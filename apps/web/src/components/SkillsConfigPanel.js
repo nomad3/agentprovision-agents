@@ -32,6 +32,7 @@ import {
 import skillConfigService from '../services/skillConfigService';
 import skillService from '../services/skillService';
 import instanceService from '../services/instanceService';
+import WhatsAppChannelCard from './WhatsAppChannelCard';
 
 // Map icon name strings from the registry to actual React icon components
 const ICON_MAP = {
@@ -390,8 +391,13 @@ const SkillsConfigPanel = ({ instanceStatus: externalInstanceStatus }) => {
                 )}
               </div>
 
-              {/* Credential Form */}
-              {isConfigured && isEnabled && (
+              {/* Channel Management (WhatsApp etc.) */}
+              {isConfigured && isEnabled && skill.channel_type && (
+                <WhatsAppChannelCard />
+              )}
+
+              {/* Credential Form (non-channel skills) */}
+              {isConfigured && isEnabled && !skill.channel_type && (
                 <>
                   <div className="mb-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <FaKey size={12} style={{ color: 'var(--color-muted)' }} />
