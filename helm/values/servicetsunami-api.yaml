@@ -140,6 +140,21 @@ env:
       secretKeyRef:
         name: openclaw-secrets
         key: OPENCLAW_GATEWAY_TOKEN
+  - name: OPENCLAW_DEVICE_ID
+    valueFrom:
+      secretKeyRef:
+        name: openclaw-device-identity
+        key: OPENCLAW_DEVICE_ID
+  - name: OPENCLAW_DEVICE_PRIVATE_KEY
+    valueFrom:
+      secretKeyRef:
+        name: openclaw-device-identity
+        key: OPENCLAW_DEVICE_PRIVATE_KEY
+  - name: OPENCLAW_DEVICE_PUBLIC_KEY
+    valueFrom:
+      secretKeyRef:
+        name: openclaw-device-identity
+        key: OPENCLAW_DEVICE_PUBLIC_KEY
 
 # Horizontal Pod Autoscaler - disabled for cost savings
 autoscaling:

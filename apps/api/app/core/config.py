@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # OpenClaw provisioning
     OPENCLAW_CHART_PATH: str = "/opt/openclaw-k8s/helm/openclaw"
     OPENCLAW_GATEWAY_TOKEN: str | None = None
+    OPENCLAW_DEVICE_ID: str | None = None
+    OPENCLAW_DEVICE_PRIVATE_KEY: str | None = None  # PEM-encoded Ed25519 private key
+    OPENCLAW_DEVICE_PUBLIC_KEY: str | None = None   # Base64url-encoded raw public key
 
     # Credential Vault encryption (Fernet key — generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     ENCRYPTION_KEY: str | None = None

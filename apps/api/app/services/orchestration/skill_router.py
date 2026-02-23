@@ -308,6 +308,44 @@ class SkillRouter:
             .first()
         )
 
+    @staticmethod
+    def _sign_device_payload(
+        private_key_pem: str,
+        device_id: str,
+        client_id: str,
+        client_mode: str,
+        role: str,
+        scopes: list,
+        signed_at_ms: int,
+        token: str,
+        nonce: str,
+    ) -> str:
+        """Sign the OpenClaw device auth payload with Ed25519."""
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        import base64
+
+        # Build payload: v2|deviceId|clientId|clientMode|role|scopes|signedAtMs|token|nonce
+        payload_parts = [
+            "v2",
+            device_id,
+            client_id,
+            client_mode,
+            role,
+            ",".join(scopes),
+            str(signed_at_ms),
+            token or "",
+            nonce,
+        ]
+        payload_str = "|".join(payload_parts)
+
+        # Sign with Ed25519
+        key = load_pem_private_key(private_key_pem.encode(), password=None)
+        signature = key.sign(payload_str.encode())
+
+        # Return base64url-encoded signature
+        return base64.urlsafe_b64encode(signature).rstrip(b"=").decode()
+
     def _call_openclaw(
         self,
         internal_url: str,
@@ -319,7 +357,7 @@ class SkillRouter:
         """
         Call OpenClaw Gateway via WebSocket.
 
-        Protocol: connect → challenge-response auth → sessions_send → collect reply.
+        Protocol: connect → challenge-response (Ed25519) → sessions_send → collect reply.
         """
         import asyncio
         import json as _json
@@ -328,8 +366,14 @@ class SkillRouter:
 
         ws_url = internal_url.replace("http://", "ws://").replace("https://", "wss://")
         token = settings.OPENCLAW_GATEWAY_TOKEN
+        device_id = settings.OPENCLAW_DEVICE_ID
+        private_key = settings.OPENCLAW_DEVICE_PRIVATE_KEY
+        public_key = settings.OPENCLAW_DEVICE_PUBLIC_KEY
+
         if not token:
             return {"status": "error", "error": "OPENCLAW_GATEWAY_TOKEN not configured"}
+        if not device_id or not private_key or not public_key:
+            return {"status": "error", "error": "OPENCLAW_DEVICE_ID/PRIVATE_KEY/PUBLIC_KEY not configured"}
 
         async def _execute():
             import websockets
@@ -346,8 +390,24 @@ class SkillRouter:
 
                     nonce = challenge["payload"]["nonce"]
 
-                    # Step 2: Authenticate
+                    # Step 2: Authenticate with Ed25519 device signature
                     step = "authenticate"
+                    role = "operator"
+                    scopes = ["operator.admin", "operator.approvals", "operator.pairing"]
+                    signed_at_ms = int(time.time() * 1000)
+
+                    signature = self._sign_device_payload(
+                        private_key_pem=private_key,
+                        device_id=device_id,
+                        client_id="gateway-client",
+                        client_mode="backend",
+                        role=role,
+                        scopes=scopes,
+                        signed_at_ms=signed_at_ms,
+                        token=token,
+                        nonce=nonce,
+                    )
+
                     connect_req = {
                         "type": "req",
                         "id": f"connect-{uuid.uuid4().hex[:8]}",
@@ -356,16 +416,19 @@ class SkillRouter:
                             "minProtocol": 3,
                             "maxProtocol": 3,
                             "client": {
-                                "id": "servicetsunami-api",
+                                "id": "gateway-client",
                                 "version": "1.0.0",
                                 "platform": "linux",
-                                "mode": "operator",
+                                "mode": "backend",
                             },
-                            "role": "operator",
-                            "scopes": ["operator.read", "operator.write"],
+                            "role": role,
+                            "scopes": scopes,
                             "auth": {"token": token},
                             "device": {
-                                "id": f"st-api-{self.tenant_id}",
+                                "id": device_id,
+                                "publicKey": public_key,
+                                "signature": signature,
+                                "signedAt": signed_at_ms,
                                 "nonce": nonce,
                             },
                         },
