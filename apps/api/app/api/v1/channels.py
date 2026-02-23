@@ -132,7 +132,7 @@ def whatsapp_status(
         return {"enabled": False, "linked": False, "connected": False, "accounts": []}
 
     return {
-        "enabled": True,
+        "enabled": any(a.get("enabled") for a in wa_accounts),
         "accounts": wa_accounts,
         "linked": any(a.get("linked") for a in wa_accounts),
         "connected": any(a.get("connected") for a in wa_accounts),
