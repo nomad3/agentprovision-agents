@@ -25,6 +25,8 @@ def execute_skill(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Execute a skill through the tenant's OpenClaw instance."""
+    import logging
+    logger = logging.getLogger(__name__)
     skill_router = SkillRouter(db=db, tenant_id=current_user.tenant_id)
     result = skill_router.execute_skill(
         skill_name=request.skill_name,
@@ -33,7 +35,9 @@ def execute_skill(
         agent_id=request.agent_id,
     )
     if result.get("status") == "error":
-        raise HTTPException(status_code=502, detail=result.get("error"))
+        error_detail = result.get("error", "Unknown error")
+        logger.error("Skill execution failed for '%s': %s", request.skill_name, error_detail)
+        raise HTTPException(status_code=502, detail=error_detail)
     return result
 
 

@@ -434,8 +434,9 @@ class SkillRouter:
             return result
 
         except Exception as e:
-            logger.error("OpenClaw WebSocket error for skill '%s': %s", skill_name, str(e))
-            return {"status": "error", "error": str(e)}
+            error_msg = f"{type(e).__name__}: {e}"
+            logger.error("OpenClaw WebSocket error for skill '%s': %s", skill_name, error_msg)
+            return {"status": "error", "error": error_msg}
 
     def _log_trace(
         self,
