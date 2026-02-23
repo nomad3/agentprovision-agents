@@ -127,11 +127,14 @@ class SkillRouter:
                 duration_ms=duration_ms,
             )
 
-        return {
+        response = {
             "status": result.get("status", "completed"),
             "result": result.get("data"),
             "duration_ms": duration_ms,
         }
+        if result.get("error"):
+            response["error"] = result["error"]
+        return response
 
     # ── Circuit Breaker Methods ────────────────────────────────────────
 
@@ -331,90 +334,102 @@ class SkillRouter:
         async def _execute():
             import websockets
 
-            async with websockets.connect(ws_url, open_timeout=10) as ws:
-                # Step 1: Receive challenge
-                raw = await asyncio.wait_for(ws.recv(), timeout=10)
-                challenge = _json.loads(raw)
-                if challenge.get("event") != "connect.challenge":
-                    return {"status": "error", "error": f"Unexpected frame: {challenge.get('event')}"}
+            step = "ws_connect"
+            try:
+                async with websockets.connect(ws_url, open_timeout=10) as ws:
+                    # Step 1: Receive challenge
+                    step = "recv_challenge"
+                    raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                    challenge = _json.loads(raw)
+                    if challenge.get("event") != "connect.challenge":
+                        return {"status": "error", "error": f"Unexpected frame: {challenge.get('event')}"}
 
-                nonce = challenge["payload"]["nonce"]
+                    nonce = challenge["payload"]["nonce"]
 
-                # Step 2: Authenticate
-                connect_req = {
-                    "type": "req",
-                    "id": f"connect-{uuid.uuid4().hex[:8]}",
-                    "method": "connect",
-                    "params": {
-                        "minProtocol": 3,
-                        "maxProtocol": 3,
-                        "client": {
-                            "id": "servicetsunami-api",
-                            "version": "1.0.0",
-                            "platform": "linux",
-                            "mode": "operator",
+                    # Step 2: Authenticate
+                    step = "authenticate"
+                    connect_req = {
+                        "type": "req",
+                        "id": f"connect-{uuid.uuid4().hex[:8]}",
+                        "method": "connect",
+                        "params": {
+                            "minProtocol": 3,
+                            "maxProtocol": 3,
+                            "client": {
+                                "id": "servicetsunami-api",
+                                "version": "1.0.0",
+                                "platform": "linux",
+                                "mode": "operator",
+                            },
+                            "role": "operator",
+                            "scopes": ["operator.read", "operator.write"],
+                            "auth": {"token": token},
+                            "device": {
+                                "id": f"st-api-{self.tenant_id}",
+                                "nonce": nonce,
+                            },
                         },
-                        "role": "operator",
-                        "scopes": ["operator.read", "operator.write"],
-                        "auth": {"token": token},
-                        "device": {
-                            "id": f"st-api-{self.tenant_id}",
-                            "nonce": nonce,
+                    }
+                    await ws.send(_json.dumps(connect_req))
+                    step = "recv_auth_response"
+                    hello_raw = await asyncio.wait_for(ws.recv(), timeout=10)
+                    hello = _json.loads(hello_raw)
+                    if not hello.get("ok"):
+                        err = hello.get("error", hello)
+                        return {"status": "error", "error": f"Auth failed: {err}"}
+
+                    # Step 3: Send skill execution message
+                    step = "send_skill"
+                    exec_id = f"exec-{uuid.uuid4().hex[:8]}"
+                    prompt = _json.dumps({
+                        "skill": skill_name,
+                        "payload": payload,
+                        "credentials": credentials,
+                        "llm": llm_info or {},
+                    })
+                    exec_req = {
+                        "type": "req",
+                        "id": exec_id,
+                        "method": "sessions_send",
+                        "params": {
+                            "message": f"Execute skill '{skill_name}' with payload: {prompt}",
                         },
-                    },
-                }
-                await ws.send(_json.dumps(connect_req))
-                hello_raw = await asyncio.wait_for(ws.recv(), timeout=10)
-                hello = _json.loads(hello_raw)
-                if not hello.get("ok"):
-                    err = hello.get("error", hello)
-                    return {"status": "error", "error": f"Auth failed: {err}"}
+                    }
+                    await ws.send(_json.dumps(exec_req))
 
-                # Step 3: Send skill execution message
-                exec_id = f"exec-{uuid.uuid4().hex[:8]}"
-                prompt = _json.dumps({
-                    "skill": skill_name,
-                    "payload": payload,
-                    "credentials": credentials,
-                    "llm": llm_info or {},
-                })
-                exec_req = {
-                    "type": "req",
-                    "id": exec_id,
-                    "method": "sessions_send",
-                    "params": {
-                        "message": f"Execute skill '{skill_name}' with payload: {prompt}",
-                    },
-                }
-                await ws.send(_json.dumps(exec_req))
-
-                # Step 4: Collect response (wait for matching res or timeout)
-                deadline = asyncio.get_event_loop().time() + 60
-                result_data = None
-                while asyncio.get_event_loop().time() < deadline:
-                    try:
-                        raw = await asyncio.wait_for(ws.recv(), timeout=5)
-                        frame = _json.loads(raw)
-                        # Look for the response to our exec request
-                        if frame.get("type") == "res" and frame.get("id") == exec_id:
-                            if frame.get("ok"):
+                    # Step 4: Collect response (wait for matching res or timeout)
+                    step = "collect_response"
+                    deadline = asyncio.get_event_loop().time() + 60
+                    result_data = None
+                    while asyncio.get_event_loop().time() < deadline:
+                        try:
+                            raw = await asyncio.wait_for(ws.recv(), timeout=5)
+                            frame = _json.loads(raw)
+                            # Look for the response to our exec request
+                            if frame.get("type") == "res" and frame.get("id") == exec_id:
+                                if frame.get("ok"):
+                                    result_data = frame.get("payload", {})
+                                else:
+                                    return {"status": "error", "error": str(frame.get("error", "Unknown"))}
+                                break
+                            # Also accept event frames with results
+                            if frame.get("type") == "event" and frame.get("event") in (
+                                "session.message", "agent.message", "message",
+                            ):
                                 result_data = frame.get("payload", {})
-                            else:
-                                return {"status": "error", "error": str(frame.get("error", "Unknown"))}
-                            break
-                        # Also accept event frames with results
-                        if frame.get("type") == "event" and frame.get("event") in (
-                            "session.message", "agent.message", "message",
-                        ):
-                            result_data = frame.get("payload", {})
-                            break
-                    except asyncio.TimeoutError:
-                        continue
+                                break
+                        except asyncio.TimeoutError:
+                            continue
 
-                if result_data is None:
-                    return {"status": "error", "error": "No response from OpenClaw within timeout"}
+                    if result_data is None:
+                        return {"status": "error", "error": "No response from OpenClaw within timeout"}
 
-                return {"status": "completed", "data": result_data}
+                    return {"status": "completed", "data": result_data}
+
+            except Exception as inner_e:
+                error_msg = f"[step={step}] {type(inner_e).__name__}: {inner_e}"
+                logger.error("OpenClaw WS inner error: %s", error_msg)
+                return {"status": "error", "error": error_msg}
 
         try:
             loop = None
@@ -434,7 +449,7 @@ class SkillRouter:
             return result
 
         except Exception as e:
-            error_msg = f"{type(e).__name__}: {e}"
+            error_msg = f"[outer] {type(e).__name__}: {e}"
             logger.error("OpenClaw WebSocket error for skill '%s': %s", skill_name, error_msg)
             return {"status": "error", "error": error_msg}
 
