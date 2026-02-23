@@ -82,11 +82,14 @@ def enable_whatsapp(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Enable the WhatsApp channel on the tenant's OpenClaw instance."""
+    allow_from = request.allow_from
+    if request.dm_policy == "open" and "*" not in allow_from:
+        allow_from = ["*"] + allow_from
     patch = {
         "channels": {
             "whatsapp": {
                 "dmPolicy": request.dm_policy,
-                "allowFrom": request.allow_from,
+                "allowFrom": allow_from,
                 "accounts": {
                     request.account_id: {"enabled": True},
                 },
