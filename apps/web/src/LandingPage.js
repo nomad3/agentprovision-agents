@@ -11,6 +11,7 @@ import {
 } from "react-bootstrap";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import { FaChartLine } from "react-icons/fa";
 import AnimatedSection from "./components/common/AnimatedSection";
 import CTASection from "./components/marketing/CTASection";
 import {
@@ -202,6 +203,14 @@ const LandingPage = () => {
               </Nav.Link>
               <Nav.Link href="#cta" className="mx-2">
                 {t("common:nav.pricing")}
+              </Nav.Link>
+              <Nav.Link
+                href="https://analytics.servicetsunami.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mx-2"
+              >
+                Analytics
               </Nav.Link>
               <Dropdown align="end">
                 <Dropdown.Toggle
@@ -520,6 +529,45 @@ const LandingPage = () => {
                 </Col>
               ))}
             </Row>
+          </Container>
+        </section>
+
+        <section id="analytics" className="section-wrapper section-dark section-separator">
+          <Container>
+            <AnimatedSection animation="fade-in">
+              <Row className="align-items-center g-5">
+                <Col lg={7} className="text-center text-lg-start">
+                  <h2 className="display-5 fw-bold gradient-text">
+                    Real-Time Analytics Dashboard
+                  </h2>
+                  <p className="lead text-soft mt-3 mb-4">
+                    Monitor agent performance, track execution metrics, and gain
+                    actionable insights across your entire AI workforce — all in
+                    one unified dashboard.
+                  </p>
+                  <Button
+                    size="lg"
+                    variant="outline-light"
+                    className="px-5 py-3"
+                    href="https://analytics.servicetsunami.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <FaChartLine className="me-2" />
+                    Explore Analytics
+                  </Button>
+                </Col>
+                <Col lg={5}>
+                  <div className="glass-card text-center p-5">
+                    <FaChartLine size={64} className="text-primary mb-3" />
+                    <h4 className="text-white fw-semibold">Live Metrics</h4>
+                    <p className="text-soft mb-0">
+                      Agent throughput, success rates, latency, and cost — updated in real time.
+                    </p>
+                  </div>
+                </Col>
+              </Row>
+            </AnimatedSection>
           </Container>
         </section>
 

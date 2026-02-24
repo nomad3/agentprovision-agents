@@ -1,4 +1,5 @@
 import { Button, Col, Container, Row } from "react-bootstrap";
+import { FaChartLine } from "react-icons/fa";
 import { useTranslation } from "react-i18next";
 import NeuralCanvas from "../common/NeuralCanvas";
 
@@ -32,6 +33,17 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
                 onClick={onSecondaryCta}
               >
                 {t('common:cta.watchDemo', 'Watch Demo')}
+              </Button>
+              <Button
+                size="lg"
+                variant="outline-light"
+                className="px-5 py-3"
+                href="https://analytics.servicetsunami.com"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <FaChartLine className="me-2" />
+                Explore Analytics
               </Button>
             </div>
           </Col>
