@@ -45,8 +45,11 @@ class WhatsAppService:
         return f"{tenant_id}:{account_id}"
 
     def _client_name(self, tenant_id: str, account_id: str = "default") -> str:
+        import os
+        session_dir = os.environ.get("NEONIZE_SESSION_DIR", "/tmp/neonize_sessions")
+        os.makedirs(session_dir, exist_ok=True)
         short = tenant_id[:8]
-        return f"wa_{short}_{account_id}"
+        return f"{session_dir}/wa_{short}_{account_id}.db"
 
     # ── DB helpers ────────────────────────────────────────────────────
 
@@ -140,6 +143,17 @@ class WhatsAppService:
             client = NewAClient(self._db_url)
         else:
             client = NewAClient(name)
+
+        # Fix event loop: neonize creates its own loop at import time,
+        # but we need callbacks on the current running loop (uvicorn's)
+        try:
+            loop = asyncio.get_running_loop()
+            client.loop = loop
+            # Also patch the module-level event loop so callbacks dispatch correctly
+            import neonize.aioze.client as _neonize_mod
+            _neonize_mod.event_global_loop = loop
+        except RuntimeError:
+            pass
 
         # QR callback
         @client.qr
