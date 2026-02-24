@@ -31,7 +31,6 @@ import {
 } from 'react-icons/fa';
 import skillConfigService from '../services/skillConfigService';
 import skillService from '../services/skillService';
-import instanceService from '../services/instanceService';
 import WhatsAppChannelCard from './WhatsAppChannelCard';
 
 // Map icon name strings from the registry to actual React icon components
@@ -60,7 +59,7 @@ const SKILL_COLORS = {
   linear: '#5E6AD2',
 };
 
-const SkillsConfigPanel = ({ instanceStatus: externalInstanceStatus }) => {
+const SkillsConfigPanel = () => {
   const [registry, setRegistry] = useState([]);
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -70,33 +69,6 @@ const SkillsConfigPanel = ({ instanceStatus: externalInstanceStatus }) => {
   const [testingSkill, setTestingSkill] = useState(null);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
-  const [instanceRunning, setInstanceRunning] = useState(false);
-  const [instanceChecked, setInstanceChecked] = useState(false);
-
-  // Check instance status: use external prop if available, otherwise self-fetch
-  useEffect(() => {
-    if (externalInstanceStatus !== undefined) {
-      setInstanceRunning(externalInstanceStatus === 'running');
-      setInstanceChecked(true);
-      return;
-    }
-
-    // Self-fetch instance status
-    const checkInstance = async () => {
-      try {
-        const res = await instanceService.getAll();
-        const instances = res.data || [];
-        const running = instances.some((i) => i.status === 'running');
-        setInstanceRunning(running);
-      } catch {
-        setInstanceRunning(false);
-      } finally {
-        setInstanceChecked(true);
-      }
-    };
-    checkInstance();
-  }, [externalInstanceStatus]);
-
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
@@ -115,16 +87,8 @@ const SkillsConfigPanel = ({ instanceStatus: externalInstanceStatus }) => {
   }, []);
 
   useEffect(() => {
-    if (instanceRunning && instanceChecked) {
-      fetchData();
-    } else if (instanceChecked) {
-      setLoading(false);
-    }
-  }, [instanceRunning, instanceChecked, fetchData]);
-
-  // Don't render anything if instance is not running
-  if (!instanceChecked) return null;
-  if (!instanceRunning) return null;
+    fetchData();
+  }, [fetchData]);
 
   const getConfigForSkill = (skillName) =>
     configs.find((c) => c.skill_name === skillName);
