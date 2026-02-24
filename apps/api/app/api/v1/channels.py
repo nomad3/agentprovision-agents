@@ -1,6 +1,5 @@
-"""WhatsApp channel management endpoints via OpenClaw gateway RPC."""
+"""WhatsApp channel management endpoints using neonize (direct integration)."""
 
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -10,13 +9,13 @@ from typing import List
 
 from app.api import deps
 from app.models.user import User
-from app.services.orchestration.skill_router import SkillRouter
+from app.services.whatsapp_service import whatsapp_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Request / Response Models ────────────────────────────────────────
+# ── Request Models ───────────────────────────────────────────────────
 
 class WhatsAppEnableRequest(BaseModel):
     dm_policy: str = "allowlist"
@@ -39,172 +38,111 @@ class WhatsAppLogoutRequest(BaseModel):
     account_id: str = "default"
 
 
-# ── Helpers ──────────────────────────────────────────────────────────
-
-def _make_router(db: Session, user: User) -> SkillRouter:
-    return SkillRouter(db=db, tenant_id=user.tenant_id)
-
-
-def _gateway(db: Session, user: User, method: str, params: dict = None, timeout: int = 30):
-    """Call gateway RPC and raise HTTPException on error."""
-    router_svc = _make_router(db, user)
-    result = router_svc.call_gateway_method(method, params or {}, timeout_seconds=timeout)
-    if result.get("status") == "error":
-        raise HTTPException(status_code=502, detail=result.get("error", "Gateway error"))
-    return result.get("data", {})
-
-
-def _config_patch(db: Session, user: User, patch: dict):
-    """Fetch current config hash, then apply a config.patch with baseHash."""
-    router_svc = _make_router(db, user)
-    # Get current config to obtain baseHash
-    get_result = router_svc.call_gateway_method("config.get", {})
-    if get_result.get("status") == "error":
-        raise HTTPException(status_code=502, detail=get_result.get("error", "Failed to get config"))
-    base_hash = get_result.get("data", {}).get("hash", "")
-
-    # Apply patch with baseHash
-    result = router_svc.call_gateway_method("config.patch", {
-        "raw": json.dumps(patch),
-        "baseHash": base_hash,
-    })
-    if result.get("status") == "error":
-        raise HTTPException(status_code=502, detail=result.get("error", "Failed to patch config"))
-    return result.get("data", {})
-
-
 # ── Endpoints ────────────────────────────────────────────────────────
 
 @router.post("/whatsapp/enable")
-def enable_whatsapp(
+async def enable_whatsapp(
     request: WhatsAppEnableRequest,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Enable the WhatsApp channel on the tenant's OpenClaw instance."""
+    """Enable the WhatsApp channel for this tenant."""
     allow_from = request.allow_from
     if request.dm_policy == "open" and "*" not in allow_from:
         allow_from = ["*"] + allow_from
-    patch = {
-        "channels": {
-            "whatsapp": {
-                "dmPolicy": request.dm_policy,
-                "allowFrom": allow_from,
-                "accounts": {
-                    request.account_id: {"enabled": True},
-                },
-            },
-        },
-    }
-    data = _config_patch(db, current_user, patch)
-    return {"status": "enabled", "data": data}
+    result = await whatsapp_service.enable(
+        str(current_user.tenant_id), request.account_id,
+        request.dm_policy, allow_from,
+    )
+    return {"status": "enabled", "data": result}
 
 
 @router.post("/whatsapp/disable")
-def disable_whatsapp(
+async def disable_whatsapp(
+    request: WhatsAppLogoutRequest = WhatsAppLogoutRequest(),
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Disable the WhatsApp channel."""
-    patch = {
-        "channels": {
-            "whatsapp": {
-                "accounts": {
-                    "default": {"enabled": False},
-                },
-            },
-        },
-    }
-    data = _config_patch(db, current_user, patch)
-    return {"status": "disabled", "data": data}
+    result = await whatsapp_service.disable(
+        str(current_user.tenant_id), request.account_id,
+    )
+    return {"status": "disabled", "data": result}
 
 
 @router.get("/whatsapp/status")
-def whatsapp_status(
+async def whatsapp_status(
+    account_id: str = Query("default"),
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Get WhatsApp channel connection status."""
-    data = _gateway(db, current_user, "channels.status", {})
-    # Extract whatsapp-specific status from the response
-    wa_accounts = data.get("channelAccounts", {}).get("whatsapp", [])
-    if not wa_accounts:
-        return {"enabled": False, "linked": False, "connected": False, "accounts": []}
-
-    return {
-        "enabled": any(a.get("enabled") for a in wa_accounts),
-        "accounts": wa_accounts,
-        "linked": any(a.get("linked") for a in wa_accounts),
-        "connected": any(a.get("connected") for a in wa_accounts),
-    }
+    result = await whatsapp_service.get_status(
+        str(current_user.tenant_id), account_id,
+    )
+    return result
 
 
 @router.post("/whatsapp/pair")
-def start_pairing(
+async def start_pairing(
     request: WhatsAppPairRequest,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Start WhatsApp QR pairing. Returns a QR data URL for scanning."""
-    if request.force:
-        # Clear stale session to avoid 30s+ QR generation delays
-        try:
-            _gateway(db, current_user, "channels.logout",
-                     {"channel": "whatsapp", "accountId": request.account_id})
-        except HTTPException:
-            pass  # Logout failure is non-fatal
-    data = _gateway(
-        db, current_user, "web.login.start",
-        {"accountId": request.account_id, "force": request.force},
-        timeout=60,
+    result = await whatsapp_service.start_pairing(
+        str(current_user.tenant_id), request.account_id, request.force,
     )
+    if not result.get("qr_data_url") and not result.get("connected"):
+        raise HTTPException(status_code=504, detail=result.get("message", "QR generation timed out"))
     return {
-        "qr_data_url": data.get("qrDataUrl"),
-        "message": data.get("message", "Scan the QR code with WhatsApp"),
+        "qr_data_url": result.get("qr_data_url"),
+        "message": result.get("message", "Scan the QR code with WhatsApp"),
+        "connected": result.get("connected", False),
     }
 
 
 @router.get("/whatsapp/pair/status")
-def pairing_status(
+async def pairing_status(
     account_id: str = Query("default"),
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Poll for pairing completion. Returns connected status."""
-    data = _gateway(
-        db, current_user, "web.login.wait",
-        {"timeoutMs": 5000, "accountId": account_id},
-        timeout=10,
+    """Poll for pairing completion."""
+    result = await whatsapp_service.get_pairing_status(
+        str(current_user.tenant_id), account_id,
     )
     return {
-        "connected": data.get("connected", False),
-        "message": data.get("message", ""),
+        "connected": result.get("connected", False),
+        "status": result.get("status", "disconnected"),
+        "message": "Connected" if result.get("connected") else "Waiting for QR scan",
     }
 
 
 @router.post("/whatsapp/logout")
-def logout_whatsapp(
+async def logout_whatsapp(
     request: WhatsAppLogoutRequest,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Logout/unlink WhatsApp account."""
-    data = _gateway(
-        db, current_user, "channels.logout",
-        {"channel": "whatsapp", "accountId": request.account_id},
+    result = await whatsapp_service.logout(
+        str(current_user.tenant_id), request.account_id,
     )
-    return {"status": "logged_out", "data": data}
+    return {"status": "logged_out", "data": result}
 
 
 @router.post("/whatsapp/send")
-def send_whatsapp(
+async def send_whatsapp(
     request: WhatsAppSendRequest,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Send a WhatsApp message through the channel."""
-    data = _gateway(
-        db, current_user, "chat.send",
-        {"message": request.message, "sessionKey": "main"},
+    """Send a WhatsApp message."""
+    result = await whatsapp_service.send_message(
+        str(current_user.tenant_id), request.account_id,
+        request.to, request.message,
     )
-    return {"status": "sent", "data": data}
+    if result.get("status") == "error":
+        raise HTTPException(status_code=502, detail=result.get("error", "Send failed"))
+    return {"status": "sent", "data": result}

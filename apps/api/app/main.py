@@ -42,4 +42,16 @@ app.add_middleware(
 
 app.include_router(v1_routes.router, prefix="/api/v1")
 
-# Dummy comment to force rebuild
+
+@app.on_event("startup")
+async def startup_whatsapp():
+    """Reconnect all enabled WhatsApp channel_accounts on startup."""
+    from app.services.whatsapp_service import whatsapp_service
+    await whatsapp_service.restore_connections()
+
+
+@app.on_event("shutdown")
+async def shutdown_whatsapp():
+    """Gracefully disconnect all neonize clients."""
+    from app.services.whatsapp_service import whatsapp_service
+    await whatsapp_service.shutdown()

@@ -25,3 +25,5 @@ snowflake-connector-python
 pyyaml
 cryptography
 websockets
+neonize>=0.3.14
+segno

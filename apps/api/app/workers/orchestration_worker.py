@@ -23,6 +23,12 @@ from app.workflows.activities.openclaw_provision import (
     health_check_openclaw,
     register_instance,
 )
+from app.workflows.channel_health import ChannelHealthMonitorWorkflow
+from app.workflows.activities.channel_health import (
+    check_channel_health,
+    reconnect_channel,
+    update_channel_health_status,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,6 +60,7 @@ async def run_orchestration_worker():
         workflows=[
             TaskExecutionWorkflow,
             OpenClawProvisionWorkflow,
+            ChannelHealthMonitorWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -66,6 +73,9 @@ async def run_orchestration_worker():
             wait_pod_ready,
             health_check_openclaw,
             register_instance,
+            check_channel_health,
+            reconnect_channel,
+            update_channel_health_status,
         ],
     )
 
