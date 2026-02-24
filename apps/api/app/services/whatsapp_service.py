@@ -401,7 +401,7 @@ class WhatsAppService:
         # Disconnect if active
         if key in self._clients:
             try:
-                self._clients[key].disconnect()
+                await self._clients[key].disconnect()
             except Exception:
                 pass
             self._clients.pop(key, None)
@@ -431,7 +431,7 @@ class WhatsAppService:
         if force:
             if key in self._clients:
                 try:
-                    self._clients[key].disconnect()
+                    await self._clients[key].disconnect()
                 except Exception:
                     pass
                 self._clients.pop(key, None)
@@ -541,11 +541,11 @@ class WhatsAppService:
         client = self._clients.get(key)
         if client:
             try:
-                client.logout()
+                await client.logout()
             except Exception:
                 pass
             try:
-                client.disconnect()
+                await client.disconnect()
             except Exception:
                 pass
             self._clients.pop(key, None)
@@ -564,7 +564,7 @@ class WhatsAppService:
         # Disconnect existing
         if key in self._clients:
             try:
-                self._clients[key].disconnect()
+                await self._clients[key].disconnect()
             except Exception:
                 pass
             self._clients.pop(key, None)
@@ -584,7 +584,7 @@ class WhatsAppService:
         """Gracefully disconnect all clients."""
         for key, client in list(self._clients.items()):
             try:
-                client.disconnect()
+                await client.disconnect()
             except Exception:
                 pass
         for key, task in list(self._tasks.items()):
