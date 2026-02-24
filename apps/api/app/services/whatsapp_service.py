@@ -138,11 +138,9 @@ class WhatsAppService:
         key = self._key(tenant_id, account_id)
         name = self._client_name(tenant_id, account_id)
 
-        # Use PostgreSQL for session storage if available, else SQLite
-        if self._db_url and self._db_url.startswith("postgresql"):
-            client = NewAClient(self._db_url)
-        else:
-            client = NewAClient(name)
+        # Always use SQLite for neonize session storage.
+        # PostgreSQL URLs with special chars in password break Go's URL parser.
+        client = NewAClient(name)
 
         # Fix event loop: neonize creates its own loop at import time,
         # but we need callbacks on the current running loop (uvicorn's)
@@ -570,7 +568,7 @@ class WhatsAppService:
                 .filter(
                     ChannelAccount.channel_type == "whatsapp",
                     ChannelAccount.enabled == True,
-                    ChannelAccount.status.in_(["connected", "disconnected"]),
+                    ChannelAccount.status.in_(["connected", "connecting", "disconnected", "error"]),
                 )
                 .all()
             )
