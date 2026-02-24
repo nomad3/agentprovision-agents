@@ -538,12 +538,12 @@ const LandingPage = () => {
               <Row className="align-items-center g-5">
                 <Col lg={7} className="text-center text-lg-start">
                   <h2 className="display-5 fw-bold gradient-text">
-                    Real-Time Analytics Dashboard
+                    ServiceTsunami Analytics
                   </h2>
                   <p className="lead text-soft mt-3 mb-4">
-                    Monitor agent performance, track execution metrics, and gain
-                    actionable insights across your entire AI workforce — all in
-                    one unified dashboard.
+                    Our standalone analytics platform gives you full visibility
+                    into business metrics, campaign performance, and operational
+                    KPIs — independent from the agent orchestration engine.
                   </p>
                   <Button
                     size="lg"
@@ -554,15 +554,15 @@ const LandingPage = () => {
                     rel="noopener noreferrer"
                   >
                     <FaChartLine className="me-2" />
-                    Explore Analytics
+                    Visit Analytics Platform
                   </Button>
                 </Col>
                 <Col lg={5}>
                   <div className="glass-card text-center p-5">
                     <FaChartLine size={64} className="text-primary mb-3" />
-                    <h4 className="text-white fw-semibold">Live Metrics</h4>
+                    <h4 className="text-white fw-semibold">Dedicated Platform</h4>
                     <p className="text-soft mb-0">
-                      Agent throughput, success rates, latency, and cost — updated in real time.
+                      Dashboards, reports, and data exploration — a separate product built for data-driven decisions.
                     </p>
                   </div>
                 </Col>

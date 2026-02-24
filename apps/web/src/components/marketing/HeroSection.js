@@ -43,7 +43,7 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
                 rel="noopener noreferrer"
               >
                 <FaChartLine className="me-2" />
-                Explore Analytics
+                Analytics Platform
               </Button>
             </div>
           </Col>
