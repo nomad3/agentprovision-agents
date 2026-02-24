@@ -560,15 +560,18 @@ class WhatsAppService:
         logger.info("WhatsApp service shut down")
 
     async def restore_connections(self):
-        """On startup, reconnect all enabled channel_accounts."""
+        """On startup, reconnect only previously-connected accounts (have auth state)."""
         db = self._get_db()
         try:
+            # Only restore accounts that were actually connected before shutdown.
+            # "connecting" or "pairing" means they never completed auth — skip them.
             accounts = (
                 db.query(ChannelAccount)
                 .filter(
                     ChannelAccount.channel_type == "whatsapp",
                     ChannelAccount.enabled == True,
-                    ChannelAccount.status.in_(["connected", "connecting", "disconnected", "error"]),
+                    ChannelAccount.status.in_(["connected", "disconnected"]),
+                    ChannelAccount.phone_number.isnot(None),  # had a successful pairing
                 )
                 .all()
             )
