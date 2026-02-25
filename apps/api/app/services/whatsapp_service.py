@@ -18,7 +18,6 @@ from neonize.aioze.events import (
     LoggedOutEv,
     MessageEv,
     PairStatusEv,
-    StreamReplacedEv,
 )
 from neonize.utils import build_jid
 from sqlalchemy.orm import Session
@@ -210,14 +209,9 @@ class WhatsAppService:
             self._update_account_status(tenant_id, account_id, "disconnected")
             self._log_event(tenant_id, account_id, "connection_closed")
 
-        # Stream replaced (another device took over)
-        @client.event(StreamReplacedEv)
-        async def on_stream_replaced(c: NewAClient, event: StreamReplacedEv):
-            logger.warning(f"StreamReplacedEv for {key} — device was unlinked or replaced")
-            self._statuses[key] = "disconnected"
-            self._clients.pop(key, None)
-            self._qr_codes.pop(key, None)
-            self._update_account_status(tenant_id, account_id, "disconnected", error="Stream replaced")
+        # NOTE: StreamReplacedEv is NOT registered — it crashes the neonize Go binary
+        # with "panic: index out of range [0] with length 0" in CallbackFunction.
+        # Disconnection is handled via DisconnectedEv instead.
 
         # Logged out
         @client.event(LoggedOutEv)
@@ -478,6 +472,21 @@ class WhatsAppService:
     async def get_pairing_status(self, tenant_id: str, account_id: str = "default") -> dict:
         key = self._key(tenant_id, account_id)
         status = self._statuses.get(key, "disconnected")
+
+        # Active detection: if status isn't "connected" yet, check if the
+        # client is actually authenticated (event callbacks may not fire).
+        if status != "connected" and key in self._clients:
+            try:
+                me = self._clients[key].get_me()
+                if me and me.User:
+                    logger.info(f"Active detection: {key} is connected as {me.User}")
+                    status = "connected"
+                    self._statuses[key] = "connected"
+                    self._qr_codes.pop(key, None)
+                    self._update_account_status(tenant_id, account_id, "connected", phone=me.User)
+            except Exception:
+                pass
+
         result = {
             "connected": status == "connected",
             "status": status,
