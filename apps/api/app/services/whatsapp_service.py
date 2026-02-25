@@ -464,13 +464,20 @@ class WhatsAppService:
                     "connected": True,
                 }
             # After 3 seconds, also check active connection (session may auto-restore
-            # without events firing)
+            # without events firing). Use sync .connected attr — the async
+            # is_connected coroutine property wraps asyncio.to_thread() and hangs
+            # when the Go binary is busy with reconnection.
             if i >= 6:
                 try:
-                    connected = await client.is_connected
+                    connected = getattr(client, "connected", False)
+                    logger.info(f"start_pairing: active probe i={i} connected={connected} for {key}")
                     if connected:
-                        me = await client.get_me()
-                        phone = me.User if me else None
+                        phone = None
+                        try:
+                            me = await asyncio.wait_for(client.get_me(), timeout=3)
+                            phone = me.User if me else None
+                        except Exception:
+                            pass
                         logger.info(f"start_pairing: active detection found {key} connected as {phone}")
                         self._statuses[key] = "connected"
                         self._qr_codes.pop(key, None)
@@ -480,8 +487,8 @@ class WhatsAppService:
                             "message": "Already connected (existing session restored)",
                             "connected": True,
                         }
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.info(f"start_pairing: active probe error: {e}")
 
         return {
             "qr_data_url": None,
@@ -496,26 +503,23 @@ class WhatsAppService:
         # client is actually authenticated (event callbacks may not fire).
         if status != "connected" and key in self._clients:
             client = self._clients[key]
-            logger.info(f"Active detection probe for {key}: current status={status}")
+            # Use sync .connected attr — the async is_connected coroutine property
+            # wraps asyncio.to_thread() and hangs when Go binary is busy.
             try:
-                # Try is_connected first
-                connected = await client.is_connected
-                logger.info(f"Active detection: is_connected()={connected} for {key}")
+                connected = getattr(client, "connected", False)
+                logger.info(f"Active detection probe for {key}: status={status}, connected={connected}")
                 if connected:
-                    me = await client.get_me()
-                    phone = me.User if me else None
+                    phone = None
+                    try:
+                        me = await asyncio.wait_for(client.get_me(), timeout=3)
+                        phone = me.User if me else None
+                    except Exception:
+                        pass
                     logger.info(f"Active detection: {key} is connected as {phone}")
                     status = "connected"
                     self._statuses[key] = "connected"
                     self._qr_codes.pop(key, None)
                     self._update_account_status(tenant_id, account_id, "connected", phone=phone)
-                else:
-                    # Fallback: check if is_logged_in (has stored session)
-                    try:
-                        logged_in = await client.is_logged_in
-                        logger.info(f"Active detection: is_logged_in()={logged_in} for {key}")
-                    except Exception as e2:
-                        logger.info(f"Active detection: is_logged_in() error: {e2}")
             except Exception as e:
                 logger.warning(f"Active detection check failed for {key}: {type(e).__name__}: {e}")
 
