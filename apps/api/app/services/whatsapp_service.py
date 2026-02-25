@@ -741,25 +741,27 @@ class WhatsAppService:
         logger.info("WhatsApp service shut down")
 
     async def restore_connections(self):
-        """On startup, reconnect only previously-connected accounts (have auth state)."""
+        """On startup, reconnect all enabled accounts that had a connection.
+
+        Neonize keeps auth state in its SQLite DB, so we don't need phone_number
+        to be set — the session will auto-restore if the auth state exists on disk.
+        """
         db = self._get_db()
         try:
-            # Only restore accounts that were actually connected before shutdown.
-            # "connecting" or "pairing" means they never completed auth — skip them.
             accounts = (
                 db.query(ChannelAccount)
                 .filter(
                     ChannelAccount.channel_type == "whatsapp",
                     ChannelAccount.enabled == True,
                     ChannelAccount.status.in_(["connected", "disconnected"]),
-                    ChannelAccount.phone_number.isnot(None),  # had a successful pairing
                 )
                 .all()
             )
+            logger.info(f"WhatsApp restore_connections: found {len(accounts)} accounts to restore")
             for acct in accounts:
                 tenant_id = str(acct.tenant_id)
                 account_id = acct.account_id
-                logger.info(f"Restoring WhatsApp connection for {tenant_id}:{account_id}")
+                logger.info(f"Restoring WhatsApp connection for {tenant_id}:{account_id} (status={acct.status}, phone={acct.phone_number})")
                 try:
                     await self.reconnect(tenant_id, account_id)
                 except Exception:
