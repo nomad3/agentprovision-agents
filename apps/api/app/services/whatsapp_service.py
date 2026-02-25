@@ -477,15 +477,18 @@ class WhatsAppService:
         # client is actually authenticated (event callbacks may not fire).
         if status != "connected" and key in self._clients:
             try:
-                me = self._clients[key].get_me()
-                if me and me.User:
-                    logger.info(f"Active detection: {key} is connected as {me.User}")
+                client = self._clients[key]
+                connected = await client.is_connected()
+                if connected:
+                    me = await client.get_me()
+                    phone = me.User if me else None
+                    logger.info(f"Active detection: {key} is connected as {phone}")
                     status = "connected"
                     self._statuses[key] = "connected"
                     self._qr_codes.pop(key, None)
-                    self._update_account_status(tenant_id, account_id, "connected", phone=me.User)
-            except Exception:
-                pass
+                    self._update_account_status(tenant_id, account_id, "connected", phone=phone)
+            except Exception as e:
+                logger.debug(f"Active detection check failed for {key}: {e}")
 
         result = {
             "connected": status == "connected",
