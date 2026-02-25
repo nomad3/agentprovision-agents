@@ -247,13 +247,18 @@ class WhatsAppService:
         info = event.Info
         msg = event.Message
 
-        sender_jid = info.MessageSource.Sender.User if info.MessageSource.Sender else ""
+        sender_jid_obj = info.MessageSource.Sender  # Full JID object (preserves LID vs phone)
+        sender_jid = sender_jid_obj.User if sender_jid_obj else ""
         chat_jid = info.MessageSource.Chat.User if info.MessageSource.Chat else ""
         is_from_me = info.MessageSource.IsFromMe
         is_group = info.MessageSource.IsGroup
         text = msg.conversation or (msg.extendedTextMessage.text if msg.extendedTextMessage else "")
 
         if is_from_me or not text:
+            return
+
+        # Skip group messages — only handle DMs for now
+        if is_group:
             return
 
         # DM policy enforcement
@@ -268,7 +273,7 @@ class WhatsAppService:
         finally:
             db.close()
 
-        logger.info(f"Inbound from {sender_jid} in {key}: {text[:100]}")
+        logger.info(f"Inbound DM from {sender_jid} in {key}: {text[:100]}")
         self._log_event(
             tenant_id, account_id, "message_inbound",
             direction="inbound", remote_id=sender_jid,
@@ -280,8 +285,8 @@ class WhatsAppService:
         response_text = await self._process_through_agent(tenant_id, sender_jid, text)
         if response_text:
             try:
-                jid = build_jid(sender_jid)
-                await client.send_message(jid, response_text)
+                # Use the original sender JID object to reply — preserves LID vs phone format
+                await client.send_message(sender_jid_obj, response_text)
                 self._log_event(
                     tenant_id, account_id, "message_outbound",
                     direction="outbound", remote_id=sender_jid,
