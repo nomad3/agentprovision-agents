@@ -467,7 +467,7 @@ class WhatsAppService:
             # without events firing)
             if i >= 6:
                 try:
-                    connected = await client.is_connected()
+                    connected = await client.is_connected
                     if connected:
                         me = await client.get_me()
                         phone = me.User if me else None
@@ -499,7 +499,7 @@ class WhatsAppService:
             logger.info(f"Active detection probe for {key}: current status={status}")
             try:
                 # Try is_connected first
-                connected = await client.is_connected()
+                connected = await client.is_connected
                 logger.info(f"Active detection: is_connected()={connected} for {key}")
                 if connected:
                     me = await client.get_me()
@@ -512,7 +512,7 @@ class WhatsAppService:
                 else:
                     # Fallback: check if is_logged_in (has stored session)
                     try:
-                        logged_in = await client.is_logged_in()
+                        logged_in = await client.is_logged_in
                         logger.info(f"Active detection: is_logged_in()={logged_in} for {key}")
                     except Exception as e2:
                         logger.info(f"Active detection: is_logged_in() error: {e2}")
