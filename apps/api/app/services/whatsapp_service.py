@@ -18,6 +18,8 @@ from neonize.aioze.events import (
     LoggedOutEv,
     MessageEv,
     PairStatusEv,
+    ReceiptEv,
+    HistorySyncEv,
 )
 from neonize.utils import build_jid
 from sqlalchemy.orm import Session
@@ -161,7 +163,22 @@ class WhatsAppService:
             import neonize.aioze.events as _neonize_events_mod
             _neonize_client_mod.event_global_loop = loop
             _neonize_events_mod.event_global_loop = loop
-            logger.info(f"Patched neonize event loops to uvicorn loop for {key}")
+            logger.info(f"Patched neonize event loops to uvicorn loop for {key} (loop running={loop.is_running()}, id={id(loop)})")
+
+            # Monkey-patch execute() to add logging for ALL events
+            original_execute = client.event.execute
+            def patched_execute(uuid, binary, size, code, _orig=original_execute):
+                from neonize.events import INT_TO_EVENT
+                evt_name = INT_TO_EVENT.get(code, f"unknown({code})")
+                if hasattr(evt_name, 'DESCRIPTOR'):
+                    evt_name = evt_name.DESCRIPTOR.name
+                logger.info(f"[DIAG] execute() called: code={code} event={evt_name} size={size}")
+                try:
+                    _orig(uuid, binary, size, code)
+                except Exception as e:
+                    logger.error(f"[DIAG] execute() EXCEPTION for code={code}: {e}", exc_info=True)
+            client.event.execute = patched_execute
+            logger.info(f"[DIAG] Monkey-patched execute() for {key}")
         except RuntimeError:
             pass
 
@@ -235,9 +252,20 @@ class WhatsAppService:
             self._update_account_status(tenant_id, account_id, "logged_out")
             self._log_event(tenant_id, account_id, "logged_out")
 
+        # Diagnostic: receipt events (fires when outbound is delivered/read)
+        @client.event(ReceiptEv)
+        async def on_receipt(c: NewAClient, event: ReceiptEv):
+            logger.info(f"[DIAG] ReceiptEv fired for {key}: {type(event)}")
+
+        # Diagnostic: history sync (fires on reconnect with offline messages)
+        @client.event(HistorySyncEv)
+        async def on_history_sync(c: NewAClient, event: HistorySyncEv):
+            logger.info(f"[DIAG] HistorySyncEv fired for {key}")
+
         # Inbound messages
         @client.event(MessageEv)
         async def on_message(c: NewAClient, event: MessageEv):
+            logger.info(f"[DIAG] MessageEv FIRED for {key} — raw event type: {type(event).__name__}")
             try:
                 await self._handle_inbound(key, tenant_id, account_id, c, event)
             except Exception:
