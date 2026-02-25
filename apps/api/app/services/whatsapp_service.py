@@ -329,9 +329,9 @@ class WhatsAppService:
             db.add(user_msg)
             db.commit()
 
-            # Generate agent response via LLM
-            from app.services.llm.service import LLMService
-            llm_svc = LLMService(db, tid)
+            # Generate agent response via Anthropic API directly
+            # (LLMService requires tenant LLM config which may not exist)
+            import anthropic
 
             # Build conversation history from recent messages
             recent_msgs = (
@@ -343,23 +343,23 @@ class WhatsAppService:
             )
             recent_msgs.reverse()
 
-            chat_messages = [
-                {"role": "system", "content": (
+            api_messages = []
+            for m in recent_msgs:
+                if m.role in ("user", "assistant"):
+                    api_messages.append({"role": m.role, "content": m.content})
+
+            client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1024,
+                system=(
                     "You are a helpful assistant responding via WhatsApp. "
                     "Keep responses concise and conversational. Use short paragraphs."
-                )},
-            ]
-            for m in recent_msgs:
-                chat_messages.append({"role": m.role, "content": m.content})
-
-            response = llm_svc.generate_response(
-                messages=chat_messages,
-                task_type="conversation",
-                max_tokens=1024,
-                temperature=0.7,
+                ),
+                messages=api_messages,
             )
 
-            assistant_text = response.choices[0].message.content if response and response.choices else None
+            assistant_text = response.content[0].text if response.content else None
             if assistant_text:
                 assistant_msg = ChatMessage(
                     session_id=session.id,
