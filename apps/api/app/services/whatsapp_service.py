@@ -344,11 +344,15 @@ class WhatsAppService:
         is_group = info.MessageSource.IsGroup
         text = msg.conversation or (msg.extendedTextMessage.text if msg.extendedTextMessage else "")
 
+        logger.info(f"[MSG] sender={sender_jid} chat={chat_jid} from_me={is_from_me} group={is_group} text={bool(text)} text_preview={repr(text[:50]) if text else 'empty'}")
+
         if is_from_me or not text:
+            logger.debug(f"[MSG] Skipped: from_me={is_from_me}, has_text={bool(text)}")
             return
 
         # Skip group messages — only handle DMs for now
         if is_group:
+            logger.debug(f"[MSG] Skipped group message from {sender_jid}")
             return
 
         # Resolve LID → phone number if needed (WhatsApp now uses LIDs for DMs)
