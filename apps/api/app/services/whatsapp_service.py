@@ -18,8 +18,6 @@ from neonize.aioze.events import (
     LoggedOutEv,
     MessageEv,
     PairStatusEv,
-    ReceiptEv,
-    HistorySyncEv,
 )
 from neonize.utils import build_jid
 from sqlalchemy.orm import Session
@@ -164,22 +162,7 @@ class WhatsAppService:
             import neonize.aioze.events as _neonize_events_mod
             _neonize_client_mod.event_global_loop = loop
             _neonize_events_mod.event_global_loop = loop
-            logger.info(f"Patched neonize event loops to uvicorn loop for {key} (loop running={loop.is_running()}, id={id(loop)})")
-
-            # Monkey-patch execute() to add logging for ALL events
-            original_execute = client.event.execute
-            def patched_execute(uuid, binary, size, code, _orig=original_execute):
-                from neonize.events import INT_TO_EVENT
-                evt_name = INT_TO_EVENT.get(code, f"unknown({code})")
-                if hasattr(evt_name, 'DESCRIPTOR'):
-                    evt_name = evt_name.DESCRIPTOR.name
-                logger.info(f"[DIAG] execute() called: code={code} event={evt_name} size={size}")
-                try:
-                    _orig(uuid, binary, size, code)
-                except Exception as e:
-                    logger.error(f"[DIAG] execute() EXCEPTION for code={code}: {e}", exc_info=True)
-            client.event.execute = patched_execute
-            logger.info(f"[DIAG] Monkey-patched execute() for {key}")
+            logger.info(f"Patched neonize event loops for {key}")
         except RuntimeError:
             pass
 
@@ -253,20 +236,9 @@ class WhatsAppService:
             self._update_account_status(tenant_id, account_id, "logged_out")
             self._log_event(tenant_id, account_id, "logged_out")
 
-        # Diagnostic: receipt events (fires when outbound is delivered/read)
-        @client.event(ReceiptEv)
-        async def on_receipt(c: NewAClient, event: ReceiptEv):
-            logger.info(f"[DIAG] ReceiptEv fired for {key}: {type(event)}")
-
-        # Diagnostic: history sync (fires on reconnect with offline messages)
-        @client.event(HistorySyncEv)
-        async def on_history_sync(c: NewAClient, event: HistorySyncEv):
-            logger.info(f"[DIAG] HistorySyncEv fired for {key}")
-
         # Inbound messages
         @client.event(MessageEv)
         async def on_message(c: NewAClient, event: MessageEv):
-            logger.info(f"[DIAG] MessageEv FIRED for {key} — raw event type: {type(event).__name__}")
             try:
                 await self._handle_inbound(key, tenant_id, account_id, c, event)
             except Exception:
@@ -348,8 +320,6 @@ class WhatsAppService:
         # Extract message ID for echo detection
         msg_id = info.ID if hasattr(info, 'ID') else ""
 
-        logger.info(f"[MSG] id={msg_id} sender={sender_jid} chat={chat_jid} from_me={is_from_me} group={is_group} text={bool(text)} text_preview={repr(text[:50]) if text else 'empty'}")
-
         if not text:
             return
 
@@ -361,11 +331,8 @@ class WhatsAppService:
         if is_from_me:
             sent_ids = self._sent_message_ids.get(key, set())
             if msg_id and msg_id in sent_ids:
-                logger.info(f"[MSG] Skipped bot echo: msg_id={msg_id}")
                 sent_ids.discard(msg_id)
                 return
-            # This is the user typing on their phone — process it
-            logger.info(f"[MSG] Self-message from user (not bot echo), processing")
 
         # Resolve LID → phone number if needed (WhatsApp now uses LIDs for DMs)
         sender_phone = sender_jid  # default: assume JID is the phone
@@ -420,7 +387,6 @@ class WhatsAppService:
                     # Cap the set size to prevent memory leak
                     if len(sent_ids) > 100:
                         sent_ids.pop()
-                    logger.info(f"[MSG] Bot reply sent, tracking msg_id={resp.ID}")
                 self._log_event(
                     tenant_id, account_id, "message_outbound",
                     direction="outbound", remote_id=sender_phone,
