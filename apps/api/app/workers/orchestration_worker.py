@@ -21,6 +21,8 @@ from app.workflows.activities.channel_health import (
     reconnect_channel,
     update_channel_health_status,
 )
+from app.workflows.follow_up import FollowUpWorkflow
+from app.workflows.activities.follow_up import execute_followup_action
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -35,6 +37,7 @@ async def run_orchestration_worker():
     This worker processes:
     - TaskExecutionWorkflow (dispatch, recall, execute, persist_entities, evaluate)
     - ChannelHealthMonitorWorkflow (WhatsApp connection health monitoring)
+    - FollowUpWorkflow (scheduled sales follow-up actions)
 
     Task queue: servicetsunami-orchestration
     """
@@ -52,6 +55,7 @@ async def run_orchestration_worker():
         workflows=[
             TaskExecutionWorkflow,
             ChannelHealthMonitorWorkflow,
+            FollowUpWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -62,6 +66,7 @@ async def run_orchestration_worker():
             check_channel_health,
             reconnect_channel,
             update_channel_health_status,
+            execute_followup_action,
         ],
     )
 
