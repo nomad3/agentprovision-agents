@@ -46,6 +46,7 @@ class WhatsAppService:
         self._qr_codes: Dict[str, str] = {}
         self._statuses: Dict[str, str] = {}
         self._reconnect_counts: Dict[str, int] = {}
+        self._sent_message_ids: Dict[str, set] = {}  # Track bot-sent msg IDs to avoid echo loops
         self._db_url = db_url
 
     def _key(self, tenant_id: str, account_id: str = "default") -> str:
@@ -344,16 +345,27 @@ class WhatsAppService:
         is_group = info.MessageSource.IsGroup
         text = msg.conversation or (msg.extendedTextMessage.text if msg.extendedTextMessage else "")
 
-        logger.info(f"[MSG] sender={sender_jid} chat={chat_jid} from_me={is_from_me} group={is_group} text={bool(text)} text_preview={repr(text[:50]) if text else 'empty'}")
+        # Extract message ID for echo detection
+        msg_id = info.ID if hasattr(info, 'ID') else ""
 
-        if is_from_me or not text:
-            logger.debug(f"[MSG] Skipped: from_me={is_from_me}, has_text={bool(text)}")
+        logger.info(f"[MSG] id={msg_id} sender={sender_jid} chat={chat_jid} from_me={is_from_me} group={is_group} text={bool(text)} text_preview={repr(text[:50]) if text else 'empty'}")
+
+        if not text:
             return
 
         # Skip group messages — only handle DMs for now
         if is_group:
-            logger.debug(f"[MSG] Skipped group message from {sender_jid}")
             return
+
+        # Allow self-messages (user messaging themselves) but skip bot echo replies
+        if is_from_me:
+            sent_ids = self._sent_message_ids.get(key, set())
+            if msg_id and msg_id in sent_ids:
+                logger.info(f"[MSG] Skipped bot echo: msg_id={msg_id}")
+                sent_ids.discard(msg_id)
+                return
+            # This is the user typing on their phone — process it
+            logger.info(f"[MSG] Self-message from user (not bot echo), processing")
 
         # Resolve LID → phone number if needed (WhatsApp now uses LIDs for DMs)
         sender_phone = sender_jid  # default: assume JID is the phone
@@ -400,7 +412,15 @@ class WhatsAppService:
         if response_text:
             try:
                 # Use the original sender JID object to reply — preserves LID vs phone format
-                await client.send_message(sender_jid_obj, response_text)
+                resp = await client.send_message(sender_jid_obj, response_text)
+                # Track sent message ID to avoid echo loop on self-messages
+                if resp and hasattr(resp, 'ID') and resp.ID:
+                    sent_ids = self._sent_message_ids.setdefault(key, set())
+                    sent_ids.add(resp.ID)
+                    # Cap the set size to prevent memory leak
+                    if len(sent_ids) > 100:
+                        sent_ids.pop()
+                    logger.info(f"[MSG] Bot reply sent, tracking msg_id={resp.ID}")
                 self._log_event(
                     tenant_id, account_id, "message_outbound",
                     direction="outbound", remote_id=sender_phone,
@@ -702,6 +722,12 @@ class WhatsAppService:
 
         try:
             resp = await client.send_message(jid, message)
+            # Track sent message ID to avoid echo loop
+            if resp and hasattr(resp, 'ID') and resp.ID:
+                sent_ids = self._sent_message_ids.setdefault(key, set())
+                sent_ids.add(resp.ID)
+                if len(sent_ids) > 100:
+                    sent_ids.pop()
             self._log_event(
                 tenant_id, account_id, "message_outbound",
                 direction="outbound", remote_id=phone,
