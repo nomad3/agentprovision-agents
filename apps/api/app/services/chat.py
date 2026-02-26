@@ -201,7 +201,13 @@ def _generate_agentic_response(
         db, session=session, user_message=user_message,
     )
 
-    adk_session_id = session.external_id
+    # Resolve ADK session ID: for WhatsApp/external sessions the external_id
+    # is the channel session key (e.g. "whatsapp:56954791985") and the ADK
+    # session ID is stored in memory_context to avoid overwriting the lookup key.
+    _mem = session.memory_context or {}
+    adk_session_id = _mem.get("adk_session_id") or (
+        session.external_id if session.source not in ("whatsapp",) else None
+    )
     if not adk_session_id:
         try:
             adk_state = _build_adk_state(
@@ -212,8 +218,13 @@ def _generate_agentic_response(
             )
             adk_session = client.create_session(user_id=user_id, state=adk_state)
             adk_session_id = adk_session.get("id")
-            session.external_id = adk_session_id
-            session.source = "adk"
+            if session.source in ("whatsapp",):
+                # Store ADK session ID in memory_context, keep external_id for channel lookup
+                _mem["adk_session_id"] = adk_session_id
+                session.memory_context = _mem
+            else:
+                session.external_id = adk_session_id
+                session.source = "adk"
             db.commit()
             db.refresh(session)
         except Exception as exc:  # pragma: no cover - network failure path
@@ -276,7 +287,12 @@ def _generate_agentic_response(
                 )
                 new_adk_session = client.create_session(user_id=user_id, state=adk_state)
                 adk_session_id = new_adk_session.get("id")
-                session.external_id = adk_session_id
+                if session.source in ("whatsapp",):
+                    _mem = session.memory_context or {}
+                    _mem["adk_session_id"] = adk_session_id
+                    session.memory_context = _mem
+                else:
+                    session.external_id = adk_session_id
                 db.commit()
                 db.refresh(session)
                 events = client.run(user_id=user_id, session_id=str(adk_session_id), message=user_message)

@@ -22,7 +22,7 @@ metadata:
   namespace: prod
   annotations:
     kubernetes.io/ingress.class: gce
-    networking.gke.io/managed-certificates: servicetsunami-cert
+    networking.gke.io/managed-certificates: servicetsunami-cert,agentprovision-cert
   labels:
     app.kubernetes.io/name: servicetsunami
     app.kubernetes.io/component: ingress
@@ -56,6 +56,41 @@ spec:
                   number: 80
     # www subdomain redirects to main (handled by web frontend)
     - host: "www.servicetsunami.com"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: servicetsunami-web
+                port:
+                  number: 80
+    # agentprovision.com - development/alternate domain
+    - host: "agentprovision.com"
+      http:
+        paths:
+          - path: /adk
+            pathType: Prefix
+            backend:
+              service:
+                name: servicetsunami-adk
+                port:
+                  number: 80
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: servicetsunami-api
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: servicetsunami-web
+                port:
+                  number: 80
+    - host: "www.agentprovision.com"
       http:
         paths:
           - path: /
