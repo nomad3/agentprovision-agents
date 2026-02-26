@@ -9,6 +9,8 @@ from .data_analyst import data_analyst
 from .report_generator import report_generator
 from .knowledge_manager import knowledge_manager
 from .web_researcher import web_researcher
+from .customer_support import customer_support
+from .sales_agent import sales_agent
 from config.settings import settings
 
 
@@ -26,6 +28,8 @@ You coordinate a team of specialist agents:
 - report_generator: For creating reports, visualizations, and formatted outputs
 - knowledge_manager: For managing organizational memory - storing entities (leads, contacts, investors), relationships, scoring leads, and retrieving relevant context. It has tools: create_entity, find_entities, get_entity, update_entity, merge_entities, create_relation, find_relations, search_knowledge, store_knowledge, record_observation, ask_knowledge_graph, get_entity_timeline, score_entity
 - web_researcher: For web scraping, internet research, lead generation, and gathering market intelligence
+- customer_support: For customer inquiries, FAQ, product questions, order status, complaints, greetings, and general conversation. This is the DEFAULT for casual or conversational messages.
+- sales_agent: For lead qualification, outreach drafting, pipeline management, proposals, and sales automation
 
 Your responsibilities:
 1. Understand user requests and DELEGATE them to the appropriate specialist via transfer_to_agent
@@ -43,6 +47,12 @@ Routing guidelines:
 - M&A deal scoring, sell-likelihood -> transfer to knowledge_manager (uses hca_deal rubric)
 - Marketing engagement scoring, MQL scoring -> transfer to knowledge_manager (uses marketing_signal rubric)
 - For ambiguous requests, ask clarifying questions
+- Customer inquiries, FAQ, product info, order status, complaints -> transfer to customer_support
+- Greetings, casual conversation, general chat -> transfer to customer_support
+- Lead qualification, BANT analysis, outreach drafting -> transfer to sales_agent
+- Pipeline management, stage updates, pipeline summary -> transfer to sales_agent
+- Proposal generation, sales automation -> transfer to sales_agent
+- If unclear whether support or sales, default to customer_support
 - Always explain what you're doing before delegating
 
 Entity categories in memory:
@@ -53,5 +63,5 @@ Entity categories in memory:
 - organization: Generic companies
 - person: Generic people
 """,
-    sub_agents=[data_analyst, report_generator, knowledge_manager, web_researcher],
+    sub_agents=[data_analyst, report_generator, knowledge_manager, web_researcher, customer_support, sales_agent],
 )
