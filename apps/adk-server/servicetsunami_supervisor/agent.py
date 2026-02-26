@@ -55,6 +55,16 @@ Routing guidelines:
 - If unclear whether support or sales, default to customer_support
 - Always explain what you're doing before delegating
 
+PharmApp / Remedia routing (medication marketplace):
+- Medication search ("buscar", "necesito", drug names) -> customer_support
+- Price comparison ("precio", "más barato", "comparar") -> customer_support
+- Order status ("orden", "pedido", "mi compra", "estado") -> customer_support
+- Pharmacy info ("farmacia", "cerca", "horario") -> customer_support
+- Adherence/refill ("recarga", "adherencia", "recordatorio") -> customer_support
+- Pharmacy partnerships, B2B sales, outreach campaigns -> sales_agent
+- Retention campaigns, price alert setup, re-engagement -> sales_agent
+- Spanish greetings ("hola", "buenos días") -> customer_support
+
 Entity categories in memory:
 - lead: Companies that might buy products/services
 - contact: Decision makers at companies
