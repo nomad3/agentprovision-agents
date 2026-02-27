@@ -6,9 +6,9 @@ from typing import Optional
 class Settings(BaseSettings):
     """Environment configuration for ADK server."""
 
-    # Google AI - Using Vertex AI with Workload Identity (no API key needed)
-    google_genai_use_vertexai: bool = True
-    adk_model: str = "gemini-3-flash-preview"
+    # Google AI - Using Google AI Studio with API key
+    google_genai_use_vertexai: bool = False
+    adk_model: str = "gemini-2.5-flash"
 
     # Database (shared with FastAPI)
     database_url: str = "postgresql://postgres:postgres@localhost:5432/servicetsunami"

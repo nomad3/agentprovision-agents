@@ -83,8 +83,8 @@ service:
 configMap:
   enabled: true
   data:
-    GOOGLE_GENAI_USE_VERTEXAI: "TRUE"
-    ADK_MODEL: "gemini-3-flash-preview"
+    GOOGLE_GENAI_USE_VERTEXAI: "FALSE"
+    ADK_MODEL: "gemini-2.5-flash"
     MCP_SERVER_URL: "http://st-mcp-server-st-microservice"
     MCP_SCRAPER_URL: "http://servicetsunami-mcp"
     MCP_TENANT_CODE: "scdp"
@@ -114,7 +114,9 @@ externalSecret:
     - secretKey: DATABASE_URL
       remoteRef:
         key: servicetsunami-database-url
-    # Note: GOOGLE_API_KEY not needed - using Vertex AI with Workload Identity
+    - secretKey: GOOGLE_API_KEY
+      remoteRef:
+        key: servicetsunami-google-api-key
     - secretKey: MCP_API_KEY
       remoteRef:
         key: servicetsunami-mcp-api-key
