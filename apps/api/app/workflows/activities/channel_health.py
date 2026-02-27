@@ -29,7 +29,7 @@ async def check_channel_health(tenant_id: str) -> Dict[str, Any]:
             .filter(
                 ChannelAccount.tenant_id == tenant_id,
                 ChannelAccount.channel_type == "whatsapp",
-                ChannelAccount.enabled == True,
+                ChannelAccount.enabled.is_(True),
             )
             .all()
         )

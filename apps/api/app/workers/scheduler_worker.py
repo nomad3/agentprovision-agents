@@ -56,7 +56,7 @@ class SchedulerWorker:
             # For simplicity, we'll fetch all active pipelines and check in python
             # In production, this should be a DB query
 
-            stmt = select(DataPipeline).where(DataPipeline.is_active == True)
+            stmt = select(DataPipeline).where(DataPipeline.is_active.is_(True))
             result = await session.execute(stmt)
             pipelines = result.scalars().all()
 

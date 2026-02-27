@@ -803,7 +803,7 @@ class WhatsAppService:
                 db.query(ChannelAccount)
                 .filter(
                     ChannelAccount.channel_type == "whatsapp",
-                    ChannelAccount.enabled == True,
+                    ChannelAccount.enabled.is_(True),
                     ChannelAccount.status.in_(["connected", "disconnected"]),
                 )
                 .all()
