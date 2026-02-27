@@ -1,12 +1,16 @@
 """Lightweight HTTP client for interacting with the ADK API server."""
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Dict, List, Optional
 import uuid
 
 import httpx
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class ADKNotConfiguredError(RuntimeError):
@@ -57,6 +61,7 @@ class ADKClient:
         session_id: str,
         message: str,
         state_delta: Optional[Dict[str, Any]] = None,
+        max_retries: int = 3,
     ) -> List[Dict[str, Any]]:
         body: Dict[str, Any] = {
             "app_name": self.app_name,
@@ -70,9 +75,32 @@ class ADKClient:
         if state_delta:
             body["state_delta"] = state_delta
 
-        response = self._client.post("/run", json=body)
-        response.raise_for_status()
-        return response.json()
+        last_exc: Optional[Exception] = None
+        for attempt in range(max_retries + 1):
+            response = self._client.post("/run", json=body)
+            if response.status_code == 200:
+                return response.json()
+            # Retry on 500 (ADK wraps Vertex AI 429 rate limits as 500)
+            if response.status_code >= 500 and attempt < max_retries:
+                delay = 2 ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    "ADK /run returned %s (attempt %d/%d), retrying in %ds",
+                    response.status_code, attempt + 1, max_retries + 1, delay,
+                )
+                time.sleep(delay)
+                last_exc = httpx.HTTPStatusError(
+                    message=f"Server error '{response.status_code}' for url '{response.url}'",
+                    request=response.request,
+                    response=response,
+                )
+                continue
+            # Non-retryable error or last attempt
+            response.raise_for_status()
+
+        # Should not reach here, but just in case
+        if last_exc:
+            raise last_exc
+        return []
 
     def close(self) -> None:
         self._client.close()
