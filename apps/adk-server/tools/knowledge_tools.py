@@ -3,10 +3,23 @@
 Manages entities, relationships, and semantic search.
 """
 from typing import Optional
+import json
 import uuid
 import re
 
 from services.knowledge_graph import get_knowledge_service
+
+
+def _parse_json(val, default=None):
+    """Parse a JSON string or return the value if already parsed."""
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    try:
+        return json.loads(val)
+    except (json.JSONDecodeError, TypeError):
+        return default
 
 _UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 _cached_default_tenant_id = None
@@ -39,7 +52,7 @@ async def create_entity(
     name: str,
     entity_type: str,
     tenant_id: str,
-    properties: Optional[dict] = None,
+    properties: Optional[str] = None,
     description: Optional[str] = None,
     aliases: Optional[list[str]] = None,
     confidence: float = 1.0,
@@ -51,7 +64,7 @@ async def create_entity(
         name: Entity name
         entity_type: Type (customer, product, organization, person, etc.)
         tenant_id: Tenant context
-        properties: Additional properties as JSON
+        properties: Additional properties as JSON string, e.g. '{"key": "value"}'
         description: Human-readable description
         aliases: Alternative names
         confidence: Confidence score 0-1
@@ -65,7 +78,7 @@ async def create_entity(
         name=name,
         entity_type=entity_type,
         tenant_id=_resolve_tenant_id(tenant_id),
-        properties=properties or {},
+        properties=_parse_json(properties, {}),
         description=description,
         aliases=aliases or [],
         confidence=confidence,
@@ -124,14 +137,14 @@ async def get_entity(
 
 async def update_entity(
     entity_id: str,
-    updates: dict,
+    updates: str,
     reason: Optional[str] = None,
 ) -> dict:
     """Update entity properties (creates version history).
 
     Args:
         entity_id: Entity UUID
-        updates: Properties to update
+        updates: Properties to update as JSON string, e.g. '{"name": "new_name"}'
         reason: Reason for change (for audit)
 
     Returns:
@@ -140,7 +153,7 @@ async def update_entity(
     kg = get_knowledge_service()
     return await kg.update_entity(
         entity_id=entity_id,
-        updates=updates,
+        updates=_parse_json(updates, {}),
         reason=reason,
     )
 
@@ -173,7 +186,7 @@ async def create_relation(
     target_entity_id: str,
     relation_type: str,
     tenant_id: str,
-    properties: Optional[dict] = None,
+    properties: Optional[str] = None,
     strength: float = 1.0,
     evidence: Optional[str] = None,
     bidirectional: bool = False,
@@ -185,7 +198,7 @@ async def create_relation(
         target_entity_id: Target entity UUID
         relation_type: Type (purchased, works_at, derived_from, etc.)
         tenant_id: Tenant context
-        properties: Additional properties
+        properties: Additional properties as JSON string
         strength: Relationship strength 0-1
         evidence: Supporting context
         bidirectional: If true, creates both directions
@@ -199,7 +212,7 @@ async def create_relation(
         target_entity_id=target_entity_id,
         relation_type=relation_type,
         tenant_id=_resolve_tenant_id(tenant_id),
-        properties=properties or {},
+        properties=_parse_json(properties, {}),
         strength=strength,
         evidence=evidence,
         bidirectional=bidirectional,
@@ -291,7 +304,7 @@ async def search_knowledge(
     query: str,
     tenant_id: str,
     top_k: int = 5,
-    filters: Optional[dict] = None,
+    filters: Optional[str] = None,
 ) -> list[dict]:
     """Semantic search across knowledge base using Vertex AI Vector Search.
 
@@ -299,7 +312,7 @@ async def search_knowledge(
         query: Natural language search query
         tenant_id: Tenant context
         top_k: Number of results
-        filters: Optional metadata filters
+        filters: Optional metadata filters as JSON string
 
     Returns:
         Ranked results with relevance scores
@@ -309,20 +322,20 @@ async def search_knowledge(
         query=query,
         tenant_id=_resolve_tenant_id(tenant_id),
         top_k=top_k,
-        filters=filters,
+        filters=_parse_json(filters),
     )
 
 
 async def store_knowledge(
     content: str,
-    metadata: dict,
+    metadata: str,
     tenant_id: str,
 ) -> str:
     """Add new knowledge to vector store with text-embedding-005.
 
     Args:
         content: Text content to store
-        metadata: Associated metadata
+        metadata: Associated metadata as JSON string
         tenant_id: Tenant context
 
     Returns:
@@ -331,7 +344,7 @@ async def store_knowledge(
     kg = get_knowledge_service()
     return await kg.store_knowledge(
         content=content,
-        metadata=metadata,
+        metadata=_parse_json(metadata, {}),
         tenant_id=_resolve_tenant_id(tenant_id),
     )
 

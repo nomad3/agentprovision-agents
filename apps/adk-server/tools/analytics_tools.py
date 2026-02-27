@@ -1,8 +1,20 @@
 """Analytics and calculation tools."""
 from typing import Optional
+import json
 import re
 
 from services.databricks_client import get_databricks_client
+
+
+def _parse_json(val, default=None):
+    if val is None:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    try:
+        return json.loads(val)
+    except (json.JSONDecodeError, TypeError):
+        return default
 
 
 def calculate(expression: str) -> dict:
@@ -32,8 +44,8 @@ def calculate(expression: str) -> dict:
 async def compare_periods(
     dataset_id: str,
     metric: str,
-    period1: dict,
-    period2: dict,
+    period1: str,
+    period2: str,
     time_column: str = "date",
 ) -> dict:
     """Compare metrics across time periods with statistical significance.
@@ -41,25 +53,27 @@ async def compare_periods(
     Args:
         dataset_id: Dataset identifier
         metric: Column name to compare (e.g., "revenue", "count")
-        period1: First period {"start": "2024-01-01", "end": "2024-03-31"}
-        period2: Second period {"start": "2024-04-01", "end": "2024-06-30"}
+        period1: First period as JSON string, e.g. '{"start": "2024-01-01", "end": "2024-03-31"}'
+        period2: Second period as JSON string, e.g. '{"start": "2024-04-01", "end": "2024-06-30"}'
         time_column: Name of the date/timestamp column
 
     Returns:
         Comparison with absolute and percentage changes
     """
+    period1 = _parse_json(period1, {})
+    period2 = _parse_json(period2, {})
     client = get_databricks_client()
 
     sql = f"""
     WITH period1_data AS (
         SELECT SUM({metric}) as total, AVG({metric}) as avg, COUNT(*) as count
         FROM {dataset_id}
-        WHERE {time_column} BETWEEN '{period1["start"]}' AND '{period1["end"]}'
+        WHERE {time_column} BETWEEN '{period1.get("start", "")}' AND '{period1.get("end", "")}'
     ),
     period2_data AS (
         SELECT SUM({metric}) as total, AVG({metric}) as avg, COUNT(*) as count
         FROM {dataset_id}
-        WHERE {time_column} BETWEEN '{period2["start"]}' AND '{period2["end"]}'
+        WHERE {time_column} BETWEEN '{period2.get("start", "")}' AND '{period2.get("end", "")}'
     )
     SELECT
         p1.total as period1_total,
