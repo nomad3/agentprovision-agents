@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     # Google AI - Using Vertex AI with Workload Identity (no API key needed)
     google_genai_use_vertexai: bool = True
-    adk_model: str = "gemini-2.5-flash"
+    adk_model: str = "gemini-3.0-flash"
 
     # Database (shared with FastAPI)
     database_url: str = "postgresql://postgres:postgres@localhost:5432/servicetsunami"
