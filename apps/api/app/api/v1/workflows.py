@@ -64,13 +64,13 @@ async def workflow_stats(
 
     try:
         client = await _get_temporal_client()
-        query = f'ExecutionStatus = "Running"'
+        query = 'ExecutionStatus = "Running"'
         async for _ in client.list_workflows(query=query):
             temporal_running += 1
-        query_done = f'ExecutionStatus = "Completed"'
+        query_done = 'ExecutionStatus = "Completed"'
         async for _ in client.list_workflows(query=query_done):
             temporal_completed += 1
-        query_fail = f'ExecutionStatus = "Failed"'
+        query_fail = 'ExecutionStatus = "Failed"'
         async for _ in client.list_workflows(query=query_fail):
             temporal_failed += 1
         temporal_total = temporal_running + temporal_completed + temporal_failed
