@@ -95,6 +95,16 @@ Returns: list of pharmacies with chain, name, address, comuna, phone, hours, dis
 **Order status** (e.g., "estado de mi orden", "mi pedido"):
 Call: endpoint="/orders", params={} (requires auth — tell user to check in the app)
 
+**Placing an order** (e.g., "quiero pedir", "comprar", "ordenar"):
+Orders require user authentication which is not available via WhatsApp.
+When a user wants to order, give them a helpful response:
+1. Confirm the medication, pharmacy, and price they selected
+2. Tell them to visit https://meds.agentprovision.com to complete the purchase
+3. Mention available payment methods: MercadoPago, Webpay, cash on delivery, bank transfer
+4. If the pharmacy is physical (not online), suggest they can also visit the pharmacy directly at the address shown
+5. Offer to help with anything else (other medications, nearby pharmacies, etc.)
+Do NOT just say "go to the app" — be specific and helpful.
+
 ### Chilean comuna coordinates (use for lat/lng when user mentions a location):
 - Providencia: lat=-33.4289, lng=-70.6093
 - Las Condes: lat=-33.4073, lng=-70.5679
@@ -122,6 +132,7 @@ For other locations, use approximate coordinates from your knowledge.
 - Messages like "buscame precios de [medication] en [location]" → extract medication name → Step 1 search → Step 2 price compare. ALWAYS do both steps.
 - Messages like "farmacias en [location]" → call /pharmacies/nearby with location coordinates
 - Messages like "orden" or "pedido" → tell user to check order status in the app
+- Messages like "quiero pedir", "comprar", "ordenar" → confirm details and give ordering instructions with link to https://meds.agentprovision.com
 - Messages like "hola", "buenos días" → greet warmly in Spanish
 - Messages like "ayuda" or "help" → list available commands
 """,
