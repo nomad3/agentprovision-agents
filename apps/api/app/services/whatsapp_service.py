@@ -586,12 +586,17 @@ class WhatsAppService:
                     "connected": True,
                 }
             # After 3 seconds, also check active connection (session may auto-restore
-            # without events firing). Use sync .connected attr — the async
-            # is_connected coroutine property wraps asyncio.to_thread() and hangs
-            # when the Go binary is busy with reconnection.
+            # without events firing after whatsmeow's internal 515 reconnect).
             if i >= 6:
                 try:
                     connected = getattr(client, "connected", False)
+                    # Fallback: is_logged_in survives 515 reconnects
+                    if not connected:
+                        try:
+                            logged_in = await asyncio.wait_for(client.is_logged_in(), timeout=3)
+                            connected = logged_in
+                        except Exception:
+                            pass
                     logger.info(f"start_pairing: active probe i={i} connected={connected} for {key}")
                     if connected:
                         phone = None
@@ -622,13 +627,20 @@ class WhatsAppService:
         status = self._statuses.get(key, "disconnected")
 
         # Active detection: if status isn't "connected" yet, check if the
-        # client is actually authenticated (event callbacks may not fire).
+        # client is actually authenticated (event callbacks may not fire after
+        # whatsmeow's internal 515 reconnect during pairing).
         if status != "connected" and key in self._clients:
             client = self._clients[key]
-            # Use sync .connected attr — the async is_connected coroutine property
-            # wraps asyncio.to_thread() and hangs when Go binary is busy.
             try:
+                # Check sync .connected attr first
                 connected = getattr(client, "connected", False)
+                # Fallback: check is_logged_in which survives 515 reconnects
+                if not connected:
+                    try:
+                        logged_in = await asyncio.wait_for(client.is_logged_in(), timeout=3)
+                        connected = logged_in
+                    except Exception:
+                        pass
                 logger.info(f"Active detection probe for {key}: status={status}, connected={connected}")
                 if connected:
                     phone = None
@@ -804,7 +816,7 @@ class WhatsAppService:
                 .filter(
                     ChannelAccount.channel_type == "whatsapp",
                     ChannelAccount.enabled.is_(True),
-                    ChannelAccount.status.in_(["connected", "disconnected"]),
+                    ChannelAccount.status.in_(["connected", "disconnected", "connecting", "pairing"]),
                 )
                 .all()
             )
