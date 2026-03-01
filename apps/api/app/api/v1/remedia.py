@@ -128,7 +128,7 @@ async def create_remedia_order(
 
     try:
         client = await Client.connect(settings.TEMPORAL_ADDRESS)
-        handle = await client.start_workflow(
+        await client.start_workflow(
             RemediaOrderWorkflow.run,
             workflow_input,
             id=workflow_id,
