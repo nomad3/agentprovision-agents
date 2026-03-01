@@ -8,7 +8,7 @@ class Settings(BaseSettings):
 
     # Google AI - Using Google AI Studio with API key
     google_genai_use_vertexai: bool = False
-    adk_model: str = "gemini-2.5-flash"
+    adk_model: str = "gemini-3.1-pro-preview"
 
     # Database (shared with FastAPI)
     database_url: str = "postgresql://postgres:postgres@localhost:5432/servicetsunami"
@@ -32,9 +32,6 @@ class Settings(BaseSettings):
 
     # FastAPI backend (for ADK -> API callbacks like lead scoring)
     api_base_url: str = "http://servicetsunami-api"
-
-    # Anthropic (for Claude vision in cardiac_analyst)
-    anthropic_api_key: str = ""
 
     # Health-Pets API (for billing callbacks)
     healthpets_api_url: str = "http://localhost:8000"

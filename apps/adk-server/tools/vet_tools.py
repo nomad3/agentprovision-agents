@@ -1,14 +1,17 @@
 """Veterinary cardiology tools.
 
-ECG image analysis via Claude vision and breed reference range lookups
+ECG image analysis via Gemini vision and breed reference range lookups
 from the knowledge graph.
 """
+import base64
 import json
 import logging
+import mimetypes
 import re
 from typing import Optional
 
 import httpx
+from google import genai
 
 from config.settings import settings
 from services.knowledge_graph import get_knowledge_service
@@ -138,53 +141,32 @@ Analyze the ECG image(s) and provide a structured interpretation. Return your fi
 
 Be precise. If you cannot measure an interval, set it to null. Flag any findings that warrant urgent attention."""
 
-    # Build Claude API message with image content blocks
-    # Fetch images and send as base64 (supports internal cluster URLs and public URLs)
-    content_blocks = []
+    # Fetch images and build Gemini content parts
+    parts = []
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as img_client:
         for url in urls:
             try:
                 img_resp = await img_client.get(url)
                 img_resp.raise_for_status()
-                import base64
-                import mimetypes
                 mime_type = img_resp.headers.get("content-type", "").split(";")[0].strip()
                 if not mime_type or not mime_type.startswith("image/"):
                     mime_type = mimetypes.guess_type(url)[0] or "image/jpeg"
                 b64_data = base64.b64encode(img_resp.content).decode()
-                content_blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": b64_data,
-                    },
-                })
+                parts.append(genai.types.Part.from_bytes(
+                    data=base64.b64decode(b64_data),
+                    mime_type=mime_type,
+                ))
             except Exception as e:
                 logger.warning("Failed to fetch image %s: %s", url, e)
-    content_blocks.append({"type": "text", "text": prompt})
+    parts.append(prompt)
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            # Call Claude API directly for vision (ADK model may not support vision)
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": settings.anthropic_api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
-                json={
-                    "model": "claude-sonnet-4-20250514",
-                    "max_tokens": 4096,
-                    "messages": [{"role": "user", "content": content_blocks}],
-                },
-            )
-            response.raise_for_status()
-            data = response.json()
-
-        # Extract the text response and parse JSON
-        text_content = data["content"][0]["text"]
+        client = genai.Client()
+        response = await client.aio.models.generate_content(
+            model="gemini-3.1-pro-preview",
+            contents=parts,
+        )
+        text_content = response.text
 
         # Try to extract JSON from the response
         json_match = re.search(r"\{[\s\S]*\}", text_content)
@@ -201,11 +183,8 @@ Be precise. If you cannot measure an interval, set it to null. Flag any findings
                 "note": "Could not parse structured findings; raw interpretation provided",
             }
 
-    except httpx.HTTPStatusError as e:
-        logger.exception(f"Claude API error: {e}")
-        return {"status": "error", "error": f"Claude API error: {e.response.status_code}"}
     except Exception as e:
-        logger.exception(f"ECG analysis failed: {e}")
+        logger.exception("ECG analysis failed: %s", e)
         return {"status": "error", "error": str(e)}
 
 
