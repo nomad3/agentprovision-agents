@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     # Health-Pets API (for billing callbacks)
     healthpets_api_url: str = "http://localhost:8000"
 
+    # Remedia PharmApp API (medication marketplace)
+    remedia_api_url: str = "http://remedia-api.prod.svc.cluster.local/api/v1"
+
+    # HCA Deal Intelligence API
+    hca_api_url: str = "http://hca-api:3000"
+    hca_service_key: str = ""
+
     # Vertex AI Vector Search
     vertex_project: str = "ai-agency-479516"
     vertex_location: str = "us-central1"
