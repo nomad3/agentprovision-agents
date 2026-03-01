@@ -22,7 +22,7 @@ metadata:
   namespace: prod
   annotations:
     kubernetes.io/ingress.class: gce
-    networking.gke.io/managed-certificates: servicetsunami-cert,agentprovision-cert
+    networking.gke.io/managed-certificates: servicetsunami-cert,agentprovision-cert,healthpets-cert
   labels:
     app.kubernetes.io/name: servicetsunami
     app.kubernetes.io/component: ingress
@@ -100,6 +100,31 @@ spec:
                 name: servicetsunami-web
                 port:
                   number: 80
+    # Health Pets - veterinary cardiac monitoring platform
+    - host: "pets.agentprovision.com"
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: healthpets-backend
+                port:
+                  number: 80
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: healthpets-backend
+                port:
+                  number: 80
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: healthpets-frontend
+                port:
+                  number: 80
 ---
 # Managed Certificate for HTTPS
 apiVersion: networking.gke.io/v1
@@ -114,3 +139,31 @@ spec:
   domains:
     - servicetsunami.com
     - www.servicetsunami.com
+---
+# BackendConfig for Health Pets API health check
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: healthpets-backend-config
+  namespace: prod
+spec:
+  healthCheck:
+    checkIntervalSec: 15
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 2
+    type: HTTP
+    requestPath: /health
+---
+# Managed Certificate for pets.agentprovision.com
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: healthpets-cert
+  namespace: prod
+  labels:
+    app.kubernetes.io/name: healthpets
+    app.kubernetes.io/component: certificate
+spec:
+  domains:
+    - pets.agentprovision.com
