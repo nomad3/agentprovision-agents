@@ -361,7 +361,7 @@ def oauth_status(
             .filter(
                 SkillConfig.tenant_id == current_user.tenant_id,
                 SkillConfig.skill_name == skill_name,
-                SkillConfig.enabled == True,
+                SkillConfig.enabled.is_(True),
             )
             .first()
         )
