@@ -64,6 +64,8 @@ configMap:
   data:
     TEMPORAL_NAMESPACE: "default"
     DEFAULT_WORKFLOW_TIMEOUT_SECONDS: "600"
+    HCA_API_URL: "http://marketing-backend-microservice:3000"
+    HCA_SERVICE_KEY: "hca-st-integration-key-2026-prod"
 
 # External Secrets - same as API service
 externalSecret:
