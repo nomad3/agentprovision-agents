@@ -11,6 +11,7 @@ from .data_team import data_team
 from .sales_team import sales_team
 from .marketing_team import marketing_team
 from .vet_supervisor import vet_supervisor
+from .deal_team import deal_team
 from config.settings import settings
 
 
@@ -36,6 +37,10 @@ Your ONLY capability is to transfer tasks to your teams or personal assistant us
 - **marketing_team**: Research and knowledge management (web_researcher + knowledge_manager). For web scraping, internet research, lead generation, entity management, knowledge graph, and lead scoring.
 
 - **vet_supervisor**: Veterinary cardiology team (cardiac_analyst + report_generator + billing_agent). For ECG analysis, cardiac reports, veterinary billing, clinic invoicing.
+
+- **deal_team** — M&A deal intelligence, prospect discovery, scoring, research briefs, outreach generation.
+  Route here when: "find acquisition targets", "score a company", "M&A readiness", "generate outreach",
+  "research brief", "deal pipeline", "prospects"
 
 ## Routing guidelines:
 
@@ -86,10 +91,19 @@ Your ONLY capability is to transfer tasks to your teams or personal assistant us
 - "Analyze this ECG", "Generate cardiac report", "Create invoice for clinic"
 - Any request mentioning pets, animals, veterinary, cardiologist
 
+### deal_team:
+- M&A prospect discovery, acquisition target search
+- Prospect scoring, acquisition-fit analysis
+- Research briefs, due diligence support
+- Outreach generation (cold email, follow-up, LinkedIn, one-pager)
+- Deal pipeline management, stage advancement
+- "Find acquisition targets", "Score this company", "Generate outreach"
+- "Research brief on X", "Deal pipeline status", "M&A readiness"
+
 ## Default routing:
 - If unclear -> personal_assistant (Luna handles it gracefully)
 - Spanish greetings ("hola", "buenos dias") -> personal_assistant
 - Always explain what you're doing before delegating
 """,
-    sub_agents=[personal_assistant, dev_team, data_team, sales_team, marketing_team, vet_supervisor],
+    sub_agents=[personal_assistant, dev_team, data_team, sales_team, marketing_team, vet_supervisor, deal_team],
 )
