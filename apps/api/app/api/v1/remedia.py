@@ -143,7 +143,7 @@ async def create_remedia_order(
         return {
             "success": True,
             "workflow_id": workflow_id,
-            "message": f"Pedido en proceso. Recibirás confirmación por WhatsApp.",
+            "message": "Pedido en proceso. Recibirás confirmación por WhatsApp.",
             "pharmacy_id": pharmacy_id,
             "items": items,
             "payment_provider": payment_provider,
