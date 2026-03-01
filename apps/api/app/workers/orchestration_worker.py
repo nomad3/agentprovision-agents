@@ -30,6 +30,13 @@ from app.workflows.activities.monthly_billing import (
     send_billing_invoices,
     schedule_billing_followups,
 )
+from app.workflows.remedia_order import RemediaOrderWorkflow
+from app.workflows.activities.remedia import (
+    create_remedia_order,
+    send_remedia_notification,
+    monitor_remedia_payment,
+    track_remedia_delivery,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -64,6 +71,7 @@ async def run_orchestration_worker():
             ChannelHealthMonitorWorkflow,
             FollowUpWorkflow,
             MonthlyBillingWorkflow,
+            RemediaOrderWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -79,6 +87,10 @@ async def run_orchestration_worker():
             generate_billing_invoices,
             send_billing_invoices,
             schedule_billing_followups,
+            create_remedia_order,
+            send_remedia_notification,
+            monitor_remedia_payment,
+            track_remedia_delivery,
         ],
     )
 

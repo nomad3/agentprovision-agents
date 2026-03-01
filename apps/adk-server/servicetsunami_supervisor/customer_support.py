@@ -14,6 +14,7 @@ from tools.knowledge_tools import (
     record_observation,
 )
 from tools.connector_tools import query_data_source
+from tools.remedia_tools import remedia_auth, remedia_order
 from config.settings import settings
 
 customer_support = Agent(
@@ -93,17 +94,45 @@ Call: endpoint="/pharmacies/nearby", params={"lat": <latitude>, "lng": <longitud
 Returns: list of pharmacies with chain, name, address, comuna, phone, hours, distance_km.
 
 **Order status** (e.g., "estado de mi orden", "mi pedido"):
-Call: endpoint="/orders", params={} (requires auth — tell user to check in the app)
+Use remedia_order with action="list" or action="status" (requires auth — will prompt OTP if needed).
 
 **Placing an order** (e.g., "quiero pedir", "comprar", "ordenar"):
-Orders require user authentication which is not available via WhatsApp.
-When a user wants to order, give them a helpful response:
-1. Confirm the medication, pharmacy, and price they selected
-2. Tell them to visit https://meds.agentprovision.com to complete the purchase
-3. Mention available payment methods: MercadoPago, Webpay, cash on delivery, bank transfer
-4. If the pharmacy is physical (not online), suggest they can also visit the pharmacy directly at the address shown
-5. Offer to help with anything else (other medications, nearby pharmacies, etc.)
-Do NOT just say "go to the app" — be specific and helpful.
+Orders require authentication via OTP. Follow this flow:
+
+### E-Commerce Order Flow (IMPORTANT — follow these steps exactly):
+
+**Step A — Check authentication:**
+Use remedia_auth with action="check_auth" and the user's phone_number from session state (whatsapp_phone).
+If not authenticated, proceed to Step B. If authenticated, skip to Step D.
+
+**Step B — Request OTP:**
+Tell the user you need to verify their account. Use remedia_auth with action="request_otp".
+Say: "Te enviaré un código de verificación a tu WhatsApp."
+
+**Step C — Verify OTP:**
+When the user responds with a code (usually 4-6 digits), use remedia_auth with action="verify_otp" and code=<the code>.
+If successful, proceed to Step D. If failed, ask them to try again or request a new code.
+
+**Step D — Confirm order details:**
+Before placing the order, confirm with the user:
+1. The medication name and dosage
+2. The pharmacy name and price
+3. Payment method (ask if not specified): mercadopago, transbank, cash_on_delivery, bank_transfer
+You MUST have pharmacy_id, items (medication_id + price_id + quantity), and payment_provider.
+
+**Step E — Place order:**
+Use remedia_order with action="create", pharmacy_id, items (JSON), and payment_provider.
+The system will create the order and send payment/delivery updates via WhatsApp automatically.
+Tell the user their order is being processed and they'll receive updates.
+
+**Step F — Order management:**
+- "estado de mi pedido" → remedia_order action="status" with order_id
+- "mis pedidos" → remedia_order action="list"
+- "agregar a favoritos" → remedia_order action="add_favorite" with medication_id
+- "mis favoritos" → remedia_order action="list_favorites"
+
+### Getting the user's phone number:
+The phone number is available in the session state as `whatsapp_phone`. Use this value for all remedia_auth and remedia_order calls as `phone_number`.
 
 ### Chilean comuna coordinates (use for lat/lng when user mentions a location):
 - Providencia: lat=-33.4289, lng=-70.6093
@@ -131,8 +160,9 @@ For other locations, use approximate coordinates from your knowledge.
 - Messages like "precio [medication]" or "precio [medication] en [location]" → extract medication name → call /medications/search with q="<medication_name_only>" → then call /prices/compare with medication_id + location coordinates
 - Messages like "buscame precios de [medication] en [location]" → extract medication name → Step 1 search → Step 2 price compare. ALWAYS do both steps.
 - Messages like "farmacias en [location]" → call /pharmacies/nearby with location coordinates
-- Messages like "orden" or "pedido" → tell user to check order status in the app
-- Messages like "quiero pedir", "comprar", "ordenar" → confirm details and give ordering instructions with link to https://meds.agentprovision.com
+- Messages like "orden" or "pedido" or "mis pedidos" → use remedia_order action="list" (authenticate first if needed)
+- Messages like "quiero pedir", "comprar", "ordenar" → follow the E-Commerce Order Flow above (Steps A-E)
+- Messages with 4-6 digit numbers after OTP request → use remedia_auth action="verify_otp" with the code
 - Messages like "hola", "buenos días" → greet warmly in Spanish
 - Messages like "ayuda" or "help" → list available commands
 """,
@@ -141,5 +171,7 @@ For other locations, use approximate coordinates from your knowledge.
         find_entities,
         record_observation,
         query_data_source,
+        remedia_auth,
+        remedia_order,
     ],
 )

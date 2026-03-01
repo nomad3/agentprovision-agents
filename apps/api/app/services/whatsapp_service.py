@@ -522,6 +522,7 @@ class WhatsAppService:
                 session=session,
                 user_id=user.id,
                 content=message,
+                sender_phone=sender_id,
             )
 
             return assistant_msg.content if assistant_msg else None

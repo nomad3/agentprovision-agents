@@ -166,6 +166,7 @@ def post_user_message(
     session: ChatSessionModel,
     user_id: uuid.UUID,
     content: str,
+    sender_phone: str | None = None,
 ) -> Tuple[ChatMessage, ChatMessage]:
     user_message = _append_message(db, session=session, role="user", content=content)
     assistant_message = _generate_agentic_response(
@@ -173,6 +174,7 @@ def post_user_message(
         session=session,
         user_id=user_id,
         user_message=content,
+        sender_phone=sender_phone,
     )
     return user_message, assistant_message
 
@@ -183,6 +185,7 @@ def _generate_agentic_response(
     session: ChatSessionModel,
     user_id: uuid.UUID,
     user_message: str,
+    sender_phone: str | None = None,
 ) -> ChatMessage:
     if not settings.ADK_BASE_URL:
         logger.error(f"ADK_BASE_URL is missing in settings: {settings.ADK_BASE_URL}")
@@ -239,6 +242,7 @@ def _generate_agentic_response(
                 agent_kit=agent_kit,
                 dataset=dataset,
                 dataset_group=dataset_group,
+                sender_phone=sender_phone,
             )
             adk_session = client.create_session(user_id=user_id, state=adk_state)
             adk_session_id = adk_session.get("id")
@@ -312,6 +316,7 @@ def _generate_agentic_response(
                     agent_kit=agent_kit,
                     dataset=dataset,
                     dataset_group=dataset_group,
+                    sender_phone=sender_phone,
                 )
                 new_adk_session = client.create_session(user_id=user_id, state=adk_state)
                 adk_session_id = new_adk_session.get("id")
@@ -579,6 +584,7 @@ def _build_adk_state(
     agent_kit: AgentKit | None,
     dataset: Dataset | None,
     dataset_group: Any | None,
+    sender_phone: str | None = None,
 ) -> Dict[str, Any]:
     datasets: List[Dataset] = []
     if dataset:
@@ -622,6 +628,9 @@ def _build_adk_state(
             "description": agent_kit.description,
             "config": agent_kit.config,
         }
+
+    if sender_phone:
+        payload["whatsapp_phone"] = sender_phone
 
     return payload
 
