@@ -69,10 +69,17 @@ def delete_agent(db: Session, *, agent_id: uuid.UUID) -> Agent | None:
     aid = str(agent_id)
 
     # Nullify nullable FK references
-    db.execute(text("UPDATE execution_traces SET agent_id = NULL WHERE agent_id = :aid"), {"aid": aid})
-    db.execute(text("UPDATE conversations SET agent_id = NULL WHERE agent_id = :aid"), {"aid": aid})
-    db.execute(text("UPDATE knowledge_entities SET source_agent_id = NULL WHERE source_agent_id = :aid"), {"aid": aid})
-    db.execute(text("UPDATE knowledge_relations SET discovered_by_agent_id = NULL WHERE discovered_by_agent_id = :aid"), {"aid": aid})
+    for tbl, col in [
+        ("execution_traces", "agent_id"),
+        ("chat_messages", "agent_id"),
+        ("knowledge_entities", "source_agent_id"),
+        ("knowledge_relations", "discovered_by_agent_id")
+    ]:
+        try:
+            with db.begin_nested():
+                db.execute(text(f"UPDATE {tbl} SET {col} = NULL WHERE {col} = :aid"), {"aid": aid})
+        except Exception:
+            pass
 
     # Delete owned records
     for tbl, col in [
@@ -87,9 +94,10 @@ def delete_agent(db: Session, *, agent_id: uuid.UUID) -> Agent | None:
         ("agent_memory", "agent_id"),
     ]:
         try:
-            db.execute(text(f"DELETE FROM {tbl} WHERE {col} = :aid"), {"aid": aid})
+            with db.begin_nested():
+                db.execute(text(f"DELETE FROM {tbl} WHERE {col} = :aid"), {"aid": aid})
         except Exception:
-            pass  # Table may not exist yet
+            pass
 
     db.delete(agent)
     db.commit()
