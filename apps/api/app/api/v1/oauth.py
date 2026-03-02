@@ -133,6 +133,61 @@ def _fetch_account_email(provider: str, access_token: str) -> Optional[str]:
     return None
 
 
+def _refresh_access_token(provider: str, refresh_token: str) -> Optional[str]:
+    """Use a refresh token to get a fresh access token."""
+    config = OAUTH_PROVIDERS[provider]
+    client_id, client_secret, _ = _get_provider_credentials(provider)
+
+    if provider != "google":
+        return None  # Only Google supports refresh tokens this way
+
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.post(config["token_url"], data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            })
+            resp.raise_for_status()
+            return resp.json().get("access_token")
+    except Exception as e:
+        logger.warning("Failed to refresh token for %s: %s", provider, e)
+        return None
+
+
+def _lazy_backfill_email(
+    db: Session, provider: str, skill_config: "SkillConfig", tenant_id: uuid.UUID,
+) -> Optional[str]:
+    """Backfill account_email for legacy configs missing it.
+
+    Uses refresh_token → fresh access_token → userinfo to discover the email.
+    """
+    if skill_config.account_email:
+        return skill_config.account_email
+
+    try:
+        creds = retrieve_credentials_for_skill(db, skill_config.id, tenant_id)
+        refresh_tok = creds.get("refresh_token")
+        if not refresh_tok:
+            return None
+
+        access_token = _refresh_access_token(provider, refresh_tok)
+        if not access_token:
+            return None
+
+        email = _fetch_account_email(provider, access_token)
+        if email:
+            skill_config.account_email = email
+            db.commit()
+            logger.info("Backfilled account_email=%s for config %s", email, skill_config.id)
+            return email
+    except Exception as e:
+        logger.warning("Lazy backfill failed for config %s: %s", skill_config.id, e)
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # GET /oauth/{provider}/authorize
 # ---------------------------------------------------------------------------
@@ -472,6 +527,10 @@ def oauth_status(
     )
 
     for sc in skill_configs:
+        # Lazy backfill: discover email for legacy accounts missing it
+        if not sc.account_email:
+            _lazy_backfill_email(db, provider, sc, current_user.tenant_id)
+
         has_token = (
             db.query(SkillCredential)
             .filter(
