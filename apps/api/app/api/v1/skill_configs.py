@@ -109,7 +109,6 @@ def get_skill_registry(
                 description=schema["description"],
                 icon=schema["icon"],
                 credentials=schema["credentials"],
-                channel_type=schema.get("channel_type"),
                 auth_type=schema.get("auth_type", "manual"),
                 oauth_provider=schema.get("oauth_provider"),
             )
