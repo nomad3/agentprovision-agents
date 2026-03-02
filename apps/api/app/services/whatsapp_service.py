@@ -433,6 +433,8 @@ class WhatsAppService:
 
         # Process through agent — use phone number (not LID) as session key
         response_text = await self._process_through_agent(tenant_id, sender_phone, text)
+        if not response_text:
+            logger.warning(f"Empty response from agent for {sender_phone}, not sending reply")
         if response_text:
             try:
                 # Build clean JID without device part — neonize requires user-only JID for sending
@@ -523,18 +525,22 @@ class WhatsAppService:
 
             # Route through the same chat service as the web UI
             # This calls ADK supervisor → agent selection → LLM → tools → audit
-            # Run in thread pool to avoid blocking the async event loop
-            # (the synchronous httpx ADK call can take 30-60s for LLM processing)
-            _user_msg, assistant_msg = await asyncio.to_thread(
-                chat_service.post_user_message,
-                db,
-                session=session,
-                user_id=user.id,
-                content=message,
-                sender_phone=sender_id,
-            )
+            # Wrapper captures content string eagerly in the thread (avoids
+            # SQLAlchemy lazy-loading issues when crossing the thread boundary)
+            def _run_chat():
+                _user_msg, assistant_msg = chat_service.post_user_message(
+                    db,
+                    session=session,
+                    user_id=user.id,
+                    content=message,
+                    sender_phone=sender_id,
+                )
+                # Eagerly capture content before leaving the thread
+                return assistant_msg.content if assistant_msg else None
 
-            return assistant_msg.content if assistant_msg else None
+            response = await asyncio.to_thread(_run_chat)
+            logger.info(f"Agent response for {sender_id}: len={len(response) if response else 0}")
+            return response
         except Exception:
             logger.exception("Failed to process through agent pipeline")
             db.rollback()
