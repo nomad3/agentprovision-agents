@@ -1,23 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Alert, Badge, Col, ListGroup, Row, Spinner, Table } from 'react-bootstrap';
-import { FaChartBar, FaComments, FaDatabase, FaRobot } from 'react-icons/fa';
+import { Alert, Col, Row, Spinner } from 'react-bootstrap';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
-import PremiumCard from '../components/common/PremiumCard';
-import QuickStartSection from '../components/dashboard/QuickStartSection';
-import DataSourceWizard from '../components/datasource/DataSourceWizard';
 import Layout from '../components/Layout';
-import EnhancedUploadModal from '../components/upload/EnhancedUploadModal';
 import { getDashboardStats } from '../services/analytics';
 
 const DashboardPage = () => {
   const { user } = useAuth();
-  const viewerEmail = user?.email ?? 'demo@servicetsunami.com';
+  const navigate = useNavigate();
 
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [showUploadModal, setShowUploadModal] = useState(false);
-  const [showConnectModal, setShowConnectModal] = useState(false);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -27,13 +21,12 @@ const DashboardPage = () => {
         setDashboardData(response.data);
         setError(null);
       } catch (err) {
-        setError('Failed to load dashboard data. Please try again.');
+        setError('Failed to load dashboard data.');
         console.error('Error fetching dashboard stats:', err);
       } finally {
         setLoading(false);
       }
     };
-
     fetchDashboardData();
   }, []);
 
@@ -41,10 +34,8 @@ const DashboardPage = () => {
     return (
       <Layout>
         <div className="text-center py-5">
-          <Spinner animation="border" role="status" variant="primary">
-            <span className="visually-hidden">Loading...</span>
-          </Spinner>
-          <p className="mt-3 text-soft">Loading dashboard...</p>
+          <Spinner animation="border" role="status" variant="primary" size="sm" />
+          <p className="mt-3 text-muted" style={{ fontSize: '0.85rem' }}>Loading...</p>
         </div>
       </Layout>
     );
@@ -53,279 +44,245 @@ const DashboardPage = () => {
   if (error) {
     return (
       <Layout>
-        <Alert variant="danger">{error}</Alert>
+        <Alert variant="danger" style={{ fontSize: '0.85rem' }}>{error}</Alert>
       </Layout>
     );
   }
 
-  if (!dashboardData) {
-    return (
-      <Layout>
-        <Alert variant="warning">No dashboard data available</Alert>
-      </Layout>
-    );
-  }
+  const { overview, activity, agents, datasets, recent_sessions } = dashboardData || {};
 
-  const { overview, activity, agents, datasets, recent_sessions } = dashboardData;
+  // System health items
+  const systemItems = [
+    {
+      label: 'Agents',
+      value: overview?.total_agents ?? 0,
+      sub: `${overview?.total_deployments ?? 0} deployed`,
+      status: (overview?.total_deployments ?? 0) > 0 ? 'operational' : 'idle',
+    },
+    {
+      label: 'Integrations',
+      value: (overview?.total_data_sources ?? 0) + (overview?.total_pipelines ?? 0),
+      sub: `${overview?.total_data_sources ?? 0} sources · ${overview?.total_pipelines ?? 0} pipelines`,
+      status: (overview?.total_data_sources ?? 0) > 0 ? 'operational' : 'idle',
+    },
+    {
+      label: 'Datasets',
+      value: overview?.total_datasets ?? 0,
+      sub: `${(activity?.dataset_rows_total ?? 0).toLocaleString()} rows`,
+      status: (overview?.total_datasets ?? 0) > 0 ? 'operational' : 'idle',
+    },
+    {
+      label: 'Knowledge Base',
+      value: overview?.total_vector_stores ?? 0,
+      sub: 'vector stores',
+      status: (overview?.total_vector_stores ?? 0) > 0 ? 'operational' : 'idle',
+    },
+  ];
+
+  const statusDot = (status) => ({
+    width: 6,
+    height: 6,
+    borderRadius: '50%',
+    background: status === 'operational' ? '#22c55e' : '#94a3b8',
+    display: 'inline-block',
+    marginRight: 6,
+    flexShrink: 0,
+  });
+
+  const cardStyle = {
+    background: 'var(--surface-elevated)',
+    border: '1px solid var(--color-border)',
+    borderRadius: 8,
+    padding: '20px 24px',
+  };
+
+  const sectionLabel = {
+    fontSize: '0.7rem',
+    fontWeight: 600,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+    color: 'var(--color-muted)',
+    marginBottom: 12,
+  };
 
   return (
     <Layout>
-      <QuickStartSection
-        onUploadClick={() => setShowUploadModal(true)}
-        onConnectClick={() => setShowConnectModal(true)}
-      />
-
-      <div className="d-flex flex-wrap align-items-center justify-content-between mb-4">
-        <div>
-          <h2 className="mb-1 fw-bold">Operations Command Center</h2>
-          <p className="text-soft mb-0">
-            Real-time cross-business metrics and intelligence across your organization.
+      <div style={{ maxWidth: 1100 }}>
+        {/* Header */}
+        <div style={{ marginBottom: 28 }}>
+          <h4 style={{ fontWeight: 600, marginBottom: 4, color: 'var(--color-foreground)' }}>
+            Dashboard
+          </h4>
+          <p style={{ fontSize: '0.85rem', color: 'var(--color-muted)', margin: 0 }}>
+            Platform status and recent activity
           </p>
         </div>
-        <div className="d-flex align-items-center gap-2">
-          <Badge bg="light" className="border border-secondary text-dark">{viewerEmail}</Badge>
-          <Badge bg="success" className="bg-opacity-25 text-success border border-success">
-            Live data
-          </Badge>
-        </div>
-      </div>
 
-      <Row className="g-4">
-        <Col md={3}>
-          <PremiumCard className="h-100">
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div className="icon-pill-sm">
-                <FaRobot size={20} />
-              </div>
-              <Badge bg="primary" className="bg-opacity-25 text-primary border border-primary">Agent Fleet</Badge>
-            </div>
-            <h6 className="text-soft mb-1">Active Agent Fleet</h6>
-            <div className="display-6 fw-bold text-primary">{overview.total_agents}</div>
-            <div className="mt-2 small text-info">{overview.total_deployments} deployments</div>
-          </PremiumCard>
-        </Col>
-
-        <Col md={3}>
-          <PremiumCard className="h-100">
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div className="icon-pill-sm">
-                <FaComments size={20} />
-              </div>
-              <Badge bg="success" className="bg-opacity-25 text-success border border-success">AI Commands</Badge>
-            </div>
-            <h6 className="text-soft mb-1">Total AI Commands</h6>
-            <div className="display-6 fw-bold text-primary">{activity.total_messages}</div>
-            <div className="mt-2 small text-success">{activity.recent_messages_7d} last 7 days</div>
-          </PremiumCard>
-        </Col>
-
-        <Col md={3}>
-          <PremiumCard className="h-100">
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div className="icon-pill-sm">
-                <FaDatabase size={20} />
-              </div>
-              <Badge bg="info" className="bg-opacity-25 text-info border border-info">Business Data</Badge>
-            </div>
-            <h6 className="text-soft mb-1">Datasets</h6>
-            <div className="display-6 fw-bold text-primary">{overview.total_datasets}</div>
-            <div className="mt-2 small text-info">{activity.dataset_rows_total.toLocaleString()} total rows</div>
-          </PremiumCard>
-        </Col>
-
-        <Col md={3}>
-          <PremiumCard className="h-100">
-            <div className="d-flex align-items-center justify-content-between mb-3">
-              <div className="icon-pill-sm">
-                <FaChartBar size={20} />
-              </div>
-              <Badge bg="warning" className="bg-opacity-25 text-warning border border-warning">ERP & Systems</Badge>
-            </div>
-            <h6 className="text-soft mb-1">ERP Connections & Pipelines</h6>
-            <div className="display-6 fw-bold text-primary">{overview.total_data_sources}</div>
-            <div className="mt-2 small text-warning">{overview.total_pipelines} active pipelines</div>
-          </PremiumCard>
-        </Col>
-      </Row>
-
-      <Row className="g-4 mt-1">
-        <Col md={4}>
-          <PremiumCard className="h-100">
-            <h6 className="text-soft mb-1">Systems Integrated</h6>
-            <div className="display-6 fw-bold text-primary">{overview.total_data_sources + overview.total_pipelines}</div>
-            <div className="mt-2 small text-info">{overview.total_data_sources} sources + {overview.total_pipelines} pipelines</div>
-          </PremiumCard>
-        </Col>
-        <Col md={4}>
-          <PremiumCard className="h-100">
-            <h6 className="text-soft mb-1">Data Points Consolidated</h6>
-            <div className="display-6 fw-bold text-primary">{activity.dataset_rows_total.toLocaleString()}</div>
-            <div className="mt-2 small text-success">{overview.total_datasets} datasets</div>
-          </PremiumCard>
-        </Col>
-        <Col md={4}>
-          <PremiumCard className="h-100">
-            <h6 className="text-soft mb-1">Automation Coverage</h6>
-            <div className="display-6 fw-bold text-primary">{overview.total_agents + overview.total_tools}</div>
-            <div className="mt-2 small text-warning">{overview.total_agents} agents + {overview.total_tools} tools</div>
-          </PremiumCard>
-        </Col>
-      </Row>
-
-      <Row className="g-4 mt-1">
-        <Col lg={6}>
-          <PremiumCard className="h-100">
-            <div className="d-flex align-items-center justify-content-between mb-4">
-              <span className="fw-semibold fs-5">Operations Overview</span>
-              <Badge bg="secondary" className="bg-opacity-25 text-secondary border border-secondary">Metrics</Badge>
-            </div>
-            <ListGroup variant="flush">
-              <ListGroup.Item className="bg-transparent px-0 py-3 border-secondary border-opacity-25">
-                <div className="d-flex justify-content-between align-items-start">
-                  <div>
-                    <h6 className="mb-1">Agent Playbooks</h6>
-                    <p className="text-muted mb-0 small">Pre-built agent playbooks for business operations</p>
-                  </div>
-                  <Badge bg="primary" pill>{overview.total_agent_kits}</Badge>
+        {/* System Status */}
+        <div style={sectionLabel}>System Status</div>
+        <Row className="g-3 mb-4">
+          {systemItems.map((item) => (
+            <Col md={3} sm={6} key={item.label}>
+              <div style={cardStyle}>
+                <div className="d-flex align-items-center mb-2" style={{ gap: 6 }}>
+                  <span style={statusDot(item.status)} />
+                  <span style={{ fontSize: '0.78rem', color: 'var(--color-muted)', fontWeight: 500 }}>
+                    {item.label}
+                  </span>
                 </div>
-              </ListGroup.Item>
-              <ListGroup.Item className="bg-transparent px-0 py-3 border-secondary border-opacity-25">
-                <div className="d-flex justify-content-between align-items-start">
-                  <div>
-                    <h6 className="mb-1">Knowledge Bases</h6>
-                    <p className="text-muted mb-0 small">Knowledge bases for context-aware AI</p>
-                  </div>
-                  <Badge bg="info" pill>{overview.total_vector_stores}</Badge>
+                <div style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--color-foreground)', lineHeight: 1.2 }}>
+                  {item.value}
                 </div>
-              </ListGroup.Item>
-              <ListGroup.Item className="bg-transparent px-0 py-3 border-0">
-                <div className="d-flex justify-content-between align-items-start">
-                  <div>
-                    <h6 className="mb-1">Tools & System Integrations</h6>
-                    <p className="text-muted mb-0 small">Connected tools across business units</p>
-                  </div>
-                  <Badge bg="success" pill>{overview.total_tools}</Badge>
+                <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)', marginTop: 4 }}>
+                  {item.sub}
                 </div>
-              </ListGroup.Item>
-            </ListGroup>
-          </PremiumCard>
-        </Col>
+              </div>
+            </Col>
+          ))}
+        </Row>
 
-        <Col lg={6}>
-          <PremiumCard className="h-100">
-            <div className="d-flex align-items-center justify-content-between mb-4">
-              <span className="fw-semibold fs-5">Recent AI Commands</span>
-              <Badge bg="secondary" className="bg-opacity-25 text-secondary border border-secondary">Commands</Badge>
-            </div>
-            {recent_sessions && recent_sessions.length > 0 ? (
-              <ListGroup variant="flush">
-                {recent_sessions.map((session, index) => (
-                  <ListGroup.Item
-                    key={session.id}
-                    className={`bg-transparent px-0 py-3 ${index !== recent_sessions.length - 1 ? 'border-secondary border-opacity-25' : 'border-0'}`}
-                  >
-                    <div className="d-flex justify-content-between align-items-start">
-                      <div style={{ flex: 1 }}>
-                        <h6 className="mb-1">{session.title}</h6>
-                        <p className="text-muted mb-0 small">
-                          {session.message_count} messages • {new Date(session.created_at).toLocaleDateString()}
-                        </p>
+        {/* Quick Navigation */}
+        <div style={sectionLabel}>Quick Access</div>
+        <Row className="g-3 mb-4">
+          {[
+            { label: 'AI Command', desc: 'Chat with your agents', path: '/chat' },
+            { label: 'Agent Fleet', desc: 'View and manage agents', path: '/agents' },
+            { label: 'Integrations', desc: 'Manage connected apps', path: '/integrations' },
+            { label: 'Workflows', desc: 'Automation & execution', path: '/workflows' },
+          ].map((item) => (
+            <Col md={3} sm={6} key={item.label}>
+              <div
+                style={{
+                  ...cardStyle,
+                  cursor: 'pointer',
+                  transition: 'border-color 0.15s ease',
+                }}
+                onClick={() => navigate(item.path)}
+                onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--color-primary, #4a90d9)'}
+                onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--color-border)'}
+              >
+                <div style={{ fontSize: '0.88rem', fontWeight: 500, color: 'var(--color-foreground)', marginBottom: 2 }}>
+                  {item.label}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>
+                  {item.desc}
+                </div>
+              </div>
+            </Col>
+          ))}
+        </Row>
+
+        {/* Two-column layout: Recent Sessions + Agent Fleet */}
+        <Row className="g-3">
+          <Col lg={7}>
+            <div style={sectionLabel}>Recent Conversations</div>
+            <div style={cardStyle}>
+              {recent_sessions && recent_sessions.length > 0 ? (
+                <div>
+                  {recent_sessions.slice(0, 6).map((session, idx) => (
+                    <div
+                      key={session.id}
+                      style={{
+                        padding: '10px 0',
+                        borderBottom: idx < Math.min(recent_sessions.length, 6) - 1 ? '1px solid var(--color-border)' : 'none',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        cursor: 'pointer',
+                      }}
+                      onClick={() => navigate('/chat')}
+                    >
+                      <div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-foreground)' }}>
+                          {session.title}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
+                          {session.message_count} messages
+                        </div>
                       </div>
-                      <Badge bg="info" pill>{session.message_count}</Badge>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)', whiteSpace: 'nowrap' }}>
+                        {new Date(session.created_at).toLocaleDateString()}
+                      </div>
                     </div>
-                  </ListGroup.Item>
-                ))}
-              </ListGroup>
-            ) : (
-              <p className="text-muted text-center py-4">No recent chat sessions</p>
-            )}
-          </PremiumCard>
-        </Col>
-      </Row>
-
-      <Row className="g-4 mt-1">
-        <Col lg={7}>
-          <PremiumCard>
-            <div className="d-flex align-items-center justify-content-between mb-4">
-              <span className="fw-semibold fs-5">Agent Fleet & Deployments</span>
-              <Badge bg="secondary" className="bg-opacity-25 text-secondary border border-secondary">Fleet</Badge>
-            </div>
-            {agents && agents.length > 0 ? (
-              <Table hover responsive borderless className="mb-0 align-middle text-soft">
-                <thead className="text-muted border-bottom border-secondary border-opacity-25">
-                  <tr>
-                    <th>Agent Name</th>
-                    <th>Deployment Count</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {agents.map((agent) => (
-                    <tr key={agent.name}>
-                      <td className="fw-semibold">{agent.name}</td>
-                      <td>
-                        <Badge bg="primary" className="bg-opacity-25 text-primary border border-primary">{agent.deployment_count}</Badge>
-                      </td>
-                      <td>
-                        <Badge bg={agent.deployment_count > 0 ? "success" : "secondary"} className={agent.deployment_count > 0 ? "bg-opacity-25 text-success border border-success" : "bg-opacity-25 text-secondary border border-secondary"}>
-                          {agent.deployment_count > 0 ? "Deployed" : "Ready"}
-                        </Badge>
-                      </td>
-                    </tr>
                   ))}
-                </tbody>
-              </Table>
-            ) : (
-              <p className="text-muted text-center py-4">No agents configured</p>
-            )}
-          </PremiumCard>
-        </Col>
-
-        <Col lg={5}>
-          <PremiumCard>
-            <div className="d-flex align-items-center justify-content-between mb-4">
-              <span className="fw-semibold fs-5">Business Data</span>
-              <Badge bg="secondary" className="bg-opacity-25 text-secondary border border-secondary">Data</Badge>
+                </div>
+              ) : (
+                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', textAlign: 'center', margin: '20px 0' }}>
+                  No recent conversations
+                </p>
+              )}
             </div>
-            {datasets && datasets.length > 0 ? (
-              <ListGroup variant="flush">
-                {datasets.map((dataset, index) => (
-                  <ListGroup.Item
-                    key={dataset.id}
-                    className={`bg-transparent px-0 py-3 ${index !== datasets.length - 1 ? 'border-secondary border-opacity-25' : 'border-0'}`}
-                  >
-                    <div className="d-flex align-items-center justify-content-between">
-                      <div style={{ flex: 1 }}>
-                        <h6 className="mb-1">{dataset.name}</h6>
-                        <p className="text-muted small mb-0">
-                          {dataset.rows.toLocaleString()} rows • {new Date(dataset.created_at).toLocaleDateString()}
-                        </p>
+          </Col>
+
+          <Col lg={5}>
+            <div style={sectionLabel}>Agent Fleet</div>
+            <div style={cardStyle}>
+              {agents && agents.length > 0 ? (
+                <div>
+                  {agents.slice(0, 6).map((agent, idx) => (
+                    <div
+                      key={agent.name}
+                      style={{
+                        padding: '10px 0',
+                        borderBottom: idx < Math.min(agents.length, 6) - 1 ? '1px solid var(--color-border)' : 'none',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-foreground)' }}>
+                        {agent.name}
                       </div>
-                      <Badge bg="info" className="bg-opacity-25 text-info border border-info">{dataset.rows}</Badge>
+                      <div className="d-flex align-items-center" style={{ gap: 4 }}>
+                        <span style={statusDot(agent.deployment_count > 0 ? 'operational' : 'idle')} />
+                        <span style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
+                          {agent.deployment_count > 0 ? 'Active' : 'Ready'}
+                        </span>
+                      </div>
                     </div>
-                  </ListGroup.Item>
-                ))}
-              </ListGroup>
-            ) : (
-              <p className="text-muted text-center py-4">No datasets available</p>
-            )}
-          </PremiumCard>
-        </Col>
-      </Row>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', textAlign: 'center', margin: '20px 0' }}>
+                  No agents configured
+                </p>
+              )}
+            </div>
 
-      <EnhancedUploadModal
-        show={showUploadModal}
-        onHide={() => setShowUploadModal(false)}
-        onSuccess={() => {
-          // Refresh quick start section
-          window.location.reload(); // Simple approach, or lift state up
-        }}
-      />
-
-      <DataSourceWizard
-        show={showConnectModal}
-        onHide={() => setShowConnectModal(false)}
-      />
+            {/* Datasets summary */}
+            <div style={{ ...sectionLabel, marginTop: 16 }}>Datasets</div>
+            <div style={cardStyle}>
+              {datasets && datasets.length > 0 ? (
+                <div>
+                  {datasets.slice(0, 4).map((dataset, idx) => (
+                    <div
+                      key={dataset.id}
+                      style={{
+                        padding: '8px 0',
+                        borderBottom: idx < Math.min(datasets.length, 4) - 1 ? '1px solid var(--color-border)' : 'none',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <div style={{ fontSize: '0.82rem', color: 'var(--color-foreground)' }}>
+                        {dataset.name}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
+                        {dataset.rows?.toLocaleString()} rows
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', textAlign: 'center', margin: '16px 0' }}>
+                  No datasets
+                </p>
+              )}
+            </div>
+          </Col>
+        </Row>
+      </div>
     </Layout>
   );
 };

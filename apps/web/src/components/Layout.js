@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { Badge, Dropdown, Nav, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { useTranslation } from 'react-i18next';
 import {
-  FaChartBar as BarChartFill,
   FaSignOutAlt as BoxArrowRight,
   FaBuilding as BuildingFill,
   FaComments as ChatDotsFill,
@@ -10,14 +10,12 @@ import {
   FaCog as GearFill,
   FaHome as HouseDoorFill,
   FaMoon as MoonFill,
-  FaBookmark as JournalBookmarkFill,
   FaUserCircle as PersonCircle,
   FaPlug as PlugFill,
+  FaProjectDiagram as ProjectDiagramFill,
   FaRobot as Robot,
-  FaSun as SunFill,
-  FaProjectDiagram as ProjectDiagramFill
+  FaSun as SunFill
 } from 'react-icons/fa';
-import { useTranslation } from 'react-i18next';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { useTheme } from '../context/ThemeContext';
@@ -48,14 +46,12 @@ const Layout = ({ children }) => {
     i18n.changeLanguage(code);
   };
 
-  // Simplified navigation structure
+  // Navigation structure
   const navSections = [
     {
-      title: 'COMMAND CENTER',
+      title: null,  // No header for top-level dashboard
       items: [
-        { path: '/home', icon: HouseDoorFill, label: 'Home', description: 'Your personalized homepage' },
-        { path: '/notebooks', icon: JournalBookmarkFill, label: 'Financial Reports', description: 'Financial reports & SQL notebooks' },
-        { path: '/dashboard', icon: BarChartFill, label: 'Analytics Overview', description: 'Cross-business metrics and KPIs' },
+        { path: '/dashboard', icon: HouseDoorFill, label: 'Dashboard', description: 'Operations overview' },
       ]
     },
     {
@@ -70,7 +66,7 @@ const Layout = ({ children }) => {
     {
       title: 'DATA',
       items: [
-        { path: '/integrations', icon: PlugFill, label: 'Integrations', description: 'Skills, connectors, data sources & datasets' },
+        { path: '/integrations', icon: PlugFill, label: 'Integrations', description: 'Connectors, data sources & datasets' },
       ]
     },
     {
@@ -111,9 +107,11 @@ const Layout = ({ children }) => {
         <Nav className="flex-column sidebar-nav">
           {navSections.map((section, sectionIndex) => (
             <div key={`section-${sectionIndex}`} className="nav-section">
-              <div className="nav-section-header">
-                <span className="nav-section-title">{section.title}</span>
-              </div>
+              {section.title && (
+                <div className="nav-section-header">
+                  <span className="nav-section-title">{section.title}</span>
+                </div>
+              )}
               {section.items.map((item) => {
                 const Icon = item.icon;
                 return (
