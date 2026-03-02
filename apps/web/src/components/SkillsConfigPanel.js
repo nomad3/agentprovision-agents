@@ -36,14 +36,12 @@ import {
 } from 'react-icons/fa';
 import skillConfigService from '../services/skillConfigService';
 import skillService from '../services/skillService';
-import WhatsAppChannelCard from './WhatsAppChannelCard';
 
 // Map icon name strings from the registry to actual React icon components
 const ICON_MAP = {
   FaSlack: FaSlack,
   FaEnvelope: FaEnvelope,
   FaGithub: FaGithub,
-  FaWhatsapp: FaWhatsapp,
   FaBook: FaBook,
   FaTasks: FaTasks,
   FaCalendar: FaCalendar,
@@ -56,7 +54,6 @@ const SKILL_COLORS = {
   slack: '#4A154B',
   gmail: '#EA4335',
   github: '#333333',
-  whatsapp: '#25D366',
   notion: '#000000',
   jira: '#0052CC',
   google_calendar: '#4285F4',
@@ -580,13 +577,8 @@ const SkillsConfigPanel = () => {
                     )}
                   </div>
 
-                  {/* Channel Management (WhatsApp etc.) */}
-                  {!!config && isEnabled && skill.channel_type && (
-                    <WhatsAppChannelCard />
-                  )}
-
                   {/* Credential Form (non-channel skills) */}
-                  {!!config && isEnabled && !skill.channel_type && (
+                  {!!config && isEnabled && (
                     <>
                       <div className="mb-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <FaKey size={12} style={{ color: 'var(--color-muted)' }} />
