@@ -84,8 +84,12 @@ class WhatsAppService:
                 account_id=account_id,
             )
             db.add(acct)
-            db.commit()
-            db.refresh(acct)
+            try:
+                db.flush()
+                db.refresh(acct)
+            except Exception:
+                db.rollback()
+                raise
         return acct
 
     def _update_account_status(

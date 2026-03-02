@@ -109,14 +109,14 @@ const CONNECTOR_FIELDS = {
   ]
 };
 
-const TAB_KEYS = ['connected-apps', 'connectors', 'data-sources', 'datasets', 'ai-models'];
+const TAB_KEYS = ['integrations', 'connectors', 'data-sources', 'datasets', 'ai-models'];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 const IntegrationsPage = () => {
   const { t } = useTranslation('datasets');
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = TAB_KEYS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'connected-apps';
+  const initialTab = TAB_KEYS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'integrations';
   const [activeTab, setActiveTab] = useState(initialTab);
 
   // ── Shared state ──
@@ -1007,7 +1007,7 @@ const IntegrationsPage = () => {
         {/* Tab Navigation */}
         <Nav variant="tabs" activeKey={activeTab} onSelect={handleTabChange} className="mb-4 integrations-tabs">
           <Nav.Item>
-            <Nav.Link eventKey="connected-apps"><FaPlug className="me-2" />Connected Apps</Nav.Link>
+            <Nav.Link eventKey="integrations"><FaPlug className="me-2" />Integrations</Nav.Link>
           </Nav.Item>
           <Nav.Item>
             <Nav.Link eventKey="connectors"><FaBolt className="me-2" />Connectors</Nav.Link>
@@ -1024,7 +1024,7 @@ const IntegrationsPage = () => {
         </Nav>
 
         {/* Tab Content */}
-        {activeTab === 'connected-apps' && renderSkillsTab()}
+        {activeTab === 'integrations' && renderSkillsTab()}
         {activeTab === 'connectors' && (
           <div className="tab-content-inner">
             <Row className="mb-4">
