@@ -15,6 +15,13 @@ from tools.knowledge_tools import (
 )
 from tools.connector_tools import query_data_source
 from tools.sales_tools import schedule_followup
+from tools.google_tools import (
+    search_emails,
+    read_email,
+    send_email,
+    list_calendar_events,
+    create_calendar_event,
+)
 from config.settings import settings
 
 personal_assistant = Agent(
@@ -52,12 +59,23 @@ When asked for a briefing or "what's on my plate":
 - "What are my open tasks?" -> find_entities(category="task") then filter for status != "done"
 - "Mark X as done" -> update_entity with properties={"status": "done"}
 
-### 4. Connector Hub
-- "Check my email for invoices" -> query_data_source to search connected email/CRM
-- "What's the latest from Slack?" -> query_data_source for connected Slack data
-- "Pull customer data for Acme" -> query_data_source with SQL query
+### 4. Gmail (requires Google connected in Connected Apps)
+- "Check my email" -> search_emails with empty query for recent messages
+- "Search emails from John" -> search_emails(query="from:john")
+- "Read that email" -> read_email(message_id=...) using ID from search results
+- "Send an email to X about Y" -> send_email(to="x@example.com", subject="Y", body="...")
+- "Any unread emails?" -> search_emails(query="is:unread")
 
-### 5. Team Orchestration
+### 5. Google Calendar (requires Google connected in Connected Apps)
+- "What's on my calendar?" -> list_calendar_events(days_ahead=7)
+- "Any meetings today?" -> list_calendar_events(days_ahead=1)
+- "Schedule a meeting with X on Friday at 2pm" -> create_calendar_event(summary="Meeting with X", start_time="2026-03-06T14:00:00", end_time="2026-03-06T15:00:00", attendees="x@example.com")
+
+### 6. Connector Hub
+- "Pull customer data for Acme" -> query_data_source with SQL query
+- "What's the latest from Slack?" -> query_data_source for connected Slack data
+
+### 7. Team Orchestration
 When the user asks something that belongs to another team, guide them:
 - "I need a report on sales" -> "I'll route that to the data team for you."
 - "Research competitor X" -> "Let me send that to the marketing team."
@@ -85,5 +103,10 @@ You don't transfer directly (that's the root supervisor's job), but you help the
         record_observation,
         query_data_source,
         schedule_followup,
+        search_emails,
+        read_email,
+        send_email,
+        list_calendar_events,
+        create_calendar_event,
     ],
 )

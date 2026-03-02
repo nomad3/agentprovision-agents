@@ -1,19 +1,21 @@
 """OAuth2 Authorization Code flow for Google, GitHub, and LinkedIn.
 
 Endpoints:
-  GET  /oauth/{provider}/authorize   — Returns auth URL (authenticated)
-  GET  /oauth/{provider}/callback    — Provider redirect (unauthenticated)
-  POST /oauth/{provider}/disconnect  — Revoke credentials (authenticated)
-  GET  /oauth/{provider}/status      — Connection status (authenticated)
+  GET  /oauth/{provider}/authorize          — Returns auth URL (authenticated)
+  GET  /oauth/{provider}/callback           — Provider redirect (unauthenticated)
+  POST /oauth/{provider}/disconnect         — Revoke credentials (authenticated)
+  GET  /oauth/{provider}/status             — Connection status (authenticated)
+  GET  /oauth/internal/token/{skill_name}   — Decrypted token (internal only)
 """
 
 import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
@@ -23,7 +25,11 @@ from app.core.config import settings
 from app.models.skill_config import SkillConfig
 from app.models.skill_credential import SkillCredential
 from app.models.user import User
-from app.services.orchestration.credential_vault import store_credential, revoke_credential
+from app.services.orchestration.credential_vault import (
+    store_credential,
+    revoke_credential,
+    retrieve_credentials_for_skill,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -384,3 +390,46 @@ def oauth_status(
             break
 
     return {"connected": connected, "provider": provider}
+
+
+# ---------------------------------------------------------------------------
+# GET /oauth/internal/token/{skill_name}  (service-to-service only)
+# ---------------------------------------------------------------------------
+
+def _verify_internal_key(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+):
+    if x_internal_key not in (settings.API_INTERNAL_KEY, settings.MCP_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid internal key")
+
+
+@router.get("/internal/token/{skill_name}")
+def get_skill_token(
+    skill_name: str,
+    tenant_id: str = Query(...),
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """Return decrypted OAuth credentials for a skill. Internal use only."""
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant_id")
+
+    skill_config = (
+        db.query(SkillConfig)
+        .filter(
+            SkillConfig.tenant_id == tid,
+            SkillConfig.skill_name == skill_name,
+            SkillConfig.enabled.is_(True),
+        )
+        .first()
+    )
+    if not skill_config:
+        raise HTTPException(status_code=404, detail=f"No active config for skill '{skill_name}'")
+
+    creds = retrieve_credentials_for_skill(db, skill_config.id, tid)
+    if not creds.get("oauth_token"):
+        raise HTTPException(status_code=404, detail="No active OAuth token found")
+
+    return creds
