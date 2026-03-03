@@ -1024,40 +1024,7 @@ const IntegrationsPage = () => {
         </Nav>
 
         {/* Tab Content */}
-        {activeTab === 'integrations' && (
-          <div className="tab-content-inner">
-            <Row className="mb-4">
-              <Col md={12}>
-                <Card style={{ border: '1px solid var(--color-border)', borderRadius: 12, background: 'var(--surface-elevated)' }}>
-                  <Card.Header style={{ background: 'transparent', borderBottom: '1px solid var(--color-border)', padding: '0.75rem 1.25rem' }}>
-                    <h6 className="mb-0 d-flex align-items-center" style={{ color: 'var(--color-foreground)' }}>
-                      <FaWhatsapp className="me-2" style={{ color: '#25D366' }} />
-                      Direct Message Channel (WhatsApp)
-                    </h6>
-                  </Card.Header>
-                  <Card.Body>
-                    <Row>
-                      <Col md={4}>
-                        <WhatsAppChannelCard />
-                      </Col>
-                      <Col md={8} className="d-flex align-items-center">
-                        <div className="ps-4 border-start">
-                          <h6 className="text-muted small text-uppercase fw-bold mb-2">About WhatsApp Integration</h6>
-                          <p className="text-muted small mb-0">
-                            The WhatsApp integration allows your agents to communicate directly with users on their phones.
-                            Once enabled and linked via QR code, your agents will have the "WhatsApp" skill automatically
-                            available to send and receive messages within their defined playbooks.
-                          </p>
-                        </div>
-                      </Col>
-                    </Row>
-                  </Card.Body>
-                </Card>
-              </Col>
-            </Row>
-            {renderSkillsTab()}
-          </div>
-        )}
+        {activeTab === 'integrations' && renderSkillsTab()}
         {activeTab === 'connectors' && (
           <div className="tab-content-inner">
             {renderConnectorsTab()}

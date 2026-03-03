@@ -36,11 +36,14 @@ import {
 import skillConfigService from '../services/skillConfigService';
 import skillService from '../services/skillService';
 
+import WhatsAppChannelCard from './WhatsAppChannelCard';
+
 // Map icon name strings from the registry to actual React icon components
 const ICON_MAP = {
   FaSlack: FaSlack,
   FaEnvelope: FaEnvelope,
   FaGithub: FaGithub,
+  FaWhatsapp: FaWhatsapp,
   FaBook: FaBook,
   FaTasks: FaTasks,
   FaCalendar: FaCalendar,
@@ -53,6 +56,7 @@ const SKILL_COLORS = {
   slack: '#4A154B',
   gmail: '#EA4335',
   github: '#333333',
+  whatsapp: '#25D366',
   notion: '#000000',
   jira: '#0052CC',
   google_calendar: '#4285F4',
@@ -579,95 +583,101 @@ const SkillsConfigPanel = () => {
                   {/* Credential Form (non-channel skills) */}
                   {!!config && isEnabled && (
                     <>
-                      <div className="mb-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <FaKey size={12} style={{ color: 'var(--color-muted)' }} />
-                        <span
-                          style={{
-                            fontSize: '0.8rem',
-                            fontWeight: 600,
-                            color: 'var(--color-foreground)',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.5px',
-                          }}
-                        >
-                          Credentials
-                        </span>
-                      </div>
+                      {skill.skill_name === 'whatsapp' ? (
+                        <WhatsAppChannelCard />
+                      ) : (
+                        <>
+                          <div className="mb-2" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <FaKey size={12} style={{ color: 'var(--color-muted)' }} />
+                            <span
+                              style={{
+                                fontSize: '0.8rem',
+                                fontWeight: 600,
+                                color: 'var(--color-foreground)',
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.5px',
+                              }}
+                            >
+                              Credentials
+                            </span>
+                          </div>
 
-                      {skill.credentials.map((cred) => (
-                        <Form.Group key={cred.key} className="mb-2">
-                          <Form.Label
-                            style={{
-                              fontSize: '0.78rem',
-                              color: 'var(--color-muted)',
-                              marginBottom: '0.25rem',
-                            }}
-                          >
-                            {cred.label}
-                            {cred.required && (
-                              <span className="text-danger ms-1">*</span>
-                            )}
-                          </Form.Label>
-                          <Form.Control
-                            type={cred.type === 'password' ? 'password' : 'text'}
-                            size="sm"
-                            placeholder={`Enter ${cred.label.toLowerCase()}`}
-                            value={formValues[cred.key] || ''}
-                            onChange={(e) =>
-                              handleCredentialChange(
-                                skill.skill_name,
-                                cred.key,
-                                e.target.value
-                              )
-                            }
-                            style={{
-                              background: 'var(--surface-contrast, rgba(0,0,0,0.2))',
-                              border: '1px solid var(--color-border)',
-                              color: 'var(--color-foreground)',
-                              fontSize: '0.82rem',
-                            }}
-                          />
-                        </Form.Group>
-                      ))}
+                          {skill.credentials.map((cred) => (
+                            <Form.Group key={cred.key} className="mb-2">
+                              <Form.Label
+                                style={{
+                                  fontSize: '0.78rem',
+                                  color: 'var(--color-muted)',
+                                  marginBottom: '0.25rem',
+                                }}
+                              >
+                                {cred.label}
+                                {cred.required && (
+                                  <span className="text-danger ms-1">*</span>
+                                )}
+                              </Form.Label>
+                              <Form.Control
+                                type={cred.type === 'password' ? 'password' : 'text'}
+                                size="sm"
+                                placeholder={`Enter ${cred.label.toLowerCase()}`}
+                                value={formValues[cred.key] || ''}
+                                onChange={(e) =>
+                                  handleCredentialChange(
+                                    skill.skill_name,
+                                    cred.key,
+                                    e.target.value
+                                  )
+                                }
+                                style={{
+                                  background: 'var(--surface-contrast, rgba(0,0,0,0.2))',
+                                  border: '1px solid var(--color-border)',
+                                  color: 'var(--color-foreground)',
+                                  fontSize: '0.82rem',
+                                }}
+                              />
+                            </Form.Group>
+                          ))}
 
-                      <div className="d-flex gap-2">
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          className="flex-grow-1"
-                          onClick={() => handleSaveCredentials(skill)}
-                          disabled={saving === skill.skill_name}
-                        >
-                          {saving === skill.skill_name ? (
-                            <Spinner
-                              animation="border"
+                          <div className="d-flex gap-2">
+                            <Button
+                              variant="primary"
                               size="sm"
-                              style={{ width: 14, height: 14, borderWidth: 1.5 }}
-                              className="me-2"
-                            />
-                          ) : (
-                            <FaSave className="me-2" size={12} />
-                          )}
-                          Save Credentials
-                        </Button>
-                        <Button
-                          variant="outline-success"
-                          size="sm"
-                          onClick={() => handleTestSkill(skill)}
-                          disabled={testingSkill === skill.skill_name || saving === skill.skill_name}
-                          title="Test connection"
-                        >
-                          {testingSkill === skill.skill_name ? (
-                            <Spinner
-                              animation="border"
+                              className="flex-grow-1"
+                              onClick={() => handleSaveCredentials(skill)}
+                              disabled={saving === skill.skill_name}
+                            >
+                              {saving === skill.skill_name ? (
+                                <Spinner
+                                  animation="border"
+                                  size="sm"
+                                  style={{ width: 14, height: 14, borderWidth: 1.5 }}
+                                  className="me-2"
+                                />
+                              ) : (
+                                <FaSave className="me-2" size={12} />
+                              )}
+                              Save Credentials
+                            </Button>
+                            <Button
+                              variant="outline-success"
                               size="sm"
-                              style={{ width: 14, height: 14, borderWidth: 1.5 }}
-                            />
-                          ) : (
-                            <FaPlay size={12} />
-                          )}
-                        </Button>
-                      </div>
+                              onClick={() => handleTestSkill(skill)}
+                              disabled={testingSkill === skill.skill_name || saving === skill.skill_name}
+                              title="Test connection"
+                            >
+                              {testingSkill === skill.skill_name ? (
+                                <Spinner
+                                  animation="border"
+                                  size="sm"
+                                  style={{ width: 14, height: 14, borderWidth: 1.5 }}
+                                />
+                              ) : (
+                                <FaPlay size={12} />
+                              )}
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </>
                   )}
 

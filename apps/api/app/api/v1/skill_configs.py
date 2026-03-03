@@ -59,6 +59,12 @@ SKILL_CREDENTIAL_SCHEMAS = {
             {"key": "webhook_url", "label": "Webhook URL", "type": "text", "required": False},
         ],
     },
+    "whatsapp": {
+        "display_name": "WhatsApp",
+        "description": "Send and receive WhatsApp messages via QR-linked phone",
+        "icon": "FaWhatsapp",
+        "credentials": [],
+    },
     "notion": {
         "display_name": "Notion",
         "description": "Read and write Notion pages and databases",
