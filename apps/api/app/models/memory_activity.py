@@ -23,7 +23,7 @@ class MemoryActivity(Base):
     #        action_failed, recall_used
     description = Column(Text, nullable=False)
     source = Column(String(50), nullable=True)  # chat, gmail, whatsapp, calendar, manual
-    metadata = Column(JSON, nullable=True)  # Extra context
+    event_metadata = Column("metadata", JSON, nullable=True)  # Extra context
 
     # Optional references
     entity_id = Column(UUID(as_uuid=True), ForeignKey("knowledge_entities.id", ondelete="SET NULL"), nullable=True)

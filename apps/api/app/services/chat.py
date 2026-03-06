@@ -295,7 +295,7 @@ def _generate_agentic_response(
                 event_type="recall_used",
                 description=f"Recalled {entity_count} entities + {memory_count} memories",
                 source="chat",
-                metadata={"keywords": user_message[:100]},
+                event_metadata={"keywords": user_message[:100]},
             )
         except Exception:
             pass  # Never break chat for logging
@@ -383,7 +383,7 @@ def _generate_agentic_response(
                             event_type="recall_used",
                             description=f"Recalled {entity_count} entities + {memory_count} memories",
                             source="chat",
-                            metadata={"keywords": user_message[:100]},
+                            event_metadata={"keywords": user_message[:100]},
                         )
                     except Exception:
                         pass  # Never break chat for logging
@@ -526,7 +526,7 @@ def _dispatch_action_triggers(
                 event_type="action_triggered",
                 description=f"Scheduled: {description}",
                 source="chat",
-                metadata={"trigger_type": trigger_type, "delay_hours": delay_hours, "entity_name": entity_name},
+                event_metadata={"trigger_type": trigger_type, "delay_hours": delay_hours, "entity_name": entity_name},
             )
             logger.info("Dispatched action trigger: %s (%s)", description, trigger_type)
         except Exception:

@@ -9,7 +9,7 @@ class MemoryActivityCreate(BaseModel):
     event_type: str
     description: str
     source: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    event_metadata: Optional[Dict[str, Any]] = None
     entity_id: Optional[UUID] = None
     memory_id: Optional[UUID] = None
     workflow_run_id: Optional[str] = None
