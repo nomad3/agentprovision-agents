@@ -37,6 +37,7 @@ from app.workflows.activities.remedia import (
     monitor_remedia_payment,
     track_remedia_delivery,
 )
+from app.workflows.auto_action import AutoActionWorkflow
 from app.workflows.deal_pipeline import DealPipelineWorkflow
 from app.workflows.activities.hca_activities import (
     hca_discover_prospects,
@@ -61,6 +62,7 @@ async def run_orchestration_worker():
     - TaskExecutionWorkflow (dispatch, recall, execute, persist_entities, evaluate)
     - ChannelHealthMonitorWorkflow (WhatsApp connection health monitoring)
     - FollowUpWorkflow (scheduled sales follow-up actions)
+    - AutoActionWorkflow (memory-triggered automated actions via Luna)
 
     Task queue: servicetsunami-orchestration
     """
@@ -82,6 +84,7 @@ async def run_orchestration_worker():
             MonthlyBillingWorkflow,
             RemediaOrderWorkflow,
             DealPipelineWorkflow,
+            AutoActionWorkflow,
         ],
         activities=[
             dispatch_task,
