@@ -20,6 +20,7 @@ from app.services import agent_kits as agent_kit_service
 from app.services import datasets as dataset_service
 from app.services.adk_client import ADKNotConfiguredError, get_adk_client
 from app.services.knowledge_extraction import knowledge_extraction_service
+from app.services.memory_recall import build_memory_context
 
 logger = logging.getLogger(__name__)
 
@@ -273,12 +274,38 @@ def _generate_agentic_response(
                 context={"error": str(exc)},
             )
 
+    # Build memory context for automatic recall
+    memory_context = {}
+    try:
+        memory_context = build_memory_context(db, session.tenant_id, user_message)
+    except Exception:
+        logger.warning("Memory recall failed", exc_info=True)
+
+    state_delta = {"tenant_id": str(session.tenant_id)}
+    if memory_context:
+        state_delta["memory_context"] = memory_context
+
+    if memory_context:
+        try:
+            from app.services.memory_activity import log_activity
+            entity_count = len(memory_context.get("relevant_entities", []))
+            memory_count = len(memory_context.get("relevant_memories", []))
+            log_activity(
+                db, session.tenant_id,
+                event_type="recall_used",
+                description=f"Recalled {entity_count} entities + {memory_count} memories",
+                source="chat",
+                metadata={"keywords": user_message[:100]},
+            )
+        except Exception:
+            pass  # Never break chat for logging
+
     try:
         events = client.run(
             user_id=user_id,
             session_id=str(adk_session_id),
             message=user_message,
-            state_delta={"tenant_id": str(session.tenant_id)},
+            state_delta=state_delta,
         )
         response_text, context = _extract_adk_response(events)
         _run_entity_extraction(db, session, context)
@@ -334,11 +361,38 @@ def _generate_agentic_response(
                     session.external_id = adk_session_id
                 db.commit()
                 db.refresh(session)
+
+                # Build memory context for automatic recall (retry path)
+                retry_memory_context = {}
+                try:
+                    retry_memory_context = build_memory_context(db, session.tenant_id, user_message)
+                except Exception:
+                    logger.warning("Memory recall failed (retry path)", exc_info=True)
+
+                retry_state_delta = {"tenant_id": str(session.tenant_id)}
+                if retry_memory_context:
+                    retry_state_delta["memory_context"] = retry_memory_context
+
+                if retry_memory_context:
+                    try:
+                        from app.services.memory_activity import log_activity
+                        entity_count = len(retry_memory_context.get("relevant_entities", []))
+                        memory_count = len(retry_memory_context.get("relevant_memories", []))
+                        log_activity(
+                            db, session.tenant_id,
+                            event_type="recall_used",
+                            description=f"Recalled {entity_count} entities + {memory_count} memories",
+                            source="chat",
+                            metadata={"keywords": user_message[:100]},
+                        )
+                    except Exception:
+                        pass  # Never break chat for logging
+
                 events = client.run(
                     user_id=user_id,
                     session_id=str(adk_session_id),
                     message=user_message,
-                    state_delta={"tenant_id": str(session.tenant_id)},
+                    state_delta=retry_state_delta,
                 )
                 response_text, context = _extract_adk_response(events)
                 _run_entity_extraction(db, session, context)
