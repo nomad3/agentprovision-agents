@@ -12,7 +12,7 @@ from starlette.requests import Request
 
 
 class StripPrefixMiddleware(BaseHTTPMiddleware):
-    """Middleware to strip /adk prefix from incoming requests."""
+    """Middleware to strip /adk prefix and extract tenant_id from requests."""
 
     def __init__(self, app, prefix: str = "/adk"):
         super().__init__(app)
@@ -26,6 +26,28 @@ class StripPrefixMiddleware(BaseHTTPMiddleware):
                 raw_path = request.scope["raw_path"].decode()
                 if raw_path.startswith(self.prefix):
                     request.scope["raw_path"] = (raw_path[len(self.prefix):] or "/").encode()
+
+        # Extract tenant_id from /run requests so tools resolve the correct tenant
+        if request.scope["path"] == "/run" and request.method == "POST":
+            try:
+                import json
+                body = await request.body()
+                data = json.loads(body)
+                # Check state_delta first, then fall back to state
+                tid = None
+                if isinstance(data.get("state_delta"), dict):
+                    tid = data["state_delta"].get("tenant_id")
+                if not tid and isinstance(data.get("state"), dict):
+                    tid = data["state"].get("tenant_id")
+                if tid:
+                    from tools.knowledge_tools import set_current_tenant_id
+                    set_current_tenant_id(tid)
+                # Re-inject body so downstream can read it
+                async def receive():
+                    return {"type": "http.request", "body": body}
+                request._receive = receive
+            except Exception:
+                pass
 
         response = await call_next(request)
         return response

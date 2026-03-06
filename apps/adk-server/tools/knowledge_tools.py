@@ -25,10 +25,18 @@ _UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 _cached_default_tenant_id = None
 
 
+def set_current_tenant_id(tenant_id: str) -> None:
+    """Set the current tenant_id from session state (called by middleware/hooks)."""
+    global _cached_default_tenant_id
+    if _UUID_PATTERN.match(tenant_id):
+        _cached_default_tenant_id = tenant_id
+
+
 def _resolve_tenant_id(tenant_id: str) -> str:
     """Resolve tenant_id to a valid UUID string.
     If the LLM passes a non-UUID value (like 'default_tenant' or 'auto'),
-    look up the first tenant from the database."""
+    use the cached tenant from session state, or fall back to DB lookup
+    preferring tenants with active skill configs (Gmail, etc.)."""
     global _cached_default_tenant_id
     if _UUID_PATTERN.match(tenant_id):
         return tenant_id
@@ -39,7 +47,14 @@ def _resolve_tenant_id(tenant_id: str) -> str:
         from config.settings import settings
         engine = create_engine(settings.database_url)
         with engine.connect() as conn:
-            result = conn.execute(text("SELECT id FROM tenants LIMIT 1")).fetchone()
+            # Prefer tenants with active skill configs (e.g. Gmail connected)
+            result = conn.execute(text(
+                "SELECT DISTINCT t.id FROM tenants t "
+                "JOIN skill_configs sc ON sc.tenant_id = t.id AND sc.enabled = true "
+                "LIMIT 1"
+            )).fetchone()
+            if not result:
+                result = conn.execute(text("SELECT id FROM tenants ORDER BY created_at DESC LIMIT 1")).fetchone()
             if result:
                 _cached_default_tenant_id = str(result[0])
                 return _cached_default_tenant_id
