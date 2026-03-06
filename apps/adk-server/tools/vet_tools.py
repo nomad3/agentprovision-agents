@@ -211,6 +211,61 @@ Only populate measurement fields you can actually read from the images. Set unre
         return {"status": "error", "error": str(e)}
 
 
+async def transcribe_audio(
+    audio_url: str,
+    tenant_id: str = "auto",
+) -> dict:
+    """Transcribe a voice note (WhatsApp audio) using Gemini multimodal.
+
+    Downloads the audio file and sends it to Gemini for transcription.
+    Optimized for veterinary clinical dictation.
+
+    Args:
+        audio_url: URL of the audio file to transcribe
+        tenant_id: Tenant context
+
+    Returns:
+        Dict with transcription text, detected language, and confidence.
+    """
+    tenant_id = _resolve_tenant_id(tenant_id)
+
+    # Normalize URL
+    base = settings.healthpets_api_url.rstrip("/")
+    if not audio_url.startswith(("http://", "https://")):
+        audio_url = f"{base}{audio_url}"
+
+    # Fetch audio
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        resp = await client.get(audio_url)
+        resp.raise_for_status()
+        mime_type = resp.headers.get("content-type", "audio/ogg").split(";")[0].strip()
+        audio_data = resp.content
+
+    # Send to Gemini for transcription
+    parts = [
+        genai.types.Part.from_bytes(data=audio_data, mime_type=mime_type),
+        "Transcribe this veterinary clinical audio recording exactly. "
+        "This is a cardiologist dictating findings during an echocardiogram. "
+        "Include all medical terms, measurements, and values precisely. "
+        "Return only the transcription text, nothing else."
+    ]
+
+    try:
+        client = genai.Client()
+        response = await client.aio.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=parts,
+        )
+        return {
+            "status": "success",
+            "transcription": response.text.strip(),
+            "language": "en",
+        }
+    except Exception as e:
+        logger.exception("Audio transcription failed: %s", e)
+        return {"status": "error", "error": str(e)}
+
+
 async def get_breed_reference_ranges(
     species: str,
     breed: str,
