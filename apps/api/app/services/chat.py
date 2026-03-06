@@ -421,8 +421,99 @@ def _run_entity_extraction(
         if entities_extracted > 0 and context is not None:
             context["entities_extracted"] = entities_extracted
             logger.info("Extracted %d entities from session %s", entities_extracted, session.id)
+
+        # Track relations and memories in context
+        relations_data = result.get("relations", [])
+        memories_data = result.get("memories", [])
+        if context is not None:
+            if relations_data:
+                context["relations_created"] = len(relations_data)
+            if memories_data:
+                context["memories_created"] = len(memories_data)
+
+        # Dispatch action triggers (reminders, follow-ups)
+        triggers = result.get("action_triggers", [])
+        if triggers:
+            _dispatch_action_triggers(db, session.tenant_id, triggers)
+
     except Exception:
         logger.warning("Entity extraction failed for session %s", session.id, exc_info=True)
+
+
+def _dispatch_action_triggers(
+    db: Session,
+    tenant_id: uuid.UUID,
+    triggers: list[dict],
+) -> None:
+    """Dispatch action triggers from extraction as Temporal workflows."""
+    from app.services.memory_activity import log_activity
+
+    for trigger in triggers:
+        trigger_type = trigger.get("type", "")
+        description = trigger.get("description", "")
+        delay_hours = trigger.get("delay_hours", 0)
+        entity_name = trigger.get("entity_name", "")
+
+        if not description:
+            continue
+
+        try:
+            if trigger_type in ("reminder", "follow_up"):
+                _start_followup_workflow(
+                    tenant_id=str(tenant_id),
+                    entity_name=entity_name,
+                    action=trigger_type,
+                    delay_hours=delay_hours,
+                    message=description,
+                )
+
+            log_activity(
+                db, tenant_id,
+                event_type="action_triggered",
+                description=f"Scheduled: {description}",
+                source="chat",
+                metadata={"trigger_type": trigger_type, "delay_hours": delay_hours, "entity_name": entity_name},
+            )
+            logger.info("Dispatched action trigger: %s (%s)", description, trigger_type)
+        except Exception:
+            logger.warning("Failed to dispatch trigger: %s", description, exc_info=True)
+
+
+def _start_followup_workflow(
+    tenant_id: str,
+    entity_name: str,
+    action: str,
+    delay_hours: int,
+    message: str,
+) -> None:
+    """Start a FollowUpWorkflow via Temporal (best-effort)."""
+    try:
+        from temporalio.client import Client as TemporalClient
+        import asyncio
+
+        async def _start():
+            client = await TemporalClient.connect(settings.TEMPORAL_ADDRESS)
+            from app.workflows.follow_up import FollowUpInput, FollowUpWorkflow
+            await client.start_workflow(
+                FollowUpWorkflow.run,
+                FollowUpInput(
+                    entity_id=entity_name,  # Will be resolved by workflow
+                    tenant_id=tenant_id,
+                    action=action,
+                    delay_hours=delay_hours or 24,
+                    message=message,
+                ),
+                id=f"followup-{tenant_id[:8]}-{entity_name[:20]}-{int(time.time())}",
+                task_queue="servicetsunami-orchestration",
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_start())
+        except RuntimeError:
+            asyncio.run(_start())
+    except Exception:
+        logger.warning("Could not start FollowUp workflow (Temporal may be unavailable)", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
