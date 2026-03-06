@@ -21,8 +21,10 @@ from sqlalchemy.orm import Session
 
 from app.models.chat import ChatSession
 from app.models.knowledge_entity import KnowledgeEntity
-from app.models.knowledge_relation import KnowledgeRelation  # noqa: F401 — reserved for future relation extraction
+from app.models.knowledge_relation import KnowledgeRelation
+from app.models.agent_memory import AgentMemory
 from app.services.llm.legacy_service import get_llm_service
+from app.services.memory_activity import log_activity
 from app.services.orchestration.entity_validator import EntityValidator, ValidationPolicy
 
 logger = logging.getLogger(__name__)
@@ -198,12 +200,49 @@ class KnowledgeExtractionService:
                 collection_task_id=collection_task_id,
             )
 
+            relations_created = self._persist_relations(db, tenant_id, relations_data)
+            memories_created = self._persist_memories(db, tenant_id, memories_data)
+
+            # --- Activity logging ---
+            for entity in created:
+                try:
+                    log_activity(
+                        db, tenant_id, "entity_created",
+                        f'Extracted "{entity.name}" ({entity.entity_type})',
+                        source="chat", entity_id=entity.id,
+                    )
+                except Exception:
+                    logger.debug("Failed to log entity activity for %s", entity.name)
+
+            if relations_created:
+                try:
+                    log_activity(
+                        db, tenant_id, "relation_created",
+                        f"Discovered {relations_created} relations",
+                        source="chat",
+                    )
+                except Exception:
+                    logger.debug("Failed to log relation activity")
+
+            if memories_created:
+                try:
+                    log_activity(
+                        db, tenant_id, "memory_created",
+                        f"Learned {memories_created} new memories",
+                        source="chat",
+                    )
+                except Exception:
+                    logger.debug("Failed to log memory activity")
+
             logger.info(
-                "Extracted %d entities (%d new), %d relations, %d memories, %d triggers from content_type=%s",
+                "Extracted %d entities (%d new), %d relations (%d persisted), "
+                "%d memories (%d persisted), %d triggers from content_type=%s",
                 len(entities_data),
                 len(created),
                 len(relations_data),
+                relations_created,
                 len(memories_data),
+                memories_created,
                 len(triggers_data),
                 content_type,
             )
@@ -470,6 +509,119 @@ class KnowledgeExtractionService:
             len(result.rejected_entities),
         )
         return created
+
+    @staticmethod
+    def _persist_relations(
+        db: Session,
+        tenant_id: uuid.UUID,
+        relations_data: List[Dict[str, Any]],
+    ) -> int:
+        """Persist extracted relations by resolving entity names to IDs."""
+        if not relations_data:
+            return 0
+
+        created_count = 0
+        for rel in relations_data:
+            from_name = rel.get("from", "").strip()
+            to_name = rel.get("to", "").strip()
+            rel_type = rel.get("type", "related_to")
+
+            if not from_name or not to_name:
+                continue
+
+            # Resolve entity names to IDs via ILIKE
+            from_entity = db.query(KnowledgeEntity).filter(
+                KnowledgeEntity.tenant_id == tenant_id,
+                KnowledgeEntity.name.ilike(from_name),
+            ).first()
+            to_entity = db.query(KnowledgeEntity).filter(
+                KnowledgeEntity.tenant_id == tenant_id,
+                KnowledgeEntity.name.ilike(to_name),
+            ).first()
+
+            if not from_entity or not to_entity:
+                logger.debug("Skipping relation %s->%s: entity not found", from_name, to_name)
+                continue
+
+            # Check for duplicate
+            existing = db.query(KnowledgeRelation).filter(
+                KnowledgeRelation.tenant_id == tenant_id,
+                KnowledgeRelation.from_entity_id == from_entity.id,
+                KnowledgeRelation.to_entity_id == to_entity.id,
+                KnowledgeRelation.relation_type == rel_type,
+            ).first()
+            if existing:
+                continue
+
+            relation = KnowledgeRelation(
+                tenant_id=tenant_id,
+                from_entity_id=from_entity.id,
+                to_entity_id=to_entity.id,
+                relation_type=rel_type,
+                strength=float(rel.get("confidence", 0.8)),
+                evidence={"text": rel.get("evidence", "")},
+            )
+            db.add(relation)
+            created_count += 1
+
+        if created_count:
+            db.commit()
+        logger.info("Persisted %d relations", created_count)
+        return created_count
+
+    @staticmethod
+    def _persist_memories(
+        db: Session,
+        tenant_id: uuid.UUID,
+        memories_data: List[Dict[str, Any]],
+    ) -> int:
+        """Persist extracted agent memories (user preferences, facts, decisions)."""
+        if not memories_data:
+            return 0
+
+        # Resolve a default agent_id for this tenant (Luna's agent)
+        from app.models.agent import Agent
+        agent = db.query(Agent).filter(Agent.tenant_id == tenant_id).first()
+        if not agent:
+            logger.warning("No agent found for tenant %s — cannot store memories", tenant_id)
+            return 0
+
+        created_count = 0
+        for mem in memories_data:
+            content = mem.get("content", "").strip()
+            memory_type = mem.get("type", "fact")
+            if not content:
+                continue
+
+            # Valid types
+            if memory_type not in ("preference", "fact", "experience", "decision", "skill", "relationship", "procedure"):
+                memory_type = "fact"
+
+            # Dedup: skip if similar content exists
+            existing = db.query(AgentMemory).filter(
+                AgentMemory.agent_id == agent.id,
+                AgentMemory.tenant_id == tenant_id,
+                AgentMemory.memory_type == memory_type,
+                AgentMemory.content.ilike(f"%{content[:50]}%"),
+            ).first()
+            if existing:
+                continue
+
+            memory = AgentMemory(
+                agent_id=agent.id,
+                tenant_id=tenant_id,
+                memory_type=memory_type,
+                content=content,
+                importance=float(mem.get("importance", 0.5)),
+                source=mem.get("source", "conversation"),
+            )
+            db.add(memory)
+            created_count += 1
+
+        if created_count:
+            db.commit()
+        logger.info("Persisted %d agent memories", created_count)
+        return created_count
 
 
 # Module-level singleton
