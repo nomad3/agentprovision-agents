@@ -11,7 +11,6 @@ import {
 } from "react-bootstrap";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { FaChartLine } from "react-icons/fa";
 import AnimatedSection from "./components/common/AnimatedSection";
 import CTASection from "./components/marketing/CTASection";
 import {
@@ -32,6 +31,10 @@ const LandingPage = () => {
   const { t, i18n } = useTranslation(["common", "landing"]);
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
+
+  const goToRegister = React.useCallback(() => {
+    navigate("/register");
+  }, [navigate]);
 
   const goToLogin = React.useCallback(() => {
     navigate("/login");
@@ -204,13 +207,8 @@ const LandingPage = () => {
               <Nav.Link href="#cta" className="mx-2">
                 {t("common:nav.pricing")}
               </Nav.Link>
-              <Nav.Link
-                href="https://analytics.servicetsunami.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mx-2"
-              >
-                Analytics
+              <Nav.Link href="#roadmap" className="mx-2">
+                Roadmap
               </Nav.Link>
               <Dropdown align="end">
                 <Dropdown.Toggle
@@ -233,8 +231,8 @@ const LandingPage = () => {
                   ))}
                 </Dropdown.Menu>
               </Dropdown>
-              <Button onClick={goToLogin} className="ms-lg-4 px-4 py-2">
-                {t("common:cta.bookDemo")}
+              <Button onClick={goToRegister} className="ms-lg-4 px-4 py-2">
+                {t("common:cta.startFree")}
               </Button>
             </Nav>
           </Navbar.Collapse>
@@ -242,7 +240,7 @@ const LandingPage = () => {
       </Navbar>
 
       <main>
-        <HeroSection onPrimaryCta={goToLogin} onSecondaryCta={goToLogin} />
+        <HeroSection onPrimaryCta={goToRegister} onSecondaryCta={goToLogin} />
         <InteractivePreview />
         <FeatureDemoSection />
         <FeaturesSection />
@@ -532,38 +530,51 @@ const LandingPage = () => {
           </Container>
         </section>
 
-        <section id="analytics" className="section-wrapper section-dark section-separator">
+        <section id="memory" className="section-wrapper section-dark section-separator">
           <Container>
             <AnimatedSection animation="fade-in">
               <Row className="align-items-center g-5">
                 <Col lg={7} className="text-center text-lg-start">
                   <h2 className="display-5 fw-bold gradient-text">
-                    ServiceTsunami Analytics
+                    Memory That Gets Smarter Every Day
                   </h2>
                   <p className="lead text-soft mt-3 mb-4">
-                    Our standalone analytics platform gives you full visibility
-                    into business metrics, campaign performance, and operational
-                    KPIs — independent from the agent orchestration engine.
+                    Every conversation teaches your agents. Luna automatically extracts
+                    people, companies, preferences, and decisions into a persistent knowledge
+                    graph. Next time you ask, she already knows the context.
                   </p>
-                  <Button
-                    size="lg"
-                    variant="outline-light"
-                    className="px-5 py-3"
-                    href="https://analytics.servicetsunami.com"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <FaChartLine className="me-2" />
-                    Visit Analytics Platform
-                  </Button>
+                  <div className="d-flex flex-wrap gap-3 justify-content-center justify-content-lg-start">
+                    <span className="badge-glow">Entity Extraction</span>
+                    <span className="badge-glow">Relation Mapping</span>
+                    <span className="badge-glow">Contextual Recall</span>
+                    <span className="badge-glow">Activity Feed</span>
+                  </div>
                 </Col>
                 <Col lg={5}>
-                  <div className="glass-card text-center p-5">
-                    <FaChartLine size={64} className="text-primary mb-3" />
-                    <h4 className="text-white fw-semibold">Dedicated Platform</h4>
-                    <p className="text-soft mb-0">
-                      Dashboards, reports, and data exploration — a separate product built for data-driven decisions.
-                    </p>
+                  <div className="glass-card p-4">
+                    <div className="d-flex justify-content-between align-items-center mb-3">
+                      <h5 className="text-white fw-semibold mb-0">Memory Overview</h5>
+                      <span className="text-soft small">Live from your conversations</span>
+                    </div>
+                    <div className="d-flex gap-3 mb-3">
+                      <div className="flex-fill text-center p-3" style={{background: 'rgba(43,125,233,0.1)', borderRadius: 12}}>
+                        <div className="text-white fw-bold fs-4">21</div>
+                        <div className="text-soft small">Entities</div>
+                      </div>
+                      <div className="flex-fill text-center p-3" style={{background: 'rgba(236,72,153,0.1)', borderRadius: 12}}>
+                        <div className="text-white fw-bold fs-4">1</div>
+                        <div className="text-soft small">Memories</div>
+                      </div>
+                      <div className="flex-fill text-center p-3" style={{background: 'rgba(94,197,176,0.1)', borderRadius: 12}}>
+                        <div className="text-white fw-bold fs-4">9</div>
+                        <div className="text-soft small">Relations</div>
+                      </div>
+                    </div>
+                    <div className="text-soft small" style={{borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 12}}>
+                      <div className="mb-1">+ Extracted "Carlos Rodriguez" (person)</div>
+                      <div className="mb-1">+ Extracted "Acme Technologies" (organization)</div>
+                      <div>+ Scheduled follow-up via email</div>
+                    </div>
                   </div>
                 </Col>
               </Row>
@@ -589,9 +600,9 @@ const LandingPage = () => {
                       <Button
                         size="lg"
                         className="px-5 py-3"
-                        onClick={goToLogin}
+                        onClick={goToRegister}
                       >
-                        {t("common:cta.scheduleCall")}
+                        {t("common:cta.startFree")}
                       </Button>
                     </Col>
                   </Row>

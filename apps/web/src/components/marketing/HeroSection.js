@@ -1,5 +1,5 @@
 import { Button, Col, Container, Row } from "react-bootstrap";
-import { FaChartLine } from "react-icons/fa";
+import { FaArrowRight } from "react-icons/fa";
 import { useTranslation } from "react-i18next";
 import NeuralCanvas from "../common/NeuralCanvas";
 
@@ -24,7 +24,7 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
             </p>
             <div className="d-flex flex-column flex-md-row gap-3 justify-content-center justify-content-lg-start mt-4">
               <Button size="lg" className="px-5 py-3" onClick={onPrimaryCta}>
-                {t('common:cta.bookDemo', 'Book a Demo')}
+                {t('common:cta.startFree', 'Start Free')}
               </Button>
               <Button
                 size="lg"
@@ -32,18 +32,8 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
                 className="px-5 py-3"
                 onClick={onSecondaryCta}
               >
-                {t('common:cta.watchDemo', 'Watch Demo')}
-              </Button>
-              <Button
-                size="lg"
-                variant="outline-light"
-                className="px-5 py-3"
-                href="https://analytics.servicetsunami.com"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                <FaChartLine className="me-2" />
-                Analytics Platform
+                {t('common:cta.signIn', 'Sign In')}
+                <FaArrowRight className="ms-2" size={14} />
               </Button>
             </div>
           </Col>

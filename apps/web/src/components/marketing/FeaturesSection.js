@@ -1,45 +1,45 @@
 import React from "react";
 import { Container, Row, Col } from "react-bootstrap";
 import {
-  FaRocket,
-  FaChartLine,
-  FaUsers,
-  FaShieldAlt,
+  FaRobot,
   FaBrain,
-  FaGlobe,
+  FaCogs,
+  FaPlug,
+  FaShieldAlt,
+  FaComments,
 } from "react-icons/fa";
 
 const FeaturesSection = () => {
   const features = [
     {
-      icon: FaRocket,
-      title: "Lightning Fast",
-      description: "Get answers in seconds, not days",
-    },
-    {
-      icon: FaChartLine,
-      title: "Smart Analytics",
-      description: "AI-powered insights automatically",
-    },
-    {
-      icon: FaUsers,
-      title: "Team Ready",
-      description: "Collaborate seamlessly with your team",
-    },
-    {
-      icon: FaShieldAlt,
-      title: "Secure & Compliant",
-      description: "Enterprise-grade security built-in",
+      icon: FaRobot,
+      title: "Multi-Agent Teams",
+      description: "Hierarchical agent orchestration with specialized teams and supervisors",
     },
     {
       icon: FaBrain,
-      title: "AI-Powered",
-      description: "Advanced ML for intelligent analysis",
+      title: "Persistent Memory",
+      description: "Knowledge graph with entity extraction, relations, and contextual recall",
     },
     {
-      icon: FaGlobe,
-      title: "Global Scale",
-      description: "Works with data from anywhere",
+      icon: FaComments,
+      title: "AI Chat with Luna",
+      description: "Natural language interface that learns your preferences and context",
+    },
+    {
+      icon: FaPlug,
+      title: "OAuth Integrations",
+      description: "Gmail, Calendar, WhatsApp, GitHub — agents access your real tools",
+    },
+    {
+      icon: FaCogs,
+      title: "Durable Workflows",
+      description: "Temporal-powered automation with retry logic and audit trails",
+    },
+    {
+      icon: FaShieldAlt,
+      title: "Enterprise Security",
+      description: "Multi-tenant isolation, encrypted credentials, and JWT auth",
     },
   ];
 
@@ -49,10 +49,10 @@ const FeaturesSection = () => {
         <Row className="text-center mb-5">
           <Col>
             <h2 className="display-5 fw-bold text-white mb-3">
-              Everything you need to succeed
+              Everything you need for production AI agents
             </h2>
             <p className="lead text-soft">
-              Powerful features that transform how your team works with data
+              From orchestration to memory to integrations — built for real-world agentic systems
             </p>
           </Col>
         </Row>

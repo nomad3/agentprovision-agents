@@ -1,185 +1,185 @@
 {
   "hero": {
-    "badge": "The AI-Powered Operations Platform",
-    "title": "Connect. Automate. Scale. Repeat.",
-    "lead": "ServiceTsunami is the unified command center for enterprise operations. Consolidate ERP, finance, HR, compliance, and AI across every business unit from day one.",
-    "subtext": "Stop stitching together spreadsheets and legacy systems. One platform to run your entire operation — from growth pipeline to optimization.",
-    "subHighlight": "The operations platform that scales with every business unit.",
+    "badge": "AI Agent Orchestration Platform",
+    "title": "Deploy AI Teams That Think, Learn & Act",
+    "lead": "ServiceTsunami is the enterprise platform for building multi-agent AI systems. Orchestrate specialized agent teams, connect to your tools via integrations, and let your AI remember everything across conversations.",
+    "subtext": "Stop building one-off chatbots. Deploy agent teams that coordinate, remember context, and execute real workflows across your business.",
+    "subHighlight": "The agentic AI platform that scales with your ambition.",
     "spotlight": {
-      "heading": "Built for Enterprise Operators",
-      "badge": "Day-One Ready"
+      "heading": "Built for AI-First Teams",
+      "badge": "Production Ready"
     },
     "highlights": {
       "governedDataProducts": {
-        "title": "Unified Back Office Across Business Units",
-        "description": "Consolidate ERP, finance, banking, and spend management across every business unit. One chart of accounts, one source of truth, one dashboard for the entire organization."
+        "title": "Multi-Agent Team Orchestration",
+        "description": "Hierarchical agent teams with supervisors, specialists, and leaf agents. Each team handles a domain — personal assistant, dev ops, data science, sales — coordinated by a root supervisor."
       },
       "unifiedLakehouseFabric": {
-        "title": "AI Agents That Know Your Business",
-        "description": "Deploy autonomous AI agents for hyper-local ad campaigns, insurance RCM automation, HR compliance, and financial reporting. Agents learn each business unit's context and operate 24/7."
+        "title": "Persistent Memory & Knowledge Graph",
+        "description": "Your agents remember. Entity extraction, relation mapping, and contextual recall across every conversation. Luna learns your contacts, preferences, and business context automatically."
       },
       "agenticAutomation": {
-        "title": "Growth Pipeline to Optimization Playbook",
-        "description": "Track opportunities, run assessments, model integration plans, and manage operational readiness — all in one place. Purpose-built for operators running 5 to 500 business units."
+        "title": "Workflow Automation Engine",
+        "description": "Temporal-powered durable workflows for deal pipelines, data sync, knowledge extraction, and scheduled automations. Reliable execution with full audit trails."
       }
     }
   },
   "logos": {
-    "heading": "Powered by Modern Infrastructure",
+    "heading": "Built With",
     "items": [
       "Claude AI",
-      "React",
-      "PostgreSQL",
-      "DuckDB",
+      "Google ADK",
       "Temporal",
+      "PostgreSQL",
+      "React",
       "FastAPI"
     ]
   },
   "metrics": {
     "items": [
       {
-        "label": "ERP & Finance",
-        "value": "One Back Office, Many Business Units",
-        "description": "Consolidate general ledger, AP/AR, payroll, and banking across every business unit. Eliminate duplicate systems, reduce headcount overhead, and close books in days instead of weeks."
+        "label": "Agent Teams",
+        "value": "7 Specialized Teams",
+        "description": "Personal assistant, dev team, data team, sales, marketing, deal management, and industry-specific agents — each with their own tools and expertise."
       },
       {
-        "label": "AI-Powered Ads",
-        "value": "Hyper-Local Campaigns at Scale",
-        "description": "Deploy AI-driven ad campaigns tailored to each business unit's local market. Automatically optimize creative, targeting, and budget allocation across hundreds of locations."
+        "label": "Integrations",
+        "value": "Gmail, Calendar, WhatsApp & More",
+        "description": "OAuth-connected integrations with automatic token refresh. Your agents read emails, manage calendar events, and communicate via WhatsApp natively."
       },
       {
-        "label": "Compliance & HR",
-        "value": "Standardize from Day One",
-        "description": "Onboard new business units to unified HR policies, benefits, and compliance frameworks instantly. Automate state-by-state regulatory tracking and reduce integration timelines by 80%."
+        "label": "Knowledge System",
+        "value": "Entities, Relations & Memories",
+        "description": "Automatic extraction from every conversation. Entities are categorized, related, and scored. Agent memories capture preferences and decisions for contextual recall."
       }
     ]
   },
   "features": {
-    "heading": "Every Module Your Operations Need",
-    "subtitle": "From opportunity sourcing to optimization — one platform, zero integration headaches.",
+    "heading": "Everything Your AI Agents Need",
+    "subtitle": "From orchestration to memory — one platform for building production-grade AI agent systems.",
     "items": {
       "connectEverySource": {
-        "title": "Growth Pipeline & Assessments",
-        "description": "Track growth targets, manage opportunities, run automated assessment checklists, and model integration plans. Never lose a deal to disorganization again."
+        "title": "Multi-Agent Orchestration",
+        "description": "Design hierarchical agent teams with a root supervisor routing to specialized sub-teams. Each agent has tools, instructions, and domain expertise. Powered by Google ADK."
       },
       "semanticControlPlane": {
-        "title": "Banking & Spend Management",
-        "description": "Centralized treasury, unit-level banking, automated expense policies, and real-time spend visibility. Control cash flow across your entire organization from one dashboard."
+        "title": "Knowledge Graph & Memory",
+        "description": "Automatic entity extraction from conversations. Entities, relations, and agent memories form a persistent knowledge graph. Recall injection gives agents context on every interaction."
       },
       "agentAutomationStudio": {
-        "title": "Insurance & RCM Automation",
-        "description": "Automate revenue cycle management, claims processing, and insurance workflows with AI agents. Reduce denial rates, accelerate collections, and eliminate manual follow-ups."
+        "title": "Workflow Automation",
+        "description": "Temporal-powered durable workflows for complex multi-step processes. Deal pipelines, data sync, knowledge extraction, follow-ups, and scheduled tasks — all with retry logic and audit trails."
       }
     }
   },
   "lakehouse": {
-    "heading": "Built for Operators Who Move Fast",
-    "description": "Operations fail when integration stalls. ServiceTsunami ensures every business unit is operational from day one.",
+    "heading": "Why Agent Teams Beat Single Chatbots",
+    "description": "Single-agent systems hit a wall. Multi-agent orchestration breaks through.",
     "highlights": {
       "unifiedGovernance": {
-        "title": "The Integration Problem",
-        "description": "Most organizations spend 12-18 months integrating each new business unit onto legacy systems. ServiceTsunami cuts that to weeks with pre-built playbooks and AI-powered automation."
+        "title": "The Complexity Problem",
+        "description": "Real business tasks span multiple domains — research, analysis, communication, execution. A single agent can't do it all well. Specialized agent teams divide and conquer."
       },
       "programmablePipelines": {
-        "title": "The Visibility Problem",
-        "description": "Operating 50+ business units on different systems means no one has the full picture. Our unified platform gives you real-time P&L, cash flow, and KPIs across every unit."
+        "title": "The Memory Problem",
+        "description": "Chatbots forget everything between sessions. ServiceTsunami's knowledge graph persists entities, relations, and preferences across every conversation and channel."
       },
       "compliantCollaboration": {
-        "title": "The Scale Problem",
-        "description": "Adding headcount for every new business unit kills your margins. AI agents handle routine finance, HR, and compliance tasks so you can scale operations without scaling overhead."
+        "title": "The Integration Problem",
+        "description": "Agents are useless without access to your tools. OAuth integrations with Gmail, Calendar, WhatsApp, and more give your agents real-world capabilities."
       }
     },
     "secondary": {
-      "heading": "Value Delivered",
-      "description": "Tangible results for enterprise operators.",
+      "heading": "Platform Capabilities",
+      "description": "What you get out of the box.",
       "items": {
         "adaptiveGuardrails": {
-          "title": "Faster Integration",
-          "description": "Reduce post-onboarding integration from months to weeks. Pre-built playbooks for ERP migration, HR onboarding, and financial consolidation."
+          "title": "Luna — Your AI Co-Pilot",
+          "description": "A personal assistant that learns from every interaction. Luna extracts contacts, remembers preferences, schedules follow-ups, and gets smarter over time."
         },
         "explainableDecisions": {
-          "title": "Lower Overhead",
-          "description": "AI agents replace manual processes across finance, HR, and compliance. Scale from 10 to 100 business units without proportional headcount growth."
+          "title": "Self-Evolving Agents",
+          "description": "The dev team agents can modify their own codebase, create new tools, run tests, and deploy changes. Your AI system improves itself autonomously."
         },
         "lakehouseSignals": {
-          "title": "Operational Readiness",
-          "description": "Clean financials, unified systems, and auditable data from day one. Your operations are always in order."
+          "title": "Enterprise-Grade Security",
+          "description": "Multi-tenant isolation, Fernet-encrypted credential vault, JWT authentication, and full audit trails. Deploy on your own GKE cluster with Helm charts."
         }
       }
     }
   },
   "architecture": {
     "heading": "Platform Architecture",
-    "description": "Enterprise-grade infrastructure for multi-unit operations.",
+    "description": "Production-grade infrastructure for agentic AI.",
     "layers": {
       "dataIntegrationLayer": {
-        "title": "Data & Integration Layer",
-        "description": "Connect ERPs, banks, payroll systems, and CRMs. Ingest data from every business unit into a unified data lake with automated reconciliation."
+        "title": "Integration Layer",
+        "description": "OAuth providers (Google, GitHub, Slack), WhatsApp Business API, MCP server for Databricks, and credential vault for secure token management."
       },
       "semanticGovernanceLayer": {
         "title": "Orchestration Layer",
-        "description": "Temporal-powered workflows handle cross-unit processes: financial consolidation, compliance checks, integration playbooks, and scheduled reporting."
+        "description": "Google ADK multi-agent supervisor pattern, Temporal durable workflows, task dispatch, and entity validation. Reliable execution at scale."
       },
       "agenticExecutionLayer": {
-        "title": "AI Agent Layer",
-        "description": "Autonomous agents for ad optimization, RCM automation, financial analysis, HR compliance, and more. Each agent understands unit-level context and operates continuously."
+        "title": "Intelligence Layer",
+        "description": "Knowledge graph with entity extraction, relation mapping, and contextual recall. Multi-LLM router supporting Claude, GPT, DeepSeek, and more."
       }
     }
   },
   "ai": {
-    "heading": "AI Agents for Every Function",
-    "description": "Deploy specialized agents across your organization.",
+    "heading": "Agent Teams for Every Domain",
+    "description": "Deploy specialized AI teams across your organization.",
     "items": {
       "insightCopilots": {
-        "title": "Financial Intelligence Agents",
-        "description": "Consolidate P&L across business units, flag anomalies, forecast cash flow, and generate board-ready reports. Like having a CFO team that never sleeps."
+        "title": "Personal Assistant Team",
+        "description": "Luna handles day-to-day tasks: email management, calendar coordination, WhatsApp communication, note-taking, and proactive follow-ups. Your AI executive assistant."
       },
       "composableSkills": {
-        "title": "Operations & Compliance Agents",
-        "description": "Monitor regulatory changes, automate compliance filings, manage HR onboarding, and track insurance claims. Reduce risk while scaling faster."
+        "title": "Data & Analytics Team",
+        "description": "Data analyst, report generator, and knowledge manager agents. SQL queries, dataset analysis, automated reports, and knowledge graph management."
       },
       "closedLoopActuators": {
-        "title": "Growth & Revenue Agents",
-        "description": "Run hyper-local ad campaigns, optimize pricing, manage customer acquisition, and automate revenue cycle management across every business unit."
+        "title": "Dev & Operations Team",
+        "description": "Self-modifying dev team with architect, coder, tester, and DevOps agents. They can create tools, fix bugs, run tests, and deploy — autonomously."
       }
     }
   },
   "roadmap": {
     "heading": "What We're Building Next",
-    "subtitle": "Purpose-built features for enterprise operators.",
+    "subtitle": "Expanding agent capabilities and integrations.",
     "items": {
       "marketplaceConnectors": {
-        "title": "Private Credit & Lending",
-        "description": "Integrated debt management, covenant tracking, and lender reporting. Manage capital structure across your entire organization."
+        "title": "SRE & Infrastructure Agents",
+        "description": "Alert triage, pattern detection, cloud architecture design, and infrastructure troubleshooting. Slack integration for ops channel monitoring."
       },
       "adaptiveGovernanceAi": {
-        "title": "Optimization & Analytics Hub",
-        "description": "Automated reporting, data room generation, quality of earnings support, and stakeholder management. Be operationally excellent at all times."
+        "title": "Advanced Memory & Recall",
+        "description": "Proactive memory suggestions, cross-session context threading, and memory-driven automations. Your agents anticipate what you need."
       },
       "autonomousFinopsSuites": {
-        "title": "Industry-Specific Playbooks",
-        "description": "Pre-built integration templates for healthcare, home services, professional services, and other high-frequency operational verticals."
+        "title": "Marketplace & Plugins",
+        "description": "Community-built agent skills, tool integrations, and workflow templates. Extend your agent capabilities without writing code."
       }
     }
   },
   "testimonials": {
-    "heading": "Built for Enterprise Operators",
-    "subtitle": "How multi-unit operators are scaling with ServiceTsunami",
+    "heading": "Built for Builders",
+    "subtitle": "How teams are using ServiceTsunami to deploy production AI agents",
     "items": [
       {
-        "quote": "We were drowning in spreadsheets trying to consolidate financials across 30 business units on 4 different ERPs. ServiceTsunami gave us a single source of truth and cut our monthly close from 3 weeks to 5 days.",
-        "author": "CFO",
-        "role": "Multi-Location Services Organization"
+        "quote": "We went from a single chatbot to a full agent fleet in two weeks. Luna handles our client communications while the data team agents generate reports automatically. The memory system means nothing falls through the cracks.",
+        "author": "AI Engineering Lead",
+        "role": "SaaS Platform"
       },
       {
-        "quote": "Every new business unit used to mean hiring 2-3 more people just to handle integration. Now our AI agents handle 80% of the onboarding automatically. We're scaling faster with a leaner team.",
-        "author": "COO",
-        "role": "Healthcare Services Platform"
+        "quote": "The self-modifying dev team is unlike anything I've seen. Our agents literally create their own tools when they need new capabilities. Combined with the knowledge graph, it's like having an AI team that gets smarter every day.",
+        "author": "CTO",
+        "role": "Technology Startup"
       }
     ]
   },
   "cta": {
-    "heading": "Ready to Scale Your Operations?",
-    "description": "See how ServiceTsunami consolidates operations across every business unit in your organization. Book a demo and we'll show you what day-one integration looks like."
+    "heading": "Ready to Deploy Your AI Agent Team?",
+    "description": "Start building multi-agent systems today. Create your account and have Luna, your AI co-pilot, up and running in minutes."
   }
 }

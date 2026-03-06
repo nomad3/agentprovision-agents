@@ -3,13 +3,14 @@
   "nav": {
     "platform": "Platform",
     "architecture": "Architecture",
-    "customers": "Customers",
-    "pricing": "Pricing & ROI"
+    "customers": "Use Cases",
+    "pricing": "Get Started"
   },
   "cta": {
-    "bookDemo": "Book a demo",
-    "watchTour": "Watch 2-min product tour",
-    "scheduleCall": "Schedule a strategy call"
+    "startFree": "Start Free",
+    "signIn": "Sign In",
+    "explorePlatform": "Explore Platform",
+    "getStarted": "Get Started"
   },
   "language": {
     "label": "Language",
@@ -22,21 +23,21 @@
     "logout": "Logout"
   },
   "sidebar": {
-    "dashboard": "Analytics Overview",
-    "dataSources": "ERP & Systems",
+    "dashboard": "Dashboard",
+    "dataSources": "Data Sources",
     "dataPipelines": "Data Pipelines",
-    "notebooks": "Financial Reports",
+    "notebooks": "Notebooks",
     "agents": "Agent Fleet",
-    "datasets": "Business Data",
-    "chat": "AI Command",
+    "datasets": "Datasets",
+    "chat": "AI Chat",
     "tools": "Tools",
-    "connectors": "System Connectors",
+    "connectors": "Connectors",
     "deployments": "Deployments",
-    "vectorStores": "Knowledge Bases",
-    "agentKits": "Agent Playbooks"
+    "vectorStores": "Vector Stores",
+    "agentKits": "Agent Kits"
   },
   "landing": {
-    "trustedBy": "Trusted by teams at"
+    "trustedBy": "Powered by"
   },
   "footer": {
     "copyright": "© {{year}} ServiceTsunami. All rights reserved."

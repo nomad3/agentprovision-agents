@@ -3,40 +3,41 @@
   "nav": {
     "platform": "Plataforma",
     "architecture": "Arquitectura",
-    "customers": "Clientes",
-    "pricing": "Precios y ROI"
+    "customers": "Casos de Uso",
+    "pricing": "Comenzar"
   },
   "cta": {
-    "bookDemo": "Reservar una demo",
-    "watchTour": "Ver tour de 2 minutos",
-    "scheduleCall": "Agendar una llamada estratégica"
+    "startFree": "Comenzar Gratis",
+    "signIn": "Iniciar Sesion",
+    "explorePlatform": "Explorar Plataforma",
+    "getStarted": "Comenzar"
   },
   "language": {
     "label": "Idioma",
-    "english": "Inglés",
-    "spanish": "Español"
+    "english": "Ingles",
+    "spanish": "Espanol"
   },
   "layout": {
     "welcome": "Bienvenido, {{name}}",
     "guest": "Invitado",
-    "logout": "Cerrar sesión"
+    "logout": "Cerrar sesion"
   },
   "sidebar": {
-    "dashboard": "Vista Analitica",
-    "dataSources": "ERP y Sistemas",
+    "dashboard": "Dashboard",
+    "dataSources": "Fuentes de Datos",
     "dataPipelines": "Pipelines de Datos",
-    "notebooks": "Reportes Financieros",
+    "notebooks": "Notebooks",
     "agents": "Flota de Agentes",
-    "datasets": "Datos de Negocio",
-    "chat": "Comando IA",
+    "datasets": "Datasets",
+    "chat": "Chat IA",
     "tools": "Herramientas",
-    "connectors": "Conectores de Sistemas",
+    "connectors": "Conectores",
     "deployments": "Implementaciones",
-    "vectorStores": "Bases de Conocimiento",
-    "agentKits": "Playbooks de Agentes"
+    "vectorStores": "Vector Stores",
+    "agentKits": "Agent Kits"
   },
   "landing": {
-    "trustedBy": "Equipos que confían en nosotros"
+    "trustedBy": "Construido con"
   },
   "footer": {
     "copyright": "© {{year}} ServiceTsunami. Todos los derechos reservados."
