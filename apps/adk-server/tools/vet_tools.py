@@ -1,7 +1,7 @@
 """Veterinary cardiology tools.
 
-ECG image analysis via Gemini vision and breed reference range lookups
-from the knowledge graph.
+Cardiac diagnostic image analysis (echocardiograms + ECGs) via Gemini vision
+and breed reference range lookups from the knowledge graph.
 """
 import base64
 import json
@@ -54,7 +54,7 @@ def _resolve_tenant_id(tenant_id: str) -> str:
     return tenant_id
 
 
-async def analyze_ecg_image(
+async def analyze_cardiac_images(
     image_urls: str,
     species: str,
     breed: str,
@@ -63,11 +63,11 @@ async def analyze_ecg_image(
     medications: str = "[]",
     tenant_id: str = "auto",
 ) -> dict:
-    """Analyze ECG image(s) using Claude vision model.
+    """Analyze cardiac diagnostic images (echocardiograms and ECGs) using Gemini vision.
 
-    Sends ECG images to Claude with veterinary cardiology context
-    and returns structured findings including rhythm classification,
-    heart rate, intervals, axis, and abnormalities.
+    Sends echocardiogram and/or ECG images to Gemini with veterinary cardiology
+    context and returns structured findings including image classification,
+    echo measurements, narrative summary, ACVIM/HCM staging, and abnormalities.
 
     Args:
         image_urls: JSON array of image URLs (S3 or public URLs)
@@ -79,9 +79,8 @@ async def analyze_ecg_image(
         tenant_id: Tenant context
 
     Returns:
-        Structured findings dict with rhythm, heart_rate_bpm, intervals,
-        axis_degrees, abnormalities, overall_confidence, breed_comparison,
-        and raw_interpretation.
+        Structured findings dict with image_classifications, echo_measurements,
+        echo_summary, suggested_staging, abnormalities, and raw_interpretation.
     """
     tenant_id = _resolve_tenant_id(tenant_id)
     urls = _parse_json(image_urls, [])
@@ -106,44 +105,65 @@ Normal reference ranges for {breed} ({species}):
 - PR interval: {props.get('pr_interval_ms', 'unknown')} ms
 - QRS duration: {props.get('qrs_duration_ms', 'unknown')} ms
 - QT interval: {props.get('qt_interval_ms', 'unknown')} ms
+- LVIDd normal range: {props.get('lvidd_range', 'unknown')} cm
+- LA/Ao normal range: {props.get('la_ao_range', 'unknown')}
 - Breed predispositions: {', '.join(props.get('common_conditions', []))}
 - Notes: {props.get('breed_predisposition_notes', '')}
 """
 
-    prompt = f"""You are an expert veterinary cardiologist analyzing an ECG recording.
+    staging_system = "HCM staging (normal / equivocal / mild / moderate / severe)" if species.lower() == "feline" else "ACVIM staging (A / B1 / B2 / C / D)"
+
+    prompt = f"""You are an expert veterinary cardiologist analyzing cardiac diagnostic images (echocardiograms and/or ECG recordings).
 
 Patient: {species}, {breed}, {age_years} years old, {weight_kg} kg
 Current medications: {', '.join(meds) if meds else 'None'}
 {ref_context}
 
-Analyze the ECG image(s) and provide a structured interpretation. Return your findings as a JSON object with this exact structure:
+For each image provided, perform the following steps:
+
+1. **Image Classification**: Classify each image as one of: 2d_echo, mmode, doppler, color_flow, measurement_screen, ecg_strip. Also identify the view (e.g., right_parasternal_long_axis, right_parasternal_short_axis, left_apical_4_chamber, subcostal, etc.).
+
+2. **Measurement Extraction**: For any measurement screens, extract all visible numeric measurements and organize them into structured sections:
+   - "2d": 2D echocardiographic measurements (e.g., LVIDd, LVIDs, LVPWd, LVPWs, IVSd, IVSs, LA, Ao, LA_Ao, FS, EF, EPSS, etc.)
+   - "mmode": M-mode measurements (e.g., IVSd_MM, LVIDd_MM, LVPWd_MM, IVSs_MM, LVIDs_MM, LVPWs_MM, FS_MM, etc.)
+   - "doppler": Doppler measurements (e.g., LVOT_Vmax, LVOT_VTI, AV_Vmax, MV_E, MV_A, E_A_ratio, IVRT, PA_Vmax, TR_Vmax, etc.)
+   Include units where visible. Use numeric values (cm, cm/s, m/s, mmHg, ms, %).
+
+3. **Echo Narrative Summary**: Generate a concise echocardiographic narrative describing all findings across the images — chamber sizes, wall thickness, valve morphology, systolic/diastolic function, flow patterns, and any abnormalities.
+
+4. **Staging Suggestion**: Based on all findings, suggest a {staging_system} with confidence and reasoning.
+
+5. **Abnormalities**: List all abnormalities found with severity and evidence.
+
+Return your findings as a JSON object with this exact structure:
 {{
-    "rhythm": "<classification: normal_sinus, sinus_arrhythmia, atrial_fibrillation, ventricular_tachycardia, etc>",
-    "heart_rate_bpm": <integer>,
-    "intervals": {{
-        "pr_ms": <integer or null>,
-        "qrs_ms": <integer or null>,
-        "qt_ms": <integer or null>,
-        "qt_corrected_ms": <integer or null>
+    "image_classifications": [
+        {{"url": "<image url>", "type": "<2d_echo|mmode|doppler|color_flow|measurement_screen|ecg_strip>", "view": "<view name>"}}
+    ],
+    "echo_measurements": {{
+        "2d": {{"LVIDd": null, "LVIDs": null, "LVPWd": null, "LVPWs": null, "IVSd": null, "IVSs": null, "LA": null, "Ao": null, "LA_Ao": null, "FS": null, "EF": null, "EPSS": null}},
+        "mmode": {{"IVSd_MM": null, "LVIDd_MM": null, "LVPWd_MM": null, "IVSs_MM": null, "LVIDs_MM": null, "LVPWs_MM": null, "FS_MM": null}},
+        "doppler": {{"LVOT_Vmax": null, "LVOT_VTI": null, "AV_Vmax": null, "MV_E": null, "MV_A": null, "E_A_ratio": null, "IVRT": null, "PA_Vmax": null, "TR_Vmax": null}}
     }},
-    "axis_degrees": <integer or null>,
+    "echo_summary": "<concise echocardiographic narrative>",
+    "suggested_staging": {{
+        "system": "<acvim|hcm>",
+        "stage": "<stage>",
+        "confidence": <0.0-1.0>,
+        "reasoning": "<explanation>"
+    }},
     "abnormalities": [
         {{
             "finding": "<abnormality name>",
             "severity": "mild | moderate | severe",
             "confidence": <0.0-1.0>,
-            "evidence": "<what you see in the ECG>"
+            "evidence": "<what you see in the images>"
         }}
     ],
-    "overall_confidence": <0.0-1.0>,
-    "breed_comparison": {{
-        "hr_normal_range": "<range> bpm",
-        "within_normal": <true/false>
-    }},
-    "raw_interpretation": "<free-text narrative of your full interpretation>"
+    "raw_interpretation": "<full narrative text of your complete interpretation>"
 }}
 
-Be precise. If you cannot measure an interval, set it to null. Flag any findings that warrant urgent attention."""
+Only populate measurement fields you can actually read from the images. Set unreadable fields to null. Flag any findings that warrant urgent attention."""
 
     # Fetch images and build Gemini content parts
     parts = []
@@ -188,7 +208,7 @@ Be precise. If you cannot measure an interval, set it to null. Flag any findings
             }
 
     except Exception as e:
-        logger.exception("ECG analysis failed: %s", e)
+        logger.exception("Cardiac image analysis failed: %s", e)
         return {"status": "error", "error": str(e)}
 
 

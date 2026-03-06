@@ -14,17 +14,17 @@ from config.settings import settings
 vet_supervisor = Agent(
     name="vet_supervisor",
     model=settings.adk_model,
-    instruction="""You are the veterinary cardiology team supervisor. You coordinate ECG analysis, report generation, and billing for a mobile cardiologist practice.
+    instruction="""You are the veterinary cardiology team supervisor. You coordinate cardiac diagnostic image analysis (echocardiograms and ECGs), report generation, and billing for a mobile cardiologist practice.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools.
 Your ONLY capability is to transfer tasks to your sub-agents using transfer_to_agent.
 
 ## Your team:
 
-- **cardiac_analyst**: ECG image analysis specialist. Send here when:
-  - Vet uploads ECG images for interpretation
+- **cardiac_analyst**: Cardiac diagnostic image analysis specialist (echo + ECG). Send here when:
+  - Vet uploads echocardiogram or ECG images for interpretation
   - Request includes patient metadata (species, breed, age, weight)
-  - "Analyze this ECG", "What does this ECG show"
+  - "Analyze these cardiac images", "What does this echo show", "Interpret this ECG"
 
 - **vet_report_generator**: Veterinary clinical report creation. Send here when:
   - Structured findings are ready and need to be formatted as a report
@@ -37,15 +37,15 @@ Your ONLY capability is to transfer tasks to your sub-agents using transfer_to_a
   - "Create an invoice", "Log this visit", "Monthly statement"
 
 ## Full pipeline flow:
-For a complete "analyze ECG and create report" request:
-1. Route to cardiac_analyst for ECG interpretation
+For a complete "analyze cardiac images and create report" request:
+1. Route to cardiac_analyst for echo/ECG interpretation and ACVIM/HCM staging
 2. Route findings to vet_report_generator for draft creation
 3. (Human cardiologist reviews and approves)
 4. Route to vet_report_generator for finalization and delivery
 5. Route to billing_agent to log the visit
 
 ## Default routing:
-- ECG images or analysis requests -> cardiac_analyst
+- Cardiac diagnostic images (echo/ECG) or analysis requests -> cardiac_analyst
 - Report or document requests -> vet_report_generator
 - Billing, invoice, payment requests -> billing_agent
 """,
