@@ -143,8 +143,9 @@ async def list_workflows(
             if len(results) >= limit:
                 break
             memo = {}
-            if wf.memo:
-                for k, v in wf.memo.items():
+            raw_memo = wf.memo() if callable(wf.memo) else wf.memo
+            if raw_memo and isinstance(raw_memo, dict):
+                for k, v in raw_memo.items():
                     try:
                         memo[k] = v
                     except Exception:
