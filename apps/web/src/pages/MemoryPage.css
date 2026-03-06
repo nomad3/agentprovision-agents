@@ -777,3 +777,141 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── Memories Tab ────────────────────────────────────────────── */
+
+.memories-subtitle {
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  margin-bottom: 1rem;
+}
+
+.memory-type-group {
+  margin-bottom: 1.25rem;
+}
+
+.memory-type-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.memory-type-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-soft);
+}
+
+.memory-type-count {
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-left: auto;
+}
+
+.memory-type-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Memory Card */
+.memory-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.65rem 0.85rem;
+  background: var(--surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  transition: border-color 0.2s;
+}
+
+.memory-card:hover {
+  border-color: rgba(244, 114, 182, 0.3);
+}
+
+.memory-card-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.memory-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.memory-card-content {
+  font-size: 0.85rem;
+  color: var(--color-foreground);
+  line-height: 1.4;
+}
+
+.memory-card-meta {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+  align-items: center;
+}
+
+.memory-card-source {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background: rgba(100, 130, 170, 0.12);
+  color: var(--color-muted);
+}
+
+.memory-card-date {
+  font-size: 0.72rem;
+  color: var(--color-muted);
+}
+
+.memory-card-importance {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+}
+
+.memory-card-actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.memory-card:hover .memory-card-actions {
+  opacity: 1;
+}
+
+.memory-action-btn {
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: 4px;
+  transition: color 0.2s, background 0.2s;
+}
+
+.memory-action-btn:hover {
+  color: var(--color-foreground);
+  background: rgba(100, 130, 170, 0.1);
+}
+
+.memory-action-btn.delete:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+}
