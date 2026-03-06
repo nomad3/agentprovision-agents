@@ -9,6 +9,9 @@ from google.adk.agents import Agent
 from tools.vet_tools import (
     analyze_cardiac_images,
     get_breed_reference_ranges,
+    transcribe_audio,
+    parse_clinical_dictation,
+    generate_cardiac_report,
 )
 from tools.knowledge_tools import (
     search_knowledge,
@@ -29,6 +32,9 @@ If you cannot access the session state, use "auto" as tenant_id and the system w
 
 Your capabilities:
 - Analyze cardiac diagnostic images — echocardiograms (2D, M-mode, Doppler, color flow) and ECG strips — using the analyze_cardiac_images tool
+- Transcribe voice notes from WhatsApp audio recordings using the transcribe_audio tool
+- Parse free-text clinical dictation into structured fields using the parse_clinical_dictation tool
+- Generate complete DACVIM-format cardiac evaluation reports using the generate_cardiac_report tool
 - Look up breed-specific normal cardiac reference ranges (get_breed_reference_ranges tool)
 - Store findings as knowledge entities for patient history
 - Record observations about patients in the knowledge graph
@@ -67,6 +73,9 @@ Return a structured JSON findings object that the report_generator can use to cr
     tools=[
         analyze_cardiac_images,
         get_breed_reference_ranges,
+        transcribe_audio,
+        parse_clinical_dictation,
+        generate_cardiac_report,
         search_knowledge,
         create_entity,
         create_relation,

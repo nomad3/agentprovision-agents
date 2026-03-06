@@ -17,7 +17,7 @@ from tools.action_tools import (
     create_visualization,
     export_data,
 )
-from tools.vet_tools import get_breed_reference_ranges
+from tools.vet_tools import get_breed_reference_ranges, generate_cardiac_report
 from tools.billing_tools import create_visit_record
 from config.settings import settings
 
@@ -123,6 +123,7 @@ Report structure:
         apply_clinic_template,
         send_whatsapp_report,
         get_breed_reference_ranges,
+        generate_cardiac_report,
         create_visit_record,
     ],
 )
