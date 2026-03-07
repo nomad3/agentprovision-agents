@@ -333,7 +333,7 @@ const ChatPage = () => {
             ) : (
               <Card className="shadow-sm">
                 <Card.Body className="text-center text-muted">
-                  <p className=”mb-0”>Select a session or start a new one.</p>
+                  <p className="mb-0">Select a session or start a new one.</p>
                 </Card.Body>
               </Card>
             )}
