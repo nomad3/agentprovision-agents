@@ -8,6 +8,7 @@ important emails through the standard knowledge extraction pipeline.
 Uses continue_as_new to prevent history growth (same as ChannelHealthMonitorWorkflow).
 """
 from temporalio import workflow
+from temporalio.common import RetryPolicy
 from datetime import timedelta
 from typing import Optional
 
@@ -31,7 +32,7 @@ class InboxMonitorWorkflow:
         last_gmail_history_id: Optional[str] = None,
         calendar_hours_ahead: int = 24,
     ) -> dict:
-        retry_policy = workflow.RetryPolicy(
+        retry_policy = RetryPolicy(
             maximum_attempts=3,
             initial_interval=timedelta(seconds=15),
             backoff_coefficient=2.0,
