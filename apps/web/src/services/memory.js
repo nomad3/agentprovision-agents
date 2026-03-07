@@ -82,6 +82,15 @@ export const memoryService = {
   },
 
   // ── Relations ────────────────────────────────────────────────────
+  async getAllRelations({ relationType, skip = 0, limit = 100 } = {}) {
+    const params = new URLSearchParams();
+    if (relationType) params.append('relation_type', relationType);
+    params.append('skip', skip);
+    params.append('limit', limit);
+    const response = await api.get(`/knowledge/relations?${params.toString()}`);
+    return response.data;
+  },
+
   async getRelations(entityId, direction = 'both') {
     const response = await api.get(`/knowledge/entities/${entityId}/relations?direction=${direction}`);
     return response.data;

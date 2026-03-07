@@ -41,3 +41,11 @@ class KnowledgeRelation(KnowledgeRelationBase):
 
     class Config:
         from_attributes = True
+
+
+class KnowledgeRelationWithEntities(KnowledgeRelation):
+    """Relation with resolved entity names for display."""
+    from_entity_name: Optional[str] = None
+    from_entity_category: Optional[str] = None
+    to_entity_name: Optional[str] = None
+    to_entity_category: Optional[str] = None

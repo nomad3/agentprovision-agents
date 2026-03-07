@@ -915,3 +915,156 @@
   color: #f87171;
   background: rgba(248, 113, 113, 0.1);
 }
+
+/* ── Relations Tab ──────────────────────────────────────────── */
+
+.relations-tab-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.relations-tab-subtitle {
+  font-size: 0.9rem;
+  color: var(--color-muted);
+  margin: 0;
+}
+
+.relation-type-group {
+  margin-bottom: 1.25rem;
+}
+
+.relation-type-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-bottom: 0.35rem;
+  margin-bottom: 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.relation-type-label {
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-soft);
+}
+
+.relation-type-count {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #a78bfa;
+  margin-left: auto;
+}
+
+.relation-type-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.relation-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  transition: border-color 0.2s;
+}
+
+.relation-card:hover {
+  border-color: rgba(167, 139, 250, 0.3);
+}
+
+.relation-card-entities {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.relation-card-entity {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.relation-entity-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.relation-entity-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.relation-entity-cat {
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.7;
+}
+
+.relation-card-arrow {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.relation-card-type {
+  font-size: 0.72rem;
+  color: var(--color-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.relation-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.relation-card-date {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+}
+
+.relation-card-delete {
+  background: none;
+  border: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  padding: 0.2rem;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.relation-card:hover .relation-card-delete {
+  opacity: 1;
+}
+
+.relation-card-delete:hover {
+  color: #f87171;
+}

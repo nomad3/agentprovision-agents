@@ -10,7 +10,7 @@ from app.schemas.knowledge_entity import (
     KnowledgeEntity, KnowledgeEntityCreate, KnowledgeEntityUpdate,
     KnowledgeEntityBulkCreate, KnowledgeEntityBulkResponse, CollectionSummary,
 )
-from app.schemas.knowledge_relation import KnowledgeRelation, KnowledgeRelationCreate
+from app.schemas.knowledge_relation import KnowledgeRelation, KnowledgeRelationCreate, KnowledgeRelationWithEntities
 from app.services import knowledge as service
 
 router = APIRouter()
@@ -154,6 +154,32 @@ def get_collection_summary(
 
 
 # Relation endpoints
+@router.get("/relations", response_model=List[KnowledgeRelationWithEntities])
+def list_relations(
+    relation_type: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """List all relations for the tenant with entity names."""
+    relations = service.get_all_relations(
+        db, current_user.tenant_id, relation_type, skip, limit
+    )
+    results = []
+    for rel in relations:
+        base = KnowledgeRelation.model_validate(rel)
+        data = KnowledgeRelationWithEntities(
+            **base.model_dump(),
+            from_entity_name=rel.from_entity.name if rel.from_entity else None,
+            from_entity_category=rel.from_entity.category if rel.from_entity else None,
+            to_entity_name=rel.to_entity.name if rel.to_entity else None,
+            to_entity_category=rel.to_entity.category if rel.to_entity else None,
+        )
+        results.append(data)
+    return results
+
+
 @router.post("/relations", response_model=KnowledgeRelation, status_code=201)
 def create_relation(
     relation_in: KnowledgeRelationCreate,

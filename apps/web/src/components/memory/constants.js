@@ -92,6 +92,7 @@ export const ACTIVITY_EVENT_CONFIG = {
   action_triggered: { icon: FaBolt,           color: '#fbbf24', label: 'Action Triggered' },
   action_completed: { icon: FaCheckCircle,    color: '#34d399', label: 'Action Completed' },
   action_failed:    { icon: FaTimesCircle,    color: '#f87171', label: 'Action Failed' },
+  tool_used:            { icon: FaWrench,         color: '#fb923c', label: 'Tool Used' },
   recall_used:          { icon: FaSearch,         color: '#38bdf8', label: 'Context Recalled' },
   notification_created: { icon: FaBell,           color: '#ffa502', label: 'Notification Created' },
   monitor_scan:         { icon: FaSearch,         color: '#747d8c', label: 'Inbox Scan' },

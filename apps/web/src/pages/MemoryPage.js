@@ -7,6 +7,7 @@ import EntityStatsBar from '../components/memory/EntityStatsBar';
 import OverviewTab from '../components/memory/OverviewTab';
 import MemoriesTab from '../components/memory/MemoriesTab';
 import ActivityFeed from '../components/memory/ActivityFeed';
+import RelationsTab from '../components/memory/RelationsTab';
 import { ALL_CATEGORIES, ALL_STATUSES, getCategoryConfig } from '../components/memory/constants';
 import Layout from '../components/Layout';
 import api from '../services/api';
@@ -202,7 +203,7 @@ function MemoryPage() {
 
         {/* Tabs */}
         <div className="memory-tabs">
-          {['overview', 'entities', 'memories', 'activity', 'import'].map(tab => (
+          {['overview', 'entities', 'relations', 'memories', 'activity', 'import'].map(tab => (
             <button
               key={tab}
               className={`memory-tab-btn ${activeTab === tab ? 'active' : ''}`}
@@ -320,6 +321,8 @@ function MemoryPage() {
             )}
           </>
         )}
+
+        {activeTab === 'relations' && <RelationsTab />}
 
         {activeTab === 'memories' && <MemoriesTab />}
 

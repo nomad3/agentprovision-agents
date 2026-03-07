@@ -458,6 +458,64 @@ def _generate_agentic_response(
         )
 
 
+def _log_tool_usage(
+    db: Session,
+    tenant_id: uuid.UUID,
+    events: List[Dict[str, Any]] | None,
+) -> None:
+    """Extract tool calls from ADK events and log as activity entries."""
+    if not events:
+        return
+
+    # Tools worth logging — action tools that change state or fetch external data
+    ACTION_TOOLS = {
+        "send_email", "create_calendar_event", "create_entity", "update_entity",
+        "merge_entities", "create_relation", "record_observation",
+        "search_emails", "read_email", "list_calendar_events",
+        "schedule_followup", "qualify_lead", "get_pipeline_summary",
+        "start_inbox_monitor", "stop_inbox_monitor",
+        "draft_outreach", "generate_proposal", "update_pipeline_stage",
+        "query_sql", "generate_insights", "query_data_source",
+        "scrape_webpage", "search_and_scrape",
+        "execute_shell",
+    }
+
+    tools_used = []
+    for event in events:
+        content = event.get("content") or {}
+        parts = content.get("parts", []) if isinstance(content, dict) else []
+        for part in parts:
+            if isinstance(part, dict) and "functionCall" in part:
+                fn = part["functionCall"]
+                tool_name = fn.get("name", "")
+                if tool_name in ACTION_TOOLS:
+                    agent_name = event.get("author", "unknown")
+                    tools_used.append({"tool": tool_name, "agent": agent_name})
+
+    if not tools_used:
+        return
+
+    try:
+        from app.services.memory_activity import log_activity
+
+        # Deduplicate by tool name for this batch
+        seen = set()
+        for usage in tools_used:
+            key = usage["tool"]
+            if key in seen:
+                continue
+            seen.add(key)
+            log_activity(
+                db, tenant_id,
+                event_type="tool_used",
+                description=f'{usage["agent"]} used {usage["tool"]}',
+                source="chat",
+                event_metadata={"tool_name": usage["tool"], "agent_name": usage["agent"]},
+            )
+    except Exception:
+        logger.debug("Failed to log tool usage activity", exc_info=True)
+
+
 def _run_entity_extraction(
     db: Session,
     session: ChatSessionModel,
@@ -468,6 +526,10 @@ def _run_entity_extraction(
     Wrapped in try/except so extraction failures never break chat.
     """
     try:
+        # Log tool usage from ADK events
+        adk_events = context.get("adk_events") if context else None
+        _log_tool_usage(db, session.tenant_id, adk_events)
+
         result = knowledge_extraction_service.extract_from_session(
             db, session.id, session.tenant_id
         )

@@ -269,6 +269,27 @@ def get_entity_relations(
     return query.all()
 
 
+def get_all_relations(
+    db: Session,
+    tenant_id: uuid.UUID,
+    relation_type: str = None,
+    skip: int = 0,
+    limit: int = 100,
+) -> List[KnowledgeRelation]:
+    """List all relations for a tenant with optional type filter."""
+    from sqlalchemy.orm import joinedload
+
+    query = db.query(KnowledgeRelation).filter(
+        KnowledgeRelation.tenant_id == tenant_id
+    ).options(
+        joinedload(KnowledgeRelation.from_entity),
+        joinedload(KnowledgeRelation.to_entity),
+    )
+    if relation_type:
+        query = query.filter(KnowledgeRelation.relation_type == relation_type)
+    return query.order_by(KnowledgeRelation.created_at.desc()).offset(skip).limit(limit).all()
+
+
 def delete_relation(db: Session, relation_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
     """Delete a relation."""
     relation = db.query(KnowledgeRelation).filter(
