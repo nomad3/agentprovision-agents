@@ -1,26 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Modal, Row, Spinner, Tab, Tabs } from 'react-bootstrap';
+import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Modal, Row, Spinner } from 'react-bootstrap';
 import { useAuth } from '../App';
 import Layout from '../components/Layout';
 import ReportVisualization from '../components/chat/ReportVisualization';
 import agentKitService from '../services/agentKit';
 import chatService from '../services/chat';
-import datasetService from '../services/dataset';
-import datasetGroupService from '../services/datasetGroup';
 
 const initialSessionState = {
-  datasetId: '',
-  datasetGroupId: '',
   agentKitId: '',
   title: '',
-  sourceType: 'dataset', // 'dataset' or 'group'
 };
 
 const ChatPage = () => {
   const auth = useAuth();
   const [sessions, setSessions] = useState([]);
-  const [datasets, setDatasets] = useState([]);
-  const [datasetGroups, setDatasetGroups] = useState([]);
   const [agentKits, setAgentKits] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -41,19 +34,19 @@ const ChatPage = () => {
     loadSessions();
   }, [auth.user]);
 
+  useEffect(() => {
+    if (agentKits.length === 1 && !sessionForm.agentKitId) {
+      setSessionForm(prev => ({ ...prev, agentKitId: agentKits[0].id }));
+    }
+  }, [agentKits]);
+
   const loadReferenceData = async () => {
     try {
-      const [datasetsResp, groupsResp, agentKitsResp] = await Promise.all([
-        datasetService.getAll(),
-        datasetGroupService.getAll(),
-        agentKitService.getAll(),
-      ]);
-      setDatasets(datasetsResp.data);
-      setDatasetGroups(groupsResp.data);
+      const agentKitsResp = await agentKitService.getAll();
       setAgentKits(agentKitsResp.data);
     } catch (err) {
       console.error(err);
-      setGlobalError('Failed to load supporting data (datasets, groups, or agent kits).');
+      setGlobalError('Failed to load agent kits.');
     }
   };
 
@@ -129,15 +122,6 @@ const ChatPage = () => {
     setSessionForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSourceTypeSelect = (k) => {
-    setSessionForm((prev) => ({
-      ...prev,
-      sourceType: k,
-      datasetId: k === 'dataset' ? prev.datasetId : '',
-      datasetGroupId: k === 'group' ? prev.datasetGroupId : ''
-    }));
-  };
-
   const handleCreateSession = async (event) => {
     event.preventDefault();
 
@@ -150,12 +134,6 @@ const ChatPage = () => {
         payload.agent_kit_id = sessionForm.agentKitId;
       }
 
-      if (sessionForm.sourceType === 'dataset' && sessionForm.datasetId) {
-        payload.dataset_id = sessionForm.datasetId;
-      } else if (sessionForm.sourceType === 'group' && sessionForm.datasetGroupId) {
-        payload.dataset_group_id = sessionForm.datasetGroupId;
-      }
-
       const response = await chatService.createSession(payload);
       setSessions((prev) => [response.data, ...prev]);
       setShowCreateModal(false);
@@ -163,23 +141,9 @@ const ChatPage = () => {
       loadMessages(response.data.id);
     } catch (err) {
       console.error(err);
-      setFormErrors('Unable to create chat session. Ensure the selected dataset/group and agent kit are valid.');
+      setFormErrors('Unable to create chat session. Ensure the selected agent kit is valid.');
     }
   };
-
-  const datasetById = useMemo(() => {
-    return datasets.reduce((acc, dataset) => {
-      acc[dataset.id] = dataset;
-      return acc;
-    }, {});
-  }, [datasets]);
-
-  const groupById = useMemo(() => {
-    return datasetGroups.reduce((acc, group) => {
-      acc[group.id] = group;
-      return acc;
-    }, {});
-  }, [datasetGroups]);
 
   const agentKitById = useMemo(() => {
     return agentKits.reduce((acc, kit) => {
@@ -233,17 +197,8 @@ const ChatPage = () => {
   };
 
   const getSessionSubtitle = (session) => {
-    let sourceName = 'Unknown Source';
-    if (session.dataset_id && datasetById[session.dataset_id]) {
-      sourceName = datasetById[session.dataset_id].name;
-    } else if (session.dataset_group_id && groupById[session.dataset_group_id]) {
-      sourceName = `${groupById[session.dataset_group_id].name} (Group)`;
-    } else if (session.dataset_group_id) {
-      sourceName = 'Dataset Group';
-    }
-
     const kitName = (agentKitById[session.agent_kit_id] && agentKitById[session.agent_kit_id].name) || 'Agent Kit';
-    return `${sourceName} · ${kitName}`;
+    return kitName;
   };
 
   return (
@@ -378,8 +333,7 @@ const ChatPage = () => {
             ) : (
               <Card className="shadow-sm">
                 <Card.Body className="text-center text-muted">
-                  <p className="mb-1">Select a session to view the conversation.</p>
-                  <p className="mb-0">Need a new one? Click “New session” and choose a dataset plus agent kit.</p>
+                  <p className=”mb-0”>Select a session or start a new one.</p>
                 </Card.Body>
               </Card>
             )}
@@ -403,46 +357,6 @@ const ChatPage = () => {
                 value={sessionForm.title}
                 onChange={handleCreateSessionChange}
               />
-            </Form.Group>
-
-            <Form.Group className="mb-3">
-              <Form.Label>Data Source</Form.Label>
-              <Tabs
-                activeKey={sessionForm.sourceType}
-                onSelect={handleSourceTypeSelect}
-                className="mb-2"
-              >
-                <Tab eventKey="dataset" title="Single Dataset">
-                  <Form.Select
-                    name="datasetId"
-                    value={sessionForm.datasetId}
-                    onChange={handleCreateSessionChange}
-                    disabled={sessionForm.sourceType !== 'dataset'}
-                  >
-                    <option value="">Select dataset…</option>
-                    {datasets.map((dataset) => (
-                      <option key={dataset.id} value={dataset.id}>
-                        {dataset.name}
-                      </option>
-                    ))}
-                  </Form.Select>
-                </Tab>
-                <Tab eventKey="group" title="Dataset Group">
-                  <Form.Select
-                    name="datasetGroupId"
-                    value={sessionForm.datasetGroupId}
-                    onChange={handleCreateSessionChange}
-                    disabled={sessionForm.sourceType !== 'group'}
-                  >
-                    <option value="">Select dataset group…</option>
-                    {datasetGroups.map((group) => (
-                      <option key={group.id} value={group.id}>
-                        {group.name} ({group.datasets ? group.datasets.length : 0} datasets)
-                      </option>
-                    ))}
-                  </Form.Select>
-                </Tab>
-              </Tabs>
             </Form.Group>
 
             <Form.Group className="mb-3">

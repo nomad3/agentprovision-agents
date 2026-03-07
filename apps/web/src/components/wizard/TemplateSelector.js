@@ -1,12 +1,10 @@
 import React from 'react';
-import { Row, Col, Card, Button } from 'react-bootstrap';
-import { FaHeadset as Headset, FaChartBar as BarChart, FaBriefcase as Briefcase, FaRobot as Robot, FaEdit as PencilSquare, FaSearch, FaUserTie, FaSitemap, FaBullhorn } from 'react-icons/fa';
+import { Row, Col, Card, Badge } from 'react-bootstrap';
 
 const TEMPLATES = [
   {
     id: 'customer_support',
     name: 'Customer Support Agent',
-    icon: Headset,
     description: 'Handles customer inquiries, FAQ, order lookups, and general conversation via WhatsApp and chat',
     config: {
       model: 'gpt-4',
@@ -21,7 +19,6 @@ const TEMPLATES = [
   {
     id: 'data_analyst',
     name: 'Data Analyst Agent',
-    icon: BarChart,
     description: 'Analytical and precise. Generates insights from your data using SQL queries',
     config: {
       model: 'gpt-4',
@@ -36,7 +33,6 @@ const TEMPLATES = [
   {
     id: 'sales_assistant',
     name: 'Sales Assistant',
-    icon: Briefcase,
     description: 'Full sales automation: lead qualification, outreach drafting, pipeline management, and proposal generation',
     config: {
       model: 'gpt-4',
@@ -52,7 +48,6 @@ const TEMPLATES = [
   {
     id: 'general_assistant',
     name: 'General Assistant',
-    icon: Robot,
     description: 'Balanced and versatile. Good for general questions and tasks',
     config: {
       model: 'gpt-4',
@@ -67,7 +62,6 @@ const TEMPLATES = [
   {
     id: 'content_writer',
     name: 'Content Writer',
-    icon: PencilSquare,
     description: 'Creative and expressive. Helps draft content, emails, and documents',
     config: {
       model: 'gpt-4',
@@ -82,7 +76,6 @@ const TEMPLATES = [
   {
     id: 'research_agent',
     name: 'Research Agent',
-    icon: FaSearch,
     description: 'Extract entities from conversations and documents. Build knowledge graphs from unstructured data',
     config: {
       model: 'gpt-4',
@@ -98,7 +91,6 @@ const TEMPLATES = [
   {
     id: 'lead_generation',
     name: 'Lead Generation Agent',
-    icon: FaUserTie,
     description: 'Identify prospects, companies, and contacts. Build structured lead databases from conversations',
     config: {
       model: 'gpt-4',
@@ -118,7 +110,6 @@ const TEMPLATES = [
   {
     id: 'knowledge_manager',
     name: 'Knowledge Manager',
-    icon: FaSitemap,
     description: 'Curate, verify, and organize your knowledge graph. Maintain entity accuracy and relationships',
     config: {
       model: 'gpt-4',
@@ -133,7 +124,6 @@ const TEMPLATES = [
   {
     id: 'deal_intelligence',
     name: 'Deal Intelligence Agent',
-    icon: Briefcase,
     description: 'Score companies on sell-likelihood for M&A advisory using ownership, market timing, and performance signals',
     config: {
       model: 'gpt-4',
@@ -149,7 +139,6 @@ const TEMPLATES = [
   {
     id: 'marketing_intelligence',
     name: 'Marketing Intelligence Agent',
-    icon: FaBullhorn,
     description: 'Score leads based on marketing engagement, campaign response, intent signals, and firmographic fit',
     config: {
       model: 'gpt-4',
@@ -176,34 +165,23 @@ const TemplateSelector = ({ onSelect, selectedTemplate }) => {
 
       <Row className="g-3">
         {TEMPLATES.map((template) => {
-          const IconComponent = template.icon;
           const isSelected = selectedTemplate === template.id;
 
           return (
-            <Col key={template.id} md={6} lg={4}>
+            <Col key={template.id} md={6} lg={6}>
               <Card
                 className={`template-card h-100 ${isSelected ? 'selected' : ''}`}
                 style={{ cursor: 'pointer' }}
                 onClick={() => handleSelect(template)}
               >
-                <Card.Body className="d-flex flex-column align-items-center text-center">
-                  <div className="template-icon mb-3">
-                    <IconComponent size={48} />
+                <Card.Body className="d-flex align-items-center justify-content-between py-3">
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{template.name}</div>
+                    <small className="text-muted">{template.description}</small>
                   </div>
-                  <Card.Title className="mb-2">{template.name}</Card.Title>
-                  <Card.Text className="text-muted mb-3 flex-grow-1">
-                    {template.description}
-                  </Card.Text>
-                  <Button
-                    variant={isSelected ? 'primary' : 'outline-primary'}
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleSelect(template);
-                    }}
-                  >
-                    {isSelected ? 'Selected' : 'Select'}
-                  </Button>
+                  {isSelected && (
+                    <Badge bg="primary" pill>✓</Badge>
+                  )}
                 </Card.Body>
               </Card>
             </Col>
