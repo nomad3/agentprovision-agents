@@ -227,8 +227,13 @@ class KnowledgeGraphService:
                 {"id": entity_id}
             ).fetchone()
 
+            import json
+
             if current:
                 # Create history record
+                props = current.properties
+                if isinstance(props, dict):
+                    props = json.dumps(props)
                 session.execute(
                     text("""
                         INSERT INTO knowledge_entity_history
@@ -238,12 +243,10 @@ class KnowledgeGraphService:
                     """),
                     {
                         "entity_id": entity_id,
-                        "properties": current.properties,
+                        "properties": props,
                         "reason": reason,
                     }
                 )
-
-            import json
             # Update entity
             session.execute(
                 text("""
