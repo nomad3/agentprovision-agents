@@ -47,6 +47,10 @@ asyncio.run(run_migration())
 - `028_add_skill_configs_and_credentials.sql` - Adds skill_configs and skill_credentials tables
 - `029_extend_knowledge_entities.sql` - Adds status lifecycle, collection_task_id, source_url, enrichment_data to knowledge_entities
 - `030_add_knowledge_entity_description_aliases.sql` - Adds description, properties, aliases columns to knowledge_entities; creates knowledge_observations and knowledge_entity_history tables
+- `035_add_session_blob_to_channel_accounts.sql` - Adds session_blob column to channel_accounts
+- `036_add_skill_config_account_email.sql` - Adds account_email to skill_config for multi-account OAuth
+- `037_add_memory_activities.sql` - Adds memory_activities table for knowledge graph audit log
+- `038_add_notifications.sql` - Adds notifications table for proactive alerts
 
 ## Rollback
 

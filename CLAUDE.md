@@ -59,8 +59,8 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 **Multi-LLM Router**: Supports multiple LLM providers (Anthropic, OpenAI, DeepSeek, etc.) with per-tenant configuration and cost-based routing. Models: `llm_provider.py`, `llm_model.py`, `llm_config.py`. Chat falls back to static templates if no API key is set.
 
-**Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor:
-- **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks.
+**Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default "Luna Supervisor" AgentKit on registration.
+- **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
 - **Dev Team**: Self-modifying team with a strict 5-step cycle (**Architect** → **Coder** → **Tester** → **DevOps** → **User Agent**). Agents have shell access and can autonomously modify code, run tests, and deploy via git.
 - **Data Team**: **Data Analyst**, **Report Generator**, **Knowledge Manager**. Handles SQL, analytics, and knowledge graph.
 - **Sales Team**: **Sales Agent** (deal management), **Customer Support** (inquiry handling).
@@ -73,7 +73,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 - **Credential Vault**: Fernet-encrypted storage for skill API keys and tokens.
 - **Skill Router**: Dynamic routing of agent tasks to external skill integrations.
 
-**Knowledge Graph**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph. Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. pgvector is not used; search falls back to text-based `ILIKE`.
+**Knowledge Graph**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph. Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. pgvector is not used; search falls back to text-based `ILIKE`. **Memory Activity** audit log (`memory_activities` table) tracks entity_created, entity_updated, relation_created, memory_created, and action_triggered events.
 
 **UI/UX (Ocean Theme)**:
 - **Design System**: Glassmorphic "Ocean Theme" with support for high-contrast light and dark modes.
@@ -81,8 +81,12 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 - **Animations**: Subtle Y-axis transitions (6px-8px) on hover for interactive elements.
 - **Custom Components**: `TaskTimeline` for execution traces and `SkillsConfigPanel` for integration management.
 
+**Notifications System**: `notification.py` model with sources (gmail, calendar, whatsapp, system), priorities (high/medium/low), read/dismissed tracking. API endpoints at `/api/v1/notifications`. Frontend `NotificationBell` component in Layout.
+
+**Proactive Inbox Monitor**: `InboxMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` every 15 minutes. Monitors Gmail + Calendar, triages items with LLM + memory context, creates notifications, and extracts knowledge entities from important emails. Auto-starts when Google OAuth is connected. Queue: `servicetsunami-orchestration`. Activities: fetch_new_emails, fetch_upcoming_events, triage_items, create_notifications, extract_from_emails, log_monitor_cycle.
+
 **Temporal workflows**: Durable workflow execution across three task queues:
-- `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`.
+- `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`.
 - `servicetsunami-databricks`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
 - `servicetsunami-business`: Industry-specific flows:
   - `DealPipelineWorkflow`: Discover → Score → Research → Outreach → Advance → Sync (6 steps).
@@ -188,6 +192,8 @@ Core domain models (all inherit from SQLAlchemy Base, include `tenant_id` Foreig
 - `execution_trace.py`: Step-by-step audit trail for task execution
 - `skill_config.py`: Per-tenant skill enablement, approval gates, rate limits, LLM override
 - `skill_credential.py`: Encrypted API keys/tokens for skill integrations
+- `notification.py`: Proactive alerts from inbox monitor, system events
+- `memory_activity.py`: Audit log for knowledge graph operations
 
 ### Services (`apps/api/app/services/`)
 
@@ -196,7 +202,7 @@ Business logic layer (one service per model):
 - `llm.py`: Claude AI integration with fallback handling
 - `context_manager.py`: Token counting, conversation summarization
 - `tool_executor.py`: Tool execution framework (SQL Query, Calculator, Data Summary, Entity Extraction, Knowledge Search)
-- `chat.py`, `enhanced_chat.py`: LLM-powered chat with tool and multi-agent support
+- `chat.py`, `enhanced_chat.py`: LLM-powered chat with tool and multi-agent support. Chat session creation requires only Title (optional) + Agent Kit selection; auto-selects kit when only one exists
 - `adk_client.py`, `mcp_client.py`: Google ADK and MCP server clients
 - `knowledge.py`, `knowledge_extraction.py`: Knowledge graph operations and extraction
 - `branding.py`, `features.py`, `tenant_analytics.py`: Tenant customization services
@@ -210,7 +216,7 @@ Business logic layer (one service per model):
 ### Workers (`apps/api/app/workers/`)
 
 Temporal workers for async processing:
-- `orchestration_worker.py`: TaskExecutionWorkflow + ChannelHealthMonitorWorkflow + FollowUpWorkflow (queue: `servicetsunami-orchestration`)
+- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow (queue: `servicetsunami-orchestration`)
 - `databricks_worker.py`: DatasetSync, KnowledgeExtraction, AgentKitExecution, DataSourceSync workflows (queue: `servicetsunami-databricks`)
 - `scheduler_worker.py`: Automated pipeline execution (cron/interval scheduling, polls every 60s)
 
@@ -224,17 +230,18 @@ FastAPI routers mounted at `/api/v1`. All routes use dependency injection via `d
 
 Organized in 3-section navigation:
 - **INSIGHTS**: `DashboardPage.js`, `DatasetsPage.js`
-- **AI OPERATIONS**: `ChatPage.js`, `AgentsPage.js`, `WorkflowsPage.js`, `MemoryPage.js`
+- **AI OPERATIONS**: `ChatPage.js`, `AgentsPage.js`, `WorkflowsPage.js`, `MemoryPage.js` (labeled "Knowledge Base" in sidebar)
 - **WORKSPACE**: `IntegrationsPage.js`, `NotebooksPage.js`, `VectorStoresPage.js`, `ToolsPage.js`
 - **SETTINGS**: `SettingsPage.js`, `LLMSettingsPage.js`, `BrandingPage.js`
 - **AUTH**: `RegisterPage.js`, `AgentWizardPage.js`
 
 ### Components (`apps/web/src/components/`)
 
-- `Layout.js`: Authenticated layout with glassmorphic dark theme sidebar
-- `wizard/`: Agent creation wizard (5-step flow with localStorage draft persistence). 8 templates including Research Agent, Lead Generation, and Knowledge Manager. 5 tools: sql_query, calculator, data_summary, entity_extraction, knowledge_search
+- `Layout.js`: Authenticated layout with glassmorphic dark theme sidebar, includes `NotificationBell` component
+- `wizard/`: Agent creation wizard (5-step flow with localStorage draft persistence). 8 templates (compact text layout). Skills step includes report_generation tool. 6 tools: sql_query, calculator, data_summary, entity_extraction, knowledge_search, report_generation
 - `TaskTimeline.js`: Execution trace timeline with step icons and duration badges
 - `SkillsConfigPanel.js`: Skill enablement grid with dynamic credential forms from registry and test execution button
+- `NotificationBell.js`: Real-time notification indicator with dropdown for inbox monitor alerts
 
 ## Environment Configuration
 
@@ -271,7 +278,13 @@ ADK_APP_NAME=servicetsunami_supervisor
 
 # Credential Vault
 ENCRYPTION_KEY=<fernet-key>  # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Google OAuth (required for Inbox Monitor)
+GOOGLE_CLIENT_ID=xxx
+GOOGLE_CLIENT_SECRET=xxx
 ```
+
+**Note**: The orchestration Helm worker needs the same secrets as the API (ENCRYPTION_KEY, ANTHROPIC_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET).
 
 ### Web Configuration (`apps/web/.env.local`)
 
@@ -363,4 +376,6 @@ When making manual changes, always replicate them to Helm, Git, and Terraform to
   - `2026-02-20-whatsapp-agent-integration-platform-design.md`: WhatsApp agent + external app integration
   - `2026-02-20-lead-scoring-skill-design.md`: LLM-powered lead scoring with configurable rubrics
   - `2025-12-18-automations-temporal-plan.md`: Automations with Temporal connectors and scheduling
+  - `2026-03-06-proactive-inbox-monitor.md`: Proactive inbox monitor workflow design
+  - `2026-03-06-memory-system-design.md`: Memory activity audit and knowledge graph design
 - `LLM_INTEGRATION_README.md`, `TOOL_FRAMEWORK_README.md`, `DATABRICKS_SYNC_README.md`: Feature docs
