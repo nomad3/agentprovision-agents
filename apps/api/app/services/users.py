@@ -49,7 +49,7 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         },
         default_hierarchy={
             "supervisor": "servicetsunami_supervisor",
-            "workers": ["personal_assistant", "dev_team", "data_team", "sales_team", "marketing_team"],
+            "workers": ["personal_assistant", "dev_team", "data_team", "sales_team", "marketing_team", "vet_supervisor", "deal_team"],
         },
         tenant_id=tenant.id,
     )
