@@ -329,14 +329,22 @@ class KnowledgeExtractionService:
             '- "type": string (one of: works_at, knows, manages, reports_to, purchased, prefers, related_to, part_of, located_in, competes_with, owns)\n'
             '- "confidence": number 0.0-1.0\n'
             '- "evidence": string (brief text explaining why this relation exists)\n'
-            "\nMEMORIES — things learned about the user (preferences, facts, decisions):\n"
+            "\nMEMORIES — things learned about the user from this conversation:\n"
             'Return as "memories" array. Each object:\n'
-            '- "type": string (one of: preference, fact, experience, decision)\n'
+            '- "type": string (one of: preference, fact, experience, decision, goal, working_style)\n'
             '- "content": string (the memory in natural language, e.g. "User prefers email over phone for follow-ups")\n'
             '- "importance": number 0.0-1.0\n'
             '- "source": string (how this was learned, e.g. "stated in conversation", "inferred from behavior")\n'
-            "\nOnly include memories that are genuinely about the USER's preferences, habits, decisions, or personal facts. "
-            "Do NOT include memories about entities (those are captured as entity attributes).\n"
+            "\nBe GENEROUS with memory extraction. Capture:\n"
+            "- Communication preferences (channels, tone, language, timing)\n"
+            "- Business priorities and goals mentioned\n"
+            "- Working style cues (prefers quick updates vs detailed reports, morning vs evening)\n"
+            "- Industry focus, target markets, or verticals they care about\n"
+            "- Tools, technologies, or workflows they mention using\n"
+            "- Decisions made during the conversation\n"
+            "- Personal context shared (timezone, role, team structure)\n"
+            "- Feedback on agent behavior (liked/disliked something the agent did)\n"
+            "Do NOT include memories about external entities (those are captured as entity attributes).\n"
             "\nACTION TRIGGERS — if the user explicitly requests a reminder, follow-up, or scheduled action:\n"
             'Return as "action_triggers" array. Each object:\n'
             '- "type": string (one of: reminder, follow_up, research, auto_reply)\n'
@@ -595,7 +603,7 @@ class KnowledgeExtractionService:
                 continue
 
             # Valid types
-            if memory_type not in ("preference", "fact", "experience", "decision", "skill", "relationship", "procedure"):
+            if memory_type not in ("preference", "fact", "experience", "decision", "skill", "relationship", "procedure", "goal", "working_style"):
                 memory_type = "fact"
 
             # Dedup: skip if similar content exists
