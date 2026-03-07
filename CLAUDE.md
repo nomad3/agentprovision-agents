@@ -378,4 +378,5 @@ When making manual changes, always replicate them to Helm, Git, and Terraform to
   - `2025-12-18-automations-temporal-plan.md`: Automations with Temporal connectors and scheduling
   - `2026-03-06-proactive-inbox-monitor.md`: Proactive inbox monitor workflow design
   - `2026-03-06-memory-system-design.md`: Memory activity audit and knowledge graph design
+  - `2026-03-07-orchestration-worker-architecture.md`: Orchestration worker design (Temporal worker for Gmail/Calendar/WhatsApp workflows)
 - `LLM_INTEGRATION_README.md`, `TOOL_FRAMEWORK_README.md`, `DATABRICKS_SYNC_README.md`: Feature docs
