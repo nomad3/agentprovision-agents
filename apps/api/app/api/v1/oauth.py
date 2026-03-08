@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.config import settings
-from app.models.skill_config import SkillConfig
+from app.models.integration_config import IntegrationConfig
 from app.models.integration_credential import IntegrationCredential
 from app.models.user import User
 from app.services.orchestration.credential_vault import (
@@ -193,7 +193,7 @@ def _update_stored_token(db: Session, integration_config_id: uuid.UUID, tenant_i
 
 
 def _lazy_backfill_email(
-    db: Session, provider: str, skill_config: "SkillConfig", tenant_id: uuid.UUID,
+    db: Session, provider: str, skill_config: "IntegrationConfig", tenant_id: uuid.UUID,
 ) -> Optional[str]:
     """Backfill account_email for legacy configs missing it.
 
@@ -377,16 +377,16 @@ def oauth_callback(
 
     # Store tokens for each skill associated with this provider
     for skill_name in config["skill_names"]:
-        # Find existing SkillConfig for THIS specific account (by email)
+        # Find existing IntegrationConfig for THIS specific account (by email)
         # or fall back to any config without an email (legacy)
         skill_config = None
         if account_email:
             skill_config = (
-                db.query(SkillConfig)
+                db.query(IntegrationConfig)
                 .filter(
-                    SkillConfig.tenant_id == tenant_id,
-                    SkillConfig.skill_name == skill_name,
-                    SkillConfig.account_email == account_email,
+                    IntegrationConfig.tenant_id == tenant_id,
+                    IntegrationConfig.skill_name == skill_name,
+                    IntegrationConfig.account_email == account_email,
                 )
                 .first()
             )
@@ -394,11 +394,11 @@ def oauth_callback(
         if not skill_config:
             # Check for a legacy config (no account_email) to upgrade
             legacy_config = (
-                db.query(SkillConfig)
+                db.query(IntegrationConfig)
                 .filter(
-                    SkillConfig.tenant_id == tenant_id,
-                    SkillConfig.skill_name == skill_name,
-                    SkillConfig.account_email.is_(None),
+                    IntegrationConfig.tenant_id == tenant_id,
+                    IntegrationConfig.skill_name == skill_name,
+                    IntegrationConfig.account_email.is_(None),
                 )
                 .first()
             )
@@ -412,7 +412,7 @@ def oauth_callback(
                 skill_config = legacy_config
             else:
                 # Create new config for this account
-                skill_config = SkillConfig(
+                skill_config = IntegrationConfig(
                     id=uuid.uuid4(),
                     tenant_id=tenant_id,
                     skill_name=skill_name,
@@ -526,14 +526,14 @@ def oauth_disconnect(
 
     for skill_name in config["skill_names"]:
         query = (
-            db.query(SkillConfig)
+            db.query(IntegrationConfig)
             .filter(
-                SkillConfig.tenant_id == current_user.tenant_id,
-                SkillConfig.skill_name == skill_name,
+                IntegrationConfig.tenant_id == current_user.tenant_id,
+                IntegrationConfig.skill_name == skill_name,
             )
         )
         if account_email:
-            query = query.filter(SkillConfig.account_email == account_email)
+            query = query.filter(IntegrationConfig.account_email == account_email)
 
         skill_configs = query.all()
 
@@ -583,11 +583,11 @@ def oauth_status(
     primary_skill = config["skill_names"][0]
 
     skill_configs = (
-        db.query(SkillConfig)
+        db.query(IntegrationConfig)
         .filter(
-            SkillConfig.tenant_id == current_user.tenant_id,
-            SkillConfig.skill_name == primary_skill,
-            SkillConfig.enabled.is_(True),
+            IntegrationConfig.tenant_id == current_user.tenant_id,
+            IntegrationConfig.skill_name == primary_skill,
+            IntegrationConfig.enabled.is_(True),
         )
         .all()
     )
@@ -655,15 +655,15 @@ def get_skill_token(
         raise HTTPException(status_code=400, detail="Invalid tenant_id")
 
     query = (
-        db.query(SkillConfig)
+        db.query(IntegrationConfig)
         .filter(
-            SkillConfig.tenant_id == tid,
-            SkillConfig.skill_name == skill_name,
-            SkillConfig.enabled.is_(True),
+            IntegrationConfig.tenant_id == tid,
+            IntegrationConfig.skill_name == skill_name,
+            IntegrationConfig.enabled.is_(True),
         )
     )
     if account_email:
-        query = query.filter(SkillConfig.account_email == account_email)
+        query = query.filter(IntegrationConfig.account_email == account_email)
 
     skill_config = query.first()
     if not skill_config:
