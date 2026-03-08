@@ -41,7 +41,7 @@ import {
 } from 'react-icons/fa';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
-import SkillsConfigPanel from '../components/SkillsConfigPanel';
+import IntegrationsPanel from '../components/IntegrationsPanel';
 import WhatsAppChannelCard from '../components/WhatsAppChannelCard';
 import SyncStatusBadge from '../components/SyncStatusBadge';
 import connectorService from '../services/connector';
@@ -669,7 +669,7 @@ const IntegrationsPage = () => {
 
   const renderSkillsTab = () => (
     <div className="tab-content-inner">
-      <SkillsConfigPanel />
+      <IntegrationsPanel />
     </div>
   );
 
