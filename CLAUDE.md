@@ -30,6 +30,11 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
   - Tools for data, analytics, knowledge, and actions
   - Connects to MCP server for Databricks operations
 
+- **`apps/dev-worker`**: Claude Code CLI Temporal worker (Python 3.11 + Node.js 20)
+  - Dedicated pod for autonomous coding tasks
+  - Runs Claude Code CLI, creates branches and PRs
+  - Temporal worker on `servicetsunami-dev` queue
+
 - **`apps/mcp-server`**: Model Context Protocol server for data integration (Python 3.11)
   - MCP-compliant server following Anthropic's specification
   - 9 tools: PostgreSQL connections, data ingestion, Databricks queries
@@ -37,7 +42,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 - **`helm/`**: Kubernetes Helm charts
   - `charts/microservice/`: Reusable base chart for all services
-  - `values/`: Per-service configuration (api, web, worker, adk, temporal, redis, postgresql)
+  - `values/`: Per-service configuration (api, web, worker, adk, dev-worker, temporal, redis, postgresql)
 
 - **`infra/terraform`**: Infrastructure as Code for AWS deployment (EKS, Aurora PostgreSQL, VPC)
 
@@ -61,7 +66,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 **Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default "Luna Supervisor" AgentKit on registration.
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
-- **Dev Team**: Self-modifying team with a strict 5-step cycle (**Architect** → **Coder** → **Tester** → **DevOps** → **User Agent**). Agents have shell access and can autonomously modify code, run tests, and deploy via git.
+- **Dev Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `dev-worker` pod via Temporal (`servicetsunami-dev` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
 - **Data Team**: **Data Analyst**, **Report Generator**, **Knowledge Manager**. Handles SQL, analytics, and knowledge graph.
 - **Sales Team**: **Sales Agent** (deal management), **Customer Support** (inquiry handling).
 - **Marketing Team**: **Web Researcher** for market intelligence and prospect discovery.
@@ -70,8 +75,8 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 **Enterprise Orchestration Engine**:
 - **Task Dispatcher**: Intelligent agent selection and task lifecycle management.
 - **Entity Validator**: High-fidelity validation of extracted knowledge entities against tenant-specific schemas.
-- **Credential Vault**: Fernet-encrypted storage for skill API keys and tokens.
-- **Skill Router**: Dynamic routing of agent tasks to external skill integrations.
+- **Credential Vault**: Fernet-encrypted storage for integration API keys and tokens.
+- **Skill Router**: Dynamic routing of agent tasks to external integrations.
 
 **Knowledge Graph**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph. Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. pgvector is not used; search falls back to text-based `ILIKE`. **Memory Activity** audit log (`memory_activities` table) tracks entity_created, entity_updated, relation_created, memory_created, and action_triggered events.
 
@@ -79,15 +84,16 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 - **Design System**: Glassmorphic "Ocean Theme" with support for high-contrast light and dark modes.
 - **Aesthetics**: Radial gradients, backdrop blurs (20px-30px), and "Metric Tiles" for data visualization.
 - **Animations**: Subtle Y-axis transitions (6px-8px) on hover for interactive elements.
-- **Custom Components**: `TaskTimeline` for execution traces and `SkillsConfigPanel` for integration management.
+- **Custom Components**: `TaskTimeline` for execution traces and `IntegrationsPanel` for integration management.
 
 **Notifications System**: `notification.py` model with sources (gmail, calendar, whatsapp, system), priorities (high/medium/low), read/dismissed tracking. API endpoints at `/api/v1/notifications`. Frontend `NotificationBell` component in Layout.
 
 **Proactive Inbox Monitor**: `InboxMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` every 15 minutes. Monitors Gmail + Calendar, triages items with LLM + memory context, creates notifications, and extracts knowledge entities from important emails. Auto-starts when Google OAuth is connected. Queue: `servicetsunami-orchestration`. Activities: fetch_new_emails, fetch_upcoming_events, triage_items, create_notifications, extract_from_emails, log_monitor_cycle.
 
-**Temporal workflows**: Durable workflow execution across three task queues:
+**Temporal workflows**: Durable workflow execution across four task queues:
 - `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`.
 - `servicetsunami-databricks`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
+- `servicetsunami-dev`: `DevTaskWorkflow` (Claude Code CLI execution in isolated dev-worker pod).
 - `servicetsunami-business`: Industry-specific flows:
   - `DealPipelineWorkflow`: Discover → Score → Research → Outreach → Advance → Sync (6 steps).
   - `RemediaOrderWorkflow`: Create order → Confirm (WhatsApp) → Monitor payment → Notify delivery.
@@ -190,8 +196,8 @@ Core domain models (all inherit from SQLAlchemy Base, include `tenant_id` Foreig
 - `knowledge_entity.py`, `knowledge_relation.py`: Knowledge graph
 - `llm_provider.py`, `llm_model.py`, `llm_config.py`: Multi-LLM provider configuration
 - `execution_trace.py`: Step-by-step audit trail for task execution
-- `skill_config.py`: Per-tenant skill enablement, approval gates, rate limits, LLM override
-- `skill_credential.py`: Encrypted API keys/tokens for skill integrations
+- `integration_config.py`: Per-tenant integration enablement, approval gates, rate limits, LLM override
+- `integration_credential.py`: Encrypted API keys/tokens for integrations (OAuth tokens, session tokens, API keys)
 - `notification.py`: Proactive alerts from inbox monitor, system events
 - `memory_activity.py`: Audit log for knowledge graph operations
 
@@ -206,7 +212,7 @@ Business logic layer (one service per model):
 - `adk_client.py`, `mcp_client.py`: Google ADK and MCP server clients
 - `knowledge.py`, `knowledge_extraction.py`: Knowledge graph operations and extraction
 - `branding.py`, `features.py`, `tenant_analytics.py`: Tenant customization services
-- `skill_configs.py`: Skill configuration CRUD service
+- `integration_configs.py`: Integration configuration CRUD service
 - `orchestration/`: Orchestration services package
   - `skill_router.py`: Skill execution router (stub — backend not yet wired)
   - `credential_vault.py`: Fernet-encrypted credential storage with CRUD helpers
@@ -240,7 +246,7 @@ Organized in 3-section navigation:
 - `Layout.js`: Authenticated layout with glassmorphic dark theme sidebar, includes `NotificationBell` component
 - `wizard/`: Agent creation wizard (5-step flow with localStorage draft persistence). 8 templates (compact text layout). Skills step includes report_generation tool. 6 tools: sql_query, calculator, data_summary, entity_extraction, knowledge_search, report_generation
 - `TaskTimeline.js`: Execution trace timeline with step icons and duration badges
-- `SkillsConfigPanel.js`: Skill enablement grid with dynamic credential forms from registry and test execution button
+- `IntegrationsPanel.js`: Integration enablement grid with dynamic credential forms from registry and test execution button
 - `NotificationBell.js`: Real-time notification indicator with dropdown for inbox monitor alerts
 
 ## Environment Configuration
