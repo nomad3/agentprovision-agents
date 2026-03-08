@@ -31,4 +31,5 @@ git config user.name "ServiceTsunami Dev Worker"
 echo -n "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
 
 echo "[dev-worker] Starting Temporal worker..."
+cd /app
 exec python -m worker
