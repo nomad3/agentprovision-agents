@@ -18,12 +18,16 @@ from .vet_report_generator import vet_report_generator
 from .deal_analyst import deal_analyst
 from .deal_researcher import deal_researcher
 from .outreach_specialist import outreach_specialist
+from .prospect_researcher import prospect_researcher
+from .prospect_scorer import prospect_scorer
+from .prospect_outreach import prospect_outreach
 
 # Team supervisors
 from .dev_team import dev_team
 from .data_team import data_team
 from .sales_team import sales_team
 from .marketing_team import marketing_team
+from .prospecting_team import prospecting_team
 from .vet_supervisor import vet_supervisor
 from .deal_team import deal_team
 
@@ -37,11 +41,15 @@ __all__ = [
     "data_team",
     "sales_team",
     "marketing_team",
+    "prospecting_team",
     "vet_supervisor",
     "deal_team",
     "deal_analyst",
     "deal_researcher",
     "outreach_specialist",
+    "prospect_researcher",
+    "prospect_scorer",
+    "prospect_outreach",
     # Personal assistant
     "personal_assistant",
     # Leaf agents
