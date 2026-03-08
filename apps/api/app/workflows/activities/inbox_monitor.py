@@ -20,7 +20,7 @@ from temporalio import activity
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.notification import Notification
-from app.models.skill_config import SkillConfig
+from app.models.integration_config import IntegrationConfig
 from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 from app.services.memory_activity import log_activity
 
@@ -50,11 +50,11 @@ def _get_google_token(db, tenant_id: str, skill_name: str) -> Optional[str]:
     """Retrieve and auto-refresh Google OAuth token from credential vault."""
     tid = uuid.UUID(tenant_id)
     skill_config = (
-        db.query(SkillConfig)
+        db.query(IntegrationConfig)
         .filter(
-            SkillConfig.tenant_id == tid,
-            SkillConfig.skill_name == skill_name,
-            SkillConfig.enabled.is_(True),
+            IntegrationConfig.tenant_id == tid,
+            IntegrationConfig.skill_name == skill_name,
+            IntegrationConfig.enabled.is_(True),
         )
         .first()
     )

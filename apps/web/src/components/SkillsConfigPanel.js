@@ -34,7 +34,7 @@ import {
   FaUserCircle,
   FaWhatsapp
 } from 'react-icons/fa';
-import skillConfigService from '../services/skillConfigService';
+import integrationConfigService from '../services/integrationConfigService';
 import skillService from '../services/skillService';
 import { notificationService } from '../services/notifications';
 
@@ -91,8 +91,8 @@ const SkillsConfigPanel = () => {
     try {
       setLoading(true);
       const [registryRes, configsRes] = await Promise.all([
-        skillConfigService.getRegistry(),
-        skillConfigService.getAll(),
+        integrationConfigService.getRegistry(),
+        integrationConfigService.getAll(),
       ]);
       setRegistry(registryRes.data || []);
       setConfigs(configsRes.data || []);
@@ -108,7 +108,7 @@ const SkillsConfigPanel = () => {
       await Promise.all(
         oauthProviders.map(async (provider) => {
           try {
-            const res = await skillConfigService.oauthStatus(provider);
+            const res = await integrationConfigService.oauthStatus(provider);
             statuses[provider] = {
               connected: res.data?.connected ?? false,
               accounts: res.data?.accounts ?? [],
@@ -170,7 +170,7 @@ const SkillsConfigPanel = () => {
   const handleOAuthConnect = async (provider) => {
     try {
       setConnectingProvider(provider);
-      const res = await skillConfigService.oauthAuthorize(provider);
+      const res = await integrationConfigService.oauthAuthorize(provider);
       const authUrl = res.data?.auth_url;
       if (!authUrl) {
         setError('Could not get authorization URL');
@@ -193,7 +193,7 @@ const SkillsConfigPanel = () => {
   const handleOAuthDisconnect = async (provider, accountEmail) => {
     try {
       setSaving(`${provider}-${accountEmail || 'all'}`);
-      await skillConfigService.oauthDisconnect(provider, accountEmail);
+      await integrationConfigService.oauthDisconnect(provider, accountEmail);
       setSuccess(`Disconnected ${accountEmail || provider}`);
       setTimeout(() => setSuccess(null), 3000);
       await fetchData();
@@ -210,11 +210,11 @@ const SkillsConfigPanel = () => {
     try {
       setSaving(skill.skill_name);
       if (existing) {
-        await skillConfigService.update(existing.id, {
+        await integrationConfigService.update(existing.id, {
           enabled: !existing.enabled,
         });
       } else {
-        await skillConfigService.create({
+        await integrationConfigService.create({
           skill_name: skill.skill_name,
           enabled: true,
         });
@@ -235,7 +235,7 @@ const SkillsConfigPanel = () => {
     if (!existing) return;
     try {
       setSaving(skill.skill_name);
-      await skillConfigService.update(existing.id, {
+      await integrationConfigService.update(existing.id, {
         requires_approval: !existing.requires_approval,
       });
       await fetchData();
@@ -275,7 +275,7 @@ const SkillsConfigPanel = () => {
     try {
       setSaving(skill.skill_name);
       for (const cred of credentialsToSave) {
-        await skillConfigService.addCredential(existing.id, {
+        await integrationConfigService.addCredential(existing.id, {
           credential_key: cred.key,
           value: formValues[cred.key],
           credential_type: cred.type === 'password' ? 'api_key' : 'text',
