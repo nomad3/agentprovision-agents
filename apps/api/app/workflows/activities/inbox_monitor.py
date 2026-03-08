@@ -49,7 +49,7 @@ def _refresh_google_token(refresh_token: str) -> Optional[str]:
 def _get_google_token(db, tenant_id: str, skill_name: str) -> Optional[str]:
     """Retrieve and auto-refresh Google OAuth token from credential vault."""
     tid = uuid.UUID(tenant_id)
-    skill_config = (
+    config = (
         db.query(IntegrationConfig)
         .filter(
             IntegrationConfig.tenant_id == tid,
@@ -58,10 +58,10 @@ def _get_google_token(db, tenant_id: str, skill_name: str) -> Optional[str]:
         )
         .first()
     )
-    if not skill_config:
+    if not config:
         return None
 
-    creds = retrieve_credentials_for_skill(db, skill_config.id, tid)
+    creds = retrieve_credentials_for_skill(db, config.id, tid)
     refresh_tok = creds.get("refresh_token")
 
     # Google access tokens expire after ~1h; always refresh

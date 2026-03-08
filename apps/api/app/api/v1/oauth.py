@@ -193,17 +193,17 @@ def _update_stored_token(db: Session, integration_config_id: uuid.UUID, tenant_i
 
 
 def _lazy_backfill_email(
-    db: Session, provider: str, skill_config: "IntegrationConfig", tenant_id: uuid.UUID,
+    db: Session, provider: str, config: "IntegrationConfig", tenant_id: uuid.UUID,
 ) -> Optional[str]:
     """Backfill account_email for legacy configs missing it.
 
     Uses refresh_token → fresh access_token → userinfo to discover the email.
     """
-    if skill_config.account_email:
-        return skill_config.account_email
+    if config.account_email:
+        return config.account_email
 
     try:
-        creds = retrieve_credentials_for_skill(db, skill_config.id, tenant_id)
+        creds = retrieve_credentials_for_skill(db, config.id, tenant_id)
         refresh_tok = creds.get("refresh_token")
         if not refresh_tok:
             return None
@@ -214,12 +214,12 @@ def _lazy_backfill_email(
 
         email = _fetch_account_email(provider, access_token)
         if email:
-            skill_config.account_email = email
+            config.account_email = email
             db.commit()
-            logger.info("Backfilled account_email=%s for config %s", email, skill_config.id)
+            logger.info("Backfilled account_email=%s for config %s", email, config.id)
             return email
     except Exception as e:
-        logger.warning("Lazy backfill failed for config %s: %s", skill_config.id, e)
+        logger.warning("Lazy backfill failed for config %s: %s", config.id, e)
 
     return None
 
@@ -379,9 +379,9 @@ def oauth_callback(
     for skill_name in config["skill_names"]:
         # Find existing IntegrationConfig for THIS specific account (by email)
         # or fall back to any config without an email (legacy)
-        skill_config = None
+        ic = None
         if account_email:
-            skill_config = (
+            ic = (
                 db.query(IntegrationConfig)
                 .filter(
                     IntegrationConfig.tenant_id == tenant_id,
@@ -391,7 +391,7 @@ def oauth_callback(
                 .first()
             )
 
-        if not skill_config:
+        if not ic:
             # Check for a legacy config (no account_email) to upgrade
             legacy_config = (
                 db.query(IntegrationConfig)
@@ -409,29 +409,29 @@ def oauth_callback(
                 legacy_config.enabled = True
                 db.commit()
                 db.refresh(legacy_config)
-                skill_config = legacy_config
+                ic = legacy_config
             else:
                 # Create new config for this account
-                skill_config = IntegrationConfig(
+                ic = IntegrationConfig(
                     id=uuid.uuid4(),
                     tenant_id=tenant_id,
                     skill_name=skill_name,
                     account_email=account_email,
                     enabled=True,
                 )
-                db.add(skill_config)
+                db.add(ic)
                 db.commit()
-                db.refresh(skill_config)
+                db.refresh(ic)
 
-        elif not skill_config.enabled:
-            skill_config.enabled = True
+        elif not ic.enabled:
+            ic.enabled = True
             db.commit()
 
         # Revoke old credentials for THIS specific config only
         old_creds = (
             db.query(IntegrationCredential)
             .filter(
-                IntegrationCredential.integration_config_id == skill_config.id,
+                IntegrationCredential.integration_config_id == ic.id,
                 IntegrationCredential.tenant_id == tenant_id,
                 IntegrationCredential.status == "active",
             )
@@ -443,7 +443,7 @@ def oauth_callback(
         # Store new tokens
         store_credential(
             db,
-            integration_config_id=skill_config.id,
+            integration_config_id=ic.id,
             tenant_id=tenant_id,
             credential_key="oauth_token",
             plaintext_value=access_token,
@@ -452,7 +452,7 @@ def oauth_callback(
         if refresh_token:
             store_credential(
                 db,
-                integration_config_id=skill_config.id,
+                integration_config_id=ic.id,
                 tenant_id=tenant_id,
                 credential_key="refresh_token",
                 plaintext_value=refresh_token,
@@ -513,7 +513,7 @@ def oauth_disconnect(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    """Revoke OAuth credentials and disable skill configs for a provider.
+    """Revoke OAuth credentials and disable integration configs for a provider.
 
     If account_email is provided, only disconnects that specific account.
     Otherwise disconnects all accounts for the provider.
@@ -535,14 +535,14 @@ def oauth_disconnect(
         if account_email:
             query = query.filter(IntegrationConfig.account_email == account_email)
 
-        skill_configs = query.all()
+        configs = query.all()
 
-        for skill_config in skill_configs:
+        for cfg in configs:
             # Revoke all active credentials
             creds = (
                 db.query(IntegrationCredential)
                 .filter(
-                    IntegrationCredential.integration_config_id == skill_config.id,
+                    IntegrationCredential.integration_config_id == cfg.id,
                     IntegrationCredential.tenant_id == current_user.tenant_id,
                     IntegrationCredential.status == "active",
                 )
@@ -552,8 +552,8 @@ def oauth_disconnect(
                 revoke_credential(db, credential_id=cred.id, tenant_id=current_user.tenant_id)
                 revoked_count += 1
 
-            # Disable the skill config
-            skill_config.enabled = False
+            # Disable the integration config
+            cfg.enabled = False
             db.commit()
 
     return {"disconnected": True, "provider": provider, "credentials_revoked": revoked_count}
@@ -582,7 +582,7 @@ def oauth_status(
     # Use the first skill to check (e.g., "gmail" for google)
     primary_skill = config["skill_names"][0]
 
-    skill_configs = (
+    configs = (
         db.query(IntegrationConfig)
         .filter(
             IntegrationConfig.tenant_id == current_user.tenant_id,
@@ -592,7 +592,7 @@ def oauth_status(
         .all()
     )
 
-    for sc in skill_configs:
+    for sc in configs:
         # Lazy backfill: discover email for legacy accounts missing it
         if not sc.account_email:
             _lazy_backfill_email(db, provider, sc, current_user.tenant_id)
@@ -611,7 +611,7 @@ def oauth_status(
         if has_token:
             accounts.append({
                 "email": sc.account_email,
-                "skill_config_id": str(sc.id),
+                "integration_config_id": str(sc.id),
                 "connected_at": sc.created_at.isoformat() if sc.created_at else None,
             })
 
@@ -665,11 +665,11 @@ def get_skill_token(
     if account_email:
         query = query.filter(IntegrationConfig.account_email == account_email)
 
-    skill_config = query.first()
-    if not skill_config:
+    config = query.first()
+    if not config:
         raise HTTPException(status_code=404, detail=f"No active config for skill '{skill_name}'")
 
-    creds = retrieve_credentials_for_skill(db, skill_config.id, tid)
+    creds = retrieve_credentials_for_skill(db, config.id, tid)
     if not creds.get("oauth_token"):
         raise HTTPException(status_code=404, detail="No active OAuth token found")
 
@@ -680,7 +680,7 @@ def get_skill_token(
         new_access_token = _refresh_access_token("google", refresh_token)
         if new_access_token:
             # Update stored credential with fresh token
-            _update_stored_token(db, skill_config.id, tid, new_access_token)
+            _update_stored_token(db, config.id, tid, new_access_token)
             creds["oauth_token"] = new_access_token
             logger.debug("Refreshed Google token for skill=%s tenant=%s", skill_name, tid)
         else:

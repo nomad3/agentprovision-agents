@@ -47,10 +47,10 @@ def _resolve_tenant_id(tenant_id: str) -> str:
         from config.settings import settings
         engine = create_engine(settings.database_url)
         with engine.connect() as conn:
-            # Prefer tenants with active skill configs (e.g. Gmail connected)
+            # Prefer tenants with active integration configs (e.g. Gmail connected)
             result = conn.execute(text(
                 "SELECT DISTINCT t.id FROM tenants t "
-                "JOIN skill_configs sc ON sc.tenant_id = t.id AND sc.enabled = true "
+                "JOIN integration_configs ic ON ic.tenant_id = t.id AND ic.enabled = true "
                 "LIMIT 1"
             )).fetchone()
             if not result:
