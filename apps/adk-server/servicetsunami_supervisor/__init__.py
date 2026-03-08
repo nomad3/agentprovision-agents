@@ -6,7 +6,7 @@ from .knowledge_manager import knowledge_manager
 from .web_researcher import web_researcher
 from .customer_support import customer_support
 from .sales_agent import sales_agent
-from .dev_agent import dev_agent
+from .code_agent import code_agent
 from .personal_assistant import personal_assistant
 from .cardiac_analyst import cardiac_analyst
 from .billing_agent import billing_agent
@@ -32,7 +32,7 @@ from .agent import root_agent
 __all__ = [
     "root_agent",
     # Teams
-    "dev_agent",
+    "code_agent",
     "data_team",
     "sales_team",
     "marketing_team",

@@ -1,9 +1,9 @@
-# ServiceTsunami Dev Worker - Claude Code CLI Temporal Worker
-nameOverride: "servicetsunami-dev-worker"
-fullnameOverride: "servicetsunami-dev-worker"
+# ServiceTsunami Code Worker - Claude Code CLI Temporal Worker
+nameOverride: "servicetsunami-code-worker"
+fullnameOverride: "servicetsunami-code-worker"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-dev-worker
+  repository: gcr.io/ai-agency-479516/servicetsunami-code-worker
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -70,7 +70,7 @@ externalSecret:
     name: gcpsm-secret-store
     kind: SecretStore
   target:
-    name: servicetsunami-dev-worker-secret
+    name: servicetsunami-code-worker-secret
     creationPolicy: Owner
   data:
     - secretKey: GITHUB_TOKEN
@@ -93,7 +93,7 @@ autoscaling:
 tmpDirs:
   - /tmp
   - /workspace
-  - /home/devworker
+  - /home/codeworker
 
 # Init container to wait for Temporal
 initContainers:
@@ -107,7 +107,7 @@ initContainers:
         drop:
           - ALL
 
-# No Cloud SQL proxy — dev worker doesn't access the database
+# No Cloud SQL proxy — code worker doesn't access the database
 # No HTTPRoute — internal service only
 httpRoute:
   enabled: false

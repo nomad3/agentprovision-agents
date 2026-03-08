@@ -1,4 +1,4 @@
-"""Temporal workflow and activities for Claude Code dev tasks."""
+"""Temporal workflow and activities for Claude Code tasks."""
 
 import json
 import logging
@@ -21,14 +21,14 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "http://servicetsunami-api:8000")
 
 
 @dataclass
-class DevTaskInput:
+class CodeTaskInput:
     task_description: str
     tenant_id: str
     context: Optional[str] = None
 
 
 @dataclass
-class DevTaskResult:
+class CodeTaskResult:
     pr_url: str
     summary: str
     branch: str
@@ -68,10 +68,10 @@ def _fetch_claude_token(tenant_id: str) -> str:
 
 
 @activity.defn
-async def execute_dev_task(task_input: DevTaskInput) -> DevTaskResult:
-    """Execute a dev task using Claude Code CLI."""
+async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
+    """Execute a code task using Claude Code CLI."""
     branch_id = uuid.uuid4().hex[:8]
-    branch_name = f"dev/task-{branch_id}"
+    branch_name = f"code/task-{branch_id}"
 
     try:
         # 1. Fetch tenant's Claude Code session token
@@ -113,7 +113,7 @@ async def execute_dev_task(task_input: DevTaskInput) -> DevTaskResult:
         # 7. Check if there are any changes to commit
         status = _run("git status --porcelain")
         if not status:
-            return DevTaskResult(
+            return CodeTaskResult(
                 pr_url="",
                 summary="No changes were made by Claude Code.",
                 branch=branch_name,
@@ -144,7 +144,7 @@ async def execute_dev_task(task_input: DevTaskInput) -> DevTaskResult:
 
         summary = claude_data.get("result", claude_output[:2000]) if isinstance(claude_data, dict) else claude_output[:2000]
 
-        return DevTaskResult(
+        return CodeTaskResult(
             pr_url=pr_url,
             summary=str(summary)[:2000],
             branch=branch_name,
@@ -154,14 +154,14 @@ async def execute_dev_task(task_input: DevTaskInput) -> DevTaskResult:
         )
 
     except Exception as e:
-        logger.exception("Dev task failed: %s", e)
+        logger.exception("Code task failed: %s", e)
         # Clean up: switch back to main
         try:
             _run("git checkout main", timeout=10)
         except Exception:
             pass
 
-        return DevTaskResult(
+        return CodeTaskResult(
             pr_url="",
             summary="",
             branch=branch_name,
@@ -173,13 +173,13 @@ async def execute_dev_task(task_input: DevTaskInput) -> DevTaskResult:
 
 
 @workflow.defn
-class DevTaskWorkflow:
-    """Temporal workflow for executing a dev task via Claude Code CLI."""
+class CodeTaskWorkflow:
+    """Temporal workflow for executing a code task via Claude Code CLI."""
 
     @workflow.run
-    async def run(self, task_input: DevTaskInput) -> DevTaskResult:
+    async def run(self, task_input: CodeTaskInput) -> CodeTaskResult:
         return await workflow.execute_activity(
-            execute_dev_task,
+            execute_code_task,
             task_input,
             start_to_close_timeout=timedelta(minutes=15),
             heartbeat_timeout=timedelta(seconds=120),

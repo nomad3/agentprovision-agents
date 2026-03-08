@@ -25,9 +25,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Non-root user
-RUN useradd -m -u 1000 devworker && \
-    mkdir -p /workspace && chown devworker:devworker /workspace && \
-    mkdir -p /home/devworker/.config && chown -R devworker:devworker /home/devworker
-USER devworker
+RUN useradd -m -u 1000 codeworker && \
+    mkdir -p /workspace && chown codeworker:codeworker /workspace && \
+    mkdir -p /home/codeworker/.config && chown -R codeworker:codeworker /home/codeworker
+USER codeworker
 
 ENTRYPOINT ["/app/entrypoint.sh"]

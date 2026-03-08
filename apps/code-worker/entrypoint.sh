@@ -7,14 +7,14 @@ GITHUB_TOKEN="$(echo -n "${GITHUB_TOKEN}" | tr -d '[:space:]')"
 # Mark /workspace as safe (ownership may differ across pod restarts)
 git config --global --add safe.directory /workspace
 
-echo "[dev-worker] Setting up repository..."
+echo "[code-worker] Setting up repository..."
 if [ -d /workspace/.git ]; then
     # Verify repo is valid; if not, remove and re-clone
     if cd /workspace && git rev-parse --git-dir >/dev/null 2>&1; then
-        echo "[dev-worker] Updating existing repo..."
+        echo "[code-worker] Updating existing repo..."
         git fetch origin && git checkout main && git reset --hard origin/main
     else
-        echo "[dev-worker] Removing corrupted repo..."
+        echo "[code-worker] Removing corrupted repo..."
         rm -rf /workspace/.git /workspace/*
         git clone "https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git" /workspace
     fi
@@ -24,12 +24,12 @@ fi
 
 # Configure git identity for commits
 cd /workspace
-git config user.email "dev-worker@servicetsunami.com"
-git config user.name "ServiceTsunami Dev Worker"
+git config user.email "code-worker@servicetsunami.com"
+git config user.name "ServiceTsunami Code Worker"
 
 # Configure gh CLI
 echo -n "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
 
-echo "[dev-worker] Starting Temporal worker..."
+echo "[code-worker] Starting Temporal worker..."
 cd /app
 exec python -m worker

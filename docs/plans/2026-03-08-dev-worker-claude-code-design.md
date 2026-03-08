@@ -1,10 +1,10 @@
-# Dev Worker: Claude Code Integration Design
+# Code Worker: Claude Code Integration Design
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Replace the 5-agent ADK dev team (architect → coder → tester → dev_ops → user_agent) with a single `dev_agent` that delegates coding tasks to Claude Code CLI running in an isolated Kubernetes pod, communicating via Temporal workflows.
+**Goal:** Replace the 5-agent ADK dev team (architect → coder → tester → dev_ops → user_agent) with a single `code_agent` that delegates coding tasks to Claude Code CLI running in an isolated Kubernetes pod, communicating via Temporal workflows.
 
-**Architecture:** A dedicated dev worker pod runs Claude Code CLI authenticated via Claude Pro/Max subscription token. The ADK `dev_agent` starts a `DevTaskWorkflow` on a `servicetsunami-dev` Temporal queue. Claude Code handles the full development cycle autonomously — reads code, implements, tests, commits to a feature branch, and creates a PR. The user reviews and merges.
+**Architecture:** A dedicated code worker pod runs Claude Code CLI authenticated via Claude Pro/Max subscription token. The ADK `code_agent` starts a `CodeTaskWorkflow` on a `servicetsunami-code` Temporal queue. Claude Code handles the full development cycle autonomously — reads code, implements, tests, commits to a feature branch, and creates a PR. The user reviews and merges.
 
 **Tech Stack:** Claude Code CLI (Node.js), Python 3.11 (Temporal worker), Temporal, Kubernetes, Helm, GitHub Actions.
 
@@ -15,21 +15,21 @@
 ```
 User (chat/WhatsApp)
   → Root Supervisor (ADK)
-    → dev_agent (ADK leaf agent)
-      → starts DevTaskWorkflow (Temporal, queue: servicetsunami-dev)
-        → dev-worker pod picks up task
+    → code_agent (ADK leaf agent)
+      → starts CodeTaskWorkflow (Temporal, queue: servicetsunami-code)
+        → code-worker pod picks up task
           → git pull origin main
-          → git checkout -b dev/task-<short-id>
+          → git checkout -b code/task-<short-id>
           → claude -p "<task description>" --output-format json --allowedTools "Edit,Write,Bash,Read,Glob,Grep"
-          → git push origin dev/task-<short-id>
+          → git push origin code/task-<short-id>
           → gh pr create --title "..." --body "..."
         → returns {pr_url, summary, branch, files_changed}
-      → dev_agent reports PR URL + summary to user
+      → code_agent reports PR URL + summary to user
 ```
 
 ## Components
 
-### 1. Dev Worker Pod (`apps/dev-worker/`)
+### 1. Code Worker Pod (`apps/code-worker/`)
 
 **Dockerfile:**
 - Base: `python:3.11-slim`
@@ -40,17 +40,17 @@ User (chat/WhatsApp)
 
 **Startup sequence:**
 1. `git clone https://<GITHUB_TOKEN>@github.com/nomad3/servicetsunami-agents.git /workspace`
-2. Start Temporal worker on `servicetsunami-dev` queue
+2. Start Temporal worker on `servicetsunami-code` queue
 3. Per-task: fetch tenant's Claude session token via internal API → `claude setup-token` → execute
 
-**Worker code (`apps/dev-worker/worker.py`):**
+**Worker code (`apps/code-worker/worker.py`):**
 - Temporal worker with one workflow + one activity
-- `DevTaskWorkflow`: receives task description, tenant_id, optional context
-- `execute_dev_task` activity:
+- `CodeTaskWorkflow`: receives task description, tenant_id, optional context
+- `execute_code_task` activity:
   1. `cd /workspace && git fetch origin && git checkout main && git pull`
-  2. `git checkout -b dev/task-<uuid[:8]>`
+  2. `git checkout -b code/task-<uuid[:8]>`
   3. Run Claude Code: `claude -p "<task>" --output-format json --allowedTools "Edit,Write,Bash,Read,Glob,Grep"`
-  4. `git push origin dev/task-<id>`
+  4. `git push origin code/task-<id>`
   5. `gh pr create --title "<title>" --body "<summary>"`
   6. Return `{pr_url, summary, branch, files_changed, claude_output}`
 
@@ -59,14 +59,14 @@ User (chat/WhatsApp)
 - Heartbeat: every 60 seconds
 - Retry: 1 retry on failure
 
-### 2. ADK dev_agent (replaces 5 agents)
+### 2. ADK code_agent (replaces 5 agents)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/dev_agent.py`
+**File:** `apps/adk-server/servicetsunami_supervisor/code_agent.py`
 
-Single leaf agent with one tool: `start_dev_task(task_description: str) -> dict`
+Single leaf agent with one tool: `start_code_task(task_description: str) -> dict`
 
 The tool:
-1. Calls the API's `/api/v1/dev-tasks` endpoint (or starts Temporal workflow directly)
+1. Calls the API's `/api/v1/code-tasks` endpoint (or starts Temporal workflow directly)
 2. Waits for completion (polls or uses Temporal query)
 3. Returns the result (PR URL, summary)
 
@@ -76,31 +76,31 @@ The tool:
 
 **File:** `apps/adk-server/servicetsunami_supervisor/agent.py`
 
-- Remove `dev_team` import, replace with `dev_agent`
-- Update routing: "dev_agent" handles all code/tool/feature requests
+- Remove `code_agent` import, replace with `code_agent`
+- Update routing: "code_agent" handles all code/tool/feature requests
 - Update `sub_agents` list
 
 ### 4. Temporal Integration
 
-**Queue:** `servicetsunami-dev` (new dedicated queue)
+**Queue:** `servicetsunami-code` (new dedicated queue)
 
-**Workflow:** `DevTaskWorkflow`
-- Input: `DevTaskInput(task_description: str, tenant_id: str, context: Optional[str])`
-- Single activity: `execute_dev_task`
+**Workflow:** `CodeTaskWorkflow`
+- Input: `CodeTaskInput(task_description: str, tenant_id: str, context: Optional[str])`
+- Single activity: `execute_code_task`
 - Shows up in Workflows Executions page
 
-**No changes to existing workers** — the dev worker is its own separate Temporal worker process.
+**No changes to existing workers** — the code worker is its own separate Temporal worker process.
 
 ### 5. Authentication & Secrets
 
 **Per-tenant tokens (from Integrations page):**
 - Claude session token → stored encrypted in `integration_credentials` table via credential vault
-- Dev worker fetches at runtime: `GET /api/v1/oauth/internal/token/claude_code?tenant_id=...`
+- Code worker fetches at runtime: `GET /api/v1/oauth/internal/token/claude_code?tenant_id=...`
 - Each tenant provides their own Claude Pro/Max subscription token
 
 **GCP Secret Manager (infrastructure only):**
 - `servicetsunami-github-token` — already exists (for git clone + push + gh CLI)
-- `servicetsunami-api-internal-key` — already exists (for dev worker → API auth)
+- `servicetsunami-api-internal-key` — already exists (for code worker → API auth)
 
 **ExternalSecrets in Helm values:**
 ```yaml
@@ -118,7 +118,7 @@ externalSecret:
 
 ### 6. Git Flow
 
-1. Claude Code creates branch: `dev/task-<uuid[:8]>`
+1. Claude Code creates branch: `code/task-<uuid[:8]>`
 2. Commits with descriptive messages
 3. Pushes branch to origin
 4. Creates PR via `gh pr create`
@@ -126,11 +126,11 @@ externalSecret:
 6. User reviews and merges to main
 7. Deploy triggers on merge (existing CI/CD)
 
-### 7. Helm Values (`helm/values/servicetsunami-dev-worker.yaml`)
+### 7. Helm Values (`helm/values/servicetsunami-code-worker.yaml`)
 
 Follows the worker pattern (no HTTP service, no probes):
 ```yaml
-nameOverride: "servicetsunami-dev-worker"
+nameOverride: "servicetsunami-code-worker"
 container:
   command: ["python", "-m", "worker"]
 replicaCount: 1
@@ -142,14 +142,14 @@ readinessProbe: {enabled: false}
 service: {type: ClusterIP, port: 80}
 ```
 
-No Cloud SQL proxy needed (dev worker doesn't access the database).
+No Cloud SQL proxy needed (code worker doesn't access the database).
 
-### 8. GitHub Actions (`dev-worker-deploy.yaml`)
+### 8. GitHub Actions (`code-worker-deploy.yaml`)
 
 Follows the ADK deploy pattern:
-- Triggers on push to `apps/dev-worker/**`, `helm/values/servicetsunami-dev-worker.yaml`
+- Triggers on push to `apps/code-worker/**`, `helm/values/servicetsunami-code-worker.yaml`
 - Builds Docker image → pushes to GCR → deploys via Helm
-- Image: `gcr.io/ai-agency-479516/servicetsunami-dev-worker`
+- Image: `gcr.io/ai-agency-479516/servicetsunami-code-worker`
 
 ### 9. Integrations Page — Claude Code Card
 
@@ -177,15 +177,15 @@ Claude Code appears on the Integrations page as a token-paste integration (like 
 1. User runs `claude setup-token` locally (or copies from browser session)
 2. Pastes the session token in the Integrations page Claude Code card
 3. Token is encrypted via `credential_vault.store_credential()` and stored in `integration_credentials` table
-4. Dev worker activity fetches the token at runtime via internal API: `GET /api/v1/oauth/internal/token/claude_code?tenant_id=...`
-5. Dev worker runs `claude setup-token` with the fetched token before each task
+4. Code worker activity fetches the token at runtime via internal API: `GET /api/v1/oauth/internal/token/claude_code?tenant_id=...`
+5. Code worker runs `claude setup-token` with the fetched token before each task
 
-**Multi-tenant:** Each tenant provides their own Claude subscription token. The dev worker fetches the correct token per `tenant_id` at task execution time, not at pod startup.
+**Multi-tenant:** Each tenant provides their own Claude subscription token. The code worker fetches the correct token per `tenant_id` at task execution time, not at pod startup.
 
 **This changes the authentication model:**
 - ~~GCP Secret Manager for `CLAUDE_SESSION_TOKEN`~~ — no longer needed
 - Token comes from the integration_credentials table via the internal API
-- Dev worker only needs `API_INTERNAL_KEY` to call the token endpoint
+- Code worker only needs `API_INTERNAL_KEY` to call the token endpoint
 - Helm values simplified: no `servicetsunami-claude-session-token` external secret
 
 ## Prerequisite: Consolidate skill_config → integration_config
@@ -221,7 +221,7 @@ The codebase has a partial rename from the old `skill_config`/`skill_credential`
 - `apps/adk-server/servicetsunami_supervisor/tester.py`
 - `apps/adk-server/servicetsunami_supervisor/dev_ops.py`
 - `apps/adk-server/servicetsunami_supervisor/user_agent.py`
-- `apps/adk-server/servicetsunami_supervisor/dev_team.py`
+- `apps/adk-server/servicetsunami_supervisor/code_agent.py`
 - Imports/references from `__init__.py` and `agent.py`
 
 ## What Stays
@@ -234,26 +234,26 @@ The codebase has a partial rename from the old `skill_config`/`skill_credential`
 
 | Component | Has Access To | Does NOT Have Access To |
 |-----------|---------------|------------------------|
-| Dev worker | Git repo, GitHub token, API internal key (to fetch Claude token per-task) | DB, encryption keys, OAuth tokens, customer data |
+| Code worker | Git repo, GitHub token, API internal key (to fetch Claude token per-task) | DB, encryption keys, OAuth tokens, customer data |
 | ADK service | DB (read), all agent tools | Git push (removed with dev_ops) |
 | Orchestration worker | DB, encryption keys, Gmail/Calendar tokens | Git repo, Claude Code |
 
 ## File Structure
 
 ```
-apps/dev-worker/
+apps/code-worker/
 ├── Dockerfile
 ├── requirements.txt        # temporalio, pydantic
 ├── worker.py               # Temporal worker + activities
-├── workflows.py            # DevTaskWorkflow definition
+├── workflows.py            # CodeTaskWorkflow definition
 └── entrypoint.sh           # git clone + claude setup-token + start worker
 ```
 
 ## Verification
 
-1. Deploy dev worker pod, verify it starts and connects to Temporal
+1. Deploy code worker pod, verify it starts and connects to Temporal
 2. Send a dev task via WhatsApp/chat: "Add a health check endpoint to the MCP server"
 3. Verify Claude Code runs, creates branch, opens PR
 4. Check PR in GitHub — should have proper commits, tests
-5. Check Workflows page — DevTaskWorkflow should appear with status
+5. Check Workflows page — CodeTaskWorkflow should appear with status
 6. Merge PR — verify CI/CD deploys normally

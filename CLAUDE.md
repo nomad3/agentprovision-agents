@@ -30,10 +30,10 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
   - Tools for data, analytics, knowledge, and actions
   - Connects to MCP server for Databricks operations
 
-- **`apps/dev-worker`**: Claude Code CLI Temporal worker (Python 3.11 + Node.js 20)
+- **`apps/code-worker`**: Claude Code CLI Temporal worker (Python 3.11 + Node.js 20)
   - Dedicated pod for autonomous coding tasks
   - Runs Claude Code CLI, creates branches and PRs
-  - Temporal worker on `servicetsunami-dev` queue
+  - Temporal worker on `servicetsunami-code` queue
 
 - **`apps/mcp-server`**: Model Context Protocol server for data integration (Python 3.11)
   - MCP-compliant server following Anthropic's specification
@@ -42,7 +42,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 - **`helm/`**: Kubernetes Helm charts
   - `charts/microservice/`: Reusable base chart for all services
-  - `values/`: Per-service configuration (api, web, worker, adk, dev-worker, temporal, redis, postgresql)
+  - `values/`: Per-service configuration (api, web, worker, adk, code-worker, temporal, redis, postgresql)
 
 - **`infra/terraform`**: Infrastructure as Code for AWS deployment (EKS, Aurora PostgreSQL, VPC)
 
@@ -66,7 +66,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 **Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default "Luna Supervisor" AgentKit on registration.
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
-- **Dev Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `dev-worker` pod via Temporal (`servicetsunami-dev` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
+- **Code Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`servicetsunami-code` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
 - **Data Team**: **Data Analyst**, **Report Generator**, **Knowledge Manager**. Handles SQL, analytics, and knowledge graph.
 - **Sales Team**: **Sales Agent** (deal management), **Customer Support** (inquiry handling).
 - **Marketing Team**: **Web Researcher** for market intelligence and prospect discovery.
@@ -93,7 +93,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 **Temporal workflows**: Durable workflow execution across four task queues:
 - `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`.
 - `servicetsunami-databricks`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
-- `servicetsunami-dev`: `DevTaskWorkflow` (Claude Code CLI execution in isolated dev-worker pod).
+- `servicetsunami-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated code-worker pod).
 - `servicetsunami-business`: Industry-specific flows:
   - `DealPipelineWorkflow`: Discover → Score → Research → Outreach → Advance → Sync (6 steps).
   - `RemediaOrderWorkflow`: Create order → Confirm (WhatsApp) → Monitor payment → Notify delivery.

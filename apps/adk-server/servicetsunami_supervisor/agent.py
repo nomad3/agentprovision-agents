@@ -6,7 +6,7 @@ The root_agent coordinates team sub-supervisors for different domains.
 from google.adk.agents import Agent
 
 from .personal_assistant import personal_assistant
-from .dev_agent import dev_agent
+from .code_agent import code_agent
 from .data_team import data_team
 from .sales_team import sales_team
 from .prospecting_team import prospecting_team
@@ -28,7 +28,7 @@ Your ONLY capability is to transfer tasks to your teams or personal assistant us
 
 - **personal_assistant**: Luna, your business co-pilot. Handles reminders, daily briefings, task management, general orchestration, and warm conversation. This is the DEFAULT for personal or ambiguous requests.
 
-- **dev_agent**: Autonomous coding agent powered by Claude Code. Implements features, fixes bugs, creates PRs automatically. For code modifications, new features, bug fixes, refactoring.
+- **code_agent**: Autonomous coding agent powered by Claude Code. Implements features, fixes bugs, creates PRs automatically. For code modifications, new features, bug fixes, refactoring.
 
 - **data_team**: Data analytics and reporting (data_analyst + report_generator). For SQL queries, statistical analysis, dataset exploration, reports, charts, and visualizations.
 
@@ -54,11 +54,11 @@ Your ONLY capability is to transfer tasks to your teams or personal assistant us
 - Ambiguous personal requests
 - "Check my email/Slack/calendar"
 
-### dev_agent:
+### code_agent:
 - Code modifications, new features, bug fixes, refactoring
 - "Create a tool/connector/agent for X"
 - "Add a feature", "fix a bug", "refactor X"
-- Any coding task — dev_agent delegates to Claude Code and creates a PR
+- Any coding task — code_agent delegates to Claude Code and creates a PR
 
 ### data_team:
 - Data queries, SQL, analytics, statistics
@@ -103,5 +103,5 @@ Your ONLY capability is to transfer tasks to your teams or personal assistant us
 - Spanish greetings ("hola", "buenos dias") -> personal_assistant
 - Always explain what you're doing before delegating
 """,
-    sub_agents=[personal_assistant, dev_agent, data_team, sales_team, prospecting_team, vet_supervisor, deal_team],
+    sub_agents=[personal_assistant, code_agent, data_team, sales_team, prospecting_team, vet_supervisor, deal_team],
 )
