@@ -670,11 +670,15 @@ def get_skill_token(
         raise HTTPException(status_code=404, detail=f"No active config for skill '{skill_name}'")
 
     creds = retrieve_credentials_for_skill(db, config.id, tid)
-    if not creds.get("oauth_token"):
+
+    # For OAuth integrations, require oauth_token; for manual, require any credential
+    provider = _skill_to_provider(skill_name)
+    if provider and not creds.get("oauth_token"):
         raise HTTPException(status_code=404, detail="No active OAuth token found")
+    elif not provider and not creds:
+        raise HTTPException(status_code=404, detail=f"No active credentials for '{skill_name}'")
 
     # Auto-refresh Google tokens (they expire after ~1 hour)
-    provider = _skill_to_provider(skill_name)
     refresh_token = creds.get("refresh_token")
     if provider == "google" and refresh_token:
         new_access_token = _refresh_access_token("google", refresh_token)
