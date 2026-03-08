@@ -1,6 +1,16 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def strip_strings(cls, v):
+        """Strip trailing whitespace from all string env vars (K8s secrets add newlines)."""
+        if isinstance(v, str):
+            return v.strip()
+        return v
     SECRET_KEY: str = "secret"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
