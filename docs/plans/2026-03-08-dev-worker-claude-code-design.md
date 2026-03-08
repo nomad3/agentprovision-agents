@@ -188,8 +188,34 @@ Claude Code appears on the Integrations page as a token-paste integration (like 
 - Dev worker only needs `API_INTERNAL_KEY` to call the token endpoint
 - Helm values simplified: no `servicetsunami-claude-session-token` external secret
 
+## Prerequisite: Consolidate skill_config → integration_config
+
+The codebase has a partial rename from the old `skill_config`/`skill_credential` naming to `integration_config`/`integration_credential`. Both models exist, causing duplication and confusion. Consolidate fully before building the Claude Code integration.
+
+**Remove (old naming):**
+- `apps/api/app/models/skill_config.py` → use `integration_config.py` only
+- `apps/api/app/models/skill_credential.py` → use `integration_credential.py` only
+- `apps/api/app/api/v1/skill_configs.py` → merge registry + endpoints into `integration_configs.py`
+- `apps/api/app/services/skill_configs.py` → merge into integration service
+- `apps/web/src/components/SkillsConfigPanel.js` → already replaced by `IntegrationsPanel.js`
+- `apps/web/src/services/skillConfigService.js` → already replaced by `integrationConfigService.js`
+
+**Update all imports:**
+- `credential_vault.py` — imports `SkillCredential` → `IntegrationCredential`
+- `oauth.py` — imports `SkillConfig`, `SkillCredential` → integration equivalents
+- `SKILL_CREDENTIAL_SCHEMAS` constant → rename to `INTEGRATION_REGISTRY` and move into `integration_configs.py`
+- All route registrations in `routes.py`
+
+**Keep DB table names as-is** — migration 040 already renamed the tables to `integration_configs` and `integration_credentials`. No new migration needed.
+
 ## What Gets Removed
 
+- `apps/api/app/models/skill_config.py` (replaced by `integration_config.py`)
+- `apps/api/app/models/skill_credential.py` (replaced by `integration_credential.py`)
+- `apps/api/app/api/v1/skill_configs.py` (merged into `integration_configs.py`)
+- `apps/api/app/services/skill_configs.py` (merged into integration service)
+- `apps/web/src/components/SkillsConfigPanel.js` (replaced by `IntegrationsPanel.js`)
+- `apps/web/src/services/skillConfigService.js` (replaced by `integrationConfigService.js`)
 - `apps/adk-server/servicetsunami_supervisor/architect.py`
 - `apps/adk-server/servicetsunami_supervisor/coder.py`
 - `apps/adk-server/servicetsunami_supervisor/tester.py`
