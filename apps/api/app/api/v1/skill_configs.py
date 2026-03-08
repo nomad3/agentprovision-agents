@@ -219,7 +219,7 @@ def add_credential(
 
     credential = store_credential(
         db,
-        skill_config_id=skill_config_id,
+        integration_config_id=skill_config_id,
         tenant_id=current_user.tenant_id,
         credential_key=cred_in.credential_key,
         plaintext_value=cred_in.value,

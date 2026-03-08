@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.config import settings
 from app.models.skill_config import SkillConfig
-from app.models.skill_credential import SkillCredential
+from app.models.integration_credential import IntegrationCredential
 from app.models.user import User
 from app.services.orchestration.credential_vault import (
     store_credential,
@@ -164,16 +164,16 @@ def _skill_to_provider(skill_name: str) -> Optional[str]:
     return None
 
 
-def _update_stored_token(db: Session, skill_config_id: uuid.UUID, tenant_id: uuid.UUID, new_token: str):
+def _update_stored_token(db: Session, integration_config_id: uuid.UUID, tenant_id: uuid.UUID, new_token: str):
     """Replace the stored oauth_token credential with a fresh one."""
     try:
         old_cred = (
-            db.query(SkillCredential)
+            db.query(IntegrationCredential)
             .filter(
-                SkillCredential.skill_config_id == skill_config_id,
-                SkillCredential.tenant_id == tenant_id,
-                SkillCredential.credential_key == "oauth_token",
-                SkillCredential.status == "active",
+                IntegrationCredential.integration_config_id == integration_config_id,
+                IntegrationCredential.tenant_id == tenant_id,
+                IntegrationCredential.credential_key == "oauth_token",
+                IntegrationCredential.status == "active",
             )
             .first()
         )
@@ -182,14 +182,14 @@ def _update_stored_token(db: Session, skill_config_id: uuid.UUID, tenant_id: uui
 
         store_credential(
             db,
-            skill_config_id=skill_config_id,
+            integration_config_id=integration_config_id,
             tenant_id=tenant_id,
             credential_key="oauth_token",
             plaintext_value=new_token,
             credential_type="oauth_token",
         )
     except Exception:
-        logger.exception("Failed to update stored token for config=%s", skill_config_id)
+        logger.exception("Failed to update stored token for config=%s", integration_config_id)
 
 
 def _lazy_backfill_email(
@@ -429,11 +429,11 @@ def oauth_callback(
 
         # Revoke old credentials for THIS specific config only
         old_creds = (
-            db.query(SkillCredential)
+            db.query(IntegrationCredential)
             .filter(
-                SkillCredential.skill_config_id == skill_config.id,
-                SkillCredential.tenant_id == tenant_id,
-                SkillCredential.status == "active",
+                IntegrationCredential.integration_config_id == skill_config.id,
+                IntegrationCredential.tenant_id == tenant_id,
+                IntegrationCredential.status == "active",
             )
             .all()
         )
@@ -443,7 +443,7 @@ def oauth_callback(
         # Store new tokens
         store_credential(
             db,
-            skill_config_id=skill_config.id,
+            integration_config_id=skill_config.id,
             tenant_id=tenant_id,
             credential_key="oauth_token",
             plaintext_value=access_token,
@@ -452,7 +452,7 @@ def oauth_callback(
         if refresh_token:
             store_credential(
                 db,
-                skill_config_id=skill_config.id,
+                integration_config_id=skill_config.id,
                 tenant_id=tenant_id,
                 credential_key="refresh_token",
                 plaintext_value=refresh_token,
@@ -540,11 +540,11 @@ def oauth_disconnect(
         for skill_config in skill_configs:
             # Revoke all active credentials
             creds = (
-                db.query(SkillCredential)
+                db.query(IntegrationCredential)
                 .filter(
-                    SkillCredential.skill_config_id == skill_config.id,
-                    SkillCredential.tenant_id == current_user.tenant_id,
-                    SkillCredential.status == "active",
+                    IntegrationCredential.integration_config_id == skill_config.id,
+                    IntegrationCredential.tenant_id == current_user.tenant_id,
+                    IntegrationCredential.status == "active",
                 )
                 .all()
             )
@@ -598,12 +598,12 @@ def oauth_status(
             _lazy_backfill_email(db, provider, sc, current_user.tenant_id)
 
         has_token = (
-            db.query(SkillCredential)
+            db.query(IntegrationCredential)
             .filter(
-                SkillCredential.skill_config_id == sc.id,
-                SkillCredential.tenant_id == current_user.tenant_id,
-                SkillCredential.credential_key == "oauth_token",
-                SkillCredential.status == "active",
+                IntegrationCredential.integration_config_id == sc.id,
+                IntegrationCredential.tenant_id == current_user.tenant_id,
+                IntegrationCredential.credential_key == "oauth_token",
+                IntegrationCredential.status == "active",
             )
             .first()
         ) is not None

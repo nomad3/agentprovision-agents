@@ -1,7 +1,7 @@
 """
 Credential Vault Service - AES-256 encrypted credential storage.
 
-Provides encryption/decryption for skill credentials with full
+Provides encryption/decryption for integration credentials with full
 multi-tenant isolation. Never logs plaintext credential values.
 """
 
@@ -14,7 +14,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.skill_credential import SkillCredential
+from app.models.integration_credential import IntegrationCredential
 
 logger = logging.getLogger(__name__)
 
@@ -48,33 +48,33 @@ def _get_vault() -> CredentialVault:
 
 def store_credential(
     db: Session,
-    skill_config_id: uuid.UUID,
+    integration_config_id: uuid.UUID,
     tenant_id: uuid.UUID,
     credential_key: str,
     plaintext_value: str,
     credential_type: str = "api_key",
-) -> SkillCredential:
+) -> IntegrationCredential:
     """
-    Encrypt and store a credential for a skill configuration.
+    Encrypt and store a credential for an integration configuration.
 
     Args:
         db: SQLAlchemy database session.
-        skill_config_id: ID of the SkillConfig this credential belongs to.
+        integration_config_id: ID of the IntegrationConfig this credential belongs to.
         tenant_id: Tenant ID for multi-tenant isolation.
         credential_key: Logical name (e.g. "api_key", "oauth_token").
         plaintext_value: The secret value to encrypt. **Never logged.**
         credential_type: One of api_key, oauth_token, webhook_url, basic_auth.
 
     Returns:
-        The persisted SkillCredential row (encrypted_value is ciphertext).
+        The persisted IntegrationCredential row (encrypted_value is ciphertext).
     """
     vault = _get_vault()
     encrypted = vault.encrypt(plaintext_value)
 
-    credential = SkillCredential(
+    credential = IntegrationCredential(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
-        skill_config_id=skill_config_id,
+        integration_config_id=integration_config_id,
         credential_key=credential_key,
         encrypted_value=encrypted,
         credential_type=credential_type,
@@ -85,10 +85,10 @@ def store_credential(
     db.refresh(credential)
 
     logger.info(
-        "Stored credential key='%s' type='%s' for skill_config=%s tenant=%s",
+        "Stored credential key='%s' type='%s' for integration_config=%s tenant=%s",
         credential_key,
         credential_type,
-        skill_config_id,
+        integration_config_id,
         tenant_id,
     )
     return credential
@@ -104,18 +104,18 @@ def retrieve_credential(
 
     Args:
         db: SQLAlchemy database session.
-        credential_id: Primary key of the SkillCredential.
+        credential_id: Primary key of the IntegrationCredential.
         tenant_id: Tenant ID for multi-tenant isolation.
 
     Returns:
         Decrypted plaintext string, or None if not found / not active.
     """
     credential = (
-        db.query(SkillCredential)
+        db.query(IntegrationCredential)
         .filter(
-            SkillCredential.id == credential_id,
-            SkillCredential.tenant_id == tenant_id,
-            SkillCredential.status == "active",
+            IntegrationCredential.id == credential_id,
+            IntegrationCredential.tenant_id == tenant_id,
+            IntegrationCredential.status == "active",
         )
         .first()
     )
@@ -147,15 +147,15 @@ def retrieve_credential(
 
 def retrieve_credentials_for_skill(
     db: Session,
-    skill_config_id: uuid.UUID,
+    integration_config_id: uuid.UUID,
     tenant_id: uuid.UUID,
 ) -> Dict[str, str]:
     """
-    Return all active credentials for a skill config as {key: decrypted_value}.
+    Return all active credentials for an integration config as {key: decrypted_value}.
 
     Args:
         db: SQLAlchemy database session.
-        skill_config_id: The SkillConfig whose credentials to fetch.
+        integration_config_id: The IntegrationConfig whose credentials to fetch.
         tenant_id: Tenant ID for multi-tenant isolation.
 
     Returns:
@@ -163,11 +163,11 @@ def retrieve_credentials_for_skill(
         Credentials that fail to decrypt are silently skipped.
     """
     credentials = (
-        db.query(SkillCredential)
+        db.query(IntegrationCredential)
         .filter(
-            SkillCredential.skill_config_id == skill_config_id,
-            SkillCredential.tenant_id == tenant_id,
-            SkillCredential.status == "active",
+            IntegrationCredential.integration_config_id == integration_config_id,
+            IntegrationCredential.tenant_id == tenant_id,
+            IntegrationCredential.status == "active",
         )
         .all()
     )
@@ -190,10 +190,10 @@ def retrieve_credentials_for_skill(
     db.commit()
 
     logger.info(
-        "Retrieved %d/%d credentials for skill_config=%s tenant=%s",
+        "Retrieved %d/%d credentials for integration_config=%s tenant=%s",
         len(result),
         len(credentials),
-        skill_config_id,
+        integration_config_id,
         tenant_id,
     )
     return result
@@ -209,17 +209,17 @@ def revoke_credential(
 
     Args:
         db: SQLAlchemy database session.
-        credential_id: Primary key of the SkillCredential.
+        credential_id: Primary key of the IntegrationCredential.
         tenant_id: Tenant ID for multi-tenant isolation.
 
     Returns:
         True if the credential was found and revoked, False otherwise.
     """
     credential = (
-        db.query(SkillCredential)
+        db.query(IntegrationCredential)
         .filter(
-            SkillCredential.id == credential_id,
-            SkillCredential.tenant_id == tenant_id,
+            IntegrationCredential.id == credential_id,
+            IntegrationCredential.tenant_id == tenant_id,
         )
         .first()
     )
