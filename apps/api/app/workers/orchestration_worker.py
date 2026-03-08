@@ -56,6 +56,15 @@ from app.workflows.activities.inbox_monitor import (
     extract_from_emails,
     log_monitor_cycle,
 )
+from app.workflows.prospecting_pipeline import (
+    ProspectingPipelineWorkflow,
+    prospect_research,
+    prospect_score,
+    prospect_qualify,
+    prospect_outreach,
+    prospect_notify,
+)
+from app.workflows.activities.skill_activities import execute_skill
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,6 +104,7 @@ async def run_orchestration_worker():
             DealPipelineWorkflow,
             AutoActionWorkflow,
             InboxMonitorWorkflow,
+            ProspectingPipelineWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -126,6 +136,12 @@ async def run_orchestration_worker():
             create_notifications,
             extract_from_emails,
             log_monitor_cycle,
+            prospect_research,
+            prospect_score,
+            prospect_qualify,
+            prospect_outreach,
+            prospect_notify,
+            execute_skill,
         ],
     )
 
