@@ -287,6 +287,8 @@ def _generate_agentic_response(
         logger.warning("Memory recall failed", exc_info=True)
 
     state_delta = {"tenant_id": str(session.tenant_id)}
+    if sender_phone:
+        state_delta["whatsapp_phone"] = sender_phone
     if memory_context:
         state_delta["memory_context"] = memory_context
 
@@ -375,6 +377,8 @@ def _generate_agentic_response(
                     logger.warning("Memory recall failed (retry path)", exc_info=True)
 
                 retry_state_delta = {"tenant_id": str(session.tenant_id)}
+                if sender_phone:
+                    retry_state_delta["whatsapp_phone"] = sender_phone
                 if retry_memory_context:
                     retry_state_delta["memory_context"] = retry_memory_context
 

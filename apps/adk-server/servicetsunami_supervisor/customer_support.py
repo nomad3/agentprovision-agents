@@ -132,7 +132,10 @@ Tell the user their order is being processed and they'll receive updates.
 - "mis favoritos" → remedia_order action="list_favorites"
 
 ### Getting the user's phone number:
-The phone number is available in the session state as `whatsapp_phone`. Use this value for all remedia_auth and remedia_order calls as `phone_number`.
+CRITICAL: The user's phone number is ALREADY available in the session state as `whatsapp_phone`.
+You MUST use this value for all remedia_auth and remedia_order calls as `phone_number`.
+NEVER ask the user for their phone number — you already have it from the WhatsApp session.
+If whatsapp_phone is not in state, the user is on web chat and you should ask for their phone.
 
 ### Chilean comuna coordinates (use for lat/lng when user mentions a location):
 - Providencia: lat=-33.4289, lng=-70.6093
