@@ -80,6 +80,12 @@ service:
   annotations:
     cloud.google.com/backend-config: '{"default": "servicetsunami-api-backend"}'
 
+# BackendConfig for GCE Ingress — 300s timeout for long-running agent calls
+backendConfig:
+  enabled: true
+  name: servicetsunami-api-backend
+  timeoutSec: 300
+
 # ConfigMap with non-sensitive configuration
 configMap:
   enabled: true
