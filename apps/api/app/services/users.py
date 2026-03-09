@@ -8,6 +8,7 @@ from app.schemas.user import UserCreate, UserUpdate
 from app.services import tenants as tenant_service
 from app.schemas.tenant import TenantCreate
 from app.models.agent_kit import AgentKit
+from app.models.chat import ChatSession
 import uuid
 
 def get_user(db: Session, user_id: uuid.UUID) -> User | None:
@@ -40,6 +41,7 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         kit_type="hierarchy",
         industry=None,
         config={
+            "primary_objective": "Provide intelligent AI co-pilot assistance by routing requests to specialized teams and delivering actionable responses.",
             "model": "claude-3-5-sonnet-20240620",
             "personality": "friendly",
             "temperature": 0.7,
@@ -61,6 +63,15 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         tenant_id=tenant.id,
     )
     db.add(db_user)
+    db.flush()  # Get IDs assigned before creating session
+
+    # Auto-create a welcome chat session so new users can talk to Luna immediately
+    welcome_session = ChatSession(
+        title="Chat with Luna",
+        tenant_id=tenant.id,
+        agent_kit_id=default_kit.id,
+    )
+    db.add(welcome_session)
     db.commit()
     db.refresh(db_user)
     return db_user
