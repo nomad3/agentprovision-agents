@@ -27,7 +27,7 @@ class AgentKitPlaybookStep(BaseModel):
 
 
 class AgentKitConfig(BaseModel):
-    primary_objective: str
+    primary_objective: str = ""
     triggers: List[str] = Field(default_factory=list)
     metrics: List[str] = Field(default_factory=list)
     constraints: List[str] = Field(default_factory=list)
