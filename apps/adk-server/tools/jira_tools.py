@@ -100,13 +100,13 @@ async def search_jira_issues(
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(
-                f"{domain}/rest/api/3/search",
-                headers=headers,
-                params={
+            resp = await client.post(
+                f"{domain}/rest/api/3/search/jql",
+                headers={**headers, "Content-Type": "application/json"},
+                json={
                     "jql": jql,
                     "maxResults": min(max_results, 50),
-                    "fields": "summary,status,assignee,priority,issuetype,created,updated,project",
+                    "fields": ["summary", "status", "assignee", "priority", "issuetype", "created", "updated", "project"],
                 },
             )
             resp.raise_for_status()
