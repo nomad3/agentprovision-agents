@@ -2,6 +2,7 @@
 
 Manages entities, relationships, and semantic search.
 """
+from contextvars import ContextVar
 from typing import Optional
 import json
 import uuid
@@ -22,42 +23,38 @@ def _parse_json(val, default=None):
         return default
 
 _UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
-_cached_default_tenant_id = None
+_current_tenant_id: ContextVar[Optional[str]] = ContextVar('_current_tenant_id', default=None)
 
 
 def set_current_tenant_id(tenant_id: str) -> None:
     """Set the current tenant_id from session state (called by middleware/hooks)."""
-    global _cached_default_tenant_id
     if _UUID_PATTERN.match(tenant_id):
-        _cached_default_tenant_id = tenant_id
+        _current_tenant_id.set(tenant_id)
 
 
 def _resolve_tenant_id(tenant_id: str) -> str:
     """Resolve tenant_id to a valid UUID string.
     If the LLM passes a non-UUID value (like 'default_tenant' or 'auto'),
-    use the cached tenant from session state, or fall back to DB lookup
-    preferring tenants with active skill configs (Gmail, etc.)."""
-    global _cached_default_tenant_id
+    use the per-request tenant from session state, or fall back to DB lookup."""
     if _UUID_PATTERN.match(tenant_id):
         return tenant_id
-    if _cached_default_tenant_id:
-        return _cached_default_tenant_id
+    cached = _current_tenant_id.get()
+    if cached:
+        return cached
     try:
         from sqlalchemy import create_engine, text
         from config.settings import settings
         engine = create_engine(settings.database_url)
         with engine.connect() as conn:
-            # Prefer tenants with active integration configs (e.g. Gmail connected)
             result = conn.execute(text(
                 "SELECT DISTINCT t.id FROM tenants t "
                 "JOIN integration_configs ic ON ic.tenant_id = t.id AND ic.enabled = true "
                 "LIMIT 1"
             )).fetchone()
             if not result:
-                result = conn.execute(text("SELECT id FROM tenants ORDER BY created_at DESC LIMIT 1")).fetchone()
+                result = conn.execute(text("SELECT id FROM tenants LIMIT 1")).fetchone()
             if result:
-                _cached_default_tenant_id = str(result[0])
-                return _cached_default_tenant_id
+                return str(result[0])
     except Exception:
         pass
     return tenant_id

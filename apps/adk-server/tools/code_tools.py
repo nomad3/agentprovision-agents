@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import uuid
+from contextvars import ContextVar
 
 from google.adk.tools import FunctionTool
 
@@ -14,22 +15,22 @@ TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
 TASK_QUEUE = "servicetsunami-code"
 
 _UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
-_cached_tenant_id: str | None = None
+_current_tenant_id: ContextVar[str | None] = ContextVar('_code_tenant_id', default=None)
 
 
 def set_current_tenant_id(tenant_id: str) -> None:
     """Set the current tenant_id from session state (called by middleware)."""
-    global _cached_tenant_id
     if _UUID_PATTERN.match(tenant_id):
-        _cached_tenant_id = tenant_id
+        _current_tenant_id.set(tenant_id)
 
 
 def _resolve_tenant_id(tenant_id: str) -> str:
-    """Resolve tenant_id — use cached from session state if LLM passes garbage."""
+    """Resolve tenant_id — use per-request value from session state if LLM passes garbage."""
     if _UUID_PATTERN.match(tenant_id):
         return tenant_id
-    if _cached_tenant_id:
-        return _cached_tenant_id
+    cached = _current_tenant_id.get()
+    if cached:
+        return cached
     raise ValueError(f"No valid tenant_id available (got: {tenant_id!r})")
 
 

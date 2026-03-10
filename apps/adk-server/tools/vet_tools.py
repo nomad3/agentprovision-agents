@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 _UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
 )
-_cached_default_tenant_id = None
 
 
 def _parse_json(val, default=None):
@@ -36,22 +35,8 @@ def _parse_json(val, default=None):
 
 
 def _resolve_tenant_id(tenant_id: str) -> str:
-    global _cached_default_tenant_id
-    if _UUID_PATTERN.match(tenant_id):
-        return tenant_id
-    if _cached_default_tenant_id:
-        return _cached_default_tenant_id
-    try:
-        from sqlalchemy import create_engine, text
-        engine = create_engine(settings.database_url)
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT id FROM tenants LIMIT 1")).fetchone()
-            if result:
-                _cached_default_tenant_id = str(result[0])
-                return _cached_default_tenant_id
-    except Exception:
-        pass
-    return tenant_id
+    from tools.knowledge_tools import _resolve_tenant_id as _kt_resolve
+    return _kt_resolve(tenant_id)
 
 
 async def analyze_cardiac_images(
