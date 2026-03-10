@@ -33,7 +33,7 @@ ServiceTsunami now uses **Google Agent Development Kit (ADK)** with **Gemini 2.5
 The ADK service uses a **hierarchical multi-team supervisor pattern**. The **Root Supervisor** routes requests to specialized team sub-supervisors:
 
 ### 1. Root Supervisor
-- **Routing**: Personal Assistant, Dev Team, Data Team, Sales Team, Marketing Team.
+- **Routing**: Personal Assistant, Code Agent, Data Team, Sales Team, Marketing Team, Prospecting Team, Vet Supervisor, Deal Team.
 - **Goal**: Analyze intent and dispatch to the correct specialized team.
 
 ### 2. Specialized Teams (Sub-Supervisors)
@@ -41,10 +41,10 @@ The ADK service uses a **hierarchical multi-team supervisor pattern**. The **Roo
 | Team | Agents | Purpose |
 |------|--------|---------|
 | **Personal Assistant** | Luna (WhatsApp-native) | Business co-pilot, scheduling, reminders. |
-| **Dev Team** | Architect, Coder, Tester, DevOps, User Agent | **Self-modifying** team with shell/git access for autonomous coding. |
+| **Code Agent** | Claude Code CLI | Autonomous coding via Temporal workflow, creates branches and PRs. |
 | **Data Team** | Data Analyst, Report Generator, Knowledge Manager | SQL queries, visualization, knowledge graph management. |
 | **Sales Team** | Sales Agent, Customer Support | Deal pipeline management, inquiry handling. |
-| **Marketing Team** | Web Researcher | Market intelligence, prospect discovery. |
+| **Marketing Team** | Web Researcher, Marketing Analyst, Knowledge Manager | Market intelligence, ad campaign management (Meta/Google/TikTok), competitor monitoring, prospect discovery. |
 
 ### 3. Industry-Specific Agents
 - **HealthPets**: Cardiac Analyst, Billing Agent, Vet Supervisor.
@@ -65,7 +65,7 @@ The ADK service uses a **hierarchical multi-team supervisor pattern**. The **Roo
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `GOOGLE_GENAI_USE_VERTEXAI` | Use Vertex AI | `TRUE` |
-| `ADK_MODEL` | Gemini model | `gemini-2.0-flash` (or 2.5) |
+| `ADK_MODEL` | Gemini model | `gemini-2.5-pro` |
 | `VERTEX_PROJECT` | GCP project | `ai-agency-479516` |
 | `VERTEX_LOCATION` | GCP region | `us-central1` |
 | `GIT_AUTH_TOKEN` | Token for self-modifying agents | `ghp_xxxxxx` |

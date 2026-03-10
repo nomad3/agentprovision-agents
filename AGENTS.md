@@ -38,14 +38,8 @@ Routes user requests to the appropriate team supervisor. It does not have tools 
 ### 2. Personal Assistant Team ("Luna")
 - **personal_assistant**: WhatsApp-native business co-pilot. Handles high-level scheduling, reminders, and general business inquiries.
 
-### 3. Dev Team (Self-Modifying)
-Operates on a strict 5-step development cycle:
-- **architect**: Explores codebase, designs solutions, and writes specifications.
-- **coder**: Implements code changes using `shell_tools`.
-- **tester**: Runs tests and verifies implementation.
-- **dev_ops**: Deploys changes via git.
-- **user_agent**: Validates the final result against user requirements.
-*Note: Dev agents have shell access via `execute_shell`.*
+### 3. Code Agent
+- **code_agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`servicetsunami-code` queue). Creates feature branches and PRs automatically.
 
 ### 4. Data Team
 - **data_analyst**: Performs SQL queries and data analysis via MCP server.
@@ -57,11 +51,32 @@ Operates on a strict 5-step development cycle:
 - **customer_support**: Handles inquiries, provides documentation, and troubleshoots.
 
 ### 6. Marketing Team
-- **web_researcher**: Gathers market intelligence, competitor data, and finds prospects.
+- **web_researcher**: Gathers market intelligence, competitor data, and finds prospects via MCP scraper.
+- **marketing_analyst**: Manages ad campaigns across Meta/Google/TikTok, monitors competitors, searches public ad libraries, and provides cross-platform marketing intelligence.
+- **knowledge_manager**: Manages knowledge graph entities, relations, lead scoring, and semantic search.
 
-### 7. Specialized Industry Teams
-- **HealthPets**: `cardiac_analyst`, `billing_agent`, `vet_supervisor`.
+### 7. Prospecting Team
+- **prospect_researcher**: Lead research and intelligence gathering (tech stack, hiring, funding).
+- **prospect_scorer**: Lead scoring with BANT qualification and configurable rubrics.
+- **prospect_outreach**: Outreach drafting, pipeline management, and proposals.
+
+### 8. Specialized Industry Teams
+- **Vet Supervisor (HealthPets)**: `cardiac_analyst`, `billing_agent`, `report_generator`.
 - **Deal Team**: `deal_analyst`, `deal_researcher`, `outreach_specialist`.
+
+### ADK Tools (`apps/adk-server/tools/`)
+- `knowledge_tools.py`: Entity CRUD, relations, observations, semantic search
+- `ads_tools.py`: Meta/Google/TikTok campaign management + public ad library search (12 functions)
+- `competitor_tools.py`: Competitor entity management and comparison (5 functions)
+- `google_tools.py`: Gmail and Calendar operations
+- `jira_tools.py`: Jira project and issue management
+- `github_tools.py`: GitHub repo, issue, and PR operations
+- `monitor_tools.py`: Inbox monitor + competitor monitor control
+- `data_tools.py`: SQL queries, dataset discovery, insights
+- `sales_tools.py`: Lead qualification, follow-ups, pipeline
+- `code_tools.py`: Claude Code CLI execution via Temporal
+- `connector_tools.py`: Data source queries
+- `shell_tools.py`: Shell command execution
 
 ## Code Style Guidelines
 

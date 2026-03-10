@@ -69,7 +69,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 - **Code Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`servicetsunami-code` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
 - **Data Team**: **Data Analyst**, **Report Generator**, **Knowledge Manager**. Handles SQL, analytics, and knowledge graph.
 - **Sales Team**: **Sales Agent** (deal management), **Customer Support** (inquiry handling).
-- **Marketing Team**: **Web Researcher** for market intelligence and prospect discovery.
+- **Marketing Team**: **Web Researcher** for market intelligence and prospect discovery. **Marketing Analyst** for ad campaign management (Meta/Google/TikTok), competitor monitoring, and cross-platform ad intelligence. **Knowledge Manager** for entity CRUD and knowledge graph.
 - **Specialized Industry Agents**: **HealthPets** platform agents (**Cardiac Analyst**, **Billing Agent**, **Vet Supervisor**), **Deal Team** agents (**Deal Analyst**, **Deal Researcher**, **Outreach Specialist**).
 
 **Enterprise Orchestration Engine**:
@@ -90,8 +90,12 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 **Proactive Inbox Monitor**: `InboxMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` every 15 minutes. Monitors Gmail + Calendar, triages items with LLM + memory context, creates notifications, and extracts knowledge entities from important emails. Auto-starts when Google OAuth is connected. Queue: `servicetsunami-orchestration`. Activities: fetch_new_emails, fetch_upcoming_events, triage_items, create_notifications, extract_from_emails, log_monitor_cycle.
 
+**Competitor Monitor**: `CompetitorMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` (default 24h cycle). Monitors competitor entities (category="competitor" in knowledge graph) by scraping websites/news via MCP scraper, checking public ad libraries (Meta Ad Library), analyzing changes, storing observations, and creating notifications. Queue: `servicetsunami-orchestration`. Activities: fetch_competitors, scrape_competitor_activity, check_ad_libraries, analyze_competitor_changes, store_competitor_observations, create_competitor_notifications.
+
+**Marketing Intelligence & Ads Platform**: Integrates with Meta Ads, Google Ads, and TikTok Ads via manual API tokens stored in the integration registry. Tools in `apps/adk-server/tools/ads_tools.py` (12 functions) manage campaigns (list, insights, pause) and search public ad libraries. Competitor tools in `apps/adk-server/tools/competitor_tools.py` (5 functions) manage competitor entities in the knowledge graph. Luna has competitor tools directly; marketing_analyst agent has both ads + competitor tools.
+
 **Temporal workflows**: Durable workflow execution across four task queues:
-- `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`.
+- `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`.
 - `servicetsunami-databricks`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
 - `servicetsunami-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated code-worker pod).
 - `servicetsunami-business`: Industry-specific flows:
@@ -222,7 +226,7 @@ Business logic layer (one service per model):
 ### Workers (`apps/api/app/workers/`)
 
 Temporal workers for async processing:
-- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow (queue: `servicetsunami-orchestration`)
+- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow (queue: `servicetsunami-orchestration`)
 - `databricks_worker.py`: DatasetSync, KnowledgeExtraction, AgentKitExecution, DataSourceSync workflows (queue: `servicetsunami-databricks`)
 - `scheduler_worker.py`: Automated pipeline execution (cron/interval scheduling, polls every 60s)
 
@@ -385,4 +389,6 @@ When making manual changes, always replicate them to Helm, Git, and Terraform to
   - `2026-03-06-proactive-inbox-monitor.md`: Proactive inbox monitor workflow design
   - `2026-03-06-memory-system-design.md`: Memory activity audit and knowledge graph design
   - `2026-03-07-orchestration-worker-architecture.md`: Orchestration worker design (Temporal worker for Gmail/Calendar/WhatsApp workflows)
+  - `2026-03-10-marketing-intelligence-ads-platform-design.md`: Marketing intelligence, competitor monitoring, Meta/Google/TikTok ad integrations
+  - `2026-03-10-marketing-intelligence-ads-platform-plan.md`: Implementation plan for marketing intelligence feature
 - `LLM_INTEGRATION_README.md`, `TOOL_FRAMEWORK_README.md`, `DATABRICKS_SYNC_README.md`: Feature docs

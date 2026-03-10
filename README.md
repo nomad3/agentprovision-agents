@@ -71,8 +71,9 @@ User Upload / API Ingest
 ## Key Features
 
 ### Multi-Agent Orchestration (Google ADK)
-- **Hierarchical Multi-Team Model**: Root supervisor routing to 5 top-level teams (Personal Assistant, Dev, Data, Sales, Marketing).
-- **Self-Modifying Agents**: Dev team with strict 5-step cycle, shell access, and autonomous deployment capabilities.
+- **Hierarchical Multi-Team Model**: Root supervisor routing to 8 top-level teams (Personal Assistant, Code Agent, Data, Sales, Marketing, Prospecting, Vet, Deal).
+- **Autonomous Code Agent**: Claude Code CLI powered agent that creates branches, implements features, and opens PRs via Temporal workflow.
+- **Marketing Intelligence**: Ad campaign management (Meta/Google/TikTok), competitor monitoring via public ad libraries, and scheduled competitor tracking workflows.
 - **Industry Specialization**: Pre-built agents for HealthPets (mobile cardiology), Remedia (pharmacy), and M&A Deal Pipelines.
 - **Task Delegation**: Configurable autonomy, depth limits, and inter-agent communication (supervisor pattern).
 
@@ -93,6 +94,8 @@ Smart routing across 5+ providers with cost optimization and automatic failover:
 - MCP-compliant server with 9 tools for data operations.
 
 ### Durable Business Workflows (Temporal)
+- **Competitor Monitor**: Scheduled per-tenant competitor tracking — scrapes websites, checks ad libraries, stores observations, creates alerts.
+- **Inbox Monitor**: Proactive Gmail + Calendar monitoring with LLM triage and knowledge extraction.
 - **Deal Pipeline**: Discover → Score → Research → Outreach → Advance → Sync.
 - **Remedia Order**: E-commerce lifecycle with WhatsApp notifications and payment monitoring.
 - **HealthPets Billing**: Usage-based processing, invoice generation, and automated payments.
@@ -266,6 +269,7 @@ See `docs/KUBERNETES_DEPLOYMENT.md` for the full runbook.
 - **Lead Scoring Rubrics** — Configurable LLM-powered entity scoring within the knowledge graph.
 - **Pipeline Run Tracking** — Scheduled and on-demand pipeline execution with run history.
 - **WhatsApp Integration Platform** — Multi-account WhatsApp orchestration for "Luna" and industry agents.
+- **Marketing Intelligence** — Meta/Google/TikTok ad campaign management, competitor monitoring with public ad library search, and CompetitorMonitorWorkflow for scheduled tracking.
 
 ---
 
