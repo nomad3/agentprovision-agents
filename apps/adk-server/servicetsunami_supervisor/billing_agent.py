@@ -20,7 +20,7 @@ from config.settings import settings
 
 billing_agent = Agent(
     name="billing_agent",
-    model="gemini-2.0-flash",
+    model=settings.adk_model,
     instruction="""You are a billing specialist for a mobile veterinary cardiologist practice.
 
 IMPORTANT: For the tenant_id parameter in all tools, use the value from the session state.
