@@ -253,7 +253,7 @@ async def transcribe_audio(
     try:
         client = genai.Client()
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-pro",
             contents=parts,
         )
         return {
@@ -320,7 +320,7 @@ Do not include fields that were not mentioned in the dictation."""
     try:
         client = genai.Client()
         response = await client.aio.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-pro",
             contents=prompt,
         )
         text_content = response.text.strip()
