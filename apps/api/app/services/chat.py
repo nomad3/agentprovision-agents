@@ -486,11 +486,15 @@ def _generate_agentic_response(
                         error=str(retry_exc),
                     )
                 retry_detail = str(retry_exc)
+                if "Connection refused" in retry_detail or "ConnectError" in retry_detail:
+                    retry_msg = "Sorry, I can't process your message right now. The AI service is temporarily restarting. Please try again in a couple of minutes."
+                else:
+                    retry_msg = "Sorry, something went wrong processing your message. Please try again in a moment."
                 return _append_message(
                     db,
                     session=session,
                     role="assistant",
-                    content=f"The AI service encountered an error: {retry_detail[:200]}",
+                    content=retry_msg,
                     context={"error": retry_detail},
                 )
 
@@ -510,7 +514,10 @@ def _generate_agentic_response(
             error_context = {"error": error_detail, "error_code": exc.status_code}
         else:
             error_detail = str(exc)
-            user_msg = f"The AI service encountered an error: {error_detail[:200]}"
+            if "Connection refused" in error_detail or "ConnectError" in error_detail:
+                user_msg = "Sorry, I can't process your message right now. The AI service is temporarily restarting. Please try again in a couple of minutes."
+            else:
+                user_msg = "Sorry, something went wrong processing your message. Please try again in a moment."
             error_context = {"error": error_detail}
         return _append_message(
             db,

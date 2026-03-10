@@ -34,7 +34,9 @@ class ADKError(RuntimeError):
             return "The AI service rejected the request due to an invalid input. Please try a different message."
         if "Session not found" in self.detail or "404" in str(self.status_code):
             return "Your session has expired. Please start a new conversation."
-        return f"The AI service encountered an error. Details: {self.detail[:200]}"
+        if "Cannot reach" in self.detail or "Connection" in self.detail or self.status_code == 503:
+            return "Sorry, I can't process your message right now. The AI service is temporarily restarting. Please try again in a couple of minutes."
+        return f"Sorry, something went wrong processing your message. Please try again in a moment."
 
 
 def _extract_error_detail(response: httpx.Response) -> str:
@@ -134,7 +136,22 @@ class ADKClient:
         last_exc: Optional[Exception] = None
         last_detail: str = ""
         for attempt in range(max_retries + 1):
-            response = self._client.post("/run", json=body)
+            try:
+                response = self._client.post("/run", json=body)
+            except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as conn_err:
+                # ADK pod may be restarting — retry connection errors
+                if attempt < max_retries:
+                    delay = 2 ** attempt
+                    logger.warning(
+                        "ADK /run connection failed (attempt %d/%d), retrying in %ds — %s",
+                        attempt + 1, max_retries + 1, delay, str(conn_err)[:200],
+                    )
+                    time.sleep(delay)
+                    last_detail = f"Connection failed: {conn_err}"
+                    last_exc = conn_err
+                    continue
+                raise ADKError(503, f"Cannot reach ADK server: {conn_err}")
+
             if response.status_code == 200:
                 return response.json()
 
@@ -166,7 +183,7 @@ class ADKClient:
 
         # All retries exhausted
         if last_exc:
-            raise ADKError(500, last_detail or str(last_exc))
+            raise ADKError(503, last_detail or str(last_exc))
         return []
 
     def close(self) -> None:
