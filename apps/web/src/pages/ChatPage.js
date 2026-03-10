@@ -27,6 +27,12 @@ const ChatPage = () => {
   const [globalError, setGlobalError] = useState('');
   const [attachedFile, setAttachedFile] = useState(null);
   const fileInputRef = useRef(null);
+  const messagesEndRef = useRef(null);
+
+  // Auto-scroll to bottom when messages change or typing indicator appears
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, postingMessage]);
 
   useEffect(() => {
     if (!auth.user) {
@@ -96,24 +102,55 @@ const ChatPage = () => {
     if ((!messageDraft.trim() && !attachedFile) || !selectedSession) {
       return;
     }
+    const sentText = messageDraft.trim();
+    const sentFile = attachedFile;
+
+    // Immediately show the user's message + typing indicator
+    const tempUserMsg = {
+      id: `temp-${Date.now()}`,
+      role: 'user',
+      content: sentText || (sentFile ? `[${sentFile.name}]` : ''),
+      created_at: new Date().toISOString(),
+      context: sentFile ? { attachment: { type: sentFile.type.split('/')[0], name: sentFile.name } } : null,
+    };
+    setMessages((prev) => [...prev, tempUserMsg]);
+    setMessageDraft('');
     setPostingMessage(true);
     setGlobalError('');
+
+    if (sentFile) {
+      setAttachedFile(null);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+
     try {
       let response;
-      if (attachedFile) {
-        response = await chatService.postMessageWithFile(selectedSession.id, messageDraft.trim(), attachedFile);
-        setAttachedFile(null);
-        if (fileInputRef.current) {
-          fileInputRef.current.value = '';
-        }
+      if (sentFile) {
+        response = await chatService.postMessageWithFile(selectedSession.id, sentText, sentFile);
       } else {
-        response = await chatService.postMessage(selectedSession.id, messageDraft.trim());
+        response = await chatService.postMessage(selectedSession.id, sentText);
       }
-      setMessages((prev) => [...prev, response.data.user_message, response.data.assistant_message]);
-      setMessageDraft('');
+      // Replace temp user message with real ones
+      setMessages((prev) => {
+        const withoutTemp = prev.filter((m) => m.id !== tempUserMsg.id);
+        return [...withoutTemp, response.data.user_message, response.data.assistant_message];
+      });
     } catch (err) {
       console.error(err);
-      setGlobalError('Failed to send message to agent.');
+      // Extract meaningful error from API response
+      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || '';
+      const userMsg = detail.includes('timeout') || detail.includes('timed out')
+        ? 'Luna is taking longer than expected. Please try again in a moment.'
+        : detail.includes('connection') || detail.includes('Connection')
+        ? 'Luna is temporarily unavailable. Please try again in a couple of minutes.'
+        : detail
+        ? `Something went wrong: ${detail.slice(0, 150)}`
+        : 'Something went wrong sending your message. Please try again.';
+      setGlobalError(userMsg);
+      // Remove the temp user message on error so they can retry
+      setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
     } finally {
       setPostingMessage(false);
     }
@@ -282,7 +319,18 @@ const ChatPage = () => {
                     ) : (
                       <ListGroup variant="flush">
                         {messages.map((message) => renderMessage(message))}
-                        {messages.length === 0 && (
+                        {postingMessage && (
+                          <ListGroup.Item className="border-0 py-2">
+                            <div className="d-flex align-items-center gap-2 text-muted" style={{ fontSize: '0.9rem' }}>
+                              <Spinner animation="grow" size="sm" style={{ width: '8px', height: '8px' }} />
+                              <Spinner animation="grow" size="sm" style={{ width: '8px', height: '8px', animationDelay: '0.2s' }} />
+                              <Spinner animation="grow" size="sm" style={{ width: '8px', height: '8px', animationDelay: '0.4s' }} />
+                              <span className="ms-1">Luna is thinking...</span>
+                            </div>
+                          </ListGroup.Item>
+                        )}
+                        <div ref={messagesEndRef} />
+                        {messages.length === 0 && !postingMessage && (
                           <div className="py-4">
                             <div className="text-center text-muted mb-4">
                               <h5>Get Started</h5>
