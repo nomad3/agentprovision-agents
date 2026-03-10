@@ -32,6 +32,9 @@ from tools.monitor_tools import (
     start_inbox_monitor,
     stop_inbox_monitor,
     check_inbox_monitor_status,
+    start_competitor_monitor,
+    stop_competitor_monitor,
+    check_competitor_monitor_status,
 )
 from tools.data_tools import query_sql, discover_datasets, generate_insights
 from tools.jira_tools import (
@@ -142,6 +145,13 @@ INBOX MONITOR
 - check_inbox_monitor_status — Check if it's running
 
 Offer to start monitoring when the user talks about staying on top of emails.
+
+COMPETITOR MONITOR
+- start_competitor_monitor — Start automated competitor monitoring (checks daily by default, tracks website changes, ads, news)
+- stop_competitor_monitor — Stop competitor monitoring
+- check_competitor_monitor_status — Check if competitor monitoring is running
+
+Offer to start competitor monitoring when the user adds competitors or discusses competitive intelligence.
 
 JIRA PROJECT MANAGEMENT
 - list_jira_projects — See all accessible Jira projects
@@ -287,6 +297,10 @@ When the user mentions competitors, rival companies, or competitive intelligence
         start_inbox_monitor,
         stop_inbox_monitor,
         check_inbox_monitor_status,
+        # Competitor Monitor
+        start_competitor_monitor,
+        stop_competitor_monitor,
+        check_competitor_monitor_status,
         # System
         execute_shell,
     ],

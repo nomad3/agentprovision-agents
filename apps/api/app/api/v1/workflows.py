@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -350,6 +350,102 @@ async def inbox_monitor_status(
 ):
     """Check if the inbox monitor is running for the current tenant."""
     workflow_id = f"inbox-monitor-{tenant_id}"
+
+    try:
+        client = await _get_temporal_client()
+        handle = client.get_workflow_handle(workflow_id)
+        desc = await handle.describe()
+        status = desc.status.name if desc.status else None
+        return {
+            "running": status == "RUNNING",
+            "workflow_id": workflow_id,
+            "status": status,
+            "start_time": desc.start_time.isoformat() if desc.start_time else None,
+        }
+    except Exception:
+        return {"running": False, "workflow_id": workflow_id, "status": None}
+
+
+# ---------------------------------------------------------------------------
+# POST /workflows/competitor-monitor/start
+# ---------------------------------------------------------------------------
+@router.post("/competitor-monitor/start")
+async def start_competitor_monitor(
+    body: Optional[dict] = Body(None),
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Start the competitor monitor workflow for the current tenant."""
+    from temporalio.client import Client
+    from app.workflows.competitor_monitor import CompetitorMonitorWorkflow
+
+    # Allow tenant_id and interval from JSON body (ADK sends JSON)
+    if body and body.get("tenant_id"):
+        tenant_id = body["tenant_id"]
+    check_interval_seconds = 86400  # 24 hours default
+    if body and body.get("check_interval_seconds"):
+        check_interval_seconds = int(body["check_interval_seconds"])
+
+    # Clamp interval: minimum 1 hour, maximum 7 days
+    check_interval_seconds = max(3600, min(check_interval_seconds, 604800))
+
+    workflow_id = f"competitor-monitor-{tenant_id}"
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        handle = await client.start_workflow(
+            CompetitorMonitorWorkflow.run,
+            args=[tenant_id, check_interval_seconds, None],
+            id=workflow_id,
+            task_queue="servicetsunami-orchestration",
+        )
+        return {
+            "status": "started",
+            "workflow_id": workflow_id,
+            "run_id": handle.result_run_id,
+            "check_interval_hours": check_interval_seconds // 3600,
+        }
+    except Exception as e:
+        if "already started" in str(e).lower() or "already running" in str(e).lower():
+            return {"status": "already_running", "workflow_id": workflow_id}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# POST /workflows/competitor-monitor/stop
+# ---------------------------------------------------------------------------
+@router.post("/competitor-monitor/stop")
+async def stop_competitor_monitor(
+    body: Optional[dict] = Body(None),
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Stop the competitor monitor workflow for the current tenant."""
+    from temporalio.client import Client
+
+    if body and body.get("tenant_id"):
+        tenant_id = body["tenant_id"]
+
+    workflow_id = f"competitor-monitor-{tenant_id}"
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.cancel()
+        return {"status": "stopped", "workflow_id": workflow_id}
+    except Exception as e:
+        if "not found" in str(e).lower():
+            return {"status": "not_running", "workflow_id": workflow_id}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# GET /workflows/competitor-monitor/status
+# ---------------------------------------------------------------------------
+@router.get("/competitor-monitor/status")
+async def competitor_monitor_status(
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Check if the competitor monitor is running for the current tenant."""
+    workflow_id = f"competitor-monitor-{tenant_id}"
 
     try:
         client = await _get_temporal_client()

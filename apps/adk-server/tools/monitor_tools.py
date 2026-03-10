@@ -134,3 +134,94 @@ async def check_inbox_monitor_status(
     except Exception as e:
         logger.exception("check_inbox_monitor_status failed")
         return {"error": f"Failed to check status: {str(e)}"}
+
+
+# ---------------------------------------------------------------------------
+# Competitor Monitor
+# ---------------------------------------------------------------------------
+
+
+async def start_competitor_monitor(
+    tenant_id: str = "auto",
+    check_interval_hours: int = 24,
+) -> dict:
+    """Start the competitor monitoring workflow for this tenant.
+
+    Monitors all competitors in the knowledge graph on a schedule.
+    Checks websites, public ad libraries, and news for changes.
+
+    Args:
+        tenant_id: Tenant context. Use "auto" if unknown.
+        check_interval_hours: How often to check (in hours). Default: 24 (daily).
+
+    Returns:
+        Dict with status and workflow ID.
+    """
+    tenant_id = _resolve_tenant_id(tenant_id)
+    client = _get_api_client()
+    try:
+        resp = await client.post(
+            "/api/v1/workflows/competitor-monitor/start",
+            headers={"X-Internal-Key": settings.mcp_api_key},
+            json={"tenant_id": tenant_id, "check_interval_seconds": check_interval_hours * 3600},
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"Failed to start competitor monitor: {resp.status_code} - {resp.text[:200]}"}
+    except Exception as e:
+        logger.exception("start_competitor_monitor failed")
+        return {"error": str(e)}
+
+
+async def stop_competitor_monitor(
+    tenant_id: str = "auto",
+) -> dict:
+    """Stop the competitor monitoring workflow for this tenant.
+
+    Args:
+        tenant_id: Tenant context. Use "auto" if unknown.
+
+    Returns:
+        Dict with status confirmation.
+    """
+    tenant_id = _resolve_tenant_id(tenant_id)
+    client = _get_api_client()
+    try:
+        resp = await client.post(
+            "/api/v1/workflows/competitor-monitor/stop",
+            headers={"X-Internal-Key": settings.mcp_api_key},
+            json={"tenant_id": tenant_id},
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"Failed to stop competitor monitor: {resp.status_code}"}
+    except Exception as e:
+        logger.exception("stop_competitor_monitor failed")
+        return {"error": str(e)}
+
+
+async def check_competitor_monitor_status(
+    tenant_id: str = "auto",
+) -> dict:
+    """Check if the competitor monitoring workflow is running.
+
+    Args:
+        tenant_id: Tenant context. Use "auto" if unknown.
+
+    Returns:
+        Dict with running status and configuration.
+    """
+    tenant_id = _resolve_tenant_id(tenant_id)
+    client = _get_api_client()
+    try:
+        resp = await client.get(
+            "/api/v1/workflows/competitor-monitor/status",
+            headers={"X-Internal-Key": settings.mcp_api_key},
+            params={"tenant_id": tenant_id},
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"status": "not_running", "message": "Competitor monitor is not active."}
+    except Exception as e:
+        logger.exception("check_competitor_monitor_status failed")
+        return {"error": str(e)}
