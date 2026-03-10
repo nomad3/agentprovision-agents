@@ -40,9 +40,12 @@ async def _get_github_token(tenant_id: str) -> Optional[str]:
         if resp.status_code == 200:
             data = resp.json()
             return data.get("oauth_token") or data.get("access_token")
-        logger.warning("GitHub credential retrieval returned %s", resp.status_code)
+        logger.warning(
+            "GitHub credential retrieval returned %s for tenant=%s: %s",
+            resp.status_code, tenant_id, resp.text[:200],
+        )
     except Exception:
-        logger.exception("Failed to retrieve GitHub credentials")
+        logger.exception("Failed to retrieve GitHub credentials for tenant=%s", tenant_id)
     return None
 
 

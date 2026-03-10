@@ -138,7 +138,7 @@ class ADKClient:
         for attempt in range(max_retries + 1):
             try:
                 response = self._client.post("/run", json=body)
-            except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as conn_err:
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, ConnectionError) as conn_err:
                 # ADK pod may be restarting — retry connection errors
                 if attempt < max_retries:
                     delay = 2 ** attempt
