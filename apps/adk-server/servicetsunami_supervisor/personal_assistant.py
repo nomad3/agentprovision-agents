@@ -41,6 +41,16 @@ from tools.jira_tools import (
     update_jira_issue,
     list_jira_projects,
 )
+from tools.github_tools import (
+    list_github_repos,
+    get_github_repo,
+    list_github_issues,
+    get_github_issue,
+    list_github_pull_requests,
+    get_github_pull_request,
+    read_github_file,
+    search_github_code,
+)
 from config.settings import settings
 
 personal_assistant = Agent(
@@ -190,6 +200,19 @@ You can receive images, audio voice notes, and PDF documents from users.
 - **PDFs**: Document text is extracted and provided to you. Summarize, answer questions, or extract data as requested.
 
 When receiving media, acknowledge the type of content ("I can see your image", "I heard your voice note", "I've reviewed the document") before responding to the content.
+
+== GITHUB ==
+
+You can access the user's GitHub account to browse repos, issues, PRs, and read code files.
+- **list_github_repos**: List all accessible repos (sorted by recently updated)
+- **get_github_repo**: Get repo details (stars, forks, topics, language)
+- **list_github_issues / get_github_issue**: Browse and read issues with comments
+- **list_github_pull_requests / get_github_pull_request**: Browse PRs with files changed and reviews
+- **read_github_file**: Read file content from any repo (specify repo + path)
+- **search_github_code**: Search code across repos
+
+Always use the full repo name format "owner/repo-name" (e.g. "nomad3/servicetsunami-agents").
+If the user asks about "my repos" or "my GitHub", start with list_github_repos.
 """,
     tools=[
         # Knowledge Graph (full suite)
@@ -221,6 +244,15 @@ When receiving media, acknowledge the type of content ("I can see your image", "
         create_jira_issue,
         update_jira_issue,
         list_jira_projects,
+        # GitHub
+        list_github_repos,
+        get_github_repo,
+        list_github_issues,
+        get_github_issue,
+        list_github_pull_requests,
+        get_github_pull_request,
+        read_github_file,
+        search_github_code,
         # Pipeline & Follow-ups
         schedule_followup,
         qualify_lead,
