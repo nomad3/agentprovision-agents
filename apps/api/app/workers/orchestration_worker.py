@@ -56,6 +56,15 @@ from app.workflows.activities.inbox_monitor import (
     extract_from_emails,
     log_monitor_cycle,
 )
+from app.workflows.competitor_monitor import CompetitorMonitorWorkflow
+from app.workflows.activities.competitor_monitor import (
+    fetch_competitors,
+    scrape_competitor_activity,
+    check_ad_libraries,
+    analyze_competitor_changes,
+    store_competitor_observations,
+    create_competitor_notifications,
+)
 from app.workflows.prospecting_pipeline import (
     ProspectingPipelineWorkflow,
     prospect_research,
@@ -104,6 +113,7 @@ async def run_orchestration_worker():
             DealPipelineWorkflow,
             AutoActionWorkflow,
             InboxMonitorWorkflow,
+            CompetitorMonitorWorkflow,
             ProspectingPipelineWorkflow,
         ],
         activities=[
@@ -136,6 +146,12 @@ async def run_orchestration_worker():
             create_notifications,
             extract_from_emails,
             log_monitor_cycle,
+            fetch_competitors,
+            scrape_competitor_activity,
+            check_ad_libraries,
+            analyze_competitor_changes,
+            store_competitor_observations,
+            create_competitor_notifications,
             prospect_research,
             prospect_score,
             prospect_qualify,
