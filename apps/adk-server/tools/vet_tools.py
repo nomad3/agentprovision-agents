@@ -186,7 +186,7 @@ Only populate measurement fields you can actually read from the images. Set unre
     try:
         client = genai.Client()
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-2.5-pro",
             contents=parts,
         )
         text_content = response.text
@@ -457,7 +457,7 @@ Return the complete report in markdown format."""
     try:
         client = genai.Client()
         response = await client.aio.models.generate_content(
-            model="gemini-3.1-pro-preview",
+            model="gemini-2.5-pro",
             contents=prompt,
         )
         report_markdown = response.text.strip()
