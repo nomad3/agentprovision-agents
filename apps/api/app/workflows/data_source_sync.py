@@ -59,88 +59,105 @@ class DataSourceSyncWorkflow:
         table_name = sync_config.get("table_name")
         target_dataset = sync_config.get("target_dataset", table_name)
 
-        # Step 1: Extract data from source
-        workflow.logger.info(f"Extracting data from {connector_type}:{table_name}")
+        try:
+            # Step 1: Extract data from source
+            workflow.logger.info(f"Extracting data from {connector_type}:{table_name}")
 
-        extract_result = await workflow.execute_activity(
-            "extract_from_connector",
-            args=[connector_id, connector_type, tenant_id, sync_config],
-            start_to_close_timeout=timedelta(minutes=30),
-            retry_policy=workflow.RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(seconds=30),
-                maximum_interval=timedelta(minutes=5),
-                backoff_coefficient=2.0
+            extract_result = await workflow.execute_activity(
+                "extract_from_connector",
+                args=[connector_id, connector_type, tenant_id, sync_config],
+                start_to_close_timeout=timedelta(minutes=30),
+                schedule_to_close_timeout=timedelta(minutes=60),
+                retry_policy=workflow.RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=30),
+                    maximum_interval=timedelta(minutes=5),
+                    backoff_coefficient=2.0
+                )
             )
-        )
 
-        if not extract_result.get("success"):
-            raise Exception(f"Extraction failed: {extract_result.get('error')}")
+            if not extract_result.get("success"):
+                raise Exception(f"Extraction failed: {extract_result.get('error')}")
 
-        staging_path = extract_result.get("staging_path")
-        row_count = extract_result.get("row_count", 0)
-        schema = extract_result.get("schema", [])
-        new_watermark = extract_result.get("new_watermark")
+            staging_path = extract_result.get("staging_path")
+            row_count = extract_result.get("row_count", 0)
+            schema = extract_result.get("schema", [])
+            new_watermark = extract_result.get("new_watermark")
 
-        workflow.logger.info(f"Extracted {row_count} rows to {staging_path}")
+            workflow.logger.info(f"Extracted {row_count} rows to {staging_path}")
 
-        # Step 2: Load to Databricks Bronze
-        workflow.logger.info("Loading to Databricks Bronze layer")
+            # Step 2: Load to Databricks Bronze
+            workflow.logger.info("Loading to Databricks Bronze layer")
 
-        bronze_result = await workflow.execute_activity(
-            "load_to_bronze",
-            args=[tenant_id, target_dataset, staging_path, schema],
-            start_to_close_timeout=timedelta(minutes=15),
-            retry_policy=workflow.RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(minutes=1)
+            bronze_result = await workflow.execute_activity(
+                "load_to_bronze",
+                args=[tenant_id, target_dataset, staging_path, schema],
+                start_to_close_timeout=timedelta(minutes=15),
+                schedule_to_close_timeout=timedelta(minutes=30),
+                retry_policy=workflow.RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(minutes=1),
+                    maximum_interval=timedelta(minutes=5)
+                )
             )
-        )
 
-        bronze_table = bronze_result.get("bronze_table")
-        workflow.logger.info(f"Bronze table created: {bronze_table}")
+            bronze_table = bronze_result.get("bronze_table")
+            workflow.logger.info(f"Bronze table created: {bronze_table}")
 
-        # Step 3: Transform to Silver layer
-        workflow.logger.info("Transforming to Silver layer")
+            # Step 3: Transform to Silver layer
+            workflow.logger.info("Transforming to Silver layer")
 
-        silver_result = await workflow.execute_activity(
-            "load_to_silver",
-            args=[tenant_id, bronze_table],
-            start_to_close_timeout=timedelta(minutes=15),
-            retry_policy=workflow.RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(minutes=1)
+            silver_result = await workflow.execute_activity(
+                "load_to_silver",
+                args=[tenant_id, bronze_table],
+                start_to_close_timeout=timedelta(minutes=15),
+                schedule_to_close_timeout=timedelta(minutes=30),
+                retry_policy=workflow.RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(minutes=1),
+                    maximum_interval=timedelta(minutes=5)
+                )
             )
-        )
 
-        silver_table = silver_result.get("silver_table")
-        workflow.logger.info(f"Silver table created: {silver_table}")
+            silver_table = silver_result.get("silver_table")
+            workflow.logger.info(f"Silver table created: {silver_table}")
 
-        # Step 4: Update sync metadata
-        await workflow.execute_activity(
-            "update_sync_metadata",
-            args=[connector_id, tenant_id, {
-                "last_sync_at": workflow.now().isoformat(),
-                "last_sync_status": "success",
+            # Step 4: Update sync metadata
+            await workflow.execute_activity(
+                "update_sync_metadata",
+                args=[connector_id, tenant_id, {
+                    "last_sync_at": workflow.now().isoformat(),
+                    "last_sync_status": "success",
+                    "rows_synced": row_count,
+                    "bronze_table": bronze_table,
+                    "silver_table": silver_table,
+                    "new_watermark": new_watermark
+                }],
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=4),
+                retry_policy=workflow.RetryPolicy(
+                    maximum_attempts=5,
+                    maximum_interval=timedelta(minutes=5)
+                )
+            )
+
+            workflow.logger.info(f"Data source sync complete for connector {connector_id}")
+
+            return {
+                "status": "success",
                 "rows_synced": row_count,
                 "bronze_table": bronze_table,
                 "silver_table": silver_table,
-                "new_watermark": new_watermark
-            }],
-            start_to_close_timeout=timedelta(minutes=2),
-            retry_policy=workflow.RetryPolicy(maximum_attempts=5)
-        )
+                "new_watermark": new_watermark,
+                "sync_mode": sync_mode
+            }
 
-        workflow.logger.info(f"Data source sync complete for connector {connector_id}")
-
-        return {
-            "status": "success",
-            "rows_synced": row_count,
-            "bronze_table": bronze_table,
-            "silver_table": silver_table,
-            "new_watermark": new_watermark,
-            "sync_mode": sync_mode
-        }
+        except Exception as e:
+            workflow.logger.error(
+                f"Data source sync failed for connector {connector_id}: {e}",
+                exc_info=True
+            )
+            raise
 
 
 @workflow.defn(sandboxed=False)

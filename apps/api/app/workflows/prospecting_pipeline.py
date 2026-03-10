@@ -63,6 +63,7 @@ class ProspectingPipelineWorkflow:
             maximum_attempts=3,
             initial_interval=timedelta(seconds=10),
             backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=60),
         )
 
         workflow.logger.info(
@@ -77,6 +78,7 @@ class ProspectingPipelineWorkflow:
             "prospect_research",
             args=[tenant_id, entity_ids, params],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
         if research_result.get("status") == "failed":
@@ -87,6 +89,7 @@ class ProspectingPipelineWorkflow:
             "prospect_score",
             args=[tenant_id, entity_ids, rubric_id],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
         if score_result.get("status") == "failed":
@@ -97,6 +100,7 @@ class ProspectingPipelineWorkflow:
             "prospect_qualify",
             args=[tenant_id, entity_ids, threshold],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
         qualified_ids = qualify_result.get("entity_ids", entity_ids)
@@ -106,6 +110,7 @@ class ProspectingPipelineWorkflow:
             "prospect_outreach",
             args=[tenant_id, qualified_ids, template],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
 
@@ -119,6 +124,7 @@ class ProspectingPipelineWorkflow:
             "prospect_notify",
             args=[tenant_id, results],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
 

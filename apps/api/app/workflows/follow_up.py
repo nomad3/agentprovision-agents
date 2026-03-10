@@ -29,18 +29,34 @@ class FollowUpWorkflow:
             f"in {input.delay_hours}h"
         )
 
-        # Wait for the scheduled delay
-        await workflow.sleep(timedelta(hours=input.delay_hours))
+        try:
+            # Wait for the scheduled delay
+            await workflow.sleep(timedelta(hours=input.delay_hours))
 
-        # Execute the follow-up action
-        result = await workflow.execute_activity(
-            "execute_followup_action",
-            args=[input],
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=workflow.RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(seconds=30),
-            ),
-        )
+            # Execute the follow-up action
+            result = await workflow.execute_activity(
+                "execute_followup_action",
+                args=[input],
+                start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(minutes=10),
+                retry_policy=workflow.RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=30),
+                    maximum_interval=timedelta(seconds=60),
+                ),
+            )
 
-        return result
+            return result
+        except Exception as e:
+            workflow.logger.error(
+                f"FollowUpWorkflow failed: {e} "
+                f"[entity_id={input.entity_id}, tenant_id={input.tenant_id}, "
+                f"action={input.action}]"
+            )
+            return {
+                "status": "failed",
+                "error": str(e),
+                "entity_id": input.entity_id,
+                "tenant_id": input.tenant_id,
+                "action": input.action,
+            }

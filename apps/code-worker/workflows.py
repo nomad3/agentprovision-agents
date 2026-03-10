@@ -178,9 +178,18 @@ class CodeTaskWorkflow:
 
     @workflow.run
     async def run(self, task_input: CodeTaskInput) -> CodeTaskResult:
+        retry_policy = workflow.RetryPolicy(
+            maximum_attempts=2,
+            initial_interval=timedelta(seconds=30),
+            backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=120),
+        )
+
         return await workflow.execute_activity(
             execute_code_task,
             task_input,
             start_to_close_timeout=timedelta(minutes=15),
+            schedule_to_close_timeout=timedelta(minutes=45),
             heartbeat_timeout=timedelta(seconds=120),
+            retry_policy=retry_policy,
         )

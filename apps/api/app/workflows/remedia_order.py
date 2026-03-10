@@ -46,6 +46,7 @@ class RemediaOrderWorkflow:
             maximum_attempts=3,
             initial_interval=timedelta(seconds=10),
             backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=60),
         )
 
         workflow.logger.info(
@@ -58,6 +59,7 @@ class RemediaOrderWorkflow:
             "create_remedia_order",
             args=[input],
             start_to_close_timeout=timedelta(minutes=2),
+            schedule_to_close_timeout=timedelta(minutes=4),
             retry_policy=retry_policy,
         )
 
@@ -83,6 +85,7 @@ class RemediaOrderWorkflow:
                 "payment_provider": input.payment_provider,
             }],
             start_to_close_timeout=timedelta(minutes=1),
+            schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=retry_policy,
         )
 
@@ -98,7 +101,8 @@ class RemediaOrderWorkflow:
                     "timeout_minutes": 30,
                 }],
                 start_to_close_timeout=timedelta(minutes=35),
-                retry_policy=workflow.RetryPolicy(maximum_attempts=1),
+                schedule_to_close_timeout=timedelta(minutes=70),
+                retry_policy=workflow.RetryPolicy(maximum_attempts=2),
             )
 
             if payment_result.get("paid"):
@@ -115,6 +119,7 @@ class RemediaOrderWorkflow:
                         "total": total,
                     }],
                     start_to_close_timeout=timedelta(minutes=1),
+                    schedule_to_close_timeout=timedelta(minutes=2),
                     retry_policy=retry_policy,
                 )
             else:
@@ -130,7 +135,8 @@ class RemediaOrderWorkflow:
                 "tenant_id": input.tenant_id,
             }],
             start_to_close_timeout=timedelta(hours=25),
-            retry_policy=workflow.RetryPolicy(maximum_attempts=1),
+            schedule_to_close_timeout=timedelta(hours=50),
+            retry_policy=workflow.RetryPolicy(maximum_attempts=2),
         )
 
         final_status = delivery_result.get("status", "unknown")

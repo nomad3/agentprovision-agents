@@ -34,19 +34,36 @@ class AutoActionWorkflow:
             f"(target: {input.target_agent or 'auto'})"
         )
 
-        # Optional delay
-        if input.delay_hours > 0:
-            await workflow.sleep(timedelta(hours=input.delay_hours))
+        try:
+            # Optional delay
+            if input.delay_hours > 0:
+                await workflow.sleep(timedelta(hours=input.delay_hours))
 
-        # Execute the action via activity
-        result = await workflow.execute_activity(
-            "execute_auto_action",
-            args=[input],
-            start_to_close_timeout=timedelta(minutes=10),
-            retry_policy=workflow.RetryPolicy(
-                maximum_attempts=3,
-                initial_interval=timedelta(seconds=30),
-            ),
-        )
+            # Execute the action via activity
+            result = await workflow.execute_activity(
+                "execute_auto_action",
+                args=[input],
+                start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_close_timeout=timedelta(minutes=20),
+                retry_policy=workflow.RetryPolicy(
+                    maximum_attempts=3,
+                    initial_interval=timedelta(seconds=30),
+                    maximum_interval=timedelta(seconds=60),
+                ),
+            )
 
-        return result
+            return result
+        except Exception as e:
+            workflow.logger.error(
+                f"AutoActionWorkflow failed: {e} "
+                f"[entity_id={input.entity_id}, tenant_id={input.tenant_id}, "
+                f"action_type={input.action_type}, target_agent={input.target_agent or 'auto'}]"
+            )
+            return {
+                "status": "failed",
+                "error": str(e),
+                "entity_id": input.entity_id,
+                "tenant_id": input.tenant_id,
+                "action_type": input.action_type,
+                "target_agent": input.target_agent or "auto",
+            }

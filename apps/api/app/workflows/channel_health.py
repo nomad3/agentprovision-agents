@@ -26,6 +26,7 @@ class ChannelHealthMonitorWorkflow:
             maximum_attempts=3,
             initial_interval=timedelta(seconds=10),
             backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=60),
         )
 
         workflow.logger.info(f"Channel health check for tenant {tenant_id[:8]}")
@@ -35,6 +36,7 @@ class ChannelHealthMonitorWorkflow:
             "check_channel_health",
             args=[tenant_id],
             start_to_close_timeout=timedelta(minutes=1),
+            schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=retry_policy,
         )
 
@@ -46,6 +48,7 @@ class ChannelHealthMonitorWorkflow:
                 "reconnect_channel",
                 args=[tenant_id, account_id],
                 start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=4),
                 retry_policy=retry_policy,
             )
 
@@ -54,6 +57,7 @@ class ChannelHealthMonitorWorkflow:
             "update_channel_health_status",
             args=[tenant_id, status_report],
             start_to_close_timeout=timedelta(minutes=1),
+            schedule_to_close_timeout=timedelta(minutes=2),
             retry_policy=retry_policy,
         )
 

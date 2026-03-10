@@ -9,6 +9,7 @@ import {
   Spinner,
 } from 'react-bootstrap';
 import {
+  FaBinoculars,
   FaBolt,
   FaBrain,
   FaBullseye,
@@ -18,6 +19,7 @@ import {
   FaChevronRight,
   FaClipboardList,
   FaClock,
+  FaCode,
   FaCog,
   FaCoins,
   FaComments,
@@ -50,11 +52,17 @@ import './WorkflowsPage.css';
 // ===========================================================================
 // WORKFLOW DEFINITIONS — Static structure of all Temporal workflows
 // ===========================================================================
+// Convention: "Category · Display Name" — makes domain obvious at a glance
+// Categories: Platform (core infra), Data (lakehouse), Sales (pipeline/deals),
+//             Marketing (ads/competitors), Industry (HealthPets/Remedia)
 const WORKFLOW_DEFINITIONS = [
+  // ── Platform ──────────────────────────────────────────────────────────
   {
     id: 'task-execution',
-    name: 'TaskExecutionWorkflow',
+    name: 'Platform · Task Execution',
+    temporalName: 'TaskExecutionWorkflow',
     description: 'End-to-end agent task execution: dispatch, memory recall, execute via ADK, persist entities, evaluate results',
+    category: 'platform',
     queue: 'orchestration',
     icon: FaClipboardList,
     color: '#f472b6',
@@ -67,49 +75,24 @@ const WORKFLOW_DEFINITIONS = [
     ],
   },
   {
-    id: 'dataset-sync',
-    name: 'DatasetSyncWorkflow',
-    description: 'Sync datasets through Bronze/Silver/Gold data layers via MCP or direct Databricks SQL',
+    id: 'agent-kit-execution',
+    name: 'Platform · Agent Kit Execution',
+    temporalName: 'AgentKitExecutionWorkflow',
+    description: 'Execute an agent kit task bundle as a durable workflow',
+    category: 'platform',
     queue: 'databricks',
-    icon: FaDatabase,
-    color: '#34d399',
+    icon: FaRobot,
+    color: '#60a5fa',
     steps: [
-      { name: 'sync_to_bronze', timeout: '5m', retry: '3x / 5m', type: 'start', description: 'Upload raw data to bronze layer (MCP → Databricks fallback)' },
-      { name: 'transform_to_silver', timeout: '10m', retry: '3x / 2m', description: 'Clean and transform to silver layer' },
-      { name: 'update_dataset_metadata', timeout: '1m', retry: '5x', type: 'end', description: 'Update sync status and metadata' },
+      { name: 'execute_agent_kit_activity', timeout: '10m', type: 'start', description: 'Run agent kit execution' },
     ],
-  },
-  {
-    id: 'data-source-sync',
-    name: 'DataSourceSyncWorkflow',
-    description: 'Extract data from connectors (Postgres, Snowflake, MySQL, S3, GCS, API) and load through data layers',
-    queue: 'databricks',
-    icon: FaSyncAlt,
-    color: '#fbbf24',
-    steps: [
-      { name: 'extract_from_connector', timeout: '30m', retry: '3x / 30s', type: 'start', description: 'Extract via connector (6 types, full/incremental)' },
-      { name: 'load_to_bronze', timeout: '15m', retry: '3x / 1m', description: 'Load extracted data to bronze' },
-      { name: 'load_to_silver', timeout: '15m', retry: '3x / 1m', description: 'Transform and load to silver' },
-      { name: 'update_sync_metadata', timeout: '2m', retry: '5x', type: 'end', description: 'Update watermark and sync status' },
-    ],
-  },
-  {
-    id: 'scheduled-sync',
-    name: 'ScheduledSyncWorkflow',
-    description: 'Parent workflow that runs DataSourceSyncWorkflow for each table in a scheduled sync job',
-    queue: 'databricks',
-    icon: FaLayerGroup,
-    color: '#a78bfa',
-    steps: [
-      { name: 'for each table', type: 'loop', description: 'Iterate over configured tables' },
-      { name: 'DataSourceSyncWorkflow', type: 'child', description: 'Spawn child workflow per table (errors caught per-iteration)' },
-    ],
-    note: 'Status: "completed" if all succeed, "partial" if some fail',
   },
   {
     id: 'knowledge-extraction',
-    name: 'KnowledgeExtractionWorkflow',
+    name: 'Platform · Knowledge Extraction',
+    temporalName: 'KnowledgeExtractionWorkflow',
     description: 'Extract knowledge entities from chat sessions using LLM analysis',
+    category: 'platform',
     queue: 'databricks',
     icon: FaBrain,
     color: '#38bdf8',
@@ -119,61 +102,11 @@ const WORKFLOW_DEFINITIONS = [
     note: 'Skips if: session not found, empty transcript, or LLM not configured',
   },
   {
-    id: 'agent-kit-execution',
-    name: 'AgentKitExecutionWorkflow',
-    description: 'Execute an agent kit task bundle as a durable workflow',
-    queue: 'databricks',
-    icon: FaRobot,
-    color: '#60a5fa',
-    steps: [
-      { name: 'execute_agent_kit_activity', timeout: '10m', type: 'start', description: 'Run agent kit execution' },
-    ],
-  },
-  {
-    id: 'channel-health',
-    name: 'ChannelHealthMonitorWorkflow',
-    description: 'Long-running monitor: checks channel health, reconnects disconnected accounts, loops via continue_as_new',
-    queue: 'orchestration',
-    icon: FaHeartbeat,
-    color: '#f87171',
-    steps: [
-      { name: 'check_channel_health', timeout: '1m', retry: '3x / 10s', type: 'start', description: 'Check all channel account statuses' },
-      { name: 'reconnect_channel', timeout: '2m/each', retry: '3x / 10s', type: 'loop', description: 'Reconnect each disconnected account' },
-      { name: 'update_channel_health_status', timeout: '1m', retry: '3x / 10s', description: 'Update DB with health results' },
-      { name: 'sleep(interval)', type: 'timer', description: 'Wait before next check (default 60s)' },
-      { name: 'continue_as_new', type: 'loop', description: 'Restart workflow to prevent history growth' },
-    ],
-  },
-  {
-    id: 'follow-up',
-    name: 'FollowUpWorkflow',
-    description: 'Schedule a delayed follow-up action: send WhatsApp, update pipeline stage, or create reminder',
-    queue: 'orchestration',
-    icon: FaClock,
-    color: '#fbbf24',
-    steps: [
-      { name: 'sleep(delay_hours)', type: 'timer', description: 'Durable timer — waits configured hours' },
-      { name: 'execute_followup_action', timeout: '5m', retry: '3x / 30s', type: 'branch', description: 'Routes to: send_whatsapp | update_stage | remind' },
-    ],
-  },
-  {
-    id: 'monthly-billing',
-    name: 'MonthlyBillingWorkflow',
-    description: 'Monthly veterinary billing settlement: aggregate visits, generate invoices, send to clinics, schedule payment follow-ups',
-    queue: 'orchestration',
-    icon: FaFileInvoiceDollar,
-    color: '#34d399',
-    steps: [
-      { name: 'aggregate_visits', timeout: '5m', retry: '3x / 30s', type: 'start', description: 'Query completed visits per clinic for the billing period' },
-      { name: 'generate_invoices', timeout: '10m', retry: '3x / 30s', description: 'Calculate totals from fee schedules and create invoices' },
-      { name: 'send_invoices', timeout: '5m', retry: '3x / 30s', description: 'Deliver invoice PDFs via email and WhatsApp' },
-      { name: 'schedule_followups', timeout: '1m', retry: '3x / 30s', type: 'end', description: 'Create 7-day reminder workflows for unpaid invoices' },
-    ],
-  },
-  {
     id: 'inbox-monitor',
-    name: 'InboxMonitorWorkflow',
-    description: 'Long-running per-tenant monitor: fetches Gmail + Calendar, triages with LLM + memory context, creates notifications, extracts entities',
+    name: 'Platform · Inbox Monitor',
+    temporalName: 'InboxMonitorWorkflow',
+    description: 'Long-running per-tenant monitor: fetches Gmail + Calendar, triages with LLM, creates notifications, extracts entities',
+    category: 'platform',
     queue: 'orchestration',
     icon: FaStream,
     color: '#818cf8',
@@ -190,42 +123,42 @@ const WORKFLOW_DEFINITIONS = [
     note: 'One instance per tenant. Auto-starts when Google OAuth is connected.',
   },
   {
-    id: 'deal-pipeline',
-    name: 'DealPipelineWorkflow',
-    description: 'Full M&A deal pipeline: discover prospects, score for sell-likelihood, research briefs, outreach generation, pipeline advancement, KG sync',
+    id: 'channel-health',
+    name: 'Platform · Channel Health Monitor',
+    temporalName: 'ChannelHealthMonitorWorkflow',
+    description: 'Long-running monitor: checks channel health, reconnects disconnected accounts, loops via continue_as_new',
+    category: 'platform',
     queue: 'orchestration',
-    icon: FaDollarSign,
-    color: '#f59e0b',
+    icon: FaHeartbeat,
+    color: '#f87171',
     steps: [
-      { name: 'hca_discover_prospects', timeout: '5m', retry: '3x / 10s', type: 'start', description: 'AI prospect discovery by industry and criteria' },
-      { name: 'Score', description: 'Score prospects using deal intelligence rubric' },
-      { name: 'hca_score_prospects', timeout: '5m', retry: '3x / 10s', description: 'Score each prospect for sell-likelihood (threshold filtering)' },
-      { name: 'hca_generate_research', timeout: '10m', retry: '3x / 10s', description: 'Generate research briefs for high-scorers' },
-      { name: 'hca_generate_outreach', timeout: '5m', retry: '3x / 10s', description: 'Create outreach drafts (cold email, LinkedIn, one-pager)' },
-      { name: 'hca_advance_pipeline', timeout: '2m', retry: '3x / 10s', description: 'Move prospects to "contacted" stage' },
-      { name: 'hca_sync_knowledge_graph', timeout: '5m', retry: '3x / 10s', type: 'end', description: 'Sync prospects to knowledge graph' },
+      { name: 'check_channel_health', timeout: '1m', retry: '3x / 10s', type: 'start', description: 'Check all channel account statuses' },
+      { name: 'reconnect_channel', timeout: '2m/each', retry: '3x / 10s', type: 'loop', description: 'Reconnect each disconnected account' },
+      { name: 'update_channel_health_status', timeout: '1m', retry: '3x / 10s', description: 'Update DB with health results' },
+      { name: 'sleep(interval)', type: 'timer', description: 'Wait before next check (default 60s)' },
+      { name: 'continue_as_new', type: 'loop', description: 'Restart workflow to prevent history growth' },
     ],
-    note: 'Can skip discovery when triggered via webhook with existing prospect IDs',
   },
   {
-    id: 'remedia-order',
-    name: 'RemediaOrderWorkflow',
-    description: 'Remedia pharmacy order lifecycle: create order, WhatsApp confirmation, payment monitoring, delivery tracking',
+    id: 'follow-up',
+    name: 'Platform · Follow-Up Action',
+    temporalName: 'FollowUpWorkflow',
+    description: 'Schedule a delayed follow-up action: send WhatsApp, update pipeline stage, or create reminder',
+    category: 'platform',
     queue: 'orchestration',
-    icon: FaCoins,
-    color: '#10b981',
+    icon: FaClock,
+    color: '#fbbf24',
     steps: [
-      { name: 'create_remedia_order', timeout: '2m', retry: '3x / 10s', type: 'start', description: 'POST to Remedia API, get order_id + payment URL' },
-      { name: 'send_confirmation', timeout: '1m', retry: '3x / 10s', description: 'WhatsApp message with order summary + payment link' },
-      { name: 'monitor_payment', timeout: '35m', retry: '1x', type: 'timer', description: 'Poll order status every 30s until paid or 30min timeout' },
-      { name: 'send_payment_confirmed', timeout: '1m', retry: '3x / 10s', description: 'WhatsApp notification on payment success' },
-      { name: 'track_delivery', timeout: '25h', retry: '1x', type: 'end', description: 'Poll delivery status every 5min for up to 24h' },
+      { name: 'sleep(delay_hours)', type: 'timer', description: 'Durable timer — waits configured hours' },
+      { name: 'execute_followup_action', timeout: '5m', retry: '3x / 30s', type: 'branch', description: 'Routes to: send_whatsapp | update_stage | remind' },
     ],
   },
   {
     id: 'auto-action',
-    name: 'AutoActionWorkflow',
+    name: 'Platform · Auto Action',
+    temporalName: 'AutoActionWorkflow',
     description: 'Memory-triggered automated actions: routes through Luna to appropriate sub-agent team for execution',
+    category: 'platform',
     queue: 'orchestration',
     icon: FaBolt,
     color: '#ec4899',
@@ -236,18 +169,158 @@ const WORKFLOW_DEFINITIONS = [
     note: 'Triggered by memory extraction action_triggers',
   },
   {
+    id: 'code-task',
+    name: 'Platform · Code Task (Claude Code)',
+    temporalName: 'CodeTaskWorkflow',
+    description: 'Autonomous coding via Claude Code CLI: clones repo, implements feature, creates branch and PR',
+    category: 'platform',
+    queue: 'code',
+    icon: FaCode,
+    color: '#22d3ee',
+    steps: [
+      { name: 'execute_code_task', timeout: '30m', retry: '1x', type: 'start', description: 'Run Claude Code CLI in isolated code-worker pod — creates branch, implements changes, opens PR' },
+    ],
+    note: 'Runs on dedicated code-worker pod with Node.js 20 + Python. Triggered via Code Agent in chat.',
+  },
+  // ── Data ──────────────────────────────────────────────────────────────
+  {
+    id: 'dataset-sync',
+    name: 'Data · Dataset Sync',
+    temporalName: 'DatasetSyncWorkflow',
+    description: 'Sync datasets through Bronze/Silver/Gold data layers via MCP or direct Databricks SQL',
+    category: 'data',
+    queue: 'databricks',
+    icon: FaDatabase,
+    color: '#34d399',
+    steps: [
+      { name: 'sync_to_bronze', timeout: '5m', retry: '3x / 5m', type: 'start', description: 'Upload raw data to bronze layer (MCP → Databricks fallback)' },
+      { name: 'transform_to_silver', timeout: '10m', retry: '3x / 2m', description: 'Clean and transform to silver layer' },
+      { name: 'update_dataset_metadata', timeout: '1m', retry: '5x', type: 'end', description: 'Update sync status and metadata' },
+    ],
+  },
+  {
+    id: 'data-source-sync',
+    name: 'Data · Data Source Sync',
+    temporalName: 'DataSourceSyncWorkflow',
+    description: 'Extract data from connectors (Postgres, Snowflake, MySQL, S3, GCS, API) and load through data layers',
+    category: 'data',
+    queue: 'databricks',
+    icon: FaSyncAlt,
+    color: '#fbbf24',
+    steps: [
+      { name: 'extract_from_connector', timeout: '30m', retry: '3x / 30s', type: 'start', description: 'Extract via connector (6 types, full/incremental)' },
+      { name: 'load_to_bronze', timeout: '15m', retry: '3x / 1m', description: 'Load extracted data to bronze' },
+      { name: 'load_to_silver', timeout: '15m', retry: '3x / 1m', description: 'Transform and load to silver' },
+      { name: 'update_sync_metadata', timeout: '2m', retry: '5x', type: 'end', description: 'Update watermark and sync status' },
+    ],
+  },
+  {
+    id: 'scheduled-sync',
+    name: 'Data · Scheduled Sync',
+    temporalName: 'ScheduledSyncWorkflow',
+    description: 'Parent workflow that runs Data Source Sync for each table in a scheduled sync job',
+    category: 'data',
+    queue: 'databricks',
+    icon: FaLayerGroup,
+    color: '#a78bfa',
+    steps: [
+      { name: 'for each table', type: 'loop', description: 'Iterate over configured tables' },
+      { name: 'DataSourceSyncWorkflow', type: 'child', description: 'Spawn child workflow per table (errors caught per-iteration)' },
+    ],
+    note: 'Status: "completed" if all succeed, "partial" if some fail',
+  },
+  // ── Sales ─────────────────────────────────────────────────────────────
+  {
     id: 'prospecting-pipeline',
-    name: 'Prospecting Pipeline',
-    description: 'Automated prospect research, scoring, qualification, and outreach',
-    queue: 'servicetsunami-orchestration',
+    name: 'Sales · Prospecting Pipeline',
+    temporalName: 'ProspectingPipelineWorkflow',
+    description: 'Durable 5-step prospecting pipeline: research, score, qualify, outreach, notify',
+    category: 'sales',
+    queue: 'orchestration',
     icon: FaBullseye,
     color: '#34d399',
     steps: [
-      { name: 'Research', description: 'Web scrape and enrich entity properties' },
-      { name: 'Score', description: 'Invoke scoring skill using tenant rubric' },
-      { name: 'Qualify', description: 'BANT qualification on entities above threshold' },
-      { name: 'Outreach', description: 'Draft outreach for qualified leads' },
-      { name: 'Notify', description: 'Create notifications with results summary' },
+      { name: 'prospect_research', timeout: '5m', retry: '3x / 10s', type: 'start', description: 'Enrich prospect entities with external data' },
+      { name: 'prospect_score', timeout: '5m', retry: '3x / 10s', description: 'Score each prospect via lead-scoring rubric' },
+      { name: 'prospect_qualify', timeout: '3m', retry: '3x / 10s', description: 'Apply BANT qualification filter (threshold-based)' },
+      { name: 'prospect_outreach', timeout: '5m', retry: '3x / 10s', description: 'Draft personalised outreach messages' },
+      { name: 'prospect_notify', timeout: '2m', retry: '3x / 10s', type: 'end', description: 'Create notification summary for tenant' },
+    ],
+  },
+  {
+    id: 'deal-pipeline',
+    name: 'Sales · Deal Pipeline (M&A)',
+    temporalName: 'DealPipelineWorkflow',
+    description: 'Full M&A deal pipeline: discover prospects, score for sell-likelihood, research briefs, outreach generation, pipeline advancement, KG sync',
+    category: 'sales',
+    queue: 'orchestration',
+    icon: FaDollarSign,
+    color: '#f59e0b',
+    steps: [
+      { name: 'hca_discover_prospects', timeout: '5m', retry: '3x / 10s', type: 'start', description: 'AI prospect discovery by industry and criteria' },
+      { name: 'hca_score_prospects', timeout: '5m', retry: '3x / 10s', description: 'Score each prospect for sell-likelihood (threshold filtering)' },
+      { name: 'hca_generate_research', timeout: '10m', retry: '3x / 10s', description: 'Generate research briefs for high-scorers' },
+      { name: 'hca_generate_outreach', timeout: '5m', retry: '3x / 10s', description: 'Create outreach drafts (cold email, LinkedIn, one-pager)' },
+      { name: 'hca_advance_pipeline', timeout: '2m', retry: '3x / 10s', description: 'Move prospects to "contacted" stage' },
+      { name: 'hca_sync_knowledge_graph', timeout: '5m', retry: '3x / 10s', type: 'end', description: 'Sync prospects to knowledge graph' },
+    ],
+    note: 'Can skip discovery when triggered via webhook with existing prospect IDs',
+  },
+  // ── Marketing ─────────────────────────────────────────────────────────
+  {
+    id: 'competitor-monitor',
+    name: 'Marketing · Competitor Monitor',
+    temporalName: 'CompetitorMonitorWorkflow',
+    description: 'Long-running per-tenant monitor: scrapes competitor websites, checks ad libraries, analyzes changes, stores observations, creates alerts',
+    category: 'marketing',
+    queue: 'orchestration',
+    icon: FaBinoculars,
+    color: '#f97316',
+    steps: [
+      { name: 'fetch_competitors', timeout: '3m', retry: '3x / 15s', type: 'start', description: 'Query knowledge graph for competitor entities' },
+      { name: 'scrape_competitor_activity', timeout: '5m', retry: '3x / 15s', description: 'Scrape competitor websites and news via MCP scraper' },
+      { name: 'check_ad_libraries', timeout: '5m', retry: '3x / 15s', description: 'Check Meta Ad Library and public ad transparency sources' },
+      { name: 'analyze_competitor_changes', timeout: '3m', retry: '3x / 15s', description: 'LLM analysis of changes vs previous observations' },
+      { name: 'store_competitor_observations', timeout: '3m', retry: '3x / 15s', description: 'Store observations on competitor knowledge entities' },
+      { name: 'create_competitor_notifications', timeout: '3m', retry: '3x / 15s', description: 'Create alerts for notable competitor changes' },
+      { name: 'sleep(24h)', type: 'timer', description: 'Wait before next monitoring cycle (default 24h)' },
+      { name: 'continue_as_new', type: 'loop', description: 'Restart workflow to prevent history growth' },
+    ],
+    note: 'One instance per tenant. Started via Luna competitor management tools.',
+  },
+  // ── Industry · HealthPets ─────────────────────────────────────────────
+  {
+    id: 'monthly-billing',
+    name: 'HealthPets · Monthly Billing',
+    temporalName: 'MonthlyBillingWorkflow',
+    description: 'Monthly veterinary billing: aggregate clinic visits, generate invoices, send via email/WhatsApp, schedule payment follow-ups',
+    category: 'healthpets',
+    queue: 'orchestration',
+    icon: FaFileInvoiceDollar,
+    color: '#34d399',
+    steps: [
+      { name: 'aggregate_visits', timeout: '5m', retry: '3x / 30s', type: 'start', description: 'Query completed visits per clinic for the billing period' },
+      { name: 'generate_invoices', timeout: '10m', retry: '3x / 30s', description: 'Calculate totals from fee schedules and create invoices' },
+      { name: 'send_invoices', timeout: '5m', retry: '3x / 30s', description: 'Deliver invoice PDFs via email and WhatsApp' },
+      { name: 'schedule_followups', timeout: '1m', retry: '3x / 30s', type: 'end', description: 'Create 7-day reminder workflows for unpaid invoices' },
+    ],
+  },
+  // ── Industry · Remedia ────────────────────────────────────────────────
+  {
+    id: 'remedia-order',
+    name: 'Remedia · Pharmacy Order',
+    temporalName: 'RemediaOrderWorkflow',
+    description: 'Pharmacy order lifecycle: create order, WhatsApp confirmation, payment monitoring, delivery tracking',
+    category: 'remedia',
+    queue: 'orchestration',
+    icon: FaCoins,
+    color: '#10b981',
+    steps: [
+      { name: 'create_remedia_order', timeout: '2m', retry: '3x / 10s', type: 'start', description: 'POST to Remedia API, get order_id + payment URL' },
+      { name: 'send_confirmation', timeout: '1m', retry: '3x / 10s', description: 'WhatsApp message with order summary + payment link' },
+      { name: 'monitor_payment', timeout: '35m', retry: '1x', type: 'timer', description: 'Poll order status every 30s until paid or 30min timeout' },
+      { name: 'send_payment_confirmed', timeout: '1m', retry: '3x / 10s', description: 'WhatsApp notification on payment success' },
+      { name: 'track_delivery', timeout: '25h', retry: '1x', type: 'end', description: 'Poll delivery status every 5min for up to 24h' },
     ],
   },
 ];
@@ -315,6 +388,11 @@ const WorkflowCard = ({ workflow }) => {
         </div>
         <div className="wf-card-info">
           <div className="wf-card-name">{workflow.name}</div>
+          {workflow.temporalName && (
+            <div style={{ fontSize: '0.62rem', color: 'var(--color-muted)', fontFamily: '"SF Mono", "Fira Code", monospace', marginBottom: '0.15rem' }}>
+              {workflow.temporalName}
+            </div>
+          )}
           <div className="wf-card-desc">{workflow.description}</div>
         </div>
         <div className="wf-card-badges">
@@ -397,13 +475,56 @@ const DesignsTab = () => (
         <FaServer size={10} style={{ marginRight: '0.3rem' }} />
         databricks queue — {WORKFLOW_DEFINITIONS.filter(w => w.queue === 'databricks').length} workflows
       </div>
+      <div style={{
+        padding: '0.5rem 0.85rem',
+        borderRadius: '8px',
+        background: 'rgba(34, 211, 238, 0.06)',
+        border: '1px solid rgba(34, 211, 238, 0.15)',
+        fontSize: '0.72rem',
+        color: '#22d3ee',
+        fontWeight: 600,
+      }}>
+        <FaServer size={10} style={{ marginRight: '0.3rem' }} />
+        code queue — {WORKFLOW_DEFINITIONS.filter(w => w.queue === 'code').length} workflows
+      </div>
     </div>
 
-    <div className="wf-designs-grid">
-      {WORKFLOW_DEFINITIONS.map((wf) => (
-        <WorkflowCard key={wf.id} workflow={wf} />
-      ))}
-    </div>
+    {/* Grouped by category */}
+    {[
+      { key: 'platform', label: 'Platform', color: '#60a5fa' },
+      { key: 'data', label: 'Data', color: '#34d399' },
+      { key: 'sales', label: 'Sales', color: '#f59e0b' },
+      { key: 'marketing', label: 'Marketing', color: '#f97316' },
+      { key: 'healthpets', label: 'Industry · HealthPets', color: '#f472b6' },
+      { key: 'remedia', label: 'Industry · Remedia', color: '#10b981' },
+    ].map((cat) => {
+      const catWorkflows = WORKFLOW_DEFINITIONS.filter(w => w.category === cat.key);
+      if (catWorkflows.length === 0) return null;
+      return (
+        <div key={cat.key} style={{ marginBottom: '1.25rem' }}>
+          <h6 style={{
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            color: cat.color,
+            marginBottom: '0.5rem',
+            paddingBottom: '0.3rem',
+            borderBottom: `1px solid ${cat.color}25`,
+          }}>
+            {cat.label}
+            <span style={{ fontWeight: 500, color: 'var(--color-muted)', marginLeft: '0.5rem', fontSize: '0.65rem' }}>
+              {catWorkflows.length} workflow{catWorkflows.length !== 1 ? 's' : ''}
+            </span>
+          </h6>
+          <div className="wf-designs-grid">
+            {catWorkflows.map((wf) => (
+              <WorkflowCard key={wf.id} workflow={wf} />
+            ))}
+          </div>
+        </div>
+      );
+    })}
   </div>
 );
 
@@ -461,6 +582,8 @@ const TYPE_ICONS = {
   InboxMonitorWorkflow: FaEnvelope,
   ChannelHealthMonitorWorkflow: FaHeartbeat,
   ProspectingPipelineWorkflow: FaBullseye,
+  CompetitorMonitorWorkflow: FaBinoculars,
+  CodeTaskWorkflow: FaCode,
   FollowUpWorkflow: FaRedo,
 };
 
@@ -473,6 +596,8 @@ const TYPE_COLORS = {
   InboxMonitorWorkflow: '#a78bfa',
   ChannelHealthMonitorWorkflow: '#f87171',
   ProspectingPipelineWorkflow: '#fbbf24',
+  CompetitorMonitorWorkflow: '#f97316',
+  CodeTaskWorkflow: '#22d3ee',
   FollowUpWorkflow: '#34d399',
 };
 
@@ -1385,7 +1510,7 @@ const ExecutionsTab = () => {
 // ===========================================================================
 const WorkflowsPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeMainTab = searchParams.get('tab') || 'designs';
+  const activeMainTab = searchParams.get('tab') || 'executions';
 
   const setTab = (tab) => {
     setSearchParams({ tab });
@@ -1405,23 +1530,23 @@ const WorkflowsPage = () => {
 
         <div className="workflows-tabs">
           <button
-            className={`workflows-tab-btn ${activeMainTab === 'designs' ? 'active' : ''}`}
-            onClick={() => setTab('designs')}
-          >
-            <FaDraftingCompass size={12} style={{ marginRight: '0.4rem' }} />
-            Designs
-          </button>
-          <button
             className={`workflows-tab-btn ${activeMainTab === 'executions' ? 'active' : ''}`}
             onClick={() => setTab('executions')}
           >
             <FaStream size={12} style={{ marginRight: '0.4rem' }} />
             Executions
           </button>
+          <button
+            className={`workflows-tab-btn ${activeMainTab === 'designs' ? 'active' : ''}`}
+            onClick={() => setTab('designs')}
+          >
+            <FaDraftingCompass size={12} style={{ marginRight: '0.4rem' }} />
+            Designs
+          </button>
         </div>
 
-        {activeMainTab === 'designs' && <DesignsTab />}
         {activeMainTab === 'executions' && <ExecutionsTab />}
+        {activeMainTab === 'designs' && <DesignsTab />}
       </div>
     </Layout>
   );

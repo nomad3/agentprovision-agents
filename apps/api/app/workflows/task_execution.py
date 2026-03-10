@@ -43,74 +43,110 @@ class TaskExecutionWorkflow:
         retry_policy = workflow.RetryPolicy(
             maximum_attempts=3,
             initial_interval=timedelta(seconds=30),
+            maximum_interval=timedelta(seconds=60),
             backoff_coefficient=2.0,
         )
 
         workflow.logger.info(f"Starting task execution for {task_id}")
 
-        # Step 1: Dispatch task to best agent
-        dispatch_result = await workflow.execute_activity(
-            "dispatch_task",
-            args=[task_id, tenant_id, task_data],
-            start_to_close_timeout=timedelta(minutes=2),
-            retry_policy=retry_policy,
-        )
+        try:
+            # Step 1: Dispatch task to best agent
+            dispatch_result = await workflow.execute_activity(
+                "dispatch_task",
+                args=[task_id, tenant_id, task_data],
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=retry_policy,
+            )
 
-        agent_id = dispatch_result["agent_id"]
-        workflow.logger.info(f"Task dispatched to agent {agent_id}")
+            agent_id = dispatch_result["agent_id"]
+            workflow.logger.info(f"Task dispatched to agent {agent_id}")
 
-        # Step 2: Recall relevant memories
-        memory_result = await workflow.execute_activity(
-            "recall_memory",
-            args=[task_id, tenant_id, agent_id, task_data],
-            start_to_close_timeout=timedelta(minutes=1),
-            retry_policy=retry_policy,
-        )
+            # Step 2: Recall relevant memories
+            memory_result = await workflow.execute_activity(
+                "recall_memory",
+                args=[task_id, tenant_id, agent_id, task_data],
+                start_to_close_timeout=timedelta(minutes=1),
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=retry_policy,
+            )
 
-        workflow.logger.info(f"Recalled {len(memory_result.get('memories', []))} memories")
+            workflow.logger.info(f"Recalled {len(memory_result.get('memories', []))} memories")
 
-        # Step 3: Execute task via ADK
-        context = {
-            **task_data,
-            "memories": memory_result.get("memories", []),
-        }
+            # Step 3: Execute task via ADK
+            context = {
+                **task_data,
+                "memories": memory_result.get("memories", []),
+            }
 
-        execute_result = await workflow.execute_activity(
-            "execute_task",
-            args=[task_id, tenant_id, agent_id, context],
-            start_to_close_timeout=timedelta(minutes=10),
-            retry_policy=retry_policy,
-        )
+            execute_result = await workflow.execute_activity(
+                "execute_task",
+                args=[task_id, tenant_id, agent_id, context],
+                start_to_close_timeout=timedelta(minutes=10),
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=retry_policy,
+            )
 
-        workflow.logger.info(f"Task executed with status: {execute_result['status']}")
+            workflow.logger.info(f"Task executed with status: {execute_result['status']}")
 
-        # Step 4: Persist entities from output (if applicable)
-        persist_result = await workflow.execute_activity(
-            "persist_entities",
-            args=[task_id, tenant_id, agent_id, execute_result],
-            start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=retry_policy,
-        )
+            # Step 4: Persist entities from output (if applicable)
+            persist_result = await workflow.execute_activity(
+                "persist_entities",
+                args=[task_id, tenant_id, agent_id, execute_result],
+                start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=retry_policy,
+            )
 
-        workflow.logger.info(
-            f"Entities persisted: {persist_result.get('entities_created', 0)} created"
-        )
+            workflow.logger.info(
+                f"Entities persisted: {persist_result.get('entities_created', 0)} created"
+            )
 
-        # Step 5: Evaluate results
-        evaluate_result = await workflow.execute_activity(
-            "evaluate_task",
-            args=[task_id, tenant_id, agent_id, execute_result],
-            start_to_close_timeout=timedelta(minutes=2),
-            retry_policy=retry_policy,
-        )
+            # Step 5: Evaluate results
+            evaluate_result = await workflow.execute_activity(
+                "evaluate_task",
+                args=[task_id, tenant_id, agent_id, execute_result],
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=retry_policy,
+            )
 
-        workflow.logger.info(f"Task evaluation complete: confidence={evaluate_result.get('confidence')}")
+            workflow.logger.info(f"Task evaluation complete: confidence={evaluate_result.get('confidence')}")
 
-        return {
-            "status": evaluate_result["status"],
-            "agent_id": agent_id,
-            "output": execute_result.get("output"),
-            "confidence": evaluate_result.get("confidence"),
-            "tokens_used": evaluate_result.get("tokens_used"),
-            "cost": evaluate_result.get("cost"),
-        }
+            return {
+                "status": evaluate_result["status"],
+                "agent_id": agent_id,
+                "output": execute_result.get("output"),
+                "confidence": evaluate_result.get("confidence"),
+                "tokens_used": evaluate_result.get("tokens_used"),
+                "cost": evaluate_result.get("cost"),
+            }
+
+        except Exception as e:
+            step_name = "unknown"
+            try:
+                dispatch_result  # noqa: B018
+                try:
+                    memory_result  # noqa: B018
+                    try:
+                        execute_result  # noqa: B018
+                        try:
+                            persist_result  # noqa: B018
+                            step_name = "evaluate_task"
+                        except NameError:
+                            step_name = "persist_entities"
+                    except NameError:
+                        step_name = "execute_task"
+                except NameError:
+                    step_name = "recall_memory"
+            except NameError:
+                step_name = "dispatch_task"
+
+            workflow.logger.error(
+                f"Task execution failed at step '{step_name}' for task {task_id}: {e}"
+            )
+            return {
+                "status": "failed",
+                "step": step_name,
+                "error": str(e),
+            }

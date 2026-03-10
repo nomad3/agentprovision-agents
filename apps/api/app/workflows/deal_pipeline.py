@@ -42,6 +42,7 @@ class DealPipelineWorkflow:
             maximum_attempts=3,
             initial_interval=timedelta(seconds=10),
             backoff_coefficient=2.0,
+            maximum_interval=timedelta(seconds=60),
         )
 
         workflow.logger.info(f"Starting deal pipeline for {industry} (skip_discovery={skip_discovery})")
@@ -57,6 +58,7 @@ class DealPipelineWorkflow:
                 "hca_discover_prospects",
                 args=[tenant_id, industry, criteria],
                 start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(minutes=10),
                 retry_policy=retry_policy,
             )
             if discover_result.get("status") != "success":
@@ -72,6 +74,7 @@ class DealPipelineWorkflow:
                 "hca_score_prospects",
                 args=[tenant_id, prospect_ids],
                 start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(minutes=10),
                 retry_policy=retry_policy,
             )
             high_scorers = [
@@ -88,6 +91,7 @@ class DealPipelineWorkflow:
             "hca_generate_research",
             args=[tenant_id, high_scorer_ids],
             start_to_close_timeout=timedelta(minutes=10),
+            schedule_to_close_timeout=timedelta(minutes=20),
             retry_policy=retry_policy,
         )
 
@@ -96,6 +100,7 @@ class DealPipelineWorkflow:
             "hca_generate_outreach",
             args=[tenant_id, high_scorer_ids, outreach_type],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
 
@@ -104,6 +109,7 @@ class DealPipelineWorkflow:
             "hca_advance_pipeline",
             args=[tenant_id, high_scorer_ids, "contacted"],
             start_to_close_timeout=timedelta(minutes=2),
+            schedule_to_close_timeout=timedelta(minutes=4),
             retry_policy=retry_policy,
         )
 
@@ -112,6 +118,7 @@ class DealPipelineWorkflow:
             "hca_sync_knowledge_graph",
             args=[tenant_id, prospect_ids],
             start_to_close_timeout=timedelta(minutes=5),
+            schedule_to_close_timeout=timedelta(minutes=10),
             retry_policy=retry_policy,
         )
 
