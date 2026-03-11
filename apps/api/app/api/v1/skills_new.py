@@ -14,6 +14,7 @@ from app.schemas.skill_execution import SkillExecutionInDB, SkillExecuteRequest
 from app.schemas.file_skill import FileSkill
 from app.services import skills as service
 from app.services.skill_manager import skill_manager
+from app.services.memory_activity import log_activity
 
 router = APIRouter()
 
@@ -72,6 +73,7 @@ class FileSkillCreateRequest(BaseModel):
 @router.post("/library/create", response_model=FileSkill, status_code=201)
 def create_file_skill(
     payload: FileSkillCreateRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Create a new file-based skill from the UI."""
@@ -84,6 +86,15 @@ def create_file_skill(
     )
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
+
+    log_activity(
+        db,
+        tenant_id=current_user.tenant_id,
+        event_type="action_triggered",
+        description=f"Skill created: {payload.name} ({payload.engine})",
+        source="skills",
+        event_metadata={"skill_name": payload.name, "engine": payload.engine, "action": "skill_created"},
+    )
     return result["skill"]
 
 
@@ -91,12 +102,31 @@ def create_file_skill(
 def execute_file_skill(
     skill_name: str = Body(...),
     inputs: Dict = Body(default={}),
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Execute a file-based skill by name (user-facing)."""
     result = skill_manager.execute_skill(skill_name, inputs)
+
     if "error" in result:
+        log_activity(
+            db,
+            tenant_id=current_user.tenant_id,
+            event_type="action_failed",
+            description=f"Skill execution failed: {skill_name}",
+            source="skills",
+            event_metadata={"skill_name": skill_name, "inputs": inputs, "error": result["error"], "action": "skill_executed"},
+        )
         raise HTTPException(status_code=400, detail=result["error"])
+
+    log_activity(
+        db,
+        tenant_id=current_user.tenant_id,
+        event_type="action_completed",
+        description=f"Skill executed: {skill_name}",
+        source="skills",
+        event_metadata={"skill_name": skill_name, "inputs": inputs, "action": "skill_executed"},
+    )
     return result
 
 

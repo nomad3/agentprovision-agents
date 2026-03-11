@@ -1,7 +1,9 @@
 """SkillManager — scans the skills directory and loads file-based skill definitions."""
+import json
 import logging
 import os
 import re
+import subprocess
 from pathlib import Path
 from typing import List, Optional
 
@@ -118,7 +120,6 @@ class SkillManager:
         if self.get_skill_by_name(name):
             return {"error": f"Skill '{name}' already exists."}
 
-        # Slugify the name for the directory
         slug = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
         if not slug:
             return {"error": "Invalid skill name."}
@@ -127,14 +128,21 @@ class SkillManager:
         if skill_dir.exists():
             return {"error": f"Directory '{slug}' already exists."}
 
+        # Engine-specific script filename
+        script_filenames = {
+            "python": "script.py",
+            "shell": "script.sh",
+            "markdown": "prompt.md",
+        }
+        script_file = script_filenames.get(engine, "script.py")
+
         try:
             skill_dir.mkdir(parents=True, exist_ok=True)
 
-            # Build skill.md with YAML frontmatter
             frontmatter = {
                 "name": name,
                 "engine": engine,
-                "script_path": "script.py",
+                "script_path": script_file,
             }
             if inputs:
                 frontmatter["inputs"] = inputs
@@ -143,9 +151,12 @@ class SkillManager:
             md_content += f"## Description\n{description}\n"
 
             (skill_dir / "skill.md").write_text(md_content, encoding="utf-8")
-            (skill_dir / "script.py").write_text(script, encoding="utf-8")
+            (skill_dir / script_file).write_text(script, encoding="utf-8")
 
-            # Reload skills
+            # Make shell scripts executable
+            if engine == "shell":
+                os.chmod(skill_dir / script_file, 0o755)
+
             self.scan()
 
             created = self.get_skill_by_name(name)
@@ -158,8 +169,6 @@ class SkillManager:
 
     def execute_skill(self, name: str, inputs: dict) -> dict:
         """Execute a file-based skill by name with given inputs."""
-        import importlib.util
-
         skill = self.get_skill_by_name(name)
         if not skill:
             available = [s.name for s in self._skills]
@@ -170,18 +179,61 @@ class SkillManager:
             return {"error": f"Script not found: {script_path}"}
 
         try:
-            spec = importlib.util.spec_from_file_location("skill_script", script_path)
-            module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-
-            if not hasattr(module, "execute"):
-                return {"error": f"Skill script has no 'execute' function."}
-
-            result = module.execute(inputs)
-            return {"success": True, "skill": name, "result": result}
+            if skill.engine == "python":
+                return self._execute_python(name, script_path, inputs)
+            elif skill.engine == "shell":
+                return self._execute_shell(name, script_path, inputs)
+            elif skill.engine == "markdown":
+                return self._execute_markdown(name, script_path, inputs)
+            else:
+                return {"error": f"Unsupported engine: {skill.engine}"}
         except Exception as e:
             logger.exception("Skill execution failed: %s", e)
             return {"error": f"Skill execution failed: {str(e)}"}
+
+    def _execute_python(self, name: str, script_path: str, inputs: dict) -> dict:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("skill_script", script_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        if not hasattr(module, "execute"):
+            return {"error": "Skill script has no 'execute' function."}
+
+        result = module.execute(inputs)
+        return {"success": True, "skill": name, "result": result}
+
+    def _execute_shell(self, name: str, script_path: str, inputs: dict) -> dict:
+        env = os.environ.copy()
+        for k, v in inputs.items():
+            env[f"SKILL_INPUT_{k.upper()}"] = str(v)
+
+        proc = subprocess.run(
+            ["bash", script_path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+
+        if proc.returncode != 0:
+            return {"error": f"Shell script exited with code {proc.returncode}", "stderr": proc.stderr[:2000]}
+
+        # Try to parse output as JSON, otherwise return raw
+        try:
+            result = json.loads(proc.stdout)
+        except (json.JSONDecodeError, ValueError):
+            result = {"output": proc.stdout.strip()}
+
+        return {"success": True, "skill": name, "result": result}
+
+    def _execute_markdown(self, name: str, script_path: str, inputs: dict) -> dict:
+        content = Path(script_path).read_text(encoding="utf-8")
+        # Substitute {{input_name}} placeholders with actual values
+        for k, v in inputs.items():
+            content = content.replace(f"{{{{{k}}}}}", str(v))
+        return {"success": True, "skill": name, "result": {"prompt": content}}
 
 
 # Module-level singleton

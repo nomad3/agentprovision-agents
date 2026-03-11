@@ -38,11 +38,17 @@ const SkillsPage = () => {
   // Create modal state
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
+  const ENGINE_DEFAULTS = {
+    python: 'def execute(inputs):\n    # Your skill logic here\n    return {"result": "done"}',
+    shell: '#!/bin/bash\n# Inputs are available as SKILL_INPUT_<NAME> env vars\necho "Hello from skill"\n',
+    markdown: '# Prompt Template\n\nUse {{input_name}} for placeholders.\n\nInstructions for the agent go here.\n',
+  };
+
   const [newSkill, setNewSkill] = useState({
     name: '',
     description: '',
     engine: 'python',
-    script: 'def execute(inputs):\n    # Your skill logic here\n    return {"result": "done"}',
+    script: ENGINE_DEFAULTS.python,
     inputs: [],
   });
 
@@ -129,7 +135,7 @@ const SkillsPage = () => {
         name: '',
         description: '',
         engine: 'python',
-        script: 'def execute(inputs):\n    # Your skill logic here\n    return {"result": "done"}',
+        script: ENGINE_DEFAULTS.python,
         inputs: [],
       });
       await fetchSkills();
@@ -547,7 +553,10 @@ const SkillsPage = () => {
                   </Form.Label>
                   <Form.Select
                     value={newSkill.engine}
-                    onChange={(e) => setNewSkill({ ...newSkill, engine: e.target.value })}
+                    onChange={(e) => {
+                      const eng = e.target.value;
+                      setNewSkill({ ...newSkill, engine: eng, script: ENGINE_DEFAULTS[eng] || '' });
+                    }}
                     style={{
                       background: 'var(--surface-contrast, rgba(0,0,0,0.2))',
                       border: '1px solid var(--color-border)',
@@ -556,7 +565,8 @@ const SkillsPage = () => {
                     }}
                   >
                     <option value="python">Python</option>
-                    <option value="node">Node.js</option>
+                    <option value="shell">Shell</option>
+                    <option value="markdown">Markdown</option>
                   </Form.Select>
                 </Form.Group>
               </Col>
@@ -666,7 +676,7 @@ const SkillsPage = () => {
             {/* Script */}
             <Form.Group className="mb-3">
               <Form.Label style={{ fontSize: '0.85rem', color: 'var(--color-foreground)' }}>
-                {t('form.scriptContent')}
+                {newSkill.engine === 'python' ? 'Script (Python)' : newSkill.engine === 'shell' ? 'Script (Shell)' : 'Prompt (Markdown)'}
               </Form.Label>
               <Form.Control
                 as="textarea"
