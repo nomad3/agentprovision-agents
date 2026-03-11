@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
@@ -92,20 +93,51 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         activity.heartbeat("Creating feature branch...")
         _run(f"git checkout -b {branch_name}")
 
-        # 4. Build the prompt
-        prompt = task_input.task_description
+        # 4. Build the prompt with full project context
+        prompt_parts = []
         if task_input.context:
-            prompt = f"{task_input.context}\n\n{prompt}"
+            prompt_parts.append(task_input.context)
+        prompt_parts.append(task_input.task_description)
+        prompt = "\n\n".join(prompt_parts)
 
-        # 5. Run Claude Code (auth via ANTHROPIC_API_KEY env var)
+        # Write prompt to temp file (avoids shell escaping issues)
+        prompt_file = os.path.join(WORKSPACE, ".claude-task-prompt.md")
+        with open(prompt_file, "w") as f:
+            f.write(prompt)
+
+        # 5. Run Claude Code with project context
         activity.heartbeat("Running Claude Code...")
-        prompt_escaped = prompt.replace("'", "'\\''")
-        claude_cmd = (
-            f"claude -p '{prompt_escaped}' "
-            f"--output-format json "
-            f'--allowedTools "Edit,Write,Bash,Read,Glob,Grep"'
+        system_prompt = (
+            "You are an autonomous code agent working on the ServiceTsunami monorepo. "
+            "IMPORTANT: Read and follow the CLAUDE.md file in the project root — it contains "
+            "the full architecture, patterns, conventions, and development commands for this codebase. "
+            "Follow established patterns strictly: multi-tenant models with tenant_id, "
+            "services layer for business logic, FastAPI routes at /api/v1/, React pages with "
+            "Bootstrap 5, and Helm values for any Kubernetes changes. "
+            "Do NOT create documentation files, READMEs, or test scripts in the root folder. "
+            "Make minimal, focused changes — only what the task requires."
         )
-        claude_output = _run(claude_cmd, timeout=600, extra_env=claude_env)
+        claude_result = subprocess.run(
+            [
+                "claude", "-p", prompt,
+                "--output-format", "json",
+                "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
+                "--append-system-prompt", system_prompt,
+                "--dangerously-skip-permissions",
+            ],
+            cwd=WORKSPACE, capture_output=True, text=True, timeout=600,
+            env={**os.environ, **claude_env},
+        )
+        # Clean up prompt file
+        try:
+            os.remove(prompt_file)
+        except OSError:
+            pass
+        if claude_result.returncode != 0:
+            error_detail = claude_result.stderr or claude_result.stdout
+            logger.error("Claude Code failed: %s\nstdout: %s", claude_result.stderr, claude_result.stdout[:2000])
+            raise RuntimeError(f"Claude Code failed:\n{error_detail}")
+        claude_output = claude_result.stdout.strip()
 
         # Parse Claude output
         try:
