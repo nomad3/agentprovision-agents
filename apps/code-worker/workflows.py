@@ -57,6 +57,20 @@ def _run(cmd: str, cwd: str = WORKSPACE, timeout: int = 600, extra_env: dict | N
     return result.stdout.strip()
 
 
+def _extract_goal(task_description: str) -> str:
+    """Extract a clean one-line goal from a structured task brief."""
+    # Look for ## Goal section and grab the line after it
+    match = re.search(r'##\s*Goal\s*\n+(.+)', task_description)
+    if match:
+        return match.group(1).strip()
+    # Fallback: first non-header, non-empty line
+    for line in task_description.splitlines():
+        line = line.strip()
+        if line and not line.startswith('#'):
+            return line
+    return task_description[:70]
+
+
 def _fetch_claude_token(tenant_id: str) -> str:
     """Fetch the Claude Code session token from the API's internal endpoint."""
     url = f"{API_BASE_URL}/api/v1/oauth/internal/token/claude_code"  # integration_name=claude_code
@@ -77,10 +91,10 @@ def _fetch_claude_token(tenant_id: str) -> str:
 @activity.defn
 async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
     """Execute a code task using Claude Code CLI."""
-    branch_id = uuid.uuid4().hex[:8]
-    # Generate readable branch name: code/feat-add-user-auth-a1b2c3d4
-    slug = re.sub(r'[^a-z0-9]+', '-', task_input.task_description[:50].lower()).strip('-')[:40]
-    branch_name = f"code/feat-{slug}-{branch_id}"
+    # Generate readable branch name from the goal line
+    goal = _extract_goal(task_input.task_description)
+    slug = re.sub(r'[^a-z0-9]+', '-', goal[:60].lower()).strip('-')[:50]
+    branch_name = f"code/{slug}"
 
     try:
         # 1. Fetch tenant's Claude Code session token
@@ -163,7 +177,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         # 8. Stage, commit and push
         activity.heartbeat("Pushing changes...")
         _run("git add -A")
-        commit_msg = task_input.task_description[:100].replace('"', '\\"')
+        commit_msg = _extract_goal(task_input.task_description)[:100].replace('"', '\\"')
         _run(f'git commit -m "feat: {commit_msg}"')
         _run(f'git push origin {branch_name}')
 
@@ -173,7 +187,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
 
         # 10. Create PR
         activity.heartbeat("Creating PR...")
-        pr_title = task_input.task_description[:70]
+        pr_title = _extract_goal(task_input.task_description)[:70]
 
         # Gather commit log and claude summary for traceability
         commit_log = _run(f"git log main..{branch_name} --pretty=format:'- %h %s' --reverse")
