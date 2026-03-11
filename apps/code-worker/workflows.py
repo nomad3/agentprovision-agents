@@ -95,7 +95,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
     # Generate readable branch name from the goal line + timestamp
     goal = _extract_goal(task_input.task_description)
     slug = re.sub(r'[^a-z0-9]+', '-', goal[:60].lower()).strip('-')[:40]
-    ts = time.strftime('%m%d-%H%M')
+    ts = time.strftime('%m-%d-%H%M')
     branch_name = f"code/{slug}-{ts}"
 
     try:
