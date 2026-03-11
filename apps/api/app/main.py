@@ -7,6 +7,10 @@ from app.db.init_db import init_db
 
 init_db(db=SessionLocal())
 
+# Load file-based skills from the skills/ directory
+from app.services.skill_manager import skill_manager
+skill_manager.load()
+
 app = FastAPI()
 
 

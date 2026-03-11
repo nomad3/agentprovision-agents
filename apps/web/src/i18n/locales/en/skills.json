@@ -1,0 +1,8 @@
+{
+  "title": "Skills Marketplace",
+  "subtitle": "Modular, file-based capabilities available to your agents.",
+  "inputs": "Inputs",
+  "required": "required",
+  "noSkills": "No skills found. Add skill definitions to the skills/ directory.",
+  "errorLoading": "Failed to load skills. Please try again."
+}

@@ -9,8 +9,15 @@ from app.models.user import User
 from app.schemas.skill import SkillInDB, SkillCreate, SkillUpdate
 from app.schemas.skill_execution import SkillExecutionInDB, SkillExecuteRequest
 from app.services import skills as service
+from app.services.skill_manager import skill_manager, FileSkill
 
 router = APIRouter()
+
+
+@router.get("/catalog", response_model=List[FileSkill])
+def list_catalog_skills():
+    """Return all file-based skills loaded from the skills/ directory."""
+    return skill_manager.list_skills()
 
 
 @router.get("/", response_model=List[SkillInDB])

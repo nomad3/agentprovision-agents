@@ -40,6 +40,7 @@
     "integrations": "Integrations",
     "organizations": "Organizations",
     "settings": "Settings",
+    "skills": "Skills",
     "aiOperations": "AI OPERATIONS",
     "data": "DATA",
     "admin": "ADMIN",
@@ -52,6 +53,7 @@
     "workflows": "Workflow designs and execution audit",
     "memory": "What Luna knows and remembers",
     "integrations": "Connectors, data sources & datasets",
+    "skills": "Browse modular agent skills",
     "organizations": "Manage organizations & business units",
     "settings": "Platform settings"
   },

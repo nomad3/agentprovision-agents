@@ -1,0 +1,8 @@
+{
+  "title": "Mercado de Skills",
+  "subtitle": "Capacidades modulares basadas en archivos disponibles para tus agentes.",
+  "inputs": "Entradas",
+  "required": "requerido",
+  "noSkills": "No se encontraron skills. Agrega definiciones en el directorio skills/.",
+  "errorLoading": "Error al cargar las skills. Por favor inténtalo de nuevo."
+}
