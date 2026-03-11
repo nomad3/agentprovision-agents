@@ -49,8 +49,9 @@ def _run(cmd: str, cwd: str = WORKSPACE, timeout: int = 600, extra_env: dict | N
         cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env
     )
     if result.returncode != 0:
-        logger.error("Command failed: %s\nstderr: %s", cmd, result.stderr)
-        raise RuntimeError(f"Command failed: {cmd}\n{result.stderr}")
+        error_detail = result.stderr or result.stdout
+        logger.error("Command failed: %s\nstderr: %s\nstdout: %s", cmd, result.stderr, result.stdout[:2000])
+        raise RuntimeError(f"Command failed: {cmd}\n{error_detail}")
     return result.stdout.strip()
 
 
@@ -81,7 +82,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         # 1. Fetch tenant's Claude Code session token
         activity.heartbeat("Fetching Claude token...")
         token = _fetch_claude_token(task_input.tenant_id)
-        claude_env = {"ANTHROPIC_API_KEY": token}
+        claude_env = {"CLAUDE_CODE_OAUTH_TOKEN": token}
 
         # 2. Pull latest code
         activity.heartbeat("Pulling latest code...")
