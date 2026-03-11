@@ -105,6 +105,40 @@ class SkillManager:
         """Return all loaded skill definitions."""
         return list(self._skills)
 
+    def get_skill_by_name(self, name: str) -> Optional[FileSkill]:
+        """Find a skill by name (case-insensitive)."""
+        for skill in self._skills:
+            if skill.name.lower() == name.lower():
+                return skill
+        return None
+
+    def execute_skill(self, name: str, inputs: dict) -> dict:
+        """Execute a file-based skill by name with given inputs."""
+        import importlib.util
+
+        skill = self.get_skill_by_name(name)
+        if not skill:
+            available = [s.name for s in self._skills]
+            return {"error": f"Skill '{name}' not found. Available: {available}"}
+
+        script_path = os.path.join(skill.skill_dir, skill.script_path)
+        if not os.path.exists(script_path):
+            return {"error": f"Script not found: {script_path}"}
+
+        try:
+            spec = importlib.util.spec_from_file_location("skill_script", script_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            if not hasattr(module, "execute"):
+                return {"error": f"Skill script has no 'execute' function."}
+
+            result = module.execute(inputs)
+            return {"success": True, "skill": name, "result": result}
+        except Exception as e:
+            logger.exception("Skill execution failed: %s", e)
+            return {"error": f"Skill execution failed: {str(e)}"}
+
 
 # Module-level singleton
 skill_manager = SkillManager.get_instance()

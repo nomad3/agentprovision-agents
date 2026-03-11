@@ -54,6 +54,7 @@ from tools.github_tools import (
     read_github_file,
     search_github_code,
 )
+from tools.skill_tools import list_skills, run_skill
 from tools.competitor_tools import (
     add_competitor,
     remove_competitor,
@@ -233,6 +234,14 @@ If a GitHub tool returns an error, tell the user and do NOT retry.
 Always use the full repo name format "owner/repo-name" (e.g. "nomad3/servicetsunami-agents").
 If the user asks about "my repos" or "my GitHub", start with list_github_repos.
 
+== FILE-BASED SKILLS ==
+
+- **list_skills**: See all available custom skills (SEO scraping, etc.)
+- **run_skill(skill_name, inputs)**: Execute a skill by name. Pass inputs as a JSON string.
+  Example: run_skill("Scrape Competitor SEO", '{"url": "https://example.com"}')
+
+When the user asks to scrape, analyze SEO, or run a custom skill, use list_skills first to discover what's available, then run_skill to execute it.
+
 == COMPETITOR MONITORING ==
 
 - Competitor Monitoring: add_competitor, remove_competitor, get_competitor_report, list_competitors
@@ -301,6 +310,9 @@ When the user mentions competitors, rival companies, or competitive intelligence
         start_competitor_monitor,
         stop_competitor_monitor,
         check_competitor_monitor_status,
+        # File-based skills
+        list_skills,
+        run_skill,
         # System
         execute_shell,
     ],

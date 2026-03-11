@@ -1,10 +1,11 @@
 """API routes for skills management."""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Dict, List, Optional
 import uuid
 
 from app.api.deps import get_db, get_current_user
+from app.core.config import settings
 from app.models.user import User
 from app.schemas.skill import SkillInDB, SkillCreate, SkillUpdate
 from app.schemas.skill_execution import SkillExecutionInDB, SkillExecuteRequest
@@ -15,12 +16,40 @@ from app.services.skill_manager import skill_manager
 router = APIRouter()
 
 
+def _verify_internal_key(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+):
+    if x_internal_key not in (getattr(settings, 'API_INTERNAL_KEY', ''), getattr(settings, 'MCP_API_KEY', '')):
+        raise HTTPException(status_code=401, detail="Invalid internal key")
+
+
 @router.get("/library", response_model=List[FileSkill])
 def list_file_skills(
     current_user: User = Depends(get_current_user),
 ):
     """List all file-based skills loaded from the skills directory."""
     return skill_manager.list_skills()
+
+
+@router.get("/library/internal", response_model=List[FileSkill])
+def list_file_skills_internal(
+    _auth: None = Depends(_verify_internal_key),
+):
+    """List file-based skills (internal — for ADK server)."""
+    return skill_manager.list_skills()
+
+
+@router.post("/library/internal/execute")
+def execute_file_skill_internal(
+    skill_name: str = Body(...),
+    inputs: Dict = Body(default={}),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """Execute a file-based skill by name (internal — for ADK server)."""
+    result = skill_manager.execute_skill(skill_name, inputs)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
 
 @router.get("/", response_model=List[SkillInDB])
