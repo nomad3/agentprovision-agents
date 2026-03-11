@@ -1,6 +1,7 @@
 """SkillManager — scans the skills directory and loads file-based skill definitions."""
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -111,6 +112,49 @@ class SkillManager:
             if skill.name.lower() == name.lower():
                 return skill
         return None
+
+    def create_skill(self, name: str, description: str, engine: str, script: str, inputs: list) -> dict:
+        """Create a new file-based skill on disk and reload."""
+        if self.get_skill_by_name(name):
+            return {"error": f"Skill '{name}' already exists."}
+
+        # Slugify the name for the directory
+        slug = re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
+        if not slug:
+            return {"error": "Invalid skill name."}
+
+        skill_dir = SKILLS_DIR / slug
+        if skill_dir.exists():
+            return {"error": f"Directory '{slug}' already exists."}
+
+        try:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+
+            # Build skill.md with YAML frontmatter
+            frontmatter = {
+                "name": name,
+                "engine": engine,
+                "script_path": "script.py",
+            }
+            if inputs:
+                frontmatter["inputs"] = inputs
+
+            md_content = "---\n" + yaml.dump(frontmatter, default_flow_style=False) + "---\n\n"
+            md_content += f"## Description\n{description}\n"
+
+            (skill_dir / "skill.md").write_text(md_content, encoding="utf-8")
+            (skill_dir / "script.py").write_text(script, encoding="utf-8")
+
+            # Reload skills
+            self.scan()
+
+            created = self.get_skill_by_name(name)
+            if created:
+                return {"skill": created}
+            return {"error": "Skill created but failed to load — check format."}
+        except Exception as e:
+            logger.exception("Failed to create skill: %s", e)
+            return {"error": f"Failed to create skill: {str(e)}"}
 
     def execute_skill(self, name: str, inputs: dict) -> dict:
         """Execute a file-based skill by name with given inputs."""

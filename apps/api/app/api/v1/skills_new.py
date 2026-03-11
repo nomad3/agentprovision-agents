@@ -1,5 +1,7 @@
 """API routes for skills management."""
+import re
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Dict, List, Optional
 import uuid
@@ -46,6 +48,52 @@ def execute_file_skill_internal(
     _auth: None = Depends(_verify_internal_key),
 ):
     """Execute a file-based skill by name (internal — for ADK server)."""
+    result = skill_manager.execute_skill(skill_name, inputs)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+class FileSkillCreateInput(BaseModel):
+    name: str
+    type: str = "string"
+    description: str = ""
+    required: bool = False
+
+
+class FileSkillCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    engine: str = "python"
+    script: str = 'def execute(inputs):\n    return {"result": "done"}'
+    inputs: List[FileSkillCreateInput] = []
+
+
+@router.post("/library/create", response_model=FileSkill, status_code=201)
+def create_file_skill(
+    payload: FileSkillCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new file-based skill from the UI."""
+    result = skill_manager.create_skill(
+        name=payload.name,
+        description=payload.description,
+        engine=payload.engine,
+        script=payload.script,
+        inputs=[inp.dict() for inp in payload.inputs],
+    )
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result["skill"]
+
+
+@router.post("/library/execute")
+def execute_file_skill(
+    skill_name: str = Body(...),
+    inputs: Dict = Body(default={}),
+    current_user: User = Depends(get_current_user),
+):
+    """Execute a file-based skill by name (user-facing)."""
     result = skill_manager.execute_skill(skill_name, inputs)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])

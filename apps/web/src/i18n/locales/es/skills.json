@@ -1,14 +1,51 @@
 {
-  "title": "Biblioteca de Skills",
-  "subtitle": "Explora los skills disponibles que los agentes pueden usar para realizar tareas",
+  "title": "Marketplace de Skills",
+  "subtitle": "Descubre, crea y ejecuta skills reutilizables que los agentes pueden usar",
   "loading": "Cargando skills...",
-  "noSkills": "No se encontraron skills",
-  "noSkillsDesc": "No hay skills disponibles en la biblioteca.",
+  "noSkills": "Sin skills aún",
+  "noSkillsDesc": "Crea tu primer skill o pídele a Luna que construya uno.",
   "engine": "Motor",
   "inputs": "Entradas",
   "required": "requerido",
   "optional": "opcional",
+  "run": "Ejecutar",
+  "running": "Ejecutando...",
+  "createSkill": "Crear Skill",
+  "totalSkills": "skills disponibles",
+  "tryIt": "Probarlo",
+  "result": "Resultado",
+  "close": "Cerrar",
+  "cancel": "Cancelar",
+  "create": "Crear",
+  "creating": "Creando...",
+  "viewSource": "Ver Fuente",
+  "skillCreated": "¡Skill creado exitosamente!",
+  "form": {
+    "name": "Nombre del Skill",
+    "namePlaceholder": "ej. scrape_pricing_page",
+    "engine": "Motor",
+    "description": "Descripción",
+    "descriptionPlaceholder": "¿Qué hace este skill?",
+    "scriptContent": "Script (Python)",
+    "scriptPlaceholder": "def execute(inputs):\n    # Tu lógica aquí\n    return {\"result\": \"listo\"}",
+    "inputName": "Nombre de Entrada",
+    "inputType": "Tipo",
+    "inputDescription": "Descripción",
+    "inputRequired": "Requerido",
+    "addInput": "Agregar Entrada",
+    "removeInput": "Eliminar",
+    "inputsSection": "Entradas del Skill"
+  },
+  "execute": {
+    "title": "Ejecutar Skill",
+    "inputValue": "Valor",
+    "submit": "Ejecutar",
+    "success": "Skill ejecutado exitosamente",
+    "error": "La ejecución falló"
+  },
   "errors": {
-    "load": "Error al cargar los skills. Por favor, intenta de nuevo."
+    "load": "Error al cargar los skills. Intenta de nuevo.",
+    "execute": "Error al ejecutar el skill.",
+    "create": "Error al crear el skill."
   }
 }

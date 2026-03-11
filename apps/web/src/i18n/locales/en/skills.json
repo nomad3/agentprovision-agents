@@ -1,14 +1,51 @@
 {
-  "title": "Skills Library",
-  "subtitle": "Browse available skills that agents can use to perform tasks",
+  "title": "Skills Marketplace",
+  "subtitle": "Discover, create, and run reusable skills that agents can use",
   "loading": "Loading skills...",
-  "noSkills": "No skills found",
-  "noSkillsDesc": "No skills are currently available in the library.",
+  "noSkills": "No skills yet",
+  "noSkillsDesc": "Create your first skill or ask Luna to build one for you.",
   "engine": "Engine",
   "inputs": "Inputs",
   "required": "required",
   "optional": "optional",
+  "run": "Run",
+  "running": "Running...",
+  "createSkill": "Create Skill",
+  "totalSkills": "skills available",
+  "tryIt": "Try it",
+  "result": "Result",
+  "close": "Close",
+  "cancel": "Cancel",
+  "create": "Create",
+  "creating": "Creating...",
+  "viewSource": "View Source",
+  "skillCreated": "Skill created successfully!",
+  "form": {
+    "name": "Skill Name",
+    "namePlaceholder": "e.g. scrape_pricing_page",
+    "engine": "Engine",
+    "description": "Description",
+    "descriptionPlaceholder": "What does this skill do?",
+    "scriptContent": "Script (Python)",
+    "scriptPlaceholder": "def execute(inputs):\n    # Your skill logic here\n    return {\"result\": \"done\"}",
+    "inputName": "Input Name",
+    "inputType": "Type",
+    "inputDescription": "Description",
+    "inputRequired": "Required",
+    "addInput": "Add Input",
+    "removeInput": "Remove",
+    "inputsSection": "Skill Inputs"
+  },
+  "execute": {
+    "title": "Run Skill",
+    "inputValue": "Value",
+    "submit": "Execute",
+    "success": "Skill executed successfully",
+    "error": "Execution failed"
+  },
   "errors": {
-    "load": "Failed to load skills. Please try again."
+    "load": "Failed to load skills. Please try again.",
+    "execute": "Failed to execute skill.",
+    "create": "Failed to create skill."
   }
 }

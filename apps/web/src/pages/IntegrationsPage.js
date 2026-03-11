@@ -19,7 +19,7 @@ import {
   FaCheckCircle,
   FaCloud,
   FaCloudUploadAlt,
-  FaCog,
+
   FaDatabase,
   FaEdit,
   FaExclamationTriangle,
@@ -43,7 +43,7 @@ import {
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import IntegrationsPanel from '../components/IntegrationsPanel';
-import SkillsManagementPanel from '../components/SkillsManagementPanel';
+
 import WhatsAppChannelCard from '../components/WhatsAppChannelCard';
 import SyncStatusBadge from '../components/SyncStatusBadge';
 import connectorService from '../services/connector';
@@ -1023,9 +1023,6 @@ const IntegrationsPage = () => {
           <Nav.Item>
             <Nav.Link eventKey="ai-models"><FaMicrochip className="me-2" />{t('tabs.aiModels')}</Nav.Link>
           </Nav.Item>
-          <Nav.Item>
-            <Nav.Link eventKey="skills"><FaCog className="me-2" />{t('tabs.skills')}</Nav.Link>
-          </Nav.Item>
         </Nav>
 
         {/* Tab Content */}
@@ -1101,7 +1098,6 @@ const IntegrationsPage = () => {
             )}
           </div>
         )}
-        {activeTab === 'skills' && <SkillsManagementPanel />}
 
         {/* ── Connector Modal ── */}
         <Modal show={showConnectorModal} onHide={() => setShowConnectorModal(false)} size="lg">
