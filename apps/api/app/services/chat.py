@@ -803,6 +803,18 @@ def _bridge_chat_to_workflow(
             created_at=now,
         )
         db.add(trace)
+
+        try:
+            _embed(
+                db,
+                tenant_id=session.tenant_id,
+                content_type="agent_task",
+                content_id=str(task.id),
+                text_content=f"Task: {objective} | session:{session.id}",
+            )
+        except Exception:
+            logger.debug("Task embedding skipped", exc_info=True)
+
         db.commit()
 
         return task.id, agent_id
