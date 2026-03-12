@@ -74,6 +74,13 @@ from app.workflows.prospecting_pipeline import (
     prospect_notify,
 )
 from app.workflows.activities.skill_activities import execute_skill
+from app.workflows.activities.rl_policy_update import (
+    collect_tenant_experiences,
+    update_tenant_policy,
+    anonymize_and_aggregate_global,
+    archive_old_experiences,
+)
+from app.workflows.rl_policy_update_workflow import RLPolicyUpdateWorkflow
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -115,6 +122,7 @@ async def run_orchestration_worker():
             InboxMonitorWorkflow,
             CompetitorMonitorWorkflow,
             ProspectingPipelineWorkflow,
+            RLPolicyUpdateWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -158,6 +166,10 @@ async def run_orchestration_worker():
             prospect_outreach,
             prospect_notify,
             execute_skill,
+            collect_tenant_experiences,
+            update_tenant_policy,
+            anonymize_and_aggregate_global,
+            archive_old_experiences,
         ],
     )
 
