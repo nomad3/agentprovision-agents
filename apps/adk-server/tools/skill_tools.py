@@ -67,3 +67,62 @@ async def run_skill(skill_name: str, inputs: str, tenant_id: str = "auto") -> di
         if resp.status_code != 200:
             return {"error": f"Skill execution failed: HTTP {resp.status_code}", "detail": resp.text[:500]}
         return resp.json()
+
+
+async def match_skills_to_context(user_message: str, tenant_id: str = "auto") -> dict:
+    """Find skills that semantically match a user's message.
+    Use this to check if there's a relevant skill before responding.
+    Returns matched skills with similarity scores.
+
+    Args:
+        user_message: The user's message to match against skill descriptions.
+        tenant_id: Tenant ID (auto-resolved).
+    """
+    try:
+        params = {"q": user_message, "limit": 3}
+        if tenant_id and tenant_id != "auto":
+            params["tenant_id"] = tenant_id
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{API_BASE}/api/v1/skills/library/match",
+                params=params,
+                headers={"X-Internal-Key": MCP_API_KEY},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return {"matches": [], "error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        logger.warning("Skill match failed: %s", e)
+        return {"matches": []}
+
+
+async def recall_memory(
+    query: str, tenant_id: str = "auto", types: str = "", limit: int = 10
+) -> dict:
+    """Semantic search across all memory — entities, activities, past conversations.
+    Use this to recall relevant context about the user, their business, or past interactions.
+
+    Args:
+        query: What to search for in memory.
+        tenant_id: Tenant ID (auto-resolved).
+        types: Comma-separated content types to filter (entity, memory_activity, skill, chat_message). Empty = all.
+        limit: Max results to return.
+    """
+    try:
+        params: dict = {"q": query, "limit": limit}
+        if types:
+            params["types"] = types
+        if tenant_id and tenant_id != "auto":
+            params["tenant_id"] = tenant_id
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{API_BASE}/api/v1/memories/search/internal",
+                params=params,
+                headers={"X-Internal-Key": MCP_API_KEY},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return {"results": [], "error": f"HTTP {resp.status_code}"}
+    except Exception as e:
+        logger.warning("Memory recall failed: %s", e)
+        return {"results": []}

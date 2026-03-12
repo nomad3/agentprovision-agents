@@ -54,7 +54,7 @@ from tools.github_tools import (
     read_github_file,
     search_github_code,
 )
-from tools.skill_tools import list_skills, run_skill
+from tools.skill_tools import list_skills, run_skill, match_skills_to_context, recall_memory
 from tools.competitor_tools import (
     add_competitor,
     remove_competitor,
@@ -234,6 +234,13 @@ If a GitHub tool returns an error, tell the user and do NOT retry.
 Always use the full repo name format "owner/repo-name" (e.g. "nomad3/servicetsunami-agents").
 If the user asks about "my repos" or "my GitHub", start with list_github_repos.
 
+== CONTEXT ASSEMBLY (use proactively!) ==
+
+- **recall_memory(query)**: Semantic search across all memory — entities, activities, past conversations, skills. Use this BEFORE responding to check if you already know something relevant about the topic, person, or company being discussed. This is your long-term memory — use it often.
+- **match_skills_to_context(user_message)**: Find skills that semantically match what the user is asking. Use this when the user's request might be handled by an automated skill (scraping, analysis, data processing). If a good match is found, offer to run it.
+
+IMPORTANT: Use recall_memory proactively at the start of conversations or when a new topic comes up. It helps you connect dots and remember past context. Use match_skills_to_context when the user asks you to DO something that might have a matching skill.
+
 == FILE-BASED SKILLS ==
 
 - **list_skills**: See all available custom skills (SEO scraping, etc.)
@@ -310,6 +317,9 @@ When the user mentions competitors, rival companies, or competitive intelligence
         start_competitor_monitor,
         stop_competitor_monitor,
         check_competitor_monitor_status,
+        # Context assembly
+        match_skills_to_context,
+        recall_memory,
         # File-based skills
         list_skills,
         run_skill,
