@@ -27,6 +27,7 @@ class Notification(Base):
     event_metadata = Column("metadata", JSON, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     tenant = relationship("Tenant")
 

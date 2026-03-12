@@ -18,6 +18,7 @@ class NotificationInDB(BaseModel):
     reference_type: Optional[str] = None
     event_metadata: Optional[Dict[str, Any]] = None
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

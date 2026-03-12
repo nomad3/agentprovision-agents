@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Integer, Float, Boolean, DateTime, ForeignKey
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -27,6 +27,19 @@ class TenantFeatures(Base):
     ai_insights_enabled = Column(Boolean, default=True)
     ai_recommendations_enabled = Column(Boolean, default=True)
     ai_anomaly_detection = Column(Boolean, default=True)
+
+    # Reinforcement Learning Features
+    rl_enabled = Column(Boolean, default=False)
+    rl_settings = Column(JSONB, nullable=False, default=lambda: {
+        "exploration_rate": 0.1,
+        "opt_in_global_learning": True,
+        "use_global_baseline": True,
+        "min_tenant_experiences": 50,
+        "blend_alpha_growth": 0.01,
+        "reward_weights": {"implicit": 0.3, "explicit": 0.5, "admin": 0.2},
+        "review_schedule": "weekly",
+        "per_decision_overrides": {}
+    })
 
     # Usage Limits
     max_agents = Column(Integer, default=10)

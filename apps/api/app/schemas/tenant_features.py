@@ -1,6 +1,6 @@
 """Pydantic schemas for TenantFeatures."""
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict, Any
 from datetime import datetime
 import uuid
 
@@ -25,6 +25,9 @@ class TenantFeaturesBase(BaseModel):
     # UI
     hide_servicetsunami_branding: bool = False
     plan_type: str = "starter"
+    # Reinforcement Learning
+    rl_enabled: bool = False
+    rl_settings: Optional[Dict[str, Any]] = None
 
 
 class TenantFeaturesCreate(TenantFeaturesBase):
@@ -47,6 +50,8 @@ class TenantFeaturesUpdate(BaseModel):
     storage_limit_gb: Optional[float] = None
     hide_servicetsunami_branding: Optional[bool] = None
     plan_type: Optional[str] = None
+    rl_enabled: Optional[bool] = None
+    rl_settings: Optional[Dict[str, Any]] = None
 
 
 class TenantFeatures(TenantFeaturesBase):
