@@ -116,12 +116,14 @@ async def search_emails(
                 continue
             md = detail.json()
             headers = {h["name"]: h["value"] for h in md.get("payload", {}).get("headers", [])}
+            labels = md.get("labelIds", [])
             emails.append({
                 "id": msg["id"],
                 "subject": headers.get("Subject", "(no subject)"),
                 "from": headers.get("From", ""),
                 "date": headers.get("Date", ""),
                 "snippet": md.get("snippet", ""),
+                "is_read": "UNREAD" not in labels,
             })
 
         return {"status": "success", "emails": emails, "total": data.get("resultSizeEstimate", len(emails))}

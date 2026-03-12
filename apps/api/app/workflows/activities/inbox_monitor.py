@@ -138,12 +138,12 @@ async def fetch_new_emails(tenant_id: str, last_history_id: Optional[str] = None
                     logger.warning("Gmail history fetch failed: %s", e)
                     last_history_id = None
 
-            # Fallback: list recent messages
+            # Fallback: list recent messages (all, not just unread — user reads on multiple devices)
             if not last_history_id and not message_ids:
                 resp = await client.get(
                     "https://gmail.googleapis.com/gmail/v1/users/me/messages",
                     headers=auth,
-                    params={"maxResults": 15, "q": "newer_than:1d"},
+                    params={"maxResults": 30, "q": "newer_than:2d"},
                 )
                 if resp.status_code != 200:
                     return {"emails": [], "new_history_id": None, "count": 0, "error": f"api_{resp.status_code}"}
@@ -161,7 +161,7 @@ async def fetch_new_emails(tenant_id: str, last_history_id: Optional[str] = None
 
             # Fetch message details
             emails = []
-            for msg_id in message_ids[:15]:  # Cap at 15 per cycle
+            for msg_id in message_ids[:30]:  # Cap at 30 per cycle
                 detail = await client.get(
                     f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_id}",
                     headers=auth,
@@ -173,6 +173,7 @@ async def fetch_new_emails(tenant_id: str, last_history_id: Optional[str] = None
                 headers_list = md.get("payload", {}).get("headers", [])
                 hdrs = {h["name"]: h["value"] for h in headers_list}
                 body = _extract_body(md.get("payload", {}))
+                labels = md.get("labelIds", [])
                 emails.append({
                     "id": msg_id,
                     "subject": hdrs.get("Subject", "(no subject)"),
@@ -180,7 +181,8 @@ async def fetch_new_emails(tenant_id: str, last_history_id: Optional[str] = None
                     "date": hdrs.get("Date", ""),
                     "snippet": md.get("snippet", ""),
                     "body": body[:3000],
-                    "labels": md.get("labelIds", []),
+                    "labels": labels,
+                    "is_read": "UNREAD" not in labels,
                 })
 
             return {"emails": emails, "new_history_id": new_history_id, "count": len(emails)}
@@ -278,7 +280,7 @@ async def triage_items(
     # ── Build LLM triage prompt ──
     items_text = ""
     if emails:
-        items_text += "=== NEW EMAILS ===\n"
+        items_text += "=== EMAILS ===\n"
         for e in emails:
             sender = e.get("from", "unknown")
             sender_lower = sender.split("<")[0].strip().lower()
@@ -287,8 +289,9 @@ async def triage_items(
                 if name in sender_lower or sender_lower in name:
                     known_tag = f" [KNOWN CONTACT: {ent.get('category', 'contact')}, {ent.get('description', '')}]"
                     break
+            read_tag = " [ALREADY READ]" if e.get("is_read") else " [UNREAD]"
             items_text += (
-                f"\nFrom: {sender}{known_tag}\n"
+                f"\nFrom: {sender}{known_tag}{read_tag}\n"
                 f"Subject: {e['subject']}\n"
                 f"Date: {e['date']}\n"
                 f"Snippet: {e['snippet']}\n"
@@ -306,6 +309,8 @@ async def triage_items(
             )
 
     system_prompt = """You are Luna, an AI assistant that triages emails and calendar events.
+
+IMPORTANT: The user reads emails on multiple devices (phone, laptop). Items tagged [ALREADY READ] have been opened by the user elsewhere but may STILL need action or a notification. Do NOT skip an email just because it was read. Judge priority by CONTENT, not read status.
 
 Classify each item as:
 - "high": Requires immediate attention. Examples: job offers, urgent deadlines within 24h, time-sensitive business decisions, security alerts, messages from known contacts or VIPs, financial transactions requiring action, important meeting changes.
