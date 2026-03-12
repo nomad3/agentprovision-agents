@@ -89,6 +89,9 @@ externalSecret:
     - secretKey: MCP_API_KEY
       remoteRef:
         key: servicetsunami-mcp-api-key
+    - secretKey: GOOGLE_API_KEY
+      remoteRef:
+        key: servicetsunami-google-api-key
     - secretKey: API_INTERNAL_KEY
       remoteRef:
         key: servicetsunami-api-internal-key

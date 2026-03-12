@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     DATABRICKS_RETRY_ATTEMPTS: int = 3
     DATABRICKS_RETRY_INTERVAL: int = 300  # seconds (5 minutes)
 
+    # Google AI (Gemini Embeddings)
+    GOOGLE_API_KEY: str = ""
+
     # LLM Configuration
     ANTHROPIC_API_KEY: str | None = None
     LLM_MODEL: str = "claude-3-haiku-20240307"
