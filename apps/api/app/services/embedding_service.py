@@ -140,7 +140,6 @@ def search_similar(
     # Build optional content_type filter
     type_clause = ""
     params: dict = {
-        "vector": vector_literal,
         "tenant_id": str(tenant_id),
         "lim": limit,
     }
@@ -148,6 +147,8 @@ def search_similar(
         type_clause = "AND content_type = ANY(:ctypes)"
         params["ctypes"] = content_types
 
+    # Inline the vector literal to avoid SQLAlchemy confusing ':vector::vector'
+    # (colon-based named param vs PostgreSQL type cast).
     sql = text(f"""
         SELECT
             id,
@@ -155,11 +156,11 @@ def search_similar(
             content_type,
             content_id,
             text_content,
-            1 - (embedding <=> :vector::vector) AS similarity
+            1 - (embedding <=> CAST('{vector_literal}' AS vector)) AS similarity
         FROM embeddings
-        WHERE (tenant_id = :tenant_id::uuid OR tenant_id IS NULL)
+        WHERE (tenant_id = CAST(:tenant_id AS uuid) OR tenant_id IS NULL)
           {type_clause}
-        ORDER BY embedding <=> :vector::vector
+        ORDER BY embedding <=> CAST('{vector_literal}' AS vector)
         LIMIT :lim
     """)
 
