@@ -1,5 +1,8 @@
-# Google ADK (includes google-cloud-aiplatform and vertexai as dependencies)
+# Google ADK
 google-adk>=1.21.0
+
+# Gemini Embedding 2 via google-genai SDK
+google-genai>=1.0.0
 
 # Pydantic for schemas
 pydantic>=2.0.0

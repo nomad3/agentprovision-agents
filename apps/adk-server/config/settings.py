@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     # Google AI - Using Google AI Studio with API key
     google_genai_use_vertexai: bool = False
+    google_api_key: str = ""
     adk_model: str = "gemini-2.5-pro"
 
     # Database (shared with FastAPI)
@@ -43,14 +44,8 @@ class Settings(BaseSettings):
     hca_api_url: str = "http://hca-api:3000"
     hca_service_key: str = ""
 
-    # Vertex AI Vector Search
-    vertex_project: str = "ai-agency-479516"
-    vertex_location: str = "us-central1"
-    vector_index_id: str = ""
-    vector_endpoint_id: str = ""
-
-    # Embedding model
-    embedding_model: str = "text-embedding-005"
+    # Embedding model (Gemini Embedding 2)
+    embedding_model: str = "gemini-embedding-2-preview"
     embedding_dimensions: int = 768
 
     class Config:
