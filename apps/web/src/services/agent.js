@@ -12,6 +12,10 @@ const agentService = {
   delete: (id) => api.delete(`/agents/${id}`),
 
   deploy: (id, deploymentData) => api.post(`/agents/${id}/deploy`, deploymentData),
+
+  getTasks: (params = {}) => api.get('/tasks', { params }),
+
+  getGroups: () => api.get('/agent_groups/'),
 };
 
 export default agentService;
