@@ -735,34 +735,33 @@ All endpoints under `/api/v1/rl`, require JWT authentication, tenant-scoped:
 
 ### Migration & Rollout Strategy
 
-```mermaid
-graph LR
-    subgraph Phase1["Phase 1: Dual-Write"]
-        P1A[Deploy tables] --> P1B[rl_enabled = false]
-        P1B --> P1C[evaluate_task writes<br/>old +0.02 AND logs experience]
-        P1C --> P1D[Experience data<br/>accumulates silently]
-    end
-
-    subgraph Phase2["Phase 2: Shadow Mode"]
-        P2A[Enable for test tenants] --> P2B[Policy engine runs<br/>but doesn't decide]
-        P2B --> P2C[Compare RL vs heuristic<br/>recommendations]
-    end
-
-    subgraph Phase3["Phase 3: Active Mode"]
-        P3A[Policy engine<br/>makes decisions] --> P3B[Stop old proficiency<br/>increments]
-        P3B --> P3C[Gradually enable<br/>per tenant]
-    end
-
-    Phase1 -->|validate data flow| Phase2
-    Phase2 -->|validate accuracy| Phase3
-
-    ROLLBACK[Rollback:<br/>rl_enabled = false<br/>reverts to heuristics]
-    Phase3 -.->|any time| ROLLBACK
-
-    style Phase1 fill:#1a365d,stroke:#63b3ed
-    style Phase2 fill:#744210,stroke:#ecc94b
-    style Phase3 fill:#22543d,stroke:#48bb78
-    style ROLLBACK fill:#742a2a,stroke:#fc8181,color:#fff
+```
+ PHASE 1: DUAL-WRITE               PHASE 2: SHADOW MODE              PHASE 3: ACTIVE MODE
+ (rl_enabled = false)               (rl_enabled = true)               (full production)
++---------------------------+      +---------------------------+      +---------------------------+
+|                           |      |                           |      |                           |
+| 1. Deploy new tables      |      | 1. Enable for test        |      | 1. Policy engine makes    |
+|    (rl_experiences,       |      |    tenants                |      |    actual decisions       |
+|     rl_policy_states)     |      |                           |      |                           |
+|                           |      | 2. Policy engine runs     |      | 2. Stop old +0.02        |
+| 2. evaluate_task writes   | val. |    alongside heuristics   | val. |    proficiency writes     |
+|    old +0.02 AND logs  ---+----->|    (log-only, no action)  +----->|    for RL tenants         |
+|    RL experience          |      |                           |      |                           |
+|                           |      | 3. Compare RL vs          |      | 3. Sync agent_skill from  |
+| 3. Experience data        |      |    heuristic choices      |      |    RL policy (compat)     |
+|    accumulates silently   |      |    to validate accuracy   |      |                           |
+|                           |      |                           |      | 4. Gradually enable       |
++---------------------------+      +---------------------------+      |    per tenant              |
+                                                                      +-------------+-------------+
+                                                                                    |
+                                                                                    | any time
+                                                                                    v
+                                                                      +---------------------------+
+                                                                      |  ROLLBACK                 |
+                                                                      |  Set rl_enabled = false   |
+                                                                      |  Reverts to heuristics    |
+                                                                      |  Policy state preserved   |
+                                                                      +---------------------------+
 ```
 
 **Phase 1 — Dual-Write (Feature Flag Off):**
