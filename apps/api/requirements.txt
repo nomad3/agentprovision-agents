@@ -29,3 +29,5 @@ websockets
 neonize>=0.3.14
 segno
 pdfplumber>=0.10.0
+pgvector>=0.3.6
+google-genai>=1.0.0

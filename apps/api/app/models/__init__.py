@@ -20,6 +20,7 @@ from .data_source import DataSource
 from .dataset import Dataset
 from .dataset_group import DatasetGroup
 from .deployment import Deployment
+from .embedding import Embedding
 from .execution_trace import ExecutionTrace
 from .knowledge_entity import KnowledgeEntity
 from .knowledge_relation import KnowledgeRelation
@@ -34,6 +35,7 @@ from .integration_config import IntegrationConfig
 from .integration_credential import IntegrationCredential
 from .skill import Skill
 from .skill_execution import SkillExecution
+from .skill_registry import SkillRegistry
 from .tenant_analytics import TenantAnalytics
 from .tenant_branding import TenantBranding
 from .tenant_features import TenantFeatures
@@ -54,7 +56,8 @@ __all__ = [
     "MemoryActivity", "Notebook", "Notification",
     "PipelineRun",
     "IntegrationConfig", "IntegrationCredential",
-    "Skill", "SkillExecution",
+    "Embedding",
+    "Skill", "SkillExecution", "SkillRegistry",
     "TenantAnalytics", "TenantBranding", "TenantFeatures",
     "Tool", "VectorStore",
 ]
