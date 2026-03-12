@@ -319,6 +319,22 @@ def create_relation(db: Session, relation_in, tenant_id: uuid.UUID) -> Knowledge
     db.add(relation)
     db.commit()
     db.refresh(relation)
+
+    try:
+        from app.services.embedding_service import embed_and_store
+        embed_text = f"{relation.relation_type}: {from_entity.name} → {to_entity.name}"
+        if relation.evidence:
+            embed_text += f" ({relation.evidence[:300]})"
+        embed_and_store(
+            db,
+            tenant_id=tenant_id,
+            content_type="relation",
+            content_id=str(relation.id),
+            text_content=embed_text,
+        )
+    except Exception:
+        logger.debug("Relation embedding skipped", exc_info=True)
+
     return relation
 
 
