@@ -20,14 +20,52 @@
   "creating": "Creando...",
   "viewSource": "Ver Fuente",
   "skillCreated": "¡Skill creado exitosamente!",
+  "tabs": {
+    "mySkills": "Mis Skills",
+    "native": "Nativos",
+    "community": "Comunidad"
+  },
+  "categories": {
+    "all": "Todos",
+    "sales": "Ventas",
+    "marketing": "Marketing",
+    "data": "Datos",
+    "coding": "Código",
+    "communication": "Comunicación",
+    "automation": "Automatización",
+    "general": "General"
+  },
+  "actions": {
+    "fork": "Copiar a Mis Skills",
+    "edit": "Editar",
+    "delete": "Eliminar",
+    "versions": "Historial de Versiones",
+    "viewGithub": "Ver en GitHub",
+    "import": "Importar de GitHub"
+  },
+  "search": {
+    "placeholder": "Buscar skills..."
+  },
+  "version": "v{{version}}",
+  "forked": "¡Skill copiado exitosamente!",
+  "deleted": "Skill eliminado.",
+  "updated": "¡Skill actualizado!",
+  "imported": "¡Skills importados exitosamente!",
   "form": {
     "name": "Nombre del Skill",
     "namePlaceholder": "ej. scrape_pricing_page",
     "engine": "Motor",
     "description": "Descripción",
     "descriptionPlaceholder": "¿Qué hace este skill?",
-    "scriptContent": "Script (Python)",
+    "scriptContent": "Script",
     "scriptPlaceholder": "def execute(inputs):\n    # Tu lógica aquí\n    return {\"result\": \"listo\"}",
+    "category": "Categoría",
+    "autoTrigger": "Descripción de Auto-Activación",
+    "autoTriggerPlaceholder": "¿Cuándo debería Luna usar este skill automáticamente?",
+    "chainTo": "Encadenar Con",
+    "chainToPlaceholder": "Skills para ejecutar después de este",
+    "tags": "Etiquetas",
+    "tagsPlaceholder": "Etiquetas separadas por comas",
     "inputName": "Nombre de Entrada",
     "inputType": "Tipo",
     "inputDescription": "Descripción",
@@ -46,6 +84,10 @@
   "errors": {
     "load": "Error al cargar los skills. Intenta de nuevo.",
     "execute": "Error al ejecutar el skill.",
-    "create": "Error al crear el skill."
+    "create": "Error al crear el skill.",
+    "fork": "Error al copiar el skill.",
+    "delete": "Error al eliminar el skill.",
+    "update": "Error al actualizar el skill.",
+    "import": "Error al importar de GitHub."
   }
 }

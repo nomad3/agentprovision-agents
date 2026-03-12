@@ -20,14 +20,52 @@
   "creating": "Creating...",
   "viewSource": "View Source",
   "skillCreated": "Skill created successfully!",
+  "tabs": {
+    "mySkills": "My Skills",
+    "native": "Native",
+    "community": "Community"
+  },
+  "categories": {
+    "all": "All",
+    "sales": "Sales",
+    "marketing": "Marketing",
+    "data": "Data",
+    "coding": "Coding",
+    "communication": "Communication",
+    "automation": "Automation",
+    "general": "General"
+  },
+  "actions": {
+    "fork": "Fork to My Skills",
+    "edit": "Edit",
+    "delete": "Delete",
+    "versions": "Version History",
+    "viewGithub": "View on GitHub",
+    "import": "Import from GitHub"
+  },
+  "search": {
+    "placeholder": "Search skills..."
+  },
+  "version": "v{{version}}",
+  "forked": "Skill forked successfully!",
+  "deleted": "Skill deleted.",
+  "updated": "Skill updated!",
+  "imported": "Skills imported successfully!",
   "form": {
     "name": "Skill Name",
     "namePlaceholder": "e.g. scrape_pricing_page",
     "engine": "Engine",
     "description": "Description",
     "descriptionPlaceholder": "What does this skill do?",
-    "scriptContent": "Script (Python)",
+    "scriptContent": "Script",
     "scriptPlaceholder": "def execute(inputs):\n    # Your skill logic here\n    return {\"result\": \"done\"}",
+    "category": "Category",
+    "autoTrigger": "Auto-Trigger Description",
+    "autoTriggerPlaceholder": "When should Luna use this skill automatically?",
+    "chainTo": "Chain To",
+    "chainToPlaceholder": "Select skills to run after this one",
+    "tags": "Tags",
+    "tagsPlaceholder": "Comma-separated tags",
     "inputName": "Input Name",
     "inputType": "Type",
     "inputDescription": "Description",
@@ -46,6 +84,10 @@
   "errors": {
     "load": "Failed to load skills. Please try again.",
     "execute": "Failed to execute skill.",
-    "create": "Failed to create skill."
+    "create": "Failed to create skill.",
+    "fork": "Failed to fork skill.",
+    "delete": "Failed to delete skill.",
+    "update": "Failed to update skill.",
+    "import": "Failed to import from GitHub."
   }
 }
