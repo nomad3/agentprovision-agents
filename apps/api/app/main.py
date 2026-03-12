@@ -48,8 +48,21 @@ app.include_router(v1_routes.router, prefix="/api/v1")
 @app.on_event("startup")
 async def startup_skill_manager():
     """Scan and load all file-based skill definitions."""
+    import logging as _logging
     from app.services.skill_manager import skill_manager
     skill_manager.scan()
+
+    # Sync skills to DB registry + embeddings
+    try:
+        from app.services.skill_registry_service import sync_skills_to_db
+        from app.db.session import SessionLocal as _SessionLocal
+        sync_db = _SessionLocal()
+        sync_skills_to_db(sync_db)
+        sync_db.close()
+    except Exception as e:
+        _logging.getLogger(__name__).warning(
+            "Skill registry sync failed (pgvector may not be ready): %s", e
+        )
 
 
 @app.on_event("startup")
