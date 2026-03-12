@@ -17,7 +17,10 @@ from app.schemas.file_skill import FileSkill, SkillInput
 
 logger = logging.getLogger(__name__)
 
-SKILLS_DIR = Path(__file__).parent.parent / "skills"
+# Bundled skills ship with the container image (read-only)
+BUNDLED_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+# Writable skills directory — uses persistent storage in K8s, falls back to bundled dir locally
+SKILLS_DIR = Path(os.environ.get("DATA_STORAGE_PATH", str(BUNDLED_SKILLS_DIR.parent))) / "skills"
 
 
 def _parse_skill_md(skill_dir: Path) -> Optional[FileSkill]:
@@ -92,12 +95,17 @@ class SkillManager:
 
     def scan(self) -> None:
         """Scan the skills directory and load all valid skill definitions."""
-        loaded: List[FileSkill] = []
-        if not SKILLS_DIR.is_dir():
-            logger.warning("Skills directory not found: %s", SKILLS_DIR)
-            self._skills = loaded
-            return
+        # Ensure writable skills dir exists
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
+        # Seed bundled skills into writable dir (only copies missing ones)
+        if BUNDLED_SKILLS_DIR.is_dir() and BUNDLED_SKILLS_DIR != SKILLS_DIR:
+            for entry in BUNDLED_SKILLS_DIR.iterdir():
+                if entry.is_dir() and not (SKILLS_DIR / entry.name).exists():
+                    shutil.copytree(entry, SKILLS_DIR / entry.name)
+                    logger.info("Seeded bundled skill: %s", entry.name)
+
+        loaded: List[FileSkill] = []
         for entry in sorted(SKILLS_DIR.iterdir()):
             if entry.is_dir():
                 skill = _parse_skill_md(entry)
@@ -106,7 +114,7 @@ class SkillManager:
                     logger.info("Loaded skill: %s (dir=%s)", skill.name, entry.name)
 
         self._skills = loaded
-        logger.info("SkillManager: %d skill(s) loaded.", len(self._skills))
+        logger.info("SkillManager: %d skill(s) loaded from %s", len(self._skills), SKILLS_DIR)
 
     def list_skills(self) -> List[FileSkill]:
         """Return all loaded skill definitions."""
