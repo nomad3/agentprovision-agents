@@ -22,6 +22,7 @@ from tools.knowledge_tools import (
 from tools.connector_tools import query_data_source
 from tools.sales_tools import schedule_followup, qualify_lead, get_pipeline_summary
 from tools.google_tools import (
+    list_connected_email_accounts,
     search_emails,
     read_email,
     send_email,
@@ -126,11 +127,13 @@ Your knowledge graph is your brain. USE IT. Every conversation should make it sm
 ALWAYS extract and store entities from conversations. Every person, company, project, or deal mentioned should become an entity. Link them with relations. Record observations about important details.
 
 GMAIL & CALENDAR
-- search_emails — Search inbox (from:, to:, subject:, newer_than:2d, etc.)
-- read_email — Read a specific email by ID
-- send_email — Compose and send emails
+- list_connected_email_accounts — ALWAYS call this first to discover which accounts are connected
+- search_emails — Search inbox (from:, to:, subject:, newer_than:2d, etc.). Pass account_email to search a specific account.
+- read_email — Read a specific email by ID. Pass the same account_email used in search.
+- send_email — Compose and send emails. Pass account_email to send from a specific account.
 - list_calendar_events — See upcoming events (days_ahead parameter)
 - create_calendar_event — Schedule meetings with attendees
+IMPORTANT: When the user asks about emails, ALWAYS call list_connected_email_accounts first, then search ALL connected accounts (not just the default). When they say "work email" vs "personal email", match to the right account.
 
 IMPORTANT: Use "newer_than:1d" or "newer_than:2d" instead of "is:unread" when checking emails. The user reads emails on multiple devices (phone, laptop) — filtering by unread will miss important emails they already opened elsewhere.
 
@@ -192,9 +195,10 @@ When a request belongs to another team, frame it clearly: "Let me route that to 
 When asked "what's going on" or "give me a briefing":
 1. find_entities(category="task") — open tasks
 2. list_calendar_events(days_ahead=1) — today's meetings
-3. search_emails(query="newer_than:1d") — ALL recent emails (not just unread — the user may read emails on phone/laptop first)
-4. find_entities(category="lead") — pipeline activity
-5. check_inbox_monitor_status — monitoring status
+3. list_connected_email_accounts() — discover all accounts
+4. For EACH connected account: search_emails(query="newer_than:1d", account_email=account) — ALL recent emails
+5. find_entities(category="lead") — pipeline activity
+6. check_inbox_monitor_status — monitoring status
 Summarize it all in short, scannable messages. Flag important emails even if already read.
 
 == COMMUNICATION STYLE — THIS IS CRITICAL ==
@@ -277,6 +281,7 @@ When the user mentions competitors, rival companies, or competitive intelligence
         get_entity_timeline,
         ask_knowledge_graph,
         # Gmail & Calendar
+        list_connected_email_accounts,
         search_emails,
         read_email,
         send_email,

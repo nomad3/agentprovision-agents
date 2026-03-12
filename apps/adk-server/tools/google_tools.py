@@ -37,14 +37,19 @@ def _get_google_client() -> httpx.AsyncClient:
     return _google_client
 
 
-async def _get_google_token(tenant_id: str, integration_name: str) -> Optional[str]:
+async def _get_google_token(
+    tenant_id: str, integration_name: str, account_email: Optional[str] = None,
+) -> Optional[str]:
     """Retrieve decrypted OAuth access token from the API credential vault."""
     client = _get_api_client()
     try:
+        params: dict = {"tenant_id": tenant_id}
+        if account_email:
+            params["account_email"] = account_email
         resp = await client.get(
             f"/api/v1/oauth/internal/token/{integration_name}",
             headers={"X-Internal-Key": settings.mcp_api_key},
-            params={"tenant_id": tenant_id},
+            params=params,
         )
         if resp.status_code == 200:
             return resp.json().get("oauth_token")
@@ -58,10 +63,42 @@ async def _get_google_token(tenant_id: str, integration_name: str) -> Optional[s
 # Gmail tools
 # ---------------------------------------------------------------------------
 
+async def list_connected_email_accounts(
+    tenant_id: str = "auto",
+) -> dict:
+    """List all Gmail accounts connected for this tenant.
+
+    Use this to discover which email accounts are available before searching.
+    When the user asks about "work email" or "personal email", use this to find
+    the right account_email and pass it to search_emails or read_email.
+
+    Args:
+        tenant_id: Tenant context. Use "auto" if unknown.
+
+    Returns:
+        Dict with list of connected email accounts.
+    """
+    tenant_id = _resolve_tenant_id(tenant_id)
+    client = _get_api_client()
+    try:
+        resp = await client.get(
+            "/api/v1/oauth/internal/connected-accounts/gmail",
+            headers={"X-Internal-Key": settings.mcp_api_key},
+            params={"tenant_id": tenant_id},
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        return {"error": f"Failed to list accounts: {resp.status_code}"}
+    except Exception as e:
+        logger.exception("list_connected_email_accounts failed")
+        return {"error": str(e)}
+
+
 async def search_emails(
     tenant_id: str = "auto",
     query: str = "",
     max_results: int = 10,
+    account_email: str = "",
 ) -> dict:
     """Search Gmail for emails matching a query.
 
@@ -70,12 +107,15 @@ async def search_emails(
         query: Gmail search query (e.g. "from:alice@example.com", "subject:invoice",
                "is:unread", "newer_than:2d"). Leave empty for recent inbox messages.
         max_results: Maximum number of emails to return (1-20).
+        account_email: Specific Gmail account to search (e.g. "user@company.com").
+                       If empty, searches the default (first) connected account.
+                       Use list_connected_email_accounts to discover available accounts.
 
     Returns:
         Dict with list of email summaries (subject, from, date, snippet).
     """
     tenant_id = _resolve_tenant_id(tenant_id)
-    token = await _get_google_token(tenant_id, "gmail")
+    token = await _get_google_token(tenant_id, "gmail", account_email or None)
     if not token:
         return {"error": "Gmail not connected. Ask the user to connect Gmail in Connected Apps."}
 
@@ -140,12 +180,15 @@ async def search_emails(
 async def read_email(
     tenant_id: str = "auto",
     message_id: str = "",
+    account_email: str = "",
 ) -> dict:
     """Read the full content of a specific email by its message ID.
 
     Args:
         tenant_id: Tenant context. Use "auto" if unknown.
         message_id: Gmail message ID (from search_emails results).
+        account_email: Specific Gmail account to read from. Use the same account
+                       that was used in search_emails to find this message.
 
     Returns:
         Dict with email subject, from, to, date, and body text.
@@ -154,7 +197,7 @@ async def read_email(
     if not message_id:
         return {"error": "message_id is required. Use search_emails first to get message IDs."}
 
-    token = await _get_google_token(tenant_id, "gmail")
+    token = await _get_google_token(tenant_id, "gmail", account_email or None)
     if not token:
         return {"error": "Gmail not connected. Ask the user to connect Gmail in Connected Apps."}
 
@@ -219,6 +262,7 @@ async def send_email(
     to: str = "",
     subject: str = "",
     body: str = "",
+    account_email: str = "",
 ) -> dict:
     """Send an email via Gmail.
 
@@ -227,6 +271,7 @@ async def send_email(
         to: Recipient email address.
         subject: Email subject line.
         body: Email body text (plain text).
+        account_email: Specific Gmail account to send from. If empty, uses default account.
 
     Returns:
         Dict with send status and message ID.
@@ -235,7 +280,7 @@ async def send_email(
     if not to or not subject:
         return {"error": "Both 'to' and 'subject' are required."}
 
-    token = await _get_google_token(tenant_id, "gmail")
+    token = await _get_google_token(tenant_id, "gmail", account_email or None)
     if not token:
         return {"error": "Gmail not connected. Ask the user to connect Gmail in Connected Apps."}
 
@@ -279,6 +324,7 @@ async def list_calendar_events(
     tenant_id: str = "auto",
     days_ahead: int = 7,
     max_results: int = 20,
+    account_email: str = "",
 ) -> dict:
     """List upcoming Google Calendar events.
 
@@ -286,12 +332,13 @@ async def list_calendar_events(
         tenant_id: Tenant context. Use "auto" if unknown.
         days_ahead: Number of days to look ahead (1-30).
         max_results: Maximum events to return (1-50).
+        account_email: Specific Google account for calendar. If empty, uses default.
 
     Returns:
         Dict with list of calendar events (summary, start, end, location).
     """
     tenant_id = _resolve_tenant_id(tenant_id)
-    token = await _get_google_token(tenant_id, "google_calendar")
+    token = await _get_google_token(tenant_id, "google_calendar", account_email or None)
     if not token:
         return {"error": "Google Calendar not connected. Ask user to connect Google in Connected Apps."}
 
@@ -349,6 +396,7 @@ async def create_calendar_event(
     end_time: str = "",
     description: str = "",
     attendees: str = "",
+    account_email: str = "",
 ) -> dict:
     """Create a new Google Calendar event.
 
@@ -359,6 +407,7 @@ async def create_calendar_event(
         end_time: End time in ISO 8601 format (e.g. "2026-03-15T11:00:00-05:00").
         description: Optional event description.
         attendees: Optional comma-separated list of attendee emails.
+        account_email: Specific Google account for calendar. If empty, uses default.
 
     Returns:
         Dict with created event details.
@@ -367,7 +416,7 @@ async def create_calendar_event(
     if not summary or not start_time or not end_time:
         return {"error": "summary, start_time, and end_time are required."}
 
-    token = await _get_google_token(tenant_id, "google_calendar")
+    token = await _get_google_token(tenant_id, "google_calendar", account_email or None)
     if not token:
         return {"error": "Google Calendar not connected. Ask user to connect Google in Connected Apps."}
 

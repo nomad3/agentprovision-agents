@@ -633,6 +633,40 @@ def _verify_internal_key(
         raise HTTPException(status_code=401, detail="Invalid internal key")
 
 
+@router.get("/internal/connected-accounts/{integration_name}")
+def get_connected_accounts(
+    integration_name: str,
+    tenant_id: str = Query(...),
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """List all connected accounts for an integration. Internal use only."""
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid tenant_id")
+
+    configs = (
+        db.query(IntegrationConfig)
+        .filter(
+            IntegrationConfig.tenant_id == tid,
+            IntegrationConfig.integration_name == integration_name,
+            IntegrationConfig.enabled.is_(True),
+        )
+        .all()
+    )
+
+    accounts = []
+    for c in configs:
+        accounts.append({
+            "account_email": c.account_email,
+            "integration_name": c.integration_name,
+            "enabled": c.enabled,
+        })
+
+    return {"accounts": accounts, "count": len(accounts)}
+
+
 @router.get("/internal/token/{integration_name}")
 def get_integration_token(
     integration_name: str,
