@@ -46,3 +46,35 @@ export const skillsService = {
     return response.data;
   },
 };
+
+// --- File-based Skills Marketplace v2 ---
+
+export const getFileSkills = (params = {}) => {
+  const query = new URLSearchParams();
+  if (params.tier) query.append('tier', params.tier);
+  if (params.category) query.append('category', params.category);
+  if (params.search) query.append('search', params.search);
+  const qs = query.toString();
+  return api.get(`/skills/library${qs ? '?' + qs : ''}`);
+};
+
+export const createFileSkill = (data) =>
+  api.post('/skills/library/create', data);
+
+export const updateFileSkill = (slug, data) =>
+  api.put(`/skills/library/${slug}`, data);
+
+export const forkFileSkill = (slug) =>
+  api.post(`/skills/library/${slug}/fork`);
+
+export const deleteFileSkill = (slug) =>
+  api.delete(`/skills/library/${slug}`);
+
+export const executeFileSkill = (skillName, inputs = {}) =>
+  api.post('/skills/library/execute', { skill_name: skillName, inputs });
+
+export const getSkillVersions = (slug) =>
+  api.get(`/skills/library/${slug}/versions`);
+
+export const importFromGithub = (repoUrl) =>
+  api.post('/skills/library/import-github', { repo_url: repoUrl });
