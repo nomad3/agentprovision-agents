@@ -1,110 +1,48 @@
-import { useEffect, useState } from 'react';
-import {
-  Alert,
-  Button,
-  Col,
-  Form,
-  Modal,
-  Row,
-  Spinner
-} from 'react-bootstrap';
+import { useEffect, useState, useMemo } from 'react';
+import { Alert, Badge, Button, Col, Form, Modal, Row, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import agentService from '../services/agent';
 
 const AgentsPage = () => {
   const { t } = useTranslation('agents');
   const navigate = useNavigate();
-  const location = useLocation();
   const [agents, setAgents] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [showModal, setShowModal] = useState(false);
-  const [editingAgent, setEditingAgent] = useState(null);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    model: 'gpt-4',
-    system_prompt: '',
-    temperature: 0.7,
-    max_tokens: 2000,
-  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   useEffect(() => {
-    fetchAgents();
-  }, []);
+    Promise.all([
+      agentService.getAll().then(r => setAgents(r.data || [])),
+      agentService.getTasks().then(r => setTasks(r.data || [])).catch(() => {}),
+    ])
+      .catch(err => { console.error(err); setError(t('errors.load')); })
+      .finally(() => setLoading(false));
+  }, [t]);
 
-  useEffect(() => {
-    if (location.state?.showQuickForm) {
-      openCreateModal();
-      window.history.replaceState({}, document.title);
-    }
-    if (location.state?.success) {
-      setSuccess(location.state.success);
-      window.history.replaceState({}, document.title);
-      setTimeout(() => setSuccess(''), 3000);
-    }
-  }, [location]);
-
-  const fetchAgents = async () => {
-    try {
-      setLoading(true);
-      const response = await agentService.getAll();
-      setAgents(response.data || []);
-      setError('');
-    } catch (err) {
-      console.error('Error fetching agents:', err);
-      setError(t('errors.load'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const openCreateModal = () => {
-    setEditingAgent(null);
-    setFormData({ name: '', description: '', model: 'gpt-4', system_prompt: '', temperature: 0.7, max_tokens: 2000 });
-    setShowModal(true);
-  };
-
-  const openEditModal = (agent) => {
-    setEditingAgent(agent);
-    setFormData({
-      name: agent.name,
-      description: agent.description || '',
-      model: agent.model || 'gpt-4',
-      system_prompt: agent.system_prompt || '',
-      temperature: agent.temperature || 0.7,
-      max_tokens: agent.max_tokens || 2000,
+  const tasksByAgent = useMemo(() => {
+    const map = {};
+    tasks.forEach(task => {
+      const aid = task.assigned_agent_id;
+      if (!aid) return;
+      if (!map[aid]) map[aid] = { active: 0, completed: 0, total: 0 };
+      map[aid].total++;
+      if (task.status === 'completed') map[aid].completed++;
+      else if (['queued', 'thinking', 'executing'].includes(task.status)) map[aid].active++;
     });
-    setShowModal(true);
-  };
+    return map;
+  }, [tasks]);
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      setSubmitting(true);
-      if (editingAgent) {
-        await agentService.update(editingAgent.id, formData);
-        setSuccess(t('success.updated'));
-      } else {
-        await agentService.create(formData);
-        setSuccess(t('success.created'));
-      }
-      setShowModal(false);
-      fetchAgents();
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (err) {
-      console.error('Error saving agent:', err);
-      setError(t('errors.save'));
-    } finally {
-      setSubmitting(false);
-    }
-  };
+  const filtered = agents.filter(a =>
+    a.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    a.description?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   const handleDelete = async (agent) => {
     try {
@@ -112,46 +50,34 @@ const AgentsPage = () => {
       await agentService.delete(agent.id);
       setDeleteConfirm(null);
       setSuccess(t('success.deleted', { name: agent.name }));
-      fetchAgents();
+      setAgents(prev => prev.filter(a => a.id !== agent.id));
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
-      console.error('Error deleting agent:', err);
+      console.error(err);
       setError(t('errors.delete'));
     } finally {
       setSubmitting(false);
     }
   };
 
-  const filtered = agents.filter(
-    (a) =>
-      a.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      a.description?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const getSkills = (agent) => {
+    const configSkills = agent.config?.skills || agent.config?.tools || [];
+    const agentSkills = (agent.skills || []).map(s => s.skill_name);
+    return [...new Set([...configSkills, ...agentSkills])];
+  };
 
-  const statusDot = (status) => ({
-    width: 6,
-    height: 6,
-    borderRadius: '50%',
-    background: status === 'active' ? '#22c55e' : status === 'error' ? '#ef4444' : '#94a3b8',
-    display: 'inline-block',
-    marginRight: 6,
-    flexShrink: 0,
-  });
+  const statusColor = (s) => s === 'active' ? '#22c55e' : s === 'error' ? '#ef4444' : '#94a3b8';
+
+  const ROLE_COLORS = { analyst: '#6f42c1', manager: '#0d6efd', specialist: '#fd7e14' };
+  const AUTONOMY_LABELS = { full: 'Full Auto', supervised: 'Supervised', approval_required: 'Approval Req.' };
 
   const cardStyle = {
     background: 'var(--surface-elevated)',
     border: '1px solid var(--color-border)',
     borderRadius: 8,
     padding: '20px 24px',
-  };
-
-  const sectionLabel = {
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-    color: 'var(--color-muted)',
-    marginBottom: 12,
+    cursor: 'pointer',
+    transition: 'transform 0.15s ease, box-shadow 0.15s ease',
   };
 
   return (
@@ -167,31 +93,21 @@ const AgentsPage = () => {
               {t('subtitle', { count: agents.length })}
             </p>
           </div>
-          <div className="d-flex gap-2">
-            <Button
-              variant="outline-secondary"
-              size="sm"
-              onClick={() => navigate('/agents/wizard')}
-              style={{ fontSize: '0.82rem' }}
-            >
-              + {t('agentWizard')}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={openCreateModal}
-              style={{ fontSize: '0.82rem' }}
-            >
-              + {t('quickCreate')}
-            </Button>
-          </div>
+          <Button
+            variant="outline-secondary"
+            size="sm"
+            onClick={() => navigate('/agents/wizard')}
+            style={{ fontSize: '0.82rem' }}
+          >
+            + {t('agentWizard')}
+          </Button>
         </div>
 
         {error && <Alert variant="danger" dismissible onClose={() => setError('')} style={{ fontSize: '0.82rem' }}>{error}</Alert>}
         {success && <Alert variant="success" dismissible onClose={() => setSuccess('')} style={{ fontSize: '0.82rem' }}>{success}</Alert>}
 
         {/* Search */}
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 20 }}>
           <Form.Control
             type="text"
             size="sm"
@@ -202,14 +118,14 @@ const AgentsPage = () => {
           />
         </div>
 
-        {/* Agent List */}
+        {/* Card Grid */}
         {loading ? (
           <div className="text-center py-5">
             <Spinner animation="border" size="sm" variant="primary" />
             <p className="mt-2 text-muted" style={{ fontSize: '0.82rem' }}>{t('loading')}</p>
           </div>
         ) : filtered.length === 0 ? (
-          <div style={{ ...cardStyle, textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ ...cardStyle, textAlign: 'center', padding: '48px 24px', cursor: 'default' }}>
             <p style={{ fontSize: '0.88rem', color: 'var(--color-foreground)', fontWeight: 500, marginBottom: 4 }}>
               {searchTerm ? t('noAgentsMatch') : t('noAgentsYet')}
             </p>
@@ -217,214 +133,118 @@ const AgentsPage = () => {
               {searchTerm ? t('tryDifferent') : t('createFirst')}
             </p>
             {!searchTerm && (
-              <Button variant="primary" size="sm" onClick={openCreateModal}>
+              <Button variant="primary" size="sm" onClick={() => navigate('/agents/wizard')}>
                 {t('createAgent')}
               </Button>
             )}
           </div>
         ) : (
-          <div style={cardStyle}>
-            {/* Table header */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: '2fr 3fr 100px 80px 120px',
-                padding: '0 0 10px 0',
-                borderBottom: '1px solid var(--color-border)',
-                gap: 12,
-              }}
-            >
-              {[t('table.name'), t('table.description'), t('table.model'), t('table.status'), ''].map((h) => (
-                <div key={h} style={{ ...sectionLabel, marginBottom: 0 }}>{h}</div>
-              ))}
-            </div>
+          <Row className="g-3">
+            {filtered.map((agent) => {
+              const skills = getSkills(agent);
+              const stats = tasksByAgent[agent.id] || { active: 0, completed: 0, total: 0 };
+              const successRate = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
-            {/* Rows */}
-            {filtered.map((agent, idx) => (
-              <div
-                key={agent.id}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '2fr 3fr 100px 80px 120px',
-                  padding: '12px 0',
-                  borderBottom: idx < filtered.length - 1 ? '1px solid var(--color-border)' : 'none',
-                  alignItems: 'center',
-                  gap: 12,
-                }}
-              >
-                <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-foreground)' }}>
-                  {agent.name}
-                </div>
-                <div style={{ fontSize: '0.78rem', color: 'var(--color-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {agent.description || '\u2014'}
-                </div>
-                <div>
-                  <span style={{
-                    fontSize: '0.7rem',
-                    padding: '2px 8px',
-                    borderRadius: 4,
-                    background: 'var(--surface-contrast, #f0f0f0)',
-                    color: 'var(--color-muted)',
-                    fontWeight: 500,
-                  }}>
-                    {agent.model || 'gpt-4'}
-                  </span>
-                </div>
-                <div className="d-flex align-items-center">
-                  <span style={statusDot(agent.status)} />
-                  <span style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
-                    {agent.status || 'inactive'}
-                  </span>
-                </div>
-                <div className="d-flex justify-content-end gap-1">
-                  <button
-                    onClick={() => openEditModal(agent)}
-                    style={{
-                      background: 'none',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: 4,
-                      padding: '4px 10px',
-                      fontSize: '0.72rem',
-                      color: 'var(--color-foreground)',
-                      cursor: 'pointer',
-                    }}
+              return (
+                <Col key={agent.id} md={6} xl={4}>
+                  <div
+                    style={cardStyle}
+                    onClick={() => navigate(`/agents/${agent.id}`)}
+                    onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}
                   >
-                    {t('actions.edit')}
-                  </button>
-                  <button
-                    onClick={() => setDeleteConfirm(agent)}
-                    style={{
-                      background: 'none',
-                      border: '1px solid var(--color-border)',
-                      borderRadius: 4,
-                      padding: '4px 10px',
-                      fontSize: '0.72rem',
-                      color: '#ef4444',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {t('actions.delete')}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+                    {/* Header: name + status + model */}
+                    <div className="d-flex align-items-center justify-content-between mb-2">
+                      <div className="d-flex align-items-center gap-2">
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: statusColor(agent.status), flexShrink: 0 }} />
+                        <span style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-foreground)' }}>
+                          {agent.name}
+                        </span>
+                      </div>
+                      <span style={{
+                        fontSize: '0.68rem', padding: '2px 8px', borderRadius: 4,
+                        background: 'var(--surface-contrast, rgba(255,255,255,0.06))',
+                        color: 'var(--color-muted)', fontWeight: 500,
+                      }}>
+                        {agent.config?.model || agent.model || 'gpt-4'}
+                      </span>
+                    </div>
+
+                    {/* Description */}
+                    <p style={{
+                      fontSize: '0.78rem', color: 'var(--color-muted)', margin: '0 0 10px 0',
+                      display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+                    }}>
+                      {agent.description || 'No description'}
+                    </p>
+
+                    {/* Role + autonomy badges */}
+                    <div className="d-flex gap-1 mb-2 flex-wrap">
+                      {agent.role && (
+                        <Badge bg="none" style={{ fontSize: '0.65rem', backgroundColor: ROLE_COLORS[agent.role] || '#6c757d' }}>
+                          {agent.role}
+                        </Badge>
+                      )}
+                      <Badge bg="none" style={{ fontSize: '0.65rem', backgroundColor: 'rgba(255,255,255,0.1)', color: 'var(--color-muted)' }}>
+                        {AUTONOMY_LABELS[agent.autonomy_level] || agent.autonomy_level || 'supervised'}
+                      </Badge>
+                    </div>
+
+                    {/* Skills pills */}
+                    {skills.length > 0 && (
+                      <div className="d-flex gap-1 mb-2 flex-wrap">
+                        {skills.slice(0, 4).map(s => (
+                          <span key={s} style={{
+                            fontSize: '0.65rem', padding: '1px 6px', borderRadius: 3,
+                            background: 'rgba(77,171,247,0.12)', color: '#4dabf7',
+                          }}>
+                            {s.replace(/_/g, ' ')}
+                          </span>
+                        ))}
+                        {skills.length > 4 && (
+                          <span style={{ fontSize: '0.65rem', color: 'var(--color-muted)' }}>
+                            +{skills.length - 4} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stats row */}
+                    <div className="d-flex align-items-center gap-3" style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
+                      <span>{stats.active} active</span>
+                      <span>{stats.completed} completed</span>
+                      {stats.total > 0 && (
+                        <div className="d-flex align-items-center gap-1">
+                          <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)' }}>
+                            <div style={{ width: `${successRate}%`, height: '100%', borderRadius: 2, background: '#22c55e' }} />
+                          </div>
+                          <span>{successRate}%</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Delete button (stop propagation) */}
+                    <div className="d-flex justify-content-end mt-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeleteConfirm(agent); }}
+                        style={{
+                          background: 'none', border: '1px solid var(--color-border)',
+                          borderRadius: 4, padding: '2px 8px', fontSize: '0.68rem',
+                          color: '#ef4444', cursor: 'pointer',
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                </Col>
+              );
+            })}
+          </Row>
         )}
       </div>
 
-      {/* Create/Edit Modal */}
-      <Modal
-        show={showModal}
-        onHide={() => setShowModal(false)}
-        size="lg"
-        centered
-      >
-        <Modal.Header closeButton>
-          <Modal.Title style={{ fontSize: '1rem', fontWeight: 600 }}>
-            {editingAgent ? t('modal.editTitle') : t('modal.createTitle')}
-          </Modal.Title>
-        </Modal.Header>
-        <Form onSubmit={handleSubmit}>
-          <Modal.Body>
-            <Row>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label className="small">{t('modal.name')}</Form.Label>
-                  <Form.Control
-                    size="sm"
-                    type="text"
-                    placeholder={t('modal.namePlaceholder')}
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    required
-                  />
-                </Form.Group>
-              </Col>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label className="small">{t('modal.model')}</Form.Label>
-                  <Form.Select
-                    size="sm"
-                    value={formData.model}
-                    onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-                  >
-                    <option value="gpt-4">GPT-4</option>
-                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                    <option value="gpt-4o">GPT-4o</option>
-                    <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                    <option value="claude-3-opus">Claude 3 Opus</option>
-                    <option value="claude-3-sonnet">Claude 3 Sonnet</option>
-                    <option value="claude-4-sonnet">Claude 4 Sonnet</option>
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                  </Form.Select>
-                </Form.Group>
-              </Col>
-            </Row>
-
-            <Form.Group className="mb-3">
-              <Form.Label className="small">{t('modal.description')}</Form.Label>
-              <Form.Control
-                size="sm"
-                as="textarea"
-                rows={2}
-                placeholder={t('modal.descriptionPlaceholder')}
-                value={formData.description}
-                onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              />
-            </Form.Group>
-
-            <Form.Group className="mb-3">
-              <Form.Label className="small">{t('modal.systemPrompt')}</Form.Label>
-              <Form.Control
-                size="sm"
-                as="textarea"
-                rows={4}
-                placeholder={t('modal.systemPromptPlaceholder')}
-                value={formData.system_prompt}
-                onChange={(e) => setFormData({ ...formData, system_prompt: e.target.value })}
-              />
-            </Form.Group>
-
-            <Row>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label className="small">{t('modal.temperature', { value: formData.temperature })}</Form.Label>
-                  <Form.Range
-                    min={0} max={1} step={0.1}
-                    value={formData.temperature}
-                    onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
-                  />
-                  <Form.Text className="text-muted" style={{ fontSize: '0.72rem' }}>
-                    {t('modal.temperatureHelp')}
-                  </Form.Text>
-                </Form.Group>
-              </Col>
-              <Col md={6}>
-                <Form.Group className="mb-3">
-                  <Form.Label className="small">{t('modal.maxTokens')}</Form.Label>
-                  <Form.Control
-                    size="sm"
-                    type="number"
-                    min={100} max={8000}
-                    value={formData.max_tokens}
-                    onChange={(e) => setFormData({ ...formData, max_tokens: parseInt(e.target.value) })}
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-          </Modal.Body>
-          <Modal.Footer>
-            <Button variant="outline-secondary" size="sm" onClick={() => setShowModal(false)}>
-              {t('modal.cancel')}
-            </Button>
-            <Button variant="primary" size="sm" type="submit" disabled={submitting}>
-              {submitting ? t('modal.saving') : editingAgent ? t('modal.saveChanges') : t('modal.createTitle')}
-            </Button>
-          </Modal.Footer>
-        </Form>
-      </Modal>
-
-      {/* Delete Confirmation */}
+      {/* Delete Confirmation Modal */}
       <Modal show={!!deleteConfirm} onHide={() => setDeleteConfirm(null)} centered size="sm">
         <Modal.Body className="text-center py-4">
           <p style={{ fontSize: '0.88rem', fontWeight: 500, marginBottom: 8 }}>
@@ -437,12 +257,7 @@ const AgentsPage = () => {
             <Button variant="outline-secondary" size="sm" onClick={() => setDeleteConfirm(null)}>
               {t('deleteModal.cancel')}
             </Button>
-            <Button
-              variant="danger"
-              size="sm"
-              onClick={() => handleDelete(deleteConfirm)}
-              disabled={submitting}
-            >
+            <Button variant="danger" size="sm" onClick={() => handleDelete(deleteConfirm)} disabled={submitting}>
               {submitting ? t('deleteModal.deleting') : t('deleteModal.delete')}
             </Button>
           </div>
