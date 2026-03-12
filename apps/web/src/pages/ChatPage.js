@@ -3,6 +3,7 @@ import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Modal, Row
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../App';
 import Layout from '../components/Layout';
+import FeedbackActions from '../components/chat/FeedbackActions';
 import ReportVisualization from '../components/chat/ReportVisualization';
 import agentKitService from '../services/agentKit';
 import chatService from '../services/chat';
@@ -231,6 +232,15 @@ const ChatPage = () => {
           }
           return null;
         })}
+
+        {message.role === 'assistant' && (
+          <div className="mt-2">
+            <FeedbackActions
+              trajectoryId={message.trajectory_id}
+              stepIndex={message.step_index}
+            />
+          </div>
+        )}
 
         {message.role === 'assistant' && message.context?.entities_extracted > 0 && (
           <div className="mt-2">
