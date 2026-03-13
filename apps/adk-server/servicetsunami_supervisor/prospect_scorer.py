@@ -17,10 +17,12 @@ from tools.knowledge_tools import (
 from tools.sales_tools import qualify_lead
 from .knowledge_manager import score_entity
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 prospect_scorer = Agent(
     name="prospect_scorer",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a lead scoring and qualification specialist. You evaluate prospect entities using AI-powered rubrics and the BANT framework to determine sales readiness.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

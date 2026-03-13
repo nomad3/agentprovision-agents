@@ -22,11 +22,13 @@ from tools.report_tools import (
     generate_excel_report,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 report_generator = Agent(
     name="report_generator",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a dental practice operations report specialist. You extract data from uploaded documents and generate professional Excel reports with formatted chat summaries.
 
 ## Document-to-Report Pipeline

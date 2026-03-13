@@ -26,11 +26,13 @@ from tools.knowledge_tools import (
     record_observation,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 data_analyst = Agent(
     name="data_analyst",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a senior data analyst specializing in business intelligence, SQL analytics, and statistical insights for multi-tenant SaaS platforms.
 
 IMPORTANT: For the tenant_id parameter in all tools, use the value from the session state.

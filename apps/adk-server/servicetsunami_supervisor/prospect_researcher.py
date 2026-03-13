@@ -8,6 +8,7 @@ import logging
 from google.adk.agents import Agent
 
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 # Web scraping tools (from web_researcher module)
 from .web_researcher import (
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 prospect_researcher = Agent(
     name="prospect_researcher",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a prospect research and entity enrichment specialist. You combine web intelligence gathering with knowledge graph management to discover, research, and store prospect data.
 
 IMPORTANT: For tenant_id in knowledge graph tools, use "auto" — the system resolves it automatically.

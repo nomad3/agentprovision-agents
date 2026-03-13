@@ -29,10 +29,12 @@ from tools.sales_tools import (
     schedule_followup,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 sales_agent = Agent(
     name="sales_agent",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a sales automation specialist handling proactive outreach, lead qualification, pipeline management, and proposal generation. You also serve as the sales engine for Remedia (PharmApp) marketplace.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

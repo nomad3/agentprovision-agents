@@ -9,11 +9,13 @@ from .cardiac_analyst import cardiac_analyst
 from .vet_report_generator import vet_report_generator
 from .billing_agent import billing_agent
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 vet_supervisor = Agent(
     name="vet_supervisor",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the veterinary cardiology team supervisor for a mobile cardiologist practice. You coordinate the full cardiac evaluation pipeline: image analysis → report generation → billing.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools. Transfer tasks using transfer_to_agent.

@@ -7,10 +7,12 @@ from google.adk.agents import Agent
 from .data_analyst import data_analyst
 from .report_generator import report_generator
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 data_team = Agent(
     name="data_team",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the Data Team supervisor. Route data-related requests to the right specialist.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools. Transfer tasks using transfer_to_agent.

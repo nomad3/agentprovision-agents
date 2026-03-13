@@ -7,10 +7,12 @@ from google.adk.agents import Agent
 
 from .customer_support import customer_support
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 sales_team = Agent(
     name="sales_team",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the Sales Team supervisor. You route all customer-facing support and service requests.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools. Transfer tasks using transfer_to_agent.

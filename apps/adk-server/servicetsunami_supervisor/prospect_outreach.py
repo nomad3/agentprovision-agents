@@ -10,6 +10,7 @@ Handles outreach drafting, pipeline management, proposals, and follow-ups:
 from google.adk.agents import Agent
 
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 # Sales tools
 from tools.sales_tools import (
@@ -26,6 +27,7 @@ from tools.google_tools import send_email, create_calendar_event
 prospect_outreach = Agent(
     name="prospect_outreach",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a sales outreach and pipeline management specialist. You craft personalized communications, manage pipeline progression, generate proposals, and coordinate follow-ups.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

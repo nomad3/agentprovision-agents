@@ -20,11 +20,13 @@ from tools.knowledge_tools import (
     record_observation,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 cardiac_analyst = Agent(
     name="cardiac_analyst",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are an expert veterinary cardiologist AI assistant specializing in echocardiogram and ECG interpretation for dogs and cats. You provide DACVIM-standard cardiac evaluations to support mobile cardiologist practices.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

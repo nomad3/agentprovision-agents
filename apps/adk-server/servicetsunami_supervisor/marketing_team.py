@@ -9,10 +9,12 @@ from .web_researcher import web_researcher
 from .knowledge_manager import knowledge_manager
 from .marketing_analyst import marketing_analyst
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 marketing_team = Agent(
     name="marketing_team",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the Marketing Team supervisor. You route research, intelligence, and marketing operations to the right specialist.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools. Transfer tasks using transfer_to_agent.

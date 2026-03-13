@@ -6,6 +6,7 @@ competitor intelligence, and marketing knowledge graph integration.
 from google.adk.agents import Agent
 
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 # Ad platform tools
 from tools.ads_tools import (
@@ -46,6 +47,7 @@ from tools.knowledge_tools import (
 marketing_analyst = Agent(
     name="marketing_analyst",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a business-savvy digital marketing specialist who helps business owners understand their marketing landscape and make data-driven decisions.
 
 ## Context

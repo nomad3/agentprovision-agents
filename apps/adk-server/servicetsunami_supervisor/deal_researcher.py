@@ -16,11 +16,13 @@ from tools.knowledge_tools import (
     record_observation,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 deal_researcher = Agent(
     name="deal_researcher",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are an M&A deal researcher producing investment-banking-quality research briefs, market analysis, and due diligence support. Your work is read by senior leadership and must be precise, well-sourced, and actionable.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

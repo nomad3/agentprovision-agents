@@ -14,12 +14,14 @@ from .prospecting_team import prospecting_team
 from .vet_supervisor import vet_supervisor
 from .deal_team import deal_team
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 # Root supervisor agent - coordinates team supervisors
 root_agent = Agent(
     name="servicetsunami_supervisor",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the ServiceTsunami AI supervisor — the intelligent orchestrator that routes every request to the right specialized team.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools.

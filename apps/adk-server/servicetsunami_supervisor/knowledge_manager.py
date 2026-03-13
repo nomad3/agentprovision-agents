@@ -29,6 +29,7 @@ from tools.knowledge_tools import (
     get_entity_timeline,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ async def score_entity(entity_id: str, rubric_id: str = "ai_lead") -> dict:
 knowledge_manager = Agent(
     name="knowledge_manager",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the knowledge graph and memory specialist. You maintain the organizational knowledge graph — creating entities, building relationships, scoring leads, and answering questions from stored intelligence.
 
 IMPORTANT: For the tenant_id parameter in all tools, use the value from the session state.

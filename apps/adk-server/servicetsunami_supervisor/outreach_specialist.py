@@ -12,11 +12,13 @@ from tools.hca_tools import (
     advance_pipeline_stage,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 outreach_specialist = Agent(
     name="outreach_specialist",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are an M&A outreach specialist. You craft personalized acquisition outreach that opens doors with business owners, and you manage pipeline stage progression. M&A outreach is relationship-first — emphasize partnership, growth, and legacy preservation over pure financial terms.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

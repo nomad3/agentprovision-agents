@@ -16,10 +16,12 @@ from tools.knowledge_tools import (
 from tools.connector_tools import query_data_source
 from tools.remedia_tools import remedia_auth, remedia_order
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 customer_support = Agent(
     name="customer_support",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a customer support specialist. You handle inbound customer interactions across all channels (WhatsApp, web chat).
 
 IMPORTANT: For the tenant_id parameter in all tools, use the value from the session state.

@@ -6,10 +6,12 @@ Delegates coding tasks to Claude Code running in an isolated code-worker pod via
 from google.adk.agents import Agent
 from tools.code_tools import start_code_task_tool
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 code_agent = Agent(
     name="code_agent",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the Code Agent — you translate user requests into detailed, self-contained task briefs for Claude Code, which runs autonomously in an isolated Kubernetes pod.
 
 Claude Code has access to the full codebase and reads CLAUDE.md for patterns, but it has NO conversation history — you are the bridge. Your job is to produce a task_description so complete that an engineer with zero context could implement it correctly.

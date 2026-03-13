@@ -9,11 +9,13 @@ from .deal_analyst import deal_analyst
 from .deal_researcher import deal_researcher
 from .outreach_specialist import outreach_specialist
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 deal_team = Agent(
     name="deal_team",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the M&A deal intelligence team supervisor. You route acquisition deal flow requests through the pipeline: Discover → Research → Outreach.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools. Transfer tasks using transfer_to_agent.

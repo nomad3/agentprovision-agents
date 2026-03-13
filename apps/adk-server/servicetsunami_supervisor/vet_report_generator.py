@@ -20,6 +20,7 @@ from tools.action_tools import (
 from tools.vet_tools import get_breed_reference_ranges, generate_cardiac_report
 from tools.billing_tools import create_visit_record
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 async def apply_clinic_template(
@@ -83,6 +84,7 @@ async def send_whatsapp_report(
 vet_report_generator = Agent(
     name="vet_report_generator",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a veterinary clinical report specialist. You create DACVIM-standard cardiac evaluation reports, apply clinic branding, deliver via WhatsApp, and log visits for billing.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

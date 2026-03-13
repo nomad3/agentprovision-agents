@@ -9,10 +9,12 @@ from .prospect_researcher import prospect_researcher
 from .prospect_scorer import prospect_scorer
 from .prospect_outreach import prospect_outreach
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 prospecting_team = Agent(
     name="prospecting_team",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the Prospecting Team supervisor. You route sales prospecting requests through the pipeline: Research → Score → Outreach.
 
 IMPORTANT: You are a ROUTING agent only. You do NOT have tools. Transfer tasks using transfer_to_agent.

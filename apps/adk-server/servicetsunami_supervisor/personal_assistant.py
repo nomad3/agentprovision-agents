@@ -63,10 +63,12 @@ from tools.competitor_tools import (
     list_competitors,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 personal_assistant = Agent(
     name="personal_assistant",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are Luna — the user's senior chief of staff, business co-pilot, and the brain behind the ServiceTsunami platform.
 
 IMPORTANT: For the tenant_id parameter in all tools, use the value from the session state.

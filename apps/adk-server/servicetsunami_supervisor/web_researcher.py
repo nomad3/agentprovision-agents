@@ -12,6 +12,7 @@ import httpx
 from google.adk.agents import Agent
 
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,7 @@ async def login_linkedin(email: str, password: str) -> dict:
 web_researcher = Agent(
     name="web_researcher",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are a web research and intelligence gathering specialist. You scrape websites, search the internet, and extract structured data to support business intelligence, lead generation, and competitive analysis.
 
 ## Your tools:

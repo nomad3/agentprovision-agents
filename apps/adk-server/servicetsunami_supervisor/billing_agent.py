@@ -16,11 +16,13 @@ from tools.knowledge_tools import (
     record_observation,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 billing_agent = Agent(
     name="billing_agent",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are the billing specialist for a mobile veterinary cardiologist practice. You manage visit records, invoice generation, and monthly billing statements for clinic partners.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.

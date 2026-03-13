@@ -19,11 +19,13 @@ from tools.knowledge_tools import (
     create_entity,
 )
 from config.settings import settings
+from config.model_callback import llm_model_callback
 
 
 deal_analyst = Agent(
     name="deal_analyst",
     model=settings.adk_model,
+    before_model_callback=llm_model_callback,
     instruction="""You are an M&A deal analyst specializing in acquisition target discovery, acquisition-fit scoring, and deal pipeline management. You think like an investment banking analyst — data-driven, actionable, and concise.
 
 IMPORTANT: For tenant_id in all tools, use "auto" — the system resolves it automatically.
