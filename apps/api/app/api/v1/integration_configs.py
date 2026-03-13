@@ -143,6 +143,30 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
              "help": "Found in TikTok Ads Manager > Account Info"},
         ],
     },
+    "anthropic_llm": {
+        "display_name": "Anthropic (Claude)",
+        "description": "Use Claude models for agent chat",
+        "icon": "FaRobot",
+        "credentials": [
+            {"key": "api_key", "label": "API Key", "type": "password", "required": True,
+             "help": "Get your key at console.anthropic.com"},
+            {"key": "model", "label": "Model ID", "type": "text", "required": True,
+             "help": "e.g. claude-sonnet-4-5, claude-haiku-4-5"}
+        ],
+        "auth_type": "manual"
+    },
+    "gemini_llm": {
+        "display_name": "Google Gemini",
+        "description": "Use Gemini models for agent chat (default)",
+        "icon": "FaGoogle",
+        "credentials": [
+            {"key": "api_key", "label": "API Key", "type": "password", "required": True,
+             "help": "Get your key at aistudio.google.com"},
+            {"key": "model", "label": "Model ID", "type": "text", "required": True,
+             "help": "e.g. gemini-2.5-pro, gemini-2.5-flash"}
+        ],
+        "auth_type": "manual"
+    },
 }
 
 
