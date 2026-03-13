@@ -74,7 +74,8 @@ The heart of the system is a single `rl_experiences` table that captures every d
 +-------------------+    |     | trajectory_id          |  |  |    |   (nullable=global) |  |
          |               +---->| step_index             |  |  |    | decision_point      |  |
          |                     | decision_point         |  |  |    | weights        JSON |  |
-         |                     | state            JSON  |  |  |    | version             |  |
+         |                     | state            JSON  |  |  |    | version             |
+         |                     | state_embedding v(768)|  |  |    |                     |  |
          |                     | action           JSON  |  |  |    | experience_count    |  |
          v                     | alternatives     JSON  |  |  |    | last_updated_at     |  |
 +-------------------+          | reward         FLOAT?  |  |  |    | exploration_rate    |  |
@@ -101,7 +102,8 @@ The heart of the system is a single `rl_experiences` table that captures every d
 | `trajectory_id` | UUID | Links steps in multi-step tasks |
 | `step_index` | Integer | Position within trajectory |
 | `decision_point` | String | One of: `agent_selection`, `memory_recall`, `skill_routing`, `orchestration_routing`, `triage_classification`, `response_generation`, `tool_selection`, `entity_validation`, `score_weighting`, `sync_strategy`, `execution_decision`, `code_strategy`, `deal_stage_advance`, `change_significance` |
-| `state` | JSON | Context features at decision time (normalized feature vector) |
+| `state` | JSON | Context features at decision time (categorical + numeric features) |
+| `state_embedding` | vector(768) (nullable) | Gemini Embedding 2 of state description text, for pgvector similarity search |
 | `action` | JSON | What was chosen (agent_id, memory_ids, skill_name, etc.) |
 | `alternatives` | JSON | What else could have been chosen + their scores |
 | `reward` | Float (nullable) | Computed reward (-1.0 to 1.0), null until feedback arrives |
@@ -133,7 +135,8 @@ The heart of the system is a single `rl_experiences` table that captures every d
 - **`alternatives`** stores what was _not_ chosen — essential for counterfactual learning and explainability.
 - **`reward` is nullable** — experiences are stored immediately at decision time, rewards arrive later (sometimes much later for batch review).
 - **`explanation`** is populated at decision time so users can see "why" even before outcomes are known.
-- **State is a JSON feature vector**, not raw data — the state encoder normalizes context into comparable features.
+- **Dual state representation:** `state` (JSON) stores structured categorical + numeric features for explainability. `state_embedding` (vector 768) stores the Gemini Embedding 2 vector of a natural language state description for pgvector similarity search. Both are populated at decision time.
+- **Leverages existing embedding infrastructure:** Uses the same `embedding_service.embed_text()`, Gemini Embedding 2 model, and pgvector `<=>` operator already in production for entity/memory/chat/skill embeddings (992+ embeddings live). New content type `"rl_experience"` follows the established polymorphic pattern.
 
 ### Data Management & Performance
 
@@ -147,15 +150,32 @@ The heart of the system is a single `rl_experiences` table that captures every d
 - Primary index: `(tenant_id, decision_point, created_at DESC)` — covers the most common query pattern
 - Secondary index: `(trajectory_id)` — for cross-step reward propagation lookups
 
-**Similarity Search Strategy:**
-- pgvector is not available in production Cloud SQL. Full cosine similarity over all experiences is not viable at scale.
-- **Approach: Recent-N with categorical pre-filtering.** For each scoring request:
-  1. Filter by `tenant_id + decision_point` (index hit)
-  2. Further filter by categorical state features (exact match on `task_type`, `memory_type`, etc.)
-  3. Load at most the **last 200 matching experiences** (ordered by `created_at DESC`)
-  4. Compute cosine similarity on numeric features in-application code over this bounded set
-- This caps similarity computation at O(200) per decision, adding < 10ms latency
-- As pgvector becomes available (embedding service in progress), migrate to SQL-level vector similarity for improved recall
+**Similarity Search Strategy — pgvector + Gemini Embedding 2:**
+- pgvector v0.8.1 is installed in production Cloud SQL with IVFFlat indexing
+- Gemini Embedding 2 (768-dim) is live and already used for entities, memories, chat messages, tasks, and skills
+- **Approach: SQL-level vector similarity via the existing `embedding_service` pattern.**
+  1. At decision time, generate a text description of the current state context
+  2. Embed via `embedding_service.embed_text(state_description, task_type="RETRIEVAL_QUERY")`
+  3. Store the 768-dim vector in `rl_experiences.state_embedding`
+  4. For scoring: query similar past experiences using pgvector's `<=>` cosine distance operator:
+     ```sql
+     SELECT *, 1 - (state_embedding <=> :query_vector) AS similarity
+     FROM rl_experiences
+     WHERE tenant_id = :tenant_id
+       AND decision_point = :decision_point
+       AND archived_at IS NULL
+     ORDER BY state_embedding <=> :query_vector
+     LIMIT 200
+     ```
+  5. This leverages the IVFFlat index for approximate nearest-neighbor, returning results in < 10ms
+- **State text generation:** Each decision point produces a natural language description of context:
+  - agent_selection: `"Task: {task_type}, capabilities needed: {caps}, urgency: {level}"`
+  - memory_recall: `"Query: {keywords}, agent: {agent_name}, context: {summary}"`
+  - triage_classification: `"Email from {sender}, subject: {subject}, entities: {mentions}"`
+  - etc. — mirrors the text patterns used for existing content type embeddings
+- **New content type in embeddings table:** `"rl_experience"` — registered alongside existing types (entity, memory_activity, chat_message, agent_task, skill). Can optionally also store in the shared `embeddings` table for cross-type semantic recall.
+- **Fallback:** If `GOOGLE_API_KEY` is not configured, falls back to categorical pre-filtering + in-app numeric similarity over last 200 experiences (same pattern as knowledge search ILIKE fallback)
+- **Index:** Add IVFFlat index on `rl_experiences.state_embedding` with `vector_cosine_ops` (same pattern as main embeddings table)
 
 ---
 
@@ -342,7 +362,7 @@ The policy engine replaces current hardcoded logic with learned scoring.
 Normalizes raw context into comparable feature vectors per decision point:
 
 - **`agent_selection`:** `{task_type, required_capabilities, urgency, tenant_history_with_agent, agent_proficiency, agent_success_rate, agent_load}`
-- **`memory_recall`:** `{query_keywords, memory_type, memory_age, memory_importance, memory_access_count, memory_last_reward, text_match_score}` (upgrades to `semantic_similarity` when pgvector/embedding service becomes available)
+- **`memory_recall`:** `{query_keywords, memory_type, memory_age, memory_importance, memory_access_count, memory_last_reward, semantic_similarity}` (via pgvector + Gemini Embedding 2, 768-dim cosine similarity)
 - **`skill_routing`:** `{task_type, skill_proficiency, skill_success_rate, skill_times_used, recent_reward_trend}`
 - **`orchestration_routing`:** `{supervisor_context, sub_agent_availability, sub_agent_recent_rewards, task_complexity}`
 - **`triage_classification`:** `{sender_history, content_signals, entity_mentions, time_of_day, tenant_notification_preferences}`
@@ -351,10 +371,11 @@ Normalizes raw context into comparable feature vectors per decision point:
 
 For each candidate action, the engine:
 
-1. Queries the experience store for similar past experiences (same decision point, similar state features)
-2. Weights by reward and recency: `score = Σ(reward_i * recency_decay_i * similarity_i) / Σ(recency_decay_i * similarity_i)`
-3. Recency decay: `e^(-λ * days_since_experience)` where λ is configurable (default 0.05 — ~14 day half-life)
-4. Similarity: cosine similarity between current state vector and stored state vector
+1. Embeds the current state description via `embedding_service.embed_text()` (Gemini Embedding 2, 768-dim)
+2. Queries `rl_experiences` for the top 200 most similar past experiences using pgvector `<=>` operator (same decision point, tenant-scoped, non-archived)
+3. Weights matched experiences by reward and recency: `score = Σ(reward_i * recency_decay_i * similarity_i) / Σ(recency_decay_i * similarity_i)`
+4. Recency decay: `e^(-λ * days_since_experience)` where λ is configurable (default 0.05 — ~14 day half-life)
+5. Similarity: cosine similarity from pgvector (`1 - distance`), already computed in the SQL query
 
 ### Exploration Gate
 
@@ -642,7 +663,7 @@ Full i18next support for Spanish and English:
 - `apps/web/src/i18n/locales/es/learning.json`
 
 **Migration:**
-- `apps/api/migrations/` — new SQL for `rl_experiences` (partitioned by tenant_id + month) and `rl_policy_states` tables, add `rl_settings` JSON column to `tenant_features`
+- `apps/api/migrations/` — new SQL for `rl_experiences` (with `state_embedding vector(768)` column, IVFFlat index on `state_embedding` with `vector_cosine_ops`, partitioned by tenant_id + month) and `rl_policy_states` tables, add `rl_settings` JSON column to `tenant_features`, add `updated_at` to `notifications`
 
 ### API Contract
 
@@ -675,6 +696,7 @@ All endpoints under `/api/v1/rl`, require JWT authentication, tenant-scoped:
 - `apps/api/app/models/agent_skill.py` — `proficiency` and `success_rate` become computed from RL policy state (see Migration Strategy below)
 
 **Services:**
+- `apps/api/app/services/embedding_service.py` — add `embed_rl_state()` helper that generates state description text per decision point and embeds via Gemini Embedding 2. Register `"rl_experience"` as a new content type.
 - `apps/api/app/services/task_dispatcher.py` — replace static `_calculate_capability_score` with policy engine call
 - `apps/api/app/services/memory/memory_service.py` — `get_relevant_memories()` uses policy engine to rank memories instead of current `importance.desc()` ordering
 - `apps/api/app/models/notification.py` — add `updated_at` DateTime column to track when read/dismissed state changed (prerequisite for implicit reward signals)
