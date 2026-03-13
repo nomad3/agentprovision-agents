@@ -25,6 +25,8 @@ class TenantFeaturesBase(BaseModel):
     # UI
     hide_servicetsunami_branding: bool = False
     plan_type: str = "starter"
+    # LLM Provider Selection
+    active_llm_provider: Optional[str] = "gemini_llm"
     # Reinforcement Learning
     rl_enabled: bool = False
     rl_settings: Optional[Dict[str, Any]] = None
@@ -50,6 +52,7 @@ class TenantFeaturesUpdate(BaseModel):
     storage_limit_gb: Optional[float] = None
     hide_servicetsunami_branding: Optional[bool] = None
     plan_type: Optional[str] = None
+    active_llm_provider: Optional[str] = None
     rl_enabled: Optional[bool] = None
     rl_settings: Optional[Dict[str, Any]] = None
 

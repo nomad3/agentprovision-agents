@@ -53,6 +53,9 @@ class TenantFeatures(Base):
     # Plan Type
     plan_type = Column(String, default="starter")  # starter, professional, enterprise
 
+    # LLM Provider Selection
+    active_llm_provider = Column(String(50), default="gemini_llm")
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
