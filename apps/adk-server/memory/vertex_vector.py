@@ -1,51 +1,53 @@
-"""Embedding service using Gemini Embedding 2."""
+"""Embedding service using nomic-embed-text-v1.5 (local, no API key needed)."""
 import logging
 from typing import List, Optional
 
-from config.settings import settings
-
 logger = logging.getLogger(__name__)
 
-_client = None
-EMBEDDING_MODEL = "gemini-embedding-2-preview"
+_model = None
+EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 EMBEDDING_DIMS = 768
 
 
-def _get_client():
-    global _client
-    if _client is None:
-        from google import genai
-        _client = genai.Client(api_key=settings.google_api_key)
-    return _client
+def _get_model():
+    global _model
+    if _model is None:
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
+        logger.info(f"Loaded embedding model: {EMBEDDING_MODEL}")
+    return _model
 
 
 class EmbeddingService:
-    """Generate embeddings via Gemini Embedding 2."""
+    """Generate embeddings via nomic-embed-text-v1.5 (local)."""
 
     async def get_embedding(self, text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-        if not settings.google_api_key:
-            return None
         try:
-            from google.genai import types
-            client = _get_client()
-            result = client.models.embed_content(
-                model=EMBEDDING_MODEL,
-                contents=text[:8000],
-                config=types.EmbedContentConfig(
-                    task_type=task_type,
-                    output_dimensionality=EMBEDDING_DIMS,
-                ),
-            )
-            return result.embeddings[0].values
+            model = _get_model()
+            truncated = text[:8000]
+
+            # Nomic-embed uses task-specific prefixes
+            if task_type == "RETRIEVAL_QUERY":
+                prefixed = f"search_query: {truncated}"
+            else:
+                prefixed = f"search_document: {truncated}"
+
+            embedding = model.encode(prefixed, normalize_embeddings=True)
+            return embedding.tolist()
         except Exception as e:
             logger.error("Embedding failed: %s", e)
             return None
 
     async def get_embeddings_batch(self, texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT") -> List[Optional[List[float]]]:
-        results = []
-        for t in texts:
-            results.append(await self.get_embedding(t, task_type))
-        return results
+        try:
+            model = _get_model()
+            prefix = "search_query: " if task_type == "RETRIEVAL_QUERY" else "search_document: "
+            prefixed = [f"{prefix}{t[:8000]}" for t in texts]
+            embeddings = model.encode(prefixed, normalize_embeddings=True, batch_size=32)
+            return [e.tolist() for e in embeddings]
+        except Exception as e:
+            logger.error("Batch embedding failed: %s", e)
+            return [None] * len(texts)
 
 
 _embedding_service: Optional[EmbeddingService] = None

@@ -1,7 +1,8 @@
 """Embedding service — generate, store, and search vector embeddings.
 
-Uses Google Gemini Embedding 2 (768-dim) via the google-genai SDK.
-All functions are module-level, matching the service pattern used elsewhere.
+Uses nomic-embed-text-v1.5 (768-dim) via sentence-transformers for local,
+API-key-free embedding generation. All functions are module-level, matching
+the service pattern used elsewhere.
 """
 import logging
 import uuid
@@ -10,29 +11,31 @@ from typing import Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.models.embedding import Embedding
 
 logger = logging.getLogger(__name__)
 
-# Lazy-initialized Google GenAI client
-_client = None
+# Lazy-initialized sentence-transformers model
+_model = None
 
-_MODEL = "gemini-embedding-2-preview"
+_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 _DIMENSIONS = 768
-_MAX_INPUT_CHARS = 8000  # stay under 8192-token limit
+_MAX_INPUT_CHARS = 8000
 
 
-def _get_client():
-    """Lazy-init the Google GenAI client."""
-    global _client
-    if _client is not None:
-        return _client
-    if not settings.GOOGLE_API_KEY:
+def _get_model():
+    """Lazy-init the sentence-transformers model."""
+    global _model
+    if _model is not None:
+        return _model
+    try:
+        from sentence_transformers import SentenceTransformer
+        _model = SentenceTransformer(_MODEL_NAME, trust_remote_code=True)
+        logger.info(f"Loaded embedding model: {_MODEL_NAME}")
+        return _model
+    except Exception:
+        logger.exception(f"Failed to load embedding model {_MODEL_NAME}")
         return None
-    from google import genai  # lazy import
-    _client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-    return _client
 
 
 # ------------------------------------------------------------------
@@ -45,24 +48,27 @@ def embed_text(
 ) -> Optional[List[float]]:
     """Generate a 768-dim embedding for *text_content*.
 
-    Returns None when no API key is configured or on upstream error.
+    Returns None when the model fails to load or on error.
+    The task_type prefix follows nomic-embed conventions:
+    - "search_document: " for documents
+    - "search_query: " for queries
     """
-    client = _get_client()
-    if client is None:
-        logger.debug("embed_text skipped — GOOGLE_API_KEY not set")
+    model = _get_model()
+    if model is None:
+        logger.debug("embed_text skipped — model not loaded")
         return None
 
     try:
         truncated = text_content[:_MAX_INPUT_CHARS]
-        response = client.models.embed_content(
-            model=_MODEL,
-            contents=truncated,
-            config={
-                "task_type": task_type,
-                "output_dimensionality": _DIMENSIONS,
-            },
-        )
-        return list(response.embeddings[0].values)
+
+        # Nomic-embed uses task-specific prefixes
+        if task_type == "RETRIEVAL_QUERY":
+            prefixed = f"search_query: {truncated}"
+        else:
+            prefixed = f"search_document: {truncated}"
+
+        embedding = model.encode(prefixed, normalize_embeddings=True)
+        return embedding.tolist()
     except Exception:
         logger.exception("embed_text failed")
         return None
@@ -98,7 +104,7 @@ def embed_and_store(
         embedding=vector,
         text_content=text_content[:_MAX_INPUT_CHARS],
         task_type=task_type,
-        model=_MODEL,
+        model=_MODEL_NAME,
     )
     db.add(row)
     db.flush()
