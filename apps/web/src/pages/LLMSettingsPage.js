@@ -1,183 +1,242 @@
-import { useEffect, useState } from 'react';
-import { Alert, Badge, Button, Col, Container, Form, InputGroup, Row, Spinner } from 'react-bootstrap';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Container, Row, Col, Card, Form, Button, Badge, Alert, Spinner } from 'react-bootstrap';
+import { FaRobot, FaGoogle, FaKey, FaSave, FaCheck, FaEye, FaEyeSlash } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
-import { FaCheckCircle, FaMicrochip, FaEye, FaEyeSlash, FaKey, FaTimesCircle } from 'react-icons/fa';
-import PremiumCard from '../components/common/PremiumCard';
-import Layout from '../components/Layout';
-import llmService from '../services/llm';
+import api from '../services/api';
 
-const LLMSettingsPage = () => {
-  const { t } = useTranslation('settings');
+const PROVIDER_ICONS = {
+  anthropic_llm: FaRobot,
+  gemini_llm: FaGoogle,
+};
+
+const LLM_PROVIDER_SUFFIX = '_llm';
+
+export default function LLMSettingsPage() {
+  const { t } = useTranslation('common');
   const [providers, setProviders] = useState([]);
+  const [credentials, setCredentials] = useState({});
+  const [activeProvider, setActiveProvider] = useState('gemini_llm');
+  const [showKeys, setShowKeys] = useState({});
+  const [saving, setSaving] = useState({});
+  const [saveSuccess, setSaveSuccess] = useState({});
+  const [activating, setActivating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [savingProvider, setSavingProvider] = useState(null);
-  const [apiKeys, setApiKeys] = useState({});
-  const [showKeys, setShowKeys] = useState({});
-  const [saveSuccess, setSaveSuccess] = useState({});
 
-  useEffect(() => {
-    loadProviders();
-  }, []);
-
-  const loadProviders = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await llmService.getProviderStatus();
-      setProviders(data);
+      // Load registry entries filtered to LLM providers
+      const registryRes = await api.get('/integration_configs/registry');
+      const llmProviders = registryRes.data.filter(e => e.integration_name.endsWith(LLM_PROVIDER_SUFFIX));
+
+      // Load tenant's integration configs to check which have credentials
+      const configsRes = await api.get('/integration_configs');
+      const configMap = {};
+      configsRes.data.forEach(c => { configMap[c.integration_name] = c; });
+
+      // Load tenant features to get active provider
+      const featuresRes = await api.get('/features');
+      const active = featuresRes.data?.active_llm_provider || 'gemini_llm';
+
+      // For each LLM provider, check credential status
+      const providersWithStatus = await Promise.all(llmProviders.map(async (p) => {
+        const config = configMap[p.integration_name];
+        let credStatus = {};
+        if (config) {
+          try {
+            const statusRes = await api.get(`/integration_configs/${config.id}/credentials/status`);
+            (statusRes.data.stored_keys || []).forEach(key => { credStatus[key] = true; });
+          } catch { /* no creds yet */ }
+        }
+        return { ...p, config, credStatus, configured: Object.keys(credStatus).length > 0, name: p.integration_name };
+      }));
+
+      setProviders(providersWithStatus);
+      setActiveProvider(active);
+      setError(null);
     } catch (err) {
-      setError(t('llm.errors.load'));
+      setError(err.message || 'Failed to load LLM providers');
     } finally {
       setLoading(false);
     }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
+  const handleCredentialChange = (providerName, key, value) => {
+    setCredentials(prev => ({
+      ...prev,
+      [providerName]: { ...(prev[providerName] || {}), [key]: value }
+    }));
   };
 
-  const handleKeyChange = (providerName, value) => {
-    setApiKeys(prev => ({ ...prev, [providerName]: value }));
-    setSaveSuccess(prev => ({ ...prev, [providerName]: false }));
-  };
+  const handleSave = async (provider) => {
+    const creds = credentials[provider.name];
+    if (!creds) return;
 
-  const handleSaveKey = async (providerName) => {
-    const key = apiKeys[providerName];
-    if (!key) return;
-
+    setSaving(prev => ({ ...prev, [provider.name]: true }));
     try {
-      setSavingProvider(providerName);
-      await llmService.setProviderKey(providerName, key);
-      setSaveSuccess(prev => ({ ...prev, [providerName]: true }));
-      setApiKeys(prev => ({ ...prev, [providerName]: '' }));
-      await loadProviders();
+      // Ensure integration config exists
+      let configId = provider.config?.id;
+      if (!configId) {
+        const createRes = await api.post('/integration_configs', {
+          integration_name: provider.name,
+          enabled: true,
+        });
+        configId = createRes.data.id;
+      }
+
+      // Store each credential field
+      for (const [key, value] of Object.entries(creds)) {
+        if (value && value.trim()) {
+          await api.post(`/integration_configs/${configId}/credentials`, {
+            credential_key: key,
+            value: value.trim(),
+            credential_type: key === 'api_key' ? 'api_key' : 'config',
+          });
+        }
+      }
+
+      setSaveSuccess(prev => ({ ...prev, [provider.name]: true }));
+      setCredentials(prev => ({ ...prev, [provider.name]: {} }));
+      setTimeout(() => setSaveSuccess(prev => ({ ...prev, [provider.name]: false })), 3000);
+      await loadData();
     } catch (err) {
-      setError(t('llm.errors.saveKey', { provider: providerName }));
+      setError(`Failed to save ${provider.display_name} credentials: ${err.message}`);
     } finally {
-      setSavingProvider(null);
+      setSaving(prev => ({ ...prev, [provider.name]: false }));
     }
   };
 
-  const toggleShowKey = (providerName) => {
-    setShowKeys(prev => ({ ...prev, [providerName]: !prev[providerName] }));
-  };
-
-  const getProviderIcon = (name) => {
-    const icons = {
-      openai: '\uD83E\uDD16',
-      anthropic: '\uD83E\uDDE0',
-      deepseek: '\uD83D\uDD0D',
-      google: '\uD83C\uDF10',
-      mistral: '\uD83D\uDCA8'
-    };
-    return icons[name] || '\uD83D\uDD0C';
+  const handleSetActive = async (providerName) => {
+    setActivating(true);
+    try {
+      await api.put('/features', { active_llm_provider: providerName });
+      setActiveProvider(providerName);
+    } catch (err) {
+      setError(`Failed to set active provider: ${err.message}`);
+    } finally {
+      setActivating(false);
+    }
   };
 
   if (loading) {
     return (
-      <Layout>
-        <Container className="py-4 text-center">
-          <Spinner animation="border" variant="primary" />
-          <p className="mt-3 text-soft">{t('llm.loading')}</p>
-        </Container>
-      </Layout>
+      <Container className="py-4 text-center">
+        <Spinner animation="border" className="text-info" />
+        <p className="text-light mt-2">{t('loading', 'Loading...')}</p>
+      </Container>
     );
   }
 
   return (
-    <Layout>
-      <Container fluid className="py-2">
-        <div className="d-flex align-items-center mb-4">
-          <div className="icon-pill-sm me-3">
-            <FaMicrochip size={24} />
-          </div>
-          <div>
-            <h2 className="mb-1 fw-bold">{t('llm.title')}</h2>
-            <p className="text-soft mb-0">{t('llm.subtitle')}</p>
-          </div>
-        </div>
+    <Container fluid className="py-4">
+      <h2 className="text-light mb-1">{t('llm.title', 'LLM Providers')}</h2>
+      <p className="text-secondary mb-4">{t('llm.subtitle', 'Configure which AI model powers your agent chat')}</p>
 
-        {error && (
-          <Alert variant="danger" dismissible onClose={() => setError(null)}>
-            {error}
-          </Alert>
-        )}
+      {error && <Alert variant="danger" dismissible onClose={() => setError(null)}>{error}</Alert>}
 
-        <Row xs={1} md={2} lg={3} className="g-4">
-          {providers.map((provider) => (
+      <Row xs={1} md={2} lg={3} className="g-4">
+        {providers.map(provider => {
+          const Icon = PROVIDER_ICONS[provider.name] || FaKey;
+          const isActive = activeProvider === provider.name;
+          const providerCreds = credentials[provider.name] || {};
+
+          return (
             <Col key={provider.name}>
-              <PremiumCard className={`h-100 ${provider.configured ? 'border-primary border-opacity-50' : ''}`}>
-                <div className="d-flex align-items-center justify-content-between mb-3">
-                  <div className="d-flex align-items-center">
-                    <span className="me-2" style={{ fontSize: '1.5rem' }}>
-                      {getProviderIcon(provider.name)}
-                    </span>
-                    <strong>{provider.display_name}</strong>
+              <Card className="h-100" style={{
+                background: 'rgba(255,255,255,0.05)',
+                border: isActive ? '1px solid rgba(0, 210, 255, 0.5)' : '1px solid rgba(255,255,255,0.1)',
+                borderRadius: '12px',
+              }}>
+                <Card.Body>
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <div className="d-flex align-items-center gap-2">
+                      <Icon size={24} className="text-info" />
+                      <h5 className="text-light mb-0">{provider.display_name}</h5>
+                    </div>
+                    <div className="d-flex gap-2">
+                      {provider.configured && (
+                        <Badge bg="success" className="px-2 py-1">
+                          {t('llm.configured', 'Configured')}
+                        </Badge>
+                      )}
+                      {isActive && (
+                        <Badge bg="info" className="px-2 py-1">
+                          {t('llm.active', 'Active')}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
-                  {provider.configured ? (
-                    <Badge bg="success" className="d-flex align-items-center bg-opacity-25 text-success border border-success">
-                      <FaCheckCircle className="me-1" /> {t('llm.connected')}
-                    </Badge>
-                  ) : (
-                    <Badge bg="secondary" className="d-flex align-items-center bg-opacity-25 text-secondary border border-secondary">
-                      <FaTimesCircle className="me-1" /> {t('llm.notConfigured')}
-                    </Badge>
-                  )}
-                </div>
 
-                <div className="mb-3">
-                  <Form.Label className="small text-soft">
-                    <FaKey className="me-1" />
-                    {t('llm.apiKey')}
-                  </Form.Label>
-                  <InputGroup>
-                    <Form.Control
-                      type={showKeys[provider.name] ? 'text' : 'password'}
-                      placeholder={provider.configured ? t('llm.apiKeyMasked') : t('llm.apiKeyPlaceholder')}
-                      value={apiKeys[provider.name] || ''}
-                      onChange={(e) => handleKeyChange(provider.name, e.target.value)}
-                      disabled={savingProvider === provider.name}
-                      className="border-secondary border-opacity-50"
-                    />
+                  <p className="text-secondary small mb-3">{provider.description}</p>
+
+                  {(provider.credentials || []).map(cred => (
+                    <Form.Group key={cred.key} className="mb-2">
+                      <Form.Label className="text-light small">{cred.label}</Form.Label>
+                      <div className="d-flex gap-2">
+                        <Form.Control
+                          type={cred.type === 'password' && !showKeys[`${provider.name}_${cred.key}`] ? 'password' : 'text'}
+                          size="sm"
+                          placeholder={provider.credStatus[cred.key] ? t('llm.keyMasked', 'Saved (enter new value to update)') : cred.help || ''}
+                          value={providerCreds[cred.key] || ''}
+                          onChange={e => handleCredentialChange(provider.name, cred.key, e.target.value)}
+                          style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff' }}
+                        />
+                        {cred.type === 'password' && (
+                          <Button
+                            variant="outline-secondary"
+                            size="sm"
+                            onClick={() => setShowKeys(prev => ({
+                              ...prev,
+                              [`${provider.name}_${cred.key}`]: !prev[`${provider.name}_${cred.key}`]
+                            }))}
+                          >
+                            {showKeys[`${provider.name}_${cred.key}`] ? <FaEyeSlash /> : <FaEye />}
+                          </Button>
+                        )}
+                      </div>
+                    </Form.Group>
+                  ))}
+
+                  <div className="d-flex gap-2 mt-3">
                     <Button
-                      variant="outline-secondary"
-                      className="border-secondary border-opacity-50 text-soft"
-                      onClick={() => toggleShowKey(provider.name)}
+                      variant="outline-info"
+                      size="sm"
+                      disabled={saving[provider.name] || !Object.values(providerCreds).some(v => v?.trim())}
+                      onClick={() => handleSave(provider)}
                     >
-                      {showKeys[provider.name] ? <FaEyeSlash /> : <FaEye />}
+                      {saving[provider.name] ? (
+                        <Spinner animation="border" size="sm" />
+                      ) : saveSuccess[provider.name] ? (
+                        <><FaCheck className="me-1" /> {t('llm.saved', 'Saved')}</>
+                      ) : (
+                        <><FaSave className="me-1" /> {t('llm.saveKeys', 'Save')}</>
+                      )}
                     </Button>
-                  </InputGroup>
-                </div>
 
-                {saveSuccess[provider.name] && (
-                  <small className="text-success mb-3 d-block">
-                    <FaCheckCircle className="me-1" /> {t('llm.keySaved')}
-                  </small>
-                )}
-
-                <div className="mt-auto d-grid">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={() => handleSaveKey(provider.name)}
-                    disabled={!apiKeys[provider.name] || savingProvider === provider.name}
-                  >
-                    {savingProvider === provider.name ? (
-                      <Spinner animation="border" size="sm" />
-                    ) : (
-                      t('llm.saveKey')
+                    {!isActive && provider.configured && (
+                      <Button
+                        variant="info"
+                        size="sm"
+                        disabled={activating}
+                        onClick={() => handleSetActive(provider.name)}
+                      >
+                        {activating ? (
+                          <Spinner animation="border" size="sm" />
+                        ) : (
+                          t('llm.setActive', 'Set as Active')
+                        )}
+                      </Button>
                     )}
-                  </Button>
-                </div>
-
-                <div className="mt-3 pt-3 border-top border-secondary border-opacity-25 text-center">
-                  <small className="text-muted">
-                    {provider.is_openai_compatible ? t('llm.openaiCompatible') : t('llm.nativeApi')}
-                  </small>
-                </div>
-              </PremiumCard>
+                  </div>
+                </Card.Body>
+              </Card>
             </Col>
-          ))}
-        </Row>
-      </Container>
-    </Layout>
+          );
+        })}
+      </Row>
+    </Container>
   );
-};
-
-export default LLMSettingsPage;
+}
