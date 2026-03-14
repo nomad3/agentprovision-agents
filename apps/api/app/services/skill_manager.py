@@ -22,13 +22,77 @@ BUNDLED_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 # Base writable skills directory
 SKILLS_BASE = Path(os.environ.get("DATA_STORAGE_PATH", str(BUNDLED_SKILLS_DIR.parent))) / "skills"
 
-VALID_CATEGORIES = {"sales", "marketing", "data", "coding", "communication", "automation", "general"}
+VALID_CATEGORIES = {"sales", "marketing", "data", "coding", "communication", "automation", "general", "productivity"}
+
+# Map external category names to our valid set
+CATEGORY_MAP = {
+    "productivity": "productivity",
+    "email": "communication",
+    "calendar": "communication",
+    "storage": "data",
+    "collaboration": "communication",
+}
+
+
+def _find_skill_md(skill_dir: Path) -> Optional[Path]:
+    """Find skill.md or SKILL.md (case-insensitive) in a directory."""
+    for name in ("skill.md", "SKILL.md", "Skill.md"):
+        p = skill_dir / name
+        if p.exists():
+            return p
+    return None
+
+
+def _normalize_external_metadata(metadata: dict) -> dict:
+    """Adapt external skill formats (e.g. GWS SKILL.md) to our frontmatter schema."""
+    # If metadata already has 'engine', it's likely our format — skip
+    if "engine" in metadata:
+        return metadata
+
+    normalized = dict(metadata)
+
+    # GWS puts description in frontmatter, we use it in body
+    # Keep it in frontmatter — _parse_skill_md will handle it
+
+    # Version: semver string "1.0.0" → integer 1
+    version = normalized.get("version", 1)
+    if isinstance(version, str) and "." in version:
+        try:
+            normalized["version"] = int(version.split(".")[0])
+        except ValueError:
+            normalized["version"] = 1
+
+    # Engine: GWS skills are CLI instruction files → markdown
+    normalized.setdefault("engine", "markdown")
+
+    # Category: nested in metadata.openclaw.category → top-level
+    openclaw = normalized.pop("metadata", {}).get("openclaw", {}) if isinstance(normalized.get("metadata"), dict) else {}
+    raw_category = openclaw.get("category", "general")
+    normalized["category"] = CATEGORY_MAP.get(raw_category, raw_category)
+    if normalized["category"] not in VALID_CATEGORIES:
+        normalized["category"] = "general"
+
+    # Tags: derive from name if not present
+    if not normalized.get("tags"):
+        name = normalized.get("name", "")
+        normalized["tags"] = [t for t in name.replace("-", " ").split() if t and t != "gws"]
+
+    # Auto-trigger: use description if available
+    if not normalized.get("auto_trigger") and normalized.get("description"):
+        normalized["auto_trigger"] = normalized["description"]
+
+    # Store requires info in properties for reference
+    requires = openclaw.get("requires", {})
+    if requires:
+        normalized["requires"] = requires
+
+    return normalized
 
 
 def _parse_skill_md(skill_dir: Path, tier: str = "native", tenant_id: str = None) -> Optional[FileSkill]:
     """Parse a skill.md file and return a FileSkill, or None if malformed."""
-    skill_file = skill_dir / "skill.md"
-    if not skill_file.exists():
+    skill_file = _find_skill_md(skill_dir)
+    if not skill_file:
         return None
     try:
         content = skill_file.read_text(encoding="utf-8")
@@ -43,8 +107,12 @@ def _parse_skill_md(skill_dir: Path, tier: str = "native", tenant_id: str = None
         if not isinstance(metadata, dict):
             return None
 
+        # Normalize external formats (e.g. GWS SKILL.md) to our schema
+        metadata = _normalize_external_metadata(metadata)
+
         body = parts[2].strip()
-        description = body
+        # Use frontmatter description if available (GWS pattern), else parse body
+        description = metadata.get("description") or body
         if description.startswith("## Description"):
             description = description[len("## Description"):].strip()
 
@@ -520,8 +588,8 @@ class SkillManager:
 
                 contents = resp.json()
                 if isinstance(contents, list):
-                    file_names = [f["name"] for f in contents if f["type"] == "file"]
-                    if "skill.md" in file_names:
+                    file_names_lower = {f["name"].lower() for f in contents if f["type"] == "file"}
+                    if "skill.md" in file_names_lower:
                         return self._import_single_skill(client, headers, owner, repo, branch, path, contents)
 
                     imported, errors = [], []
@@ -533,7 +601,8 @@ class SkillManager:
                         if sub_resp.status_code != 200:
                             continue
                         sub_contents = sub_resp.json()
-                        if "skill.md" in [f["name"] for f in sub_contents if f["type"] == "file"]:
+                        sub_names_lower = {f["name"].lower() for f in sub_contents if f["type"] == "file"}
+                        if "skill.md" in sub_names_lower:
                             result = self._import_single_skill(client, headers, owner, repo, branch, subdir["path"], sub_contents)
                             if "error" in result:
                                 errors.append(result["error"])
@@ -561,10 +630,20 @@ class SkillManager:
             if raw_resp.status_code == 200:
                 files[f["name"]] = raw_resp.text
 
-        if "skill.md" not in files:
+        # Find skill.md case-insensitively (supports SKILL.md from GWS etc.)
+        skill_md_key = None
+        for key in files:
+            if key.lower() == "skill.md":
+                skill_md_key = key
+                break
+        if not skill_md_key:
             return {"error": f"No skill.md in {path}"}
 
-        content = files["skill.md"]
+        # Normalize filename to lowercase for our system
+        content = files[skill_md_key]
+        if skill_md_key != "skill.md":
+            files["skill.md"] = content
+            del files[skill_md_key]
         if not content.startswith("---"):
             return {"error": f"skill.md in {path} has no YAML frontmatter"}
         parts = content.split("---", 2)
@@ -572,6 +651,8 @@ class SkillManager:
             return {"error": f"Malformed skill.md in {path}"}
 
         metadata = yaml.safe_load(parts[1].strip())
+        # Normalize external formats (GWS, etc.) to our schema
+        metadata = _normalize_external_metadata(metadata)
         skill_name = metadata.get("name", "")
         if not skill_name:
             return {"error": f"No name in {path}"}
