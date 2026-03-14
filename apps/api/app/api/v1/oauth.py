@@ -419,6 +419,11 @@ def oauth_callback(
     access_token = tokens.get("access_token")
     refresh_token = tokens.get("refresh_token", "")
 
+    logger.info(
+        "OAuth %s token exchange: has_access=%s, has_refresh=%s, token_keys=%s",
+        provider, bool(access_token), bool(refresh_token), list(tokens.keys()),
+    )
+
     if not access_token:
         logger.error("No access_token in response from %s: %s", provider, tokens)
         return HTMLResponse(CALLBACK_HTML.format(

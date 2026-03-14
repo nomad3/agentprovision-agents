@@ -531,7 +531,19 @@ class WhatsAppService:
         # Process through agent — use phone number (not LID) as session key
         try:
             media_parts = None
-            if media_bytes:
+            doc_text = None
+
+            if media_bytes and media_type == "document":
+                # Documents (PDF, Excel, CSV, text): extract text locally, embed it.
+                # Don't send raw bytes to the LLM — process in Python.
+                media_filename = ""
+                if msg.documentMessage:
+                    media_filename = msg.documentMessage.fileName or msg.documentMessage.title or ""
+                doc_text = await self._extract_and_embed_document(
+                    tenant_id, media_bytes, media_mime or "", media_filename,
+                )
+            elif media_bytes:
+                # Images/audio: send to LLM as media_parts
                 try:
                     from app.services.media_utils import build_media_parts
                     media_filename = ""
@@ -546,7 +558,17 @@ class WhatsAppService:
                 except ValueError as e:
                     logger.warning(f"Media processing failed for {sender_phone}: {e}")
 
-            agent_text = media_caption or text or f"[Sent {media_type}]"
+            # If we extracted document text, prepend it to the agent message
+            if doc_text:
+                media_filename = ""
+                if msg.documentMessage:
+                    media_filename = msg.documentMessage.fileName or msg.documentMessage.title or ""
+                agent_text = f"[User sent document: {media_filename}]\n\nExtracted content:\n{doc_text[:3000]}"
+                if len(doc_text) > 3000:
+                    agent_text += f"\n\n(Document truncated — {len(doc_text)} chars total, embedded for search)"
+            else:
+                agent_text = media_caption or text or f"[Sent {media_type}]"
+
             response_text = await self._process_through_agent(
                 tenant_id, sender_phone, agent_text, media_parts=media_parts,
             )
@@ -590,6 +612,71 @@ class WhatsAppService:
                     pass
             except Exception:
                 logger.exception(f"Failed to send reply to {sender_phone} (jid={sender_jid})")
+
+    async def _extract_and_embed_document(
+        self, tenant_id: str, media_bytes: bytes, mime_type: str, filename: str,
+    ) -> Optional[str]:
+        """Extract text from a document and embed it locally. No LLM needed.
+
+        Supports PDF, Excel, CSV, and plain text files.
+        Returns extracted text or None on failure.
+        """
+        import io
+        text_content = None
+
+        try:
+            # PDF
+            if mime_type == "application/pdf" or filename.lower().endswith(".pdf"):
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(media_bytes)) as pdf:
+                    pages = [p.extract_text() for p in pdf.pages if p.extract_text()]
+                    text_content = "\n\n".join(pages) if pages else None
+
+            # Excel
+            elif "spreadsheet" in mime_type or "excel" in mime_type or filename.lower().endswith((".xlsx", ".xls")):
+                import pandas as pd
+                df = pd.read_excel(io.BytesIO(media_bytes))
+                text_content = df.to_string(max_rows=200)
+
+            # CSV
+            elif "csv" in mime_type or filename.lower().endswith(".csv"):
+                text_content = media_bytes.decode("utf-8", errors="replace")
+
+            # Plain text / code
+            elif mime_type.startswith("text/") or filename.lower().endswith((".txt", ".md", ".json", ".py", ".js")):
+                text_content = media_bytes.decode("utf-8", errors="replace")
+
+            if not text_content:
+                return None
+
+            logger.info(f"Extracted {len(text_content)} chars from {filename} ({mime_type})")
+
+            # Embed the document content for semantic search
+            try:
+                from app.services.embedding_service import embed_and_store
+                from app.db.session import SessionLocal
+                import uuid as _uuid
+                db = SessionLocal()
+                try:
+                    embed_and_store(
+                        db,
+                        tenant_id=_uuid.UUID(tenant_id),
+                        content_type="whatsapp_document",
+                        content_id=f"wa_{filename}_{hash(media_bytes) % 10000}",
+                        text_content=text_content[:8000],
+                    )
+                    db.commit()
+                    logger.info(f"Embedded document {filename} for tenant {tenant_id[:8]}")
+                finally:
+                    db.close()
+            except Exception:
+                logger.debug("Document embedding failed (non-fatal)", exc_info=True)
+
+            return text_content
+
+        except Exception:
+            logger.warning(f"Document extraction failed for {filename}", exc_info=True)
+            return None
 
     async def _process_through_agent(
         self, tenant_id: str, sender_id: str, message: str,
