@@ -31,3 +31,4 @@ segno
 pdfplumber>=0.10.0
 pgvector>=0.3.6
 sentence-transformers>=3.0.0
+einops

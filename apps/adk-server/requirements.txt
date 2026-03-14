@@ -4,6 +4,7 @@ litellm>=1.0.0
 
 # Local embeddings (no API key needed)
 sentence-transformers>=3.0.0
+einops
 
 # Pydantic for schemas
 pydantic>=2.0.0
