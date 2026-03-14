@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 from sqlalchemy.orm import Session
@@ -16,12 +16,15 @@ from app.models.agent_task import AgentTask
 from app.models.chat import ChatSession as ChatSessionModel, ChatMessage
 from app.models.dataset import Dataset
 from app.models.execution_trace import ExecutionTrace
+from app.models.tenant_features import TenantFeatures
+from app.models.integration_config import IntegrationConfig
 from app.services import agent_kits as agent_kit_service
 from app.services import datasets as dataset_service
 from app.services.adk_client import ADKError, ADKNotConfiguredError, get_adk_client
 from app.services.knowledge_extraction import knowledge_extraction_service
 from app.services.embedding_service import embed_and_store as _embed
 from app.services.memory_recall import build_memory_context
+from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +205,51 @@ def post_user_message(
     return user_message, assistant_message
 
 
+def _get_tenant_llm_config(db: Session, tenant_id) -> Optional[dict]:
+    """Read tenant's active LLM provider and return config for ADK state_delta.
+
+    Returns dict with {provider, model, api_key} or None if using default Gemini.
+    """
+    import uuid as _uuid
+
+    # Read tenant's active provider from tenant_features
+    features = db.query(TenantFeatures).filter(
+        TenantFeatures.tenant_id == tenant_id
+    ).first()
+
+    if not features or not features.active_llm_provider:
+        return None  # Use default Gemini
+
+    provider = features.active_llm_provider
+    if provider == "gemini_llm":
+        return None  # Default Gemini — no override needed
+
+    # Look up integration config for this provider
+    config = db.query(IntegrationConfig).filter(
+        IntegrationConfig.tenant_id == tenant_id,
+        IntegrationConfig.integration_name == provider,
+        IntegrationConfig.enabled == True
+    ).first()
+
+    if not config:
+        return {"error": f"Provider '{provider}' is not configured. Go to LLM Settings to set it up."}
+
+    # Retrieve decrypted credentials from vault
+    try:
+        creds = retrieve_credentials_for_skill(db, config.id, tenant_id)
+    except Exception:
+        return {"error": "Failed to retrieve credentials. Please re-save your API key in LLM Settings."}
+
+    if not creds or "api_key" not in creds or "model" not in creds:
+        return {"error": "Missing API key or model ID. Please configure them in LLM Settings."}
+
+    return {
+        "provider": provider,
+        "model": creds["model"],
+        "api_key": creds["api_key"],
+    }
+
+
 def _generate_agentic_response(
     db: Session,
     *,
@@ -310,6 +358,20 @@ def _generate_agentic_response(
     if memory_context:
         state_delta["memory_context"] = memory_context
 
+    # Include tenant's LLM provider config for ADK model override
+    llm_config = _get_tenant_llm_config(db, session.tenant_id)
+    if llm_config and "error" in llm_config:
+        # Tenant selected a provider but credentials are missing/broken
+        return _append_message(
+            db,
+            session=session,
+            role="assistant",
+            content=llm_config["error"],
+            context={"error": "llm_config_missing"},
+        )
+    if llm_config:
+        state_delta["llm_config"] = llm_config
+
     if memory_context:
         try:
             from app.services.memory_activity import log_activity
@@ -411,6 +473,10 @@ def _generate_agentic_response(
                     retry_state_delta["whatsapp_phone"] = sender_phone
                 if retry_memory_context:
                     retry_state_delta["memory_context"] = retry_memory_context
+
+                # Include tenant's LLM provider config for ADK model override (retry path)
+                if llm_config:
+                    retry_state_delta["llm_config"] = llm_config
 
                 if retry_memory_context:
                     try:
