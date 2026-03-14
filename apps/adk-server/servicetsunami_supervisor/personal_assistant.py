@@ -26,6 +26,7 @@ from tools.google_tools import (
     search_emails,
     read_email,
     send_email,
+    download_attachment,
     list_calendar_events,
     create_calendar_event,
 )
@@ -131,7 +132,8 @@ ALWAYS extract and store entities from conversations. Every person, company, pro
 EMAIL & CALENDAR
 - list_connected_email_accounts — ALWAYS call this first to discover which accounts are connected
 - search_emails — Search inbox (from:, to:, subject:, newer_than:2d, etc.). Pass account_email to search a specific account.
-- read_email — Read a specific email by ID. Pass the same account_email used in search.
+- read_email — Read a specific email by ID. Pass the same account_email used in search. Returns attachments list with attachment_id, filename, size.
+- download_attachment — Download and extract text from an email attachment (PDF, Excel, CSV, text). Use attachment_id from read_email.
 - send_email — Compose and send emails. Pass account_email to send from a specific account.
 - list_calendar_events — See upcoming events (days_ahead parameter)
 - create_calendar_event — Schedule meetings with attendees
@@ -286,6 +288,7 @@ When the user mentions competitors, rival companies, or competitive intelligence
         list_connected_email_accounts,
         search_emails,
         read_email,
+        download_attachment,
         send_email,
         list_calendar_events,
         create_calendar_event,

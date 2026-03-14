@@ -368,6 +368,9 @@ async def read_email(
             headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
             body = _extract_body(msg.get("payload", {}))
 
+            # Extract attachment metadata
+            attachments = _extract_attachments(msg.get("payload", {}))
+
             return {
                 "status": "success",
                 "id": message_id,
@@ -377,6 +380,7 @@ async def read_email(
                 "date": headers.get("Date", ""),
                 "body": body[:5000],
                 "labels": msg.get("labelIds", []),
+                "attachments": attachments,
                 "provider": "google",
                 "account_email": account.get("email"),
             }
@@ -436,6 +440,131 @@ def _extract_body(payload: dict) -> str:
         return base64.urlsafe_b64decode(payload["body"]["data"]).decode("utf-8", errors="replace")
 
     return ""
+
+
+def _extract_attachments(payload: dict) -> list:
+    """Extract attachment metadata from Gmail message payload."""
+    attachments = []
+
+    def _walk(part):
+        filename = part.get("filename", "")
+        body = part.get("body", {})
+        attachment_id = body.get("attachmentId")
+        if filename and attachment_id:
+            attachments.append({
+                "attachment_id": attachment_id,
+                "filename": filename,
+                "mime_type": part.get("mimeType", ""),
+                "size": body.get("size", 0),
+            })
+        for sub in part.get("parts", []):
+            _walk(sub)
+
+    _walk(payload)
+    return attachments
+
+
+async def download_attachment(
+    tenant_id: str,
+    message_id: str,
+    attachment_id: str,
+    account_email: Optional[str] = None,
+) -> dict:
+    """Download a Gmail attachment and return its text content.
+
+    Use read_email first to get attachment_id and filename from the attachments list.
+    Supports PDF, text, CSV, spreadsheets, and common document formats.
+    Returns the extracted text content (not raw binary).
+
+    Args:
+        tenant_id: Tenant identifier.
+        message_id: Gmail message ID (from search_emails or read_email).
+        attachment_id: Attachment ID (from read_email attachments list).
+        account_email: Optional email account to use.
+
+    Returns:
+        Dict with filename, mime_type, size, and extracted text content.
+    """
+    tenant_id = _resolve_tenant_id(tenant_id)
+    if not message_id or not attachment_id:
+        return {"error": "message_id and attachment_id are required. Use read_email first."}
+
+    account, error = await _resolve_email_account(tenant_id, account_email)
+    if error:
+        return {"error": error}
+
+    integration_name = account["integration_name"]
+    if integration_name != "gmail":
+        return {"error": "Attachment download is only supported for Gmail accounts."}
+
+    token = await _get_oauth_token(tenant_id, integration_name, account.get("email"))
+    if not token:
+        return {"error": "Gmail not connected. Ask the user to reconnect it in Connected Apps."}
+
+    provider_client = _get_provider_client()
+    auth = {"Authorization": f"Bearer {token}"}
+
+    try:
+        resp = await provider_client.get(
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}/attachments/{attachment_id}",
+            headers=auth,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        raw_bytes = base64.urlsafe_b64decode(data.get("data", ""))
+        size = len(raw_bytes)
+
+        # Try to extract text content based on file type
+        text_content = None
+
+        # Plain text / CSV / code files
+        try:
+            text_content = raw_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            pass
+
+        # PDF extraction
+        if text_content and text_content.startswith("%PDF"):
+            text_content = None  # Not useful as raw text, try pdfplumber
+            try:
+                import pdfplumber
+                import io
+                with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+                    pages = []
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            pages.append(page_text)
+                    text_content = "\n\n".join(pages) if pages else "(PDF has no extractable text)"
+            except Exception as e:
+                text_content = f"(Could not extract PDF text: {e})"
+
+        # Spreadsheet extraction (xlsx, xls, csv)
+        if text_content is None:
+            try:
+                import io
+                import pandas as pd
+                df = pd.read_excel(io.BytesIO(raw_bytes))
+                text_content = df.to_string(max_rows=200)
+            except Exception:
+                pass
+
+        if text_content is None:
+            text_content = f"(Binary file, {size} bytes — cannot extract text)"
+
+        return {
+            "status": "success",
+            "size": size,
+            "content": text_content[:10000],
+            "truncated": len(text_content) > 10000 if text_content else False,
+            "account_email": account.get("email"),
+        }
+
+    except httpx.HTTPStatusError as e:
+        return {"error": f"Gmail API error: {e.response.status_code} {e.response.text[:200]}"}
+    except Exception as e:
+        return {"error": f"Failed to download attachment: {str(e)}"}
 
 
 async def send_email(
