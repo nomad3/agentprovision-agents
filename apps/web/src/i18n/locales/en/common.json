@@ -62,6 +62,16 @@
   "landing": {
     "trustedBy": "Powered by"
   },
+  "llm": {
+    "title": "LLM Providers",
+    "subtitle": "Configure which AI model powers your agent chat",
+    "configured": "Configured",
+    "active": "Active",
+    "keyMasked": "Saved (enter new value to update)",
+    "saveKeys": "Save",
+    "saved": "Saved",
+    "setActive": "Set as Active"
+  },
   "footer": {
     "copyright": "© {{year}} ServiceTsunami. All rights reserved."
   }

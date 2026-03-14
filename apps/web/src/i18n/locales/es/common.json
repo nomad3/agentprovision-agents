@@ -62,6 +62,16 @@
   "landing": {
     "trustedBy": "Construido con"
   },
+  "llm": {
+    "title": "Proveedores LLM",
+    "subtitle": "Configura qué modelo de IA usa tu chat de agentes",
+    "configured": "Configurado",
+    "active": "Activo",
+    "keyMasked": "Guardado (ingresa un nuevo valor para actualizar)",
+    "saveKeys": "Guardar",
+    "saved": "Guardado",
+    "setActive": "Establecer como Activo"
+  },
   "footer": {
     "copyright": "© {{year}} ServiceTsunami. Todos los derechos reservados."
   }
