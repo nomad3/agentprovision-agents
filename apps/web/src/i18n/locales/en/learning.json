@@ -1,47 +1,73 @@
 {
   "title": "Learning",
+  "subtitle": "How your AI agents improve over time through feedback and experience",
+  "loading": "Loading learning data...",
+  "tabs": {
+    "overview": "Overview",
+    "decisionPoints": "Decision Points",
+    "experiments": "Experiments",
+    "reviews": "Reviews",
+    "settings": "Settings"
+  },
   "overview": {
-    "title": "Overview",
+    "metricsLabel": "Key Metrics",
     "totalExperiences": "Total Experiences",
     "avgReward": "Avg Reward (30d)",
     "explorationRate": "Exploration Rate",
-    "policyVersion": "Policy Version"
+    "policyVersion": "Policy Version",
+    "allTime": "all time",
+    "last30d": "last 30 days",
+    "epsilonGreedy": "epsilon-greedy",
+    "lastUpdated": "updated {{date}}",
+    "topDecisionPoints": "Top Decision Points",
+    "experienceCount": "{{count}} experiences",
+    "avgRewardLabel": "avg reward",
+    "errorLoad": "Failed to load learning overview"
   },
   "decisionPoints": {
-    "title": "Decision Points",
-    "name": "Decision Point",
-    "score": "Score",
-    "experiences": "Experiences",
-    "explorationRatio": "Exploration %"
+    "colName": "Decision Point",
+    "colScoreVersion": "Score / Version",
+    "colExperienceCount": "Experiences",
+    "colExplorationRate": "Exploration %",
+    "noDescription": "No description available",
+    "empty": "No decision points yet. Start chatting with your agents to generate learning data.",
+    "errorLoad": "Failed to load decision points"
   },
   "experiments": {
-    "title": "Experiments"
+    "decisionPoint": "Decision point",
+    "reward": "reward",
+    "empty": "No experiments yet. Exploration actions will appear here when agents try alternative strategies.",
+    "errorLoad": "Failed to load experiments"
   },
   "reviews": {
-    "title": "Reviews",
-    "pending": "Pending Reviews",
+    "decisionPoint": "Decision point",
+    "outcome": "Outcome",
     "good": "Good",
-    "acceptable": "Acceptable",
-    "poor": "Poor"
+    "acceptable": "OK",
+    "poor": "Poor",
+    "rated": "Rated",
+    "empty": "All caught up! No pending reviews.",
+    "errorLoad": "Failed to load pending reviews"
   },
   "settings": {
-    "title": "Settings",
+    "explorationTitle": "Exploration",
     "explorationRate": "Exploration Rate",
-    "globalBaseline": "Use Global Baseline",
-    "optInGlobal": "Contribute to Global Learning",
-    "rewardWeights": "Reward Weights",
-    "implicit": "Implicit",
-    "explicit": "Explicit",
-    "admin": "Admin",
-    "save": "Save Settings"
+    "behaviorTitle": "Learning Behavior",
+    "useGlobalBaseline": "Use global baseline from all tenants",
+    "contributeGlobal": "Contribute experiences to global learning pool",
+    "rewardWeightsTitle": "Reward Weights",
+    "weightImplicit": "Implicit (behavior)",
+    "weightExplicit": "Explicit (feedback)",
+    "weightAdmin": "Admin (reviews)",
+    "save": "Save Settings",
+    "saved": "Settings saved successfully",
+    "errorSave": "Failed to save settings"
   },
   "feedback": {
     "thumbsUp": "Helpful",
     "thumbsDown": "Not helpful",
     "wrongAgent": "Wrong agent",
     "irrelevantMemory": "Irrelevant memory",
-    "incorrectInfo": "Incorrect info",
-    "tooSlow": "Too slow",
     "flagIssue": "Flag issue",
     "submitted": "Submitted"
   }
