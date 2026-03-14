@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ServiceTsunami is an enterprise-grade agentic orchestration platform built as a monorepo. It provides multi-tenant control plane capabilities for managing AI agents, data pipelines, skill execution, and deployments. Features enterprise-grade credential management, traceability, and LLM-agnostic execution. Deploys exclusively via Kubernetes (GKE) using Helm charts and GitHub Actions.
+ServiceTsunami is an enterprise-grade agentic orchestration platform built as a monorepo. It provides multi-tenant control plane capabilities for managing AI agents, data pipelines, skill execution, and deployments. Features enterprise-grade credential management, traceability, and **LLM-agnostic execution** — tenants can switch between Anthropic Claude and Google Gemini (or any LiteLLM-supported provider) per-tenant via the integration registry. Local open-source embeddings (nomic-embed-text-v1.5, 768-dim) run without API keys. Deploys exclusively via Kubernetes (GKE) using Helm charts and GitHub Actions.
 
 ## Architecture
 
@@ -25,9 +25,11 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
   - Authenticated console at `/dashboard/*`, marketing landing page at `/`
 
 - **`apps/adk-server`**: Google Agent Development Kit (ADK) server (Python 3.11)
-  - Multi-agent orchestration with supervisor pattern
-  - Sub-agents: data_analyst, report_generator, knowledge_manager
-  - Tools for data, analytics, knowledge, and actions
+  - Multi-agent orchestration with supervisor pattern (25 agents across 5 teams)
+  - LLM-agnostic via `before_model_callback` + LiteLLM — switches between Gemini/Anthropic/others per-request
+  - Model callback registered on all 25 agent files individually (ADK doesn't propagate callbacks)
+  - Local embeddings via nomic-embed-text-v1.5 (768-dim, no API key needed)
+  - Tools for data, analytics, knowledge, email (Gmail attachments), calendar, Jira, and ads
   - Connects to MCP server for Databricks operations
 
 - **`apps/code-worker`**: Claude Code CLI Temporal worker (Python 3.11 + Node.js 20)
@@ -65,7 +67,7 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 
 **Database initialization**: On API startup, `apps/api/app/main.py` calls `init_db()` which creates tables and seeds demo data.
 
-**Multi-LLM Router**: Supports multiple LLM providers (Anthropic, OpenAI, DeepSeek, etc.) with per-tenant configuration and cost-based routing. Models: `llm_provider.py`, `llm_model.py`, `llm_config.py`. Chat falls back to static templates if no API key is set.
+**Multi-LLM Abstraction Layer**: Tenants choose their LLM provider (Anthropic Claude, Google Gemini, or any LiteLLM-supported provider) via the **integration registry + credential vault** pattern. Credentials are Fernet-encrypted. The chat service reads `tenant_features.active_llm_provider`, retrieves decrypted API key + model ID from the vault, and passes `llm_config` to ADK via `state_delta`. ADK's `before_model_callback` (in `config/model_callback.py`) sets `agent.model` to the LiteLLM format (e.g., `"anthropic/claude-opus-4-6"`), which ADK's `LLMRegistry` resolves to a `LiteLlm` instance. Agents stay as singletons; the model is overridden per-request. Free-text model IDs (no curated dropdowns). LLM Settings page (`LLMSettingsPage.js`) uses the same integration card pattern as other integrations.
 
 **Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default "Luna Supervisor" AgentKit on registration.
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
@@ -81,7 +83,17 @@ This is a **Turborepo monorepo** managed with `pnpm` workspaces:
 - **Credential Vault**: Fernet-encrypted storage for integration API keys and tokens.
 - **Skill Router**: Dynamic routing of agent tasks to external integrations.
 
-**Knowledge Graph**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph. Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. pgvector is not used; search falls back to text-based `ILIKE`. **Memory Activity** audit log (`memory_activities` table) tracks entity_created, entity_updated, relation_created, memory_created, and action_triggered events.
+**Knowledge Graph + Vector Search**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph with pgvector-powered semantic search (768-dim embeddings via nomic-embed-text-v1.5). Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. Observations table (`knowledge_observations`) stores facts and insights. Entity history tracked in `knowledge_entity_history`. **Memory Activity** audit log (`memory_activities` table) tracks entity_created, entity_updated, relation_created, memory_created, and action_triggered events.
+
+**Embedding System**: Local open-source embeddings via `nomic-ai/nomic-embed-text-v1.5` (768-dim, sentence-transformers). No API key needed — runs locally in both API and ADK containers. Centralized in `embedding_service.py` (API) and `vertex_vector.py` (ADK). Used by: knowledge graph, chat messages, memory activities, RL experiences, skill registry (auto-trigger matching), and email attachment content. Email attachments downloaded via Gmail API are automatically embedded for semantic search (`content_type='email_attachment'`).
+
+**Skill Marketplace**: Three-tier file-based skill system with GitHub import:
+- **Native tier**: Bundled skills shipped with the container (read-only): sql_query, calculator, data_summary, entity_extraction, knowledge_search, lead_scoring, report_generation
+- **Community tier**: Imported from GitHub repos via `POST /skills/library/import-github`. Supports external formats (GWS `SKILL.md`, Claude Code superpowers). Auto-adapter normalizes frontmatter (semver→int, nested categories, engine mapping).
+- **Custom tier**: Per-tenant skills created/edited in the UI with versioning and CHANGELOG
+- **Engines**: `python` (script.py), `shell` (script.sh), `markdown` (prompt.md), `tool` (class registry)
+- **Semantic search**: Skills are embedded via pgvector for auto-trigger matching
+- **GitHub import**: Paste a repo URL → imports single skill or scans subdirectories. Supports GWS (92 skills), superpowers, or any repo with SKILL.md/skill.md files.
 
 **UI/UX (Ocean Theme)**:
 - **Design System**: Glassmorphic "Ocean Theme" with support for high-contrast light and dark modes.
@@ -215,13 +227,16 @@ Business logic layer (one service per model):
 - `llm.py`: Claude AI integration with fallback handling
 - `context_manager.py`: Token counting, conversation summarization
 - `tool_executor.py`: Tool execution framework (SQL Query, Calculator, Data Summary, Entity Extraction, Knowledge Search)
-- `chat.py`, `enhanced_chat.py`: LLM-powered chat with tool and multi-agent support. Chat session creation requires only Title (optional) + Agent Kit selection; auto-selects kit when only one exists
+- `chat.py`, `enhanced_chat.py`: LLM-powered chat with tool and multi-agent support. Chat session creation requires only Title (optional) + Agent Kit selection; auto-selects kit when only one exists. Reads tenant's `active_llm_provider` and passes `llm_config` to ADK via `state_delta` (primary + retry paths).
+- `embedding_service.py`: Local embedding generation via nomic-embed-text-v1.5 (768-dim). Functions: `embed_text()`, `embed_and_store()`, `search_similar()`, `recall()`. Used by knowledge, chat, memory, RL, skills.
 - `adk_client.py`, `mcp_client.py`: Google ADK and MCP server clients
 - `knowledge.py`, `knowledge_extraction.py`: Knowledge graph operations and extraction
+- `skill_manager.py`: Three-tier skill marketplace (native/community/custom). GitHub import with external format adapter (GWS SKILL.md support). Skill execution across 4 engines. Semantic auto-trigger matching.
+- `skill_registry_service.py`: Sync file skills to DB + pgvector embeddings
+- `whatsapp_service.py`: Neonize-based WhatsApp integration with persistent typing indicator (refreshes composing presence every 4s until response sent)
 - `branding.py`, `features.py`, `tenant_analytics.py`: Tenant customization services
 - `integration_configs.py`: Integration configuration CRUD service
 - `orchestration/`: Orchestration services package
-  - `skill_router.py`: Skill execution router (stub — backend not yet wired)
   - `credential_vault.py`: Fernet-encrypted credential storage with CRUD helpers
   - `task_dispatcher.py`: Agent selection and task dispatch
 - Pattern: `{resource}s.py` (e.g., `agents.py`, `datasets.py`, `agent_groups.py`, `vector_stores.py`)
@@ -428,4 +443,6 @@ PRs created by the code agent include structured body with full audit trail:
   - `2026-03-07-orchestration-worker-architecture.md`: Orchestration worker design (Temporal worker for Gmail/Calendar/WhatsApp workflows)
   - `2026-03-10-marketing-intelligence-ads-platform-design.md`: Marketing intelligence, competitor monitoring, Meta/Google/TikTok ad integrations
   - `2026-03-10-marketing-intelligence-ads-platform-plan.md`: Implementation plan for marketing intelligence feature
+  - `2026-03-13-multi-model-abstraction-layer-design.md`: Multi-LLM provider switching via integration registry + ADK before_model_callback
+  - `2026-03-13-multi-model-abstraction-layer-plan.md`: 10-task implementation plan for multi-model support
 - `LLM_INTEGRATION_README.md`, `TOOL_FRAMEWORK_README.md`, `DATABRICKS_SYNC_README.md`: Feature docs

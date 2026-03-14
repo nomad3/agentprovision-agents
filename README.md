@@ -1,315 +1,198 @@
-# ServiceTsunami — Enterprise AI Lakehouse Platform
+<h1 align="center">ServiceTsunami</h1>
 
-[![Production](https://img.shields.io/badge/production-servicetsunami.com-green)](https://servicetsunami.com)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
-[![GKE](https://img.shields.io/badge/GKE-Kubernetes-4285F4)](https://cloud.google.com/kubernetes-engine)
-[![Turborepo](https://img.shields.io/badge/Turborepo-Monorepo-EF4444)](https://turbo.build)
+<p align="center"><strong>AI Agent Orchestration Platform</strong></p>
 
-Enterprise-grade unified data & AI lakehouse platform. Orchestrates AI agents, data pipelines, and analytics workloads with full multi-tenant isolation. Built as a **Turborepo monorepo** deploying to GKE via Helm and GitHub Actions.
+<p align="center">
+  <a href="https://servicetsunami.com"><img src="https://img.shields.io/badge/live-servicetsunami.com-00d2ff?style=flat-square" alt="Production"></a>
+  <a href="#"><img src="https://img.shields.io/badge/agents-25-blueviolet?style=flat-square" alt="25 Agents"></a>
+  <a href="#"><img src="https://img.shields.io/badge/LLM-Anthropic%20%7C%20Gemini%20%7C%20100%2B-ff6b6b?style=flat-square" alt="Multi-LLM"></a>
+  <a href="#"><img src="https://img.shields.io/badge/skills-92%2B%20GWS-green?style=flat-square" alt="Skill Marketplace"></a>
+  <a href="#"><img src="https://img.shields.io/badge/embeddings-local%20(nomic)-orange?style=flat-square" alt="Local Embeddings"></a>
+  <a href="#"><img src="https://img.shields.io/badge/deploy-GKE%20%2B%20Helm-4285F4?style=flat-square" alt="Kubernetes"></a>
+</p>
 
-**Production:** [servicetsunami.com](https://servicetsunami.com)
+<p align="center">
+  Multi-tenant AI agent platform with 25 specialized agents, LLM-agnostic execution, WhatsApp-native assistant, skill marketplace with GitHub import, local vector embeddings, and durable workflow orchestration.
+</p>
 
-**Sub-platforms:** [DentalERP](https://scdp-front-prod.servicetsunami.com) · Into the Space
+---
+
+## What Makes It Different
+
+- **LLM-Agnostic** — Switch between Anthropic Claude, Google Gemini, or 100+ providers per-tenant. Credentials encrypted with Fernet vault. ADK `before_model_callback` + LiteLLM for zero-downtime provider switching.
+
+- **Local Embeddings** — `nomic-embed-text-v1.5` (768-dim) runs locally via sentence-transformers. No API key. No cost. Used across knowledge graph, chat, memory, RL, skills, and email attachments.
+
+- **Skill Marketplace** — Three-tier system (native/community/custom) with GitHub import. Drop a `SKILL.md` in a repo and import it. Supports GWS (92 Google Workspace skills), Claude Code superpowers, or any markdown-based skill format. Semantic auto-trigger matching via pgvector.
+
+- **WhatsApp-Native AI** — Luna, a business co-pilot accessible via WhatsApp. Reads Gmail, manages calendar, tracks competitors, scores leads, runs SQL, downloads email attachments, and maintains a persistent knowledge graph. Typing indicator stays active throughout long processing.
+
+- **25 Specialized Agents** — Hierarchical multi-team architecture. Root supervisor routes to 5 teams, each with sub-agents. Personal assistant, code agent (Claude Code CLI), data team, sales team, marketing intelligence, deal pipeline, and industry verticals (HealthPets, Remedia).
+
+- **Autonomous Code Agent** — Claude Code CLI in a dedicated Kubernetes pod. Creates feature branches, implements code, opens PRs with full traceability. Uses tenant's OAuth subscription, not API credits.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  React SPA (Bootstrap 5 · i18n · React Router v7)                │
-│  Dashboard · Chat · Agents · Datasets · Pipelines · Integrations │
-└──────────────────────────┬───────────────────────────────────────┘
-                           │
-┌──────────────────────────▼───────────────────────────────────────┐
-│  FastAPI Backend (Python 3.11 · SQLAlchemy · JWT Multi-Tenant)   │
-│  Auth · Chat · Workflows · Tool Executor · Analytics · Datasets  │
-└──────┬───────────────────┬──────────────────┬────────────────────┘
-       │                   │                  │
-┌──────▼──────┐   ┌───────▼───────┐  ┌───────▼───────┐
-│  ADK Server │   │  MCP Server   │  │  Temporal     │
-│  (Google    │   │  (Databricks  │  │  (Workflow    │
-│   ADK)      │   │   Integration)│  │   Engine)     │
-│  Supervisor │   │  9 MCP Tools  │  │  Data Sync    │
-│  + Agents   │   │  Unity Catalog│  │  Knowledge    │
-└─────────────┘   └───────────────┘  └───────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │  Databricks Unity       │
-              │  Catalog                │
-              │  Bronze → Silver → Gold │
-              └─────────────────────────┘
-```
-
-### Data Flow
-
-```
-User Upload / API Ingest
-  → Temporal Workflow (reliable background processing)
-    → Bronze Table (raw data in Unity Catalog)
-      → Silver Table (automated cleaning + quality checks)
-        → Gold Table (business-ready analytics)
-          → Chat / Dashboard queries
+                    ┌──────────────────────────────────────┐
+                    │  React SPA (Ocean Theme, i18n)       │
+                    │  Chat  Agents  Skills  Integrations  │
+                    └──────────────┬───────────────────────┘
+                                   │
+┌──────────────────────────────────▼───────────────────────────────────┐
+│  FastAPI (Python 3.11)                                               │
+│  Multi-tenant JWT  ·  Fernet Vault  ·  Embedding Service (local)    │
+│  Skill Manager  ·  Knowledge Graph  ·  WhatsApp Service             │
+└──────┬──────────────────┬──────────────────┬───────────────┬────────┘
+       │                  │                  │               │
+┌──────▼──────┐   ┌───────▼───────┐  ┌──────▼──────┐ ┌──────▼──────┐
+│  ADK Server │   │  MCP Server   │  │  Temporal   │ │ Code Worker │
+│  25 Agents  │   │  Databricks   │  │  Workflows  │ │ Claude Code │
+│  LiteLLM    │   │  Unity Catalog│  │  4 Queues   │ │ CLI in K8s  │
+│  Nomic Embed│   │  9 MCP Tools  │  │  10+ Flows  │ │ Auto PRs    │
+└─────────────┘   └───────────────┘  └─────────────┘ └─────────────┘
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Frontend | React 18, JavaScript, Bootstrap 5, React Router v7, i18next | Dashboard, chat UI, dataset management |
-| Backend | FastAPI, Python 3.11, SQLAlchemy, Pydantic, PostgreSQL | Multi-tenant REST API, auth, business logic |
-| ADK Server | Google ADK, Python 3.11 | Multi-agent orchestration (supervisor pattern) |
-| MCP Server | FastMCP, Python 3.11 | Databricks integration, data tools (9 MCP tools) |
-| Workflows | Temporal | Durable execution: data sync, knowledge extraction |
-| Data Layer | Databricks Unity Catalog, PostgreSQL, Redis | Medallion architecture, entities, caching |
-| Infrastructure | GKE, Helm, GitHub Actions, Terraform (AWS) | Kubernetes deployment, CI/CD |
+| Layer | Technology |
+|-------|-----------|
+| **AI Agents** | Google ADK, LiteLLM, Anthropic Claude, Google Gemini |
+| **Embeddings** | nomic-embed-text-v1.5 (768-dim, local, sentence-transformers) |
+| **Vector Search** | pgvector (cosine similarity) |
+| **Backend** | FastAPI, Python 3.11, SQLAlchemy, Pydantic |
+| **Frontend** | React 18, Bootstrap 5, i18next |
+| **Workflows** | Temporal (4 task queues, 10+ durable workflows) |
+| **Messaging** | WhatsApp via Neonize (whatsmeow Go backend) |
+| **Security** | JWT multi-tenant, Fernet-encrypted credential vault |
+| **Data** | PostgreSQL, Databricks Unity Catalog (Bronze/Silver/Gold) |
+| **Skills** | Markdown-based skill files, GitHub import, semantic matching |
+| **Infrastructure** | GKE, Helm, GitHub Actions, Docker Compose |
 
 ---
 
 ## Key Features
 
-### Multi-Agent Orchestration (Google ADK)
-- **Hierarchical Multi-Team Model**: Root supervisor routing to 8 top-level teams (Personal Assistant, Code Agent, Data, Sales, Marketing, Prospecting, Vet, Deal).
-- **Autonomous Code Agent**: Claude Code CLI powered agent that creates branches, implements features, and opens PRs via Temporal workflow.
-- **Marketing Intelligence**: Ad campaign management (Meta/Google/TikTok), competitor monitoring via public ad libraries, and scheduled competitor tracking workflows.
-- **Industry Specialization**: Pre-built agents for HealthPets (mobile cardiology), Remedia (pharmacy), and M&A Deal Pipelines.
-- **Task Delegation**: Configurable autonomy, depth limits, and inter-agent communication (supervisor pattern).
+### Multi-LLM Provider Switching
 
-### Multi-LLM Router
-Smart routing across 5+ providers with cost optimization and automatic failover:
+Tenants choose their LLM provider from the integration registry. API reads encrypted credentials from the vault and passes `llm_config` to ADK via `state_delta`. The `before_model_callback` overrides `agent.model` per-request — agents stay as singletons.
 
-| Provider | Best For | Cost/1M tokens |
-|----------|----------|----------------|
-| DeepSeek | Code generation | $0.14 |
-| Google Gemini | Multimodal analysis | $1.25 |
-| GPT-4o | General tasks | $2.50 |
-| Mistral | European compliance | $2.00 |
-| Claude | Complex reasoning | $3.00 |
+```
+Tenant Settings → Integration Registry → Fernet Vault → state_delta → ADK Callback → LiteLLM → Provider API
+```
 
-### Databricks Lakehouse Integration
-- Automatic dataset sync to Unity Catalog via Temporal workflows.
-- Bronze/Silver/Gold medallion architecture.
-- MCP-compliant server with 9 tools for data operations.
+Supported: Anthropic, Gemini, OpenAI, DeepSeek, Mistral, Groq, Bedrock, Ollama, and 100+ via LiteLLM.
 
-### Durable Business Workflows (Temporal)
-- **Competitor Monitor**: Scheduled per-tenant competitor tracking — scrapes websites, checks ad libraries, stores observations, creates alerts.
-- **Inbox Monitor**: Proactive Gmail + Calendar monitoring with LLM triage and knowledge extraction.
-- **Deal Pipeline**: Discover → Score → Research → Outreach → Advance → Sync.
-- **Remedia Order**: E-commerce lifecycle with WhatsApp notifications and payment monitoring.
-- **HealthPets Billing**: Usage-based processing, invoice generation, and automated payments.
-- **Knowledge Extraction**: LLM-powered entity and relation extraction from chat history.
+### Skill Marketplace with GitHub Import
 
-### Three-Tier Memory System
-- **Hot Context** (Redis) — Active session state, <1ms.
-- **Semantic Memory** (Vector Store) — Past conversation embeddings, ~10ms.
-- **Knowledge Graph** (PostgreSQL) — Entities, relationships, and **Lead Scoring** (rubric-based), ~50ms.
+```bash
+# Import all 92 Google Workspace skills
+POST /api/v1/skills/library/import-github
+{"repo_url": "https://github.com/googleworkspace/cli/tree/main/skills"}
 
-### Enterprise Multi-Tenancy
-- Full tenant isolation via JWT-secured APIs.
-- Per-tenant data segregation, LLM configs, feature flags.
-- Whitelabel branding with custom domains and industry templates.
+# Import a single skill
+{"repo_url": "https://github.com/googleworkspace/cli/tree/main/skills/gws-gmail-triage"}
+```
+
+Three tiers: **Native** (bundled, read-only) | **Community** (GitHub imports) | **Custom** (per-tenant, versioned). Supports `SKILL.md` and `skill.md` formats. External formats (GWS, superpowers) auto-normalized on import.
+
+### 25-Agent Hierarchical Teams
+
+| Team | Agents | Capabilities |
+|------|--------|-------------|
+| **Personal Assistant** | Luna | WhatsApp co-pilot, Gmail, Calendar, Jira, knowledge graph, attachment download |
+| **Code Agent** | Claude Code CLI | Feature branches, PRs, autonomous coding in K8s pod |
+| **Data Team** | Data Analyst, Report Generator, Knowledge Manager | SQL, analytics, Excel reports, entity CRUD |
+| **Sales Team** | Sales Agent, Customer Support | Deal management, lead scoring, follow-ups |
+| **Marketing Team** | Web Researcher, Marketing Analyst, Knowledge Manager | Ad campaigns (Meta/Google/TikTok), competitor monitoring |
+| **Prospecting** | Prospect Researcher, Scorer, Outreach | Discovery, qualification, outreach |
+| **Deal Team** | Deal Analyst, Researcher, Outreach Specialist | M&A pipeline workflows |
+| **Industry** | Vet Supervisor, Cardiac Analyst, Billing Agent | HealthPets mobile cardiology |
+
+### Durable Workflows (Temporal)
+
+- **Inbox Monitor** — Proactive Gmail + Calendar monitoring with LLM triage and knowledge extraction
+- **Competitor Monitor** — Scheduled competitor tracking via website scraping and ad library analysis
+- **Deal Pipeline** — Discover, Score, Research, Outreach, Advance, Sync (6-step)
+- **Code Task** — Claude Code CLI execution in isolated pod with PR creation
+- **Knowledge Extraction** — LLM-powered entity/relation extraction from conversations
+- **Dataset Sync** — Databricks Unity Catalog (Bronze/Silver/Gold medallion)
+
+### Knowledge Graph + Vector Search
+
+Entities, relations, observations, and history stored in PostgreSQL with pgvector semantic search. Email attachments, chat messages, memory activities, and skills are embedded for cross-content recall.
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-- Docker & Docker Compose
-- Node.js 18+ / pnpm
-- Python 3.11+
-
-### Development
-
 ```bash
-# Install dependencies
-pnpm install
+# Clone and start
+git clone https://github.com/nomad3/servicetsunami-agents.git
+cd servicetsunami-agents
 
-# Start all services (custom ports to avoid conflicts)
+# Start all services
 DB_PORT=8003 API_PORT=8001 WEB_PORT=8002 docker-compose up --build
 
-# Services:
-#   API:         http://localhost:8001
-#   Web:         http://localhost:8002
-#   Database:    localhost:8003
-#   MCP Server:  http://localhost:8086
-#   ADK Server:  http://localhost:8085
-#   Temporal UI: http://localhost:8233
+# Access
+# Web:      http://localhost:8002
+# API:      http://localhost:8001
+# ADK:      http://localhost:8085
+# Temporal: http://localhost:8233
+
+# Demo login: test@example.com / password
 ```
 
-### Access
-
-- **Dashboard**: http://localhost:8002/dashboard
-- **Demo Login**: `test@example.com` / `password` (or "Login as Demo User")
-
-### Individual Services
+### Environment Setup
 
 ```bash
-# API
-cd apps/api && pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+# apps/api/.env — required
+ENCRYPTION_KEY=<fernet-key>           # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ANTHROPIC_API_KEY=sk-ant-xxx          # Or configure via LLM Settings UI
+GOOGLE_CLIENT_ID=xxx                  # For Gmail/Calendar OAuth
+GOOGLE_CLIENT_SECRET=xxx
 
-# Web
-cd apps/web && npm install && npm start
-
-# MCP Server
-cd apps/mcp-server && pip install -e ".[dev]"
-python -m src.server
-
-# ADK Server
-cd apps/adk-server && pip install -r requirements.txt
-python server.py
-
-# Monorepo build
-pnpm install && pnpm build && pnpm lint
-```
-
-### Testing
-
-```bash
-# API tests
-cd apps/api && pytest -v
-
-# Web tests
-cd apps/web && npm test -- --ci --watchAll=false
-
-# MCP Server tests
-cd apps/mcp-server && pytest tests/ -v
-
-# E2E (production-grade, 22 test cases)
-BASE_URL=http://localhost:8001 ./scripts/e2e_test_production.sh
-```
-
----
-
-## Repository Structure
-
-```
-servicetsunami/
-├── apps/
-│   ├── api/                  # FastAPI backend (Python 3.11)
-│   │   ├── app/
-│   │   │   ├── api/v1/       # REST API endpoints
-│   │   │   ├── models/       # SQLAlchemy models (all have tenant_id)
-│   │   │   ├── services/     # Business logic (LLM, chat, tools, context)
-│   │   │   └── core/         # Config, security, dependencies
-│   │   └── tests/
-│   ├── web/                  # React SPA (JavaScript, CRA)
-│   │   └── src/
-│   │       ├── pages/        # Dashboard, Chat, Agents, Datasets, Pipelines
-│   │       ├── components/   # Layout (glassmorphic sidebar), Wizard
-│   │       └── services/     # API clients
-│   ├── adk-server/           # Google ADK multi-agent server
-│   │   ├── servicetsunami_supervisor/  # Hierarchical Team Agents
-│   │   ├── tools/            # Agent tools (data, shell, analytics, knowledge)
-│   │   └── server.py
-│   └── mcp-server/           # MCP server for Databricks integration
-│       ├── src/tools/        # 9 MCP tools
-│       └── tests/
-├── helm/
-│   ├── charts/microservice/  # Reusable Helm base chart
-│   └── values/               # Per-service: api, web, worker, adk, temporal, redis, postgresql
-├── infra/terraform/          # AWS IaC (EKS, Aurora, VPC)
-├── scripts/                  # deploy.sh, e2e_test_production.sh
-├── docs/                     # Plans, deployment runbook, archive
-├── docker-compose.yml
-├── turbo.json                # Turborepo config
-└── pnpm-workspace.yaml
+# root .env — optional overrides
+ANTHROPIC_API_KEY=sk-ant-xxx          # Passed to ADK container
 ```
 
 ---
 
 ## Production Deployment
 
-Deploys **exclusively via Kubernetes** (GKE) using Helm charts and GitHub Actions.
+Deploys exclusively via **Kubernetes (GKE)** using Helm charts and GitHub Actions.
 
 ```bash
-# Full stack deploy
-gh workflow run deploy-all.yaml -f environment=prod
-
-# ADK server only
-gh workflow run adk-deploy.yaml -f environment=prod
-
-# Watch rollout
-kubectl get pods -n prod -w
+gh workflow run deploy-all.yaml -f environment=prod     # Full stack
+gh workflow run adk-deploy.yaml -f environment=prod     # ADK only
 kubectl rollout status deployment/servicetsunami-api -n prod
 ```
 
-### Production Architecture
-
 ```
 GKE Gateway → prod namespace
-  ├── servicetsunami-web     (React SPA)
-  ├── servicetsunami-api     (FastAPI)
-  ├── servicetsunami-worker  (Temporal worker)
-  ├── servicetsunami-adk     (Google ADK agents)
-  ├── mcp-server             (Databricks integration)
+  ├── servicetsunami-web        (React SPA)
+  ├── servicetsunami-api        (FastAPI + embedding model)
+  ├── servicetsunami-worker     (Temporal workers)
+  ├── servicetsunami-adk        (25 agents + LiteLLM)
+  ├── servicetsunami-code-worker (Claude Code CLI pod)
+  ├── mcp-server                (Databricks integration)
   ├── temporal + temporal-web
-  └── redis / postgresql (Cloud SQL proxy)
-```
-
-### GitHub Actions Workflows
-- `deploy-all.yaml` — Full stack deployment
-- `adk-deploy.yaml` — ADK server only
-- `servicetsunami-api.yaml` — API service
-- `servicetsunami-web.yaml` — Web frontend
-- `servicetsunami-worker.yaml` — Temporal worker
-- `kubernetes-infrastructure.yaml` — Initial infra setup
-
-See `docs/KUBERNETES_DEPLOYMENT.md` for the full runbook.
-
----
-
-## Recent Changes
-
-- **Hierarchical Agent Teams** — New ADK structure with 5 specialized teams and Root Supervisor.
-- **Self-Modifying Capabilities** — Dev team agents can now autonomously modify and deploy code.
-- **Industry Vertical Support** — Native agents and workflows for HealthPets, Remedia, and Deal Pipeline.
-- **Lead Scoring Rubrics** — Configurable LLM-powered entity scoring within the knowledge graph.
-- **Pipeline Run Tracking** — Scheduled and on-demand pipeline execution with run history.
-- **WhatsApp Integration Platform** — Multi-account WhatsApp orchestration for "Luna" and industry agents.
-- **Marketing Intelligence** — Meta/Google/TikTok ad campaign management, competitor monitoring with public ad library search, and CompetitorMonitorWorkflow for scheduled tracking.
-
----
-
-## API Reference
-
-### Authentication
-```bash
-POST /api/v1/auth/register   # Create tenant + admin user
-POST /api/v1/auth/login      # Returns JWT access token
-```
-
-### Core Endpoints (Bearer token required)
-```bash
-# Agents & Teams
-GET/POST /api/v1/agents
-GET/POST /api/v1/agent_groups
-
-# Chat & Memory
-POST /api/v1/chat/sessions
-POST /api/v1/chat/sessions/{id}/messages
-
-# Datasets & Pipelines
-POST /api/v1/datasets/ingest
-GET  /api/v1/datasets/{id}/databricks/status
-
-# LLM Configuration
-GET  /api/v1/llm/providers
-POST /api/v1/llm/configs
+  └── Cloud SQL (PostgreSQL + pgvector)
 ```
 
 ---
 
 ## Contributing
 
-1. Branch: `feature/amazing-feature`
-2. Follow patterns in `AGENTS.md`
-3. Test: `pnpm test && pnpm lint`
-4. Conventional commits: `feat:`, `fix:`, `chore:`
-5. Open a Pull Request
+1. Branch from `main`: `feature/your-feature`
+2. Follow patterns in `CLAUDE.md`
+3. Conventional commits: `feat:`, `fix:`, `chore:`
+4. Open a Pull Request
 
 ---
 
-*Built with React · FastAPI · Google ADK · Temporal · Databricks · Turborepo · GKE*
+*Built with Google ADK  ·  LiteLLM  ·  Anthropic Claude  ·  Temporal  ·  pgvector  ·  Neonize  ·  sentence-transformers  ·  FastAPI  ·  React*
