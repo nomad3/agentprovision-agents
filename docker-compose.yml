@@ -111,6 +111,7 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - ADK_MODEL=${ADK_MODEL:-gemini-3.1-pro-preview}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - API_BASE_URL=http://api:8000
     volumes:
       - ./apps/adk-server:/app
     depends_on:
