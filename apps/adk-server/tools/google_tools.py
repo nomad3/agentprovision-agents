@@ -7,6 +7,7 @@ import base64
 import html
 import logging
 import re
+import uuid as _uuid
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from typing import Optional
@@ -129,6 +130,70 @@ def _strip_html(content: str) -> str:
     text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
     return html.unescape(re.sub(r"\s+\n", "\n", re.sub(r"[ \t]+", " ", text))).strip()
+
+
+async def _embed_attachment_content(
+    tenant_id: str,
+    message_id: str,
+    attachment_id: str,
+    text_content: str,
+) -> None:
+    """Embed attachment text into the embeddings table for semantic search.
+
+    Uses the ADK's local embedding service and DB connection (via
+    KnowledgeGraphService) to INSERT directly into the embeddings table.
+    Failures are logged but never raised — embedding is best-effort.
+    """
+    if not text_content or text_content.startswith("("):
+        # Skip placeholder messages like "(Binary file, ... bytes)"
+        return
+
+    try:
+        from services.knowledge_graph import get_knowledge_service
+        from memory.vertex_vector import get_embedding_service
+
+        kg = get_knowledge_service()
+        emb_svc = get_embedding_service()
+
+        # Truncate to match the model's effective window
+        truncated = text_content[:8000]
+        embedding = await emb_svc.get_embedding(truncated, task_type="RETRIEVAL_DOCUMENT")
+        if embedding is None:
+            logger.debug("Attachment embedding skipped — model returned None")
+            return
+
+        content_id = f"{message_id}_{attachment_id}"
+        emb_id = str(_uuid.uuid4())
+
+        from sqlalchemy import text as sa_text
+
+        with kg.Session() as session:
+            # Upsert: remove previous embedding for same attachment
+            session.execute(
+                sa_text(
+                    "DELETE FROM embeddings WHERE content_type = 'email_attachment' AND content_id = :cid"
+                ),
+                {"cid": content_id},
+            )
+            session.execute(
+                sa_text("""
+                    INSERT INTO embeddings
+                    (id, tenant_id, content_type, content_id, embedding, text_content, task_type, model, created_at, updated_at)
+                    VALUES (:id, :tenant_id, 'email_attachment', :content_id, :embedding, :text_content,
+                            'RETRIEVAL_DOCUMENT', 'nomic-ai/nomic-embed-text-v1.5', NOW(), NOW())
+                """),
+                {
+                    "id": emb_id,
+                    "tenant_id": tenant_id,
+                    "content_id": content_id,
+                    "embedding": embedding,
+                    "text_content": truncated,
+                },
+            )
+            session.commit()
+        logger.info("Embedded attachment %s for tenant %s", content_id, tenant_id[:8])
+    except Exception:
+        logger.warning("Attachment embedding failed (best-effort)", exc_info=True)
 
 
 def _build_outlook_search(query: str, max_results: int) -> tuple[dict, dict]:
@@ -552,6 +617,14 @@ async def download_attachment(
 
         if text_content is None:
             text_content = f"(Binary file, {size} bytes — cannot extract text)"
+
+        # Embed the extracted text for future semantic search (best-effort)
+        await _embed_attachment_content(
+            tenant_id=tenant_id,
+            message_id=message_id,
+            attachment_id=attachment_id,
+            text_content=text_content,
+        )
 
         return {
             "status": "success",
