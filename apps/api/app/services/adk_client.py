@@ -165,7 +165,9 @@ class ADKClient:
             # Don't retry on quota exhaustion or context window overflow — it won't help
             if "RESOURCE_EXHAUSTED" in detail or "quota" in detail.lower():
                 raise ADKError(response.status_code, detail)
-            if "too long" in detail or "ContextWindow" in detail or "prompt is too long" in detail:
+            if "CONTEXT_OVERFLOW" in detail or "too long" in detail or "prompt is too long" in detail:
+                raise ADKError(response.status_code, detail)
+            if "RATE_LIMIT" in detail or "rate_limit_error" in detail.lower():
                 raise ADKError(response.status_code, detail)
 
             # Retry on other 500s (transient failures)
