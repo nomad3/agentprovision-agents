@@ -306,10 +306,47 @@ def _generate_agentic_response(
         db, session=session, user_message=user_message,
     )
 
+    # --- Context window guard: rotate ADK session if approaching limit ---
+    # ADK keeps full conversation in memory. If cumulative prompt tokens
+    # approach the model limit, create a fresh session with a summary.
+    _MAX_SESSION_TOKENS = 120_000  # Rotate well before the 200K hard limit
+    _mem = session.memory_context or {}
+    _cumulative_tokens = _mem.get("cumulative_prompt_tokens", 0)
+
+    if _cumulative_tokens > _MAX_SESSION_TOKENS:
+        logger.info(
+            "Session %s has %d cumulative tokens (limit %d), rotating ADK session",
+            session.id, _cumulative_tokens, _MAX_SESSION_TOKENS,
+        )
+        # Build a brief summary from recent messages for continuity
+        recent_msgs = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session.id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(6)
+            .all()
+        )
+        summary_lines = []
+        for m in reversed(recent_msgs):
+            role = "User" if m.role == "user" else "Luna"
+            summary_lines.append(f"{role}: {m.content[:200]}")
+        conversation_summary = "\n".join(summary_lines)
+
+        # Force new ADK session creation
+        _mem.pop("adk_session_id", None)
+        _mem["cumulative_prompt_tokens"] = 0
+        _mem["conversation_summary"] = conversation_summary
+        session.memory_context = _mem
+        flag_modified(session, "memory_context")
+        if session.source not in ("whatsapp",):
+            session.external_id = None
+        db.commit()
+        db.refresh(session)
+        _mem = session.memory_context or {}
+
     # Resolve ADK session ID: for WhatsApp/external sessions the external_id
     # is the channel session key (e.g. "whatsapp:56954791985") and the ADK
     # session ID is stored in memory_context to avoid overwriting the lookup key.
-    _mem = session.memory_context or {}
     adk_session_id = _mem.get("adk_session_id") or (
         session.external_id if session.source not in ("whatsapp",) else None
     )
@@ -378,6 +415,20 @@ def _generate_agentic_response(
     if llm_config:
         state_delta["llm_config"] = llm_config
 
+    # Inject conversation summary when session was rotated (context window guard)
+    _conv_summary = (session.memory_context or {}).get("conversation_summary")
+    if _conv_summary:
+        state_delta["conversation_summary"] = _conv_summary
+        # Clear it after use so it's not sent again
+        try:
+            _mem_clear = dict(session.memory_context or {})
+            _mem_clear.pop("conversation_summary", None)
+            session.memory_context = _mem_clear
+            flag_modified(session, "memory_context")
+            db.commit()
+        except Exception:
+            pass
+
     if memory_context:
         try:
             from app.services.memory_activity import log_activity
@@ -411,8 +462,19 @@ def _generate_agentic_response(
         response_text, context = _extract_adk_response(events)
         _run_entity_extraction(db, session, context)
 
-        # --- Bridge: mark task completed ---
+        # --- Track cumulative tokens for context window guard ---
         _tokens = context.get("tokens_used", 0) if context else 0
+        prompt_tokens = context.get("prompt_tokens", 0) if context else 0
+        try:
+            _mem_update = dict(session.memory_context or {})
+            _mem_update["cumulative_prompt_tokens"] = _mem_update.get("cumulative_prompt_tokens", 0) + prompt_tokens
+            session.memory_context = _mem_update
+            flag_modified(session, "memory_context")
+            db.commit()
+        except Exception:
+            pass  # Never break chat for tracking
+
+        # --- Bridge: mark task completed ---
         _cost = _estimate_cost(_tokens, context, provider=llm_config.get("provider") if llm_config else None)
         if bridge_task_id:
             duration_ms = int((time.time() - bridge_start) * 1000)
