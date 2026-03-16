@@ -300,6 +300,51 @@ def _generate_agentic_response(
             context=None,
         )
 
+    # --- CLI Orchestrator path (feature flag) ---
+    features = db.query(TenantFeatures).filter(
+        TenantFeatures.tenant_id == session.tenant_id
+    ).first()
+
+    if features and getattr(features, 'cli_orchestrator_enabled', False):
+        from app.services.agent_router import route_and_execute
+
+        # Build conversation summary from recent messages
+        recent_msgs = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.session_id == session.id)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(6)
+            .all()
+        )
+        summary = "\n".join(
+            f"{'User' if m.role == 'user' else 'Assistant'}: {m.content[:200]}"
+            for m in reversed(recent_msgs)
+        )
+
+        response_text, context = route_and_execute(
+            db,
+            tenant_id=session.tenant_id,
+            user_id=user_id,
+            message=user_message,
+            channel="whatsapp" if sender_phone else "web",
+            sender_phone=sender_phone,
+            conversation_summary=summary,
+        )
+
+        if response_text is None:
+            error_msg = (context or {}).get("error", "Agent failed to respond. Please try again.")
+            return _append_message(
+                db, session=session, role="assistant",
+                content=error_msg, context=context,
+            )
+
+        return _append_message(
+            db, session=session, role="assistant",
+            content=response_text, context=context,
+        )
+
+    # --- Existing ADK path (unchanged below) ---
+
     # --- Chat-to-Workflow bridge: create audit task before ADK call ---
     bridge_start = time.time()
     bridge_task_id, bridge_agent_id = _bridge_chat_to_workflow(
