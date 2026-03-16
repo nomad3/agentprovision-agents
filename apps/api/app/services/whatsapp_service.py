@@ -542,18 +542,56 @@ class WhatsAppService:
                 doc_text = await self._extract_and_embed_document(
                     tenant_id, media_bytes, media_mime or "", media_filename,
                 )
-            elif media_bytes:
-                # Images/audio: send to LLM as media_parts
+            elif media_bytes and media_type == "image":
+                # Images: save locally, embed, and describe for CLI agents
+                # CLI mode can't process inline images — extract description
+                import base64
+                img_b64 = base64.b64encode(media_bytes).decode()
+                img_size = len(media_bytes)
+                doc_text = (
+                    f"[User sent an image ({media_mime or 'image'}, {img_size:,} bytes). "
+                    f"Caption: {media_caption or 'no caption'}. "
+                    f"Please acknowledge the image was received and respond based on the caption/context.]"
+                )
+                # Also build media_parts for ADK fallback path
                 try:
                     from app.services.media_utils import build_media_parts
-                    media_filename = ""
-                    if media_type == "document" and msg.documentMessage:
-                        media_filename = msg.documentMessage.fileName or msg.documentMessage.title or ""
                     media_parts, _ = build_media_parts(
                         media_bytes=media_bytes,
                         mime_type=media_mime,
                         caption=media_caption or "",
-                        filename=media_filename,
+                        filename="",
+                    )
+                except ValueError:
+                    pass
+                # Embed image description for future recall
+                try:
+                    from app.services.embedding_service import embed_and_store
+                    from app.db.session import SessionLocal
+                    import uuid as _uuid
+                    edb = SessionLocal()
+                    try:
+                        embed_and_store(
+                            edb,
+                            tenant_id=_uuid.UUID(tenant_id),
+                            content_type="whatsapp_image",
+                            content_id=f"wa_img_{hash(media_bytes) % 10000}",
+                            text_content=f"Image from {sender_phone}: {media_caption or 'no caption'}",
+                        )
+                        edb.commit()
+                    finally:
+                        edb.close()
+                except Exception:
+                    pass
+            elif media_bytes:
+                # Audio/other: send to LLM as media_parts (ADK path only)
+                try:
+                    from app.services.media_utils import build_media_parts
+                    media_parts, _ = build_media_parts(
+                        media_bytes=media_bytes,
+                        mime_type=media_mime,
+                        caption=media_caption or "",
+                        filename="",
                     )
                 except ValueError as e:
                     logger.warning(f"Media processing failed for {sender_phone}: {e}")
