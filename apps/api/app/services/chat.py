@@ -280,18 +280,25 @@ def _generate_agentic_response(
             import re
             agent_slug = re.sub(r'[^a-z0-9]+', '_', session.agent_kit.name.lower()).strip('_')
 
-        # Build conversation summary from recent messages
+        # Build full conversation history (not just summary) for CLI context
         recent_msgs = (
             db.query(ChatMessage)
             .filter(ChatMessage.session_id == session.id)
             .order_by(ChatMessage.created_at.desc())
-            .limit(6)
+            .limit(20)  # Last 20 messages (10 turns)
             .all()
         )
-        summary = "\n".join(
-            f"{'User' if m.role == 'user' else 'Assistant'}: {m.content[:200]}"
-            for m in reversed(recent_msgs)
-        )
+        history_lines = []
+        for m in reversed(recent_msgs):
+            role = "User" if m.role == "user" else "Assistant"
+            content = m.content[:1000]  # Full content up to 1K per message
+            history_lines.append(f"[{role}]: {content}")
+            # Note if message had an attachment
+            if m.context and isinstance(m.context, dict):
+                attachment = m.context.get("attachment")
+                if attachment:
+                    history_lines.append(f"  (attached: {attachment.get('type', 'file')} — {attachment.get('name', 'unnamed')})")
+        summary = "\n\n".join(history_lines)
 
         response_text, context = route_and_execute(
             db,
