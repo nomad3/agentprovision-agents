@@ -323,10 +323,15 @@ def run_agent_session(
         "error": None,
     }
 
-    # 1. Load agent skill
+    # 1. Load agent skill (fallback to 'luna' if specific skill not found)
     skill = skill_manager.get_skill_by_slug(agent_slug, str(tenant_id))
+    if not skill and agent_slug != "luna":
+        logger.info("Skill '%s' not found, falling back to 'luna'", agent_slug)
+        skill = skill_manager.get_skill_by_slug("luna", str(tenant_id))
+        if skill:
+            agent_slug = "luna"
     if not skill:
-        err = f"Skill '{agent_slug}' not found for tenant {tenant_id}"
+        err = f"No agent skill found (tried '{agent_slug}' and 'luna')"
         logger.error(err)
         metadata["error"] = err
         return None, metadata
