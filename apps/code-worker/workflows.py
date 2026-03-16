@@ -309,7 +309,9 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
         if not token:
             return ChatCliResult(response_text="", success=False, error="Claude Code not connected")
 
-        # Create temp session directory
+        # Stateless: each message gets its own temp dir.
+        # Conversation history is injected via --append-system-prompt.
+        # No --resume needed — the API passes full context each time.
         session_dir = tempfile.mkdtemp(prefix="st_chat_")
         try:
             # Write CLAUDE.md if provided
@@ -338,15 +340,10 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 "--add-dir", session_dir,
             ]
 
-            # Session continuity: use --resume for existing sessions,
-            # --session-id for new ones
-            if task_input.session_id:
-                cmd.extend(["--resume", task_input.session_id])
-
-            # Inject agent instructions as system prompt (only on first message,
-            # resumed sessions already have it)
+            # Inject agent instructions + conversation history as system prompt
+            # (stateless: each call gets full context from DB-backed chat history)
             claude_md_path = os.path.join(session_dir, "CLAUDE.md")
-            if os.path.exists(claude_md_path) and not task_input.session_id:
+            if os.path.exists(claude_md_path):
                 with open(claude_md_path) as f:
                     system_prompt = f.read()
                 if system_prompt.strip():
@@ -388,9 +385,8 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 return ChatCliResult(response_text=raw, success=True)
 
         finally:
-            # Don't delete session_dir — Claude Code stores session state there
-            # for --resume. Cleanup happens on session rotation or pod restart.
-            pass
+            import shutil
+            shutil.rmtree(session_dir, ignore_errors=True)
 
     except subprocess.TimeoutExpired:
         return ChatCliResult(response_text="", success=False, error="CLI timed out after 120s")
