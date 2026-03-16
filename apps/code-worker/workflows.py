@@ -332,7 +332,7 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 with open(claude_md_path) as f:
                     system_prompt = f.read()
                 if system_prompt.strip():
-                    cmd.extend(["--append-system-prompt", system_prompt[:8000]])
+                    cmd.extend(["--append-system-prompt", system_prompt[:16000]])
 
             # Connect to MCP server for tools
             mcp_path = os.path.join(session_dir, "mcp.json")

@@ -44,22 +44,18 @@ def generate_claude_md(
     """
     lines: list[str] = []
 
+    # CRITICAL section FIRST — must be within the 8K truncation limit
+    lines.append("# CRITICAL: MCP Tool Usage")
+    lines.append("")
+    lines.append(f"Your tenant_id is: {tenant_name}")
+    lines.append(f"When calling ANY MCP tool, ALWAYS pass tenant_id=\"{tenant_name}\" as a parameter.")
+    lines.append("NEVER use 'auto' or omit tenant_id. This is required for every tool call.")
+    lines.append("")
+    lines.append(f"Session: tenant={tenant_name} user={user_name} channel={channel}")
+    lines.append("")
     lines.append("# Agent Instructions")
     lines.append("")
     lines.append(skill_body.strip())
-    lines.append("")
-
-    # Tenant context section
-    lines.append("## Session Context")
-    lines.append("")
-    lines.append(f"- **Tenant ID:** {tenant_name}")
-    lines.append(f"- **User:** {user_name}")
-    lines.append(f"- **Channel:** {channel}")
-    lines.append("")
-    lines.append("## CRITICAL: MCP Tool Usage")
-    lines.append("")
-    lines.append(f"When calling ANY MCP tool, you MUST pass `tenant_id=\"{tenant_name}\"` as a parameter.")
-    lines.append("Never use the default 'auto' value. Always pass the exact tenant ID above.")
     lines.append("")
 
     if conversation_summary:
