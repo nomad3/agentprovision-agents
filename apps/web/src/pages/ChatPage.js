@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Badge, Button, Card, Col, Container, Form, ListGroup, Modal, Row, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useAuth } from '../App';
 import Layout from '../components/Layout';
 import FeedbackActions from '../components/chat/FeedbackActions';
 import ReportVisualization from '../components/chat/ReportVisualization';
 import agentKitService from '../services/agentKit';
 import chatService from '../services/chat';
+import './ChatPage.css';
 
 const initialSessionState = {
   agentKitId: '',
@@ -220,7 +223,13 @@ const ChatPage = () => {
                 {message.context.attachment.filename || 'file'}
               </Badge>
             )}
-            <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
+            {message.role === 'assistant' ? (
+              <div className="chat-markdown" style={{ fontSize: '0.9rem', lineHeight: 1.6 }}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+              </div>
+            ) : (
+              <span style={{ whiteSpace: 'pre-wrap' }}>{message.content}</span>
+            )}
           </div>
           <small className="text-muted">{timeLabel}</small>
         </div>
