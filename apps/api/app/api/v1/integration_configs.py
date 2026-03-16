@@ -167,6 +167,16 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         ],
         "auth_type": "manual"
     },
+    "claude_code_cli": {
+        "display_name": "Claude Code (Subscription)",
+        "description": "Use your Claude Code Pro/Max subscription for AI agents",
+        "icon": "FaTerminal",
+        "credentials": [
+            {"key": "session_token", "label": "Session Token", "type": "password", "required": True,
+             "help": "Run 'claude auth status' in your terminal and paste the session token"},
+        ],
+        "auth_type": "manual",
+    },
 }
 
 
