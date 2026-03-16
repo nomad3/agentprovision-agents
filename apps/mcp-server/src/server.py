@@ -42,7 +42,9 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan,
 )
-app.mount("/", mcp_server.streamable_http_app())
+# NOTE: FastMCP streamable HTTP requires its own ASGI lifecycle.
+# It runs as a separate process on port 8001 (see Dockerfile CMD).
+# Do NOT mount it here — app.mount() breaks the task group initialization.
 databricks = DatabricksClient()
 
 # ==================== Models ====================

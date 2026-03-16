@@ -113,8 +113,8 @@ def generate_mcp_config(tenant_id: str, internal_key: str) -> dict:
     Points to MCP_SERVER_URL/mcp with tenant authentication headers so the
     Claude Code CLI can reach ServiceTsunami's MCP tools.
     """
-    mcp_server_url = os.environ.get("MCP_SERVER_URL", "http://mcp-server:8000")
-    mcp_url = f"{mcp_server_url}/mcp"
+    mcp_tools_url = os.environ.get("MCP_TOOLS_URL", "http://mcp-tools:8001")
+    mcp_url = f"{mcp_tools_url}/mcp"
 
     return {
         "mcpServers": {
