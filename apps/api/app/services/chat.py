@@ -270,7 +270,9 @@ def _generate_agentic_response(
         TenantFeatures.tenant_id == session.tenant_id
     ).first()
 
-    if features and getattr(features, 'cli_orchestrator_enabled', False):
+    if features and getattr(features, 'cli_orchestrator_enabled', False) and not media_parts:
+        # CLI path — text-only messages. Images/audio fall through to ADK
+        # because CLI agents can't process multimodal input.
         from app.services.agent_router import route_and_execute
 
         # Derive agent_slug from session's agent kit (not hardcoded to Luna)
