@@ -292,6 +292,30 @@ The pivot extends this by adding:
 - Fast-path direct subprocess for conversational messages (skip Temporal)
 - MCP config generation per session
 
+## CLI Platform Auth (One-Click Integration)
+
+All three CLIs support subscription-based OAuth — no API credits needed. Follows the same integration card pattern as Gmail, GitHub, and Jira.
+
+| CLI | OAuth Flow | Env Var | Subscription Tiers |
+|---|---|---|---|
+| Claude Code | Anthropic OAuth | `CLAUDE_CODE_OAUTH_TOKEN` | Pro, Max, Team |
+| Codex | "Sign in with ChatGPT" | `OPENAI_CODEX_TOKEN` | Plus, Pro, Team, Enterprise |
+| Gemini CLI | "Sign in with Google" | `GEMINI_AUTH_TOKEN` | Free tier, AI Pro, AI Ultra |
+
+**User flow (same as existing integrations):**
+1. User opens **Integrations** page
+2. Clicks "Connect Claude Code" / "Connect Codex" / "Connect Gemini CLI"
+3. OAuth redirect → user logs in with their subscription account
+4. Token stored in credential vault (Fernet encrypted, per-tenant)
+5. Agent Router uses their subscription for CLI calls — zero API cost
+
+**Integration registry entries** (added to `INTEGRATION_CREDENTIAL_SCHEMAS`):
+- `claude_code` — already exists (code-worker uses it)
+- `openai_codex` — new, OAuth flow to ChatGPT
+- `gemini_cli` — new, OAuth flow to Google (extends existing Google OAuth)
+
+**Headless execution:** For K8s workers that can't open a browser, tokens are fetched from the vault at runtime (same as code-worker: `GET /api/v1/oauth/internal/token/{integration_name}`).
+
 ## Platform MCP Compatibility
 
 Before adding a CLI platform, validate MCP support:
