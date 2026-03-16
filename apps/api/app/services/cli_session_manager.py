@@ -44,25 +44,28 @@ def generate_claude_md(
     """
     lines: list[str] = []
 
-    # CRITICAL section FIRST — must be within the 8K truncation limit
+    # CRITICAL section FIRST
     lines.append("# CRITICAL: MCP Tool Usage")
     lines.append("")
     lines.append(f"Your tenant_id is: {tenant_name}")
     lines.append(f"When calling ANY MCP tool, ALWAYS pass tenant_id=\"{tenant_name}\" as a parameter.")
-    lines.append("NEVER use 'auto' or omit tenant_id. This is required for every tool call.")
-    lines.append("")
     lines.append(f"Session: tenant={tenant_name} user={user_name} channel={channel}")
     lines.append("")
+
+    # Conversation history BEFORE skill body (higher priority for context)
+    if conversation_summary:
+        lines.append("# Conversation History")
+        lines.append("")
+        lines.append("The following is the conversation so far. Continue from where it left off.")
+        lines.append("")
+        lines.append(conversation_summary.strip())
+        lines.append("")
+
+    # Agent instructions (may be truncated if history is long — that's OK)
     lines.append("# Agent Instructions")
     lines.append("")
     lines.append(skill_body.strip())
     lines.append("")
-
-    if conversation_summary:
-        lines.append("## Conversation Summary")
-        lines.append("")
-        lines.append(conversation_summary.strip())
-        lines.append("")
 
     # Memory context — entities, memories, relations
     relevant_entities = memory_context.get("relevant_entities", [])

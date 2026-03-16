@@ -148,6 +148,7 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN:-ghp_placeholder}
     volumes:
       - ./apps/code-worker:/app
+      - claude_sessions:/home/codeworker/.claude
     depends_on:
       - temporal
     restart: unless-stopped
@@ -173,3 +174,4 @@ services:
 
 volumes:
   db_data:
+  claude_sessions:
