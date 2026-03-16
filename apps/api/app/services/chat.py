@@ -265,48 +265,20 @@ def _generate_agentic_response(
     sender_phone: str | None = None,
     media_parts: list | None = None,
 ) -> ChatMessage:
-    if not settings.ADK_BASE_URL:
-        logger.error(f"ADK_BASE_URL is missing in settings: {settings.ADK_BASE_URL}")
-        return _append_message(
-            db,
-            session=session,
-            role="assistant",
-            content=ADK_UNCONFIGURED_MESSAGE,
-            context={"error": "adk_not_configured"},
-        )
-
-    try:
-        client = get_adk_client()
-    except ADKNotConfiguredError as e:
-        logger.error(f"get_adk_client raised ADKNotConfiguredError: {e}")
-        return _append_message(
-            db,
-            session=session,
-            role="assistant",
-            content=ADK_UNCONFIGURED_MESSAGE,
-            context={"error": "adk_not_configured"},
-        )
-
-    agent_kit = session.agent_kit
-    dataset = session.dataset
-    dataset_group = session.dataset_group
-
-    if not agent_kit:
-        return _append_message(
-            db,
-            session=session,
-            role="assistant",
-            content="No agent kit is attached to this session yet.",
-            context=None,
-        )
-
-    # --- CLI Orchestrator path (feature flag) ---
+    # --- CLI Orchestrator path (feature flag) — checked FIRST, before ADK ---
     features = db.query(TenantFeatures).filter(
         TenantFeatures.tenant_id == session.tenant_id
     ).first()
 
     if features and getattr(features, 'cli_orchestrator_enabled', False):
         from app.services.agent_router import route_and_execute
+
+        # Derive agent_slug from session's agent kit (not hardcoded to Luna)
+        agent_slug = None
+        if session.agent_kit:
+            # Use agent kit name as slug (lowercase, underscored)
+            import re
+            agent_slug = re.sub(r'[^a-z0-9]+', '_', session.agent_kit.name.lower()).strip('_')
 
         # Build conversation summary from recent messages
         recent_msgs = (
@@ -328,6 +300,7 @@ def _generate_agentic_response(
             message=user_message,
             channel="whatsapp" if sender_phone else "web",
             sender_phone=sender_phone,
+            agent_slug=agent_slug,
             conversation_summary=summary,
         )
 
@@ -343,7 +316,35 @@ def _generate_agentic_response(
             content=response_text, context=context,
         )
 
-    # --- Existing ADK path (unchanged below) ---
+    # --- Existing ADK path (fallback when CLI orchestrator is disabled) ---
+    if not settings.ADK_BASE_URL:
+        logger.error(f"ADK_BASE_URL is missing in settings: {settings.ADK_BASE_URL}")
+        return _append_message(
+            db, session=session, role="assistant",
+            content=ADK_UNCONFIGURED_MESSAGE,
+            context={"error": "adk_not_configured"},
+        )
+
+    try:
+        client = get_adk_client()
+    except ADKNotConfiguredError as e:
+        logger.error(f"get_adk_client raised ADKNotConfiguredError: {e}")
+        return _append_message(
+            db, session=session, role="assistant",
+            content=ADK_UNCONFIGURED_MESSAGE,
+            context={"error": "adk_not_configured"},
+        )
+
+    agent_kit = session.agent_kit
+    dataset = session.dataset
+    dataset_group = session.dataset_group
+
+    if not agent_kit:
+        return _append_message(
+            db, session=session, role="assistant",
+            content="No agent kit is attached to this session yet.",
+            context=None,
+        )
 
     # --- Chat-to-Workflow bridge: create audit task before ADK call ---
     bridge_start = time.time()
