@@ -3,3 +3,14 @@ from src.mcp_tools import knowledge  # noqa: F401
 from src.mcp_tools import email  # noqa: F401
 from src.mcp_tools import calendar  # noqa: F401
 from src.mcp_tools import jira  # noqa: F401
+from src.mcp_tools import github  # noqa: F401
+from src.mcp_tools import data  # noqa: F401
+from src.mcp_tools import ads  # noqa: F401
+from src.mcp_tools import competitor  # noqa: F401
+from src.mcp_tools import monitor  # noqa: F401
+from src.mcp_tools import sales  # noqa: F401
+from src.mcp_tools import reports  # noqa: F401
+from src.mcp_tools import connectors  # noqa: F401
+from src.mcp_tools import shell  # noqa: F401
+from src.mcp_tools import analytics  # noqa: F401
+from src.mcp_tools import skills  # noqa: F401
