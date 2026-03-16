@@ -1,0 +1,20 @@
+tunnel: servicetsunami
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  # API routes
+  - hostname: servicetsunami.com
+    path: /api/*
+    service: http://api:8000
+  - hostname: agentprovision.com
+    path: /api/*
+    service: http://api:8000
+
+  # Web SPA (catch-all per domain)
+  - hostname: servicetsunami.com
+    service: http://web:80
+  - hostname: agentprovision.com
+    service: http://web:80
+
+  # Reject everything else
+  - service: http_status:404

@@ -36,6 +36,7 @@ from app.api.v1 import (
     notifications,
     reports,
     rl,
+    branding_domain,
 )
 
 router = APIRouter()
@@ -80,3 +81,4 @@ router.include_router(oauth.router, prefix="/oauth", tags=["oauth"])
 router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 router.include_router(reports.router, prefix="/reports", tags=["reports"])
 router.include_router(rl.router, prefix="/rl", tags=["reinforcement-learning"])
+router.include_router(branding_domain.router, tags=["domain-branding"])
