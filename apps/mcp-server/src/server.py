@@ -20,6 +20,7 @@ from src.tools import databricks_tools, ingestion
 from src.services.browser_service import get_browser_service
 from src.tools.web_scraper import scrape_webpage, scrape_structured_data, search_and_scrape
 from src.mcp_app import mcp as mcp_server
+import src.mcp_tools  # noqa: F401 — registers @mcp.tool() decorators
 
 logger = logging.getLogger(__name__)
 

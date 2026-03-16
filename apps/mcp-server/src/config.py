@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     API_BASE_URL: str = "http://localhost:8001"
     API_INTERNAL_KEY: str = "internal-service-key"
 
+    # PostgreSQL (shared with API — needed for knowledge tools)
+    DATABASE_URL: str = ""
+
     # Databricks
     DATABRICKS_HOST: str = ""
     DATABRICKS_TOKEN: str = ""
