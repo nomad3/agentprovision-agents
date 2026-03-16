@@ -369,6 +369,22 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             timeout=1500, env=env, cwd=session_dir,  # 25 min — below Temporal's 30 min
         )
 
+        # If --resume failed (session not found), retry without it
+        if result.returncode != 0 and task_input.session_id and "No conversation found" in (result.stderr or result.stdout or ""):
+            logger.warning("Session %s not found, retrying without --resume", task_input.session_id)
+            cmd = [c for c in cmd if c != "--resume" and c != task_input.session_id]
+            # Add system prompt since this is now a fresh session
+            claude_md_path = os.path.join(session_dir, "CLAUDE.md")
+            if os.path.exists(claude_md_path):
+                with open(claude_md_path) as f:
+                    system_prompt = f.read()
+                if system_prompt.strip() and "--append-system-prompt" not in cmd:
+                    cmd.extend(["--append-system-prompt", system_prompt[:16000]])
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                timeout=1500, env=env, cwd=session_dir,
+            )
+
         if result.returncode != 0:
             err = (result.stderr or result.stdout or "")[:1000]
             return ChatCliResult(response_text="", success=False, error=f"CLI exit {result.returncode}: {err}")
