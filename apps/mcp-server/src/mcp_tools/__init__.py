@@ -2,3 +2,4 @@
 from src.mcp_tools import knowledge  # noqa: F401
 from src.mcp_tools import email  # noqa: F401
 from src.mcp_tools import calendar  # noqa: F401
+from src.mcp_tools import jira  # noqa: F401
