@@ -509,6 +509,8 @@ def oauth_callback(
             plaintext_value=access_token,
             credential_type="oauth_token",
         )
+        # Store refresh_token — also propagate to sibling configs for same account
+        # (Google returns one refresh_token for all integration_names in the same OAuth flow)
         if refresh_token:
             store_credential(
                 db,
@@ -518,6 +520,40 @@ def oauth_callback(
                 plaintext_value=refresh_token,
                 credential_type="oauth_token",
             )
+
+    # Propagate refresh_token to ALL sibling configs that are missing it
+    # (Google returns one refresh_token but we have multiple integration_names per account)
+    if refresh_token and account_email:
+        sibling_configs = (
+            db.query(IntegrationConfig)
+            .filter(
+                IntegrationConfig.tenant_id == tenant_id,
+                IntegrationConfig.account_email == account_email,
+                IntegrationConfig.enabled.is_(True),
+            )
+            .all()
+        )
+        for sib in sibling_configs:
+            existing_refresh = (
+                db.query(IntegrationCredential)
+                .filter(
+                    IntegrationCredential.integration_config_id == sib.id,
+                    IntegrationCredential.tenant_id == tenant_id,
+                    IntegrationCredential.credential_key == "refresh_token",
+                    IntegrationCredential.status == "active",
+                )
+                .first()
+            )
+            if not existing_refresh:
+                store_credential(
+                    db,
+                    integration_config_id=sib.id,
+                    tenant_id=tenant_id,
+                    credential_key="refresh_token",
+                    plaintext_value=refresh_token,
+                    credential_type="oauth_token",
+                )
+                logger.info("Propagated refresh_token to %s for %s", sib.integration_name, account_email)
 
     logger.info(
         "OAuth %s connected for tenant=%s user=%s email=%s",
