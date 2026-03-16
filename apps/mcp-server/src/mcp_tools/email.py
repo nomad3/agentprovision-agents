@@ -885,15 +885,15 @@ async def download_attachment(
 @mcp.tool()
 async def deep_scan_emails(
     tenant_id: str = "",
-    days: int = 60,
-    max_emails: int = 100,
+    days: int = 365,
+    max_emails: int = 500,
     account_email: str = "",
     ctx: Context = None,
 ) -> dict:
     """Bulk scan emails and extract entities WITHOUT using LLM per email.
 
     This tool does all heavy lifting in Python:
-    1. Fetches emails in batches via Gmail API
+    1. Fetches emails in PAGINATED batches via Gmail API (handles 1000+ emails)
     2. Extracts people + organizations from headers using regex (no LLM)
     3. Stores entities in the knowledge graph via direct DB operations
     4. Embeds entity descriptions for semantic search
@@ -903,8 +903,8 @@ async def deep_scan_emails(
 
     Args:
         tenant_id: Tenant UUID (resolved from session if omitted).
-        days: How many days back to scan (default 60).
-        max_emails: Maximum emails to process (default 100, max 100).
+        days: How many days back to scan (default 365 — one full year).
+        max_emails: Maximum emails to process (default 500).
         account_email: Specific account to scan. If empty, scans all connected accounts.
         ctx: MCP request context (injected automatically).
 
@@ -944,14 +944,34 @@ async def deep_scan_emails(
             acct_email = account.get("email", "")
 
             try:
-                resp = await provider_client.get(
-                    "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                    headers=auth,
-                    params={"maxResults": min(max_emails, 100), "q": f"newer_than:{days}d"},
-                )
-                if resp.status_code != 200:
-                    continue
-                messages = resp.json().get("messages", [])
+                # Paginate through Gmail API to get all messages
+                messages = []
+                page_token = None
+                remaining = max_emails
+
+                while remaining > 0:
+                    params = {
+                        "maxResults": min(remaining, 100),
+                        "q": f"newer_than:{days}d",
+                    }
+                    if page_token:
+                        params["pageToken"] = page_token
+
+                    resp = await provider_client.get(
+                        "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                        headers=auth,
+                        params=params,
+                    )
+                    if resp.status_code != 200:
+                        break
+                    data = resp.json()
+                    batch = data.get("messages", [])
+                    messages.extend(batch)
+                    remaining -= len(batch)
+
+                    page_token = data.get("nextPageToken")
+                    if not page_token or not batch:
+                        break
 
                 all_entities: list = []
                 for msg in messages:
