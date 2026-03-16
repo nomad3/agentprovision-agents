@@ -101,10 +101,11 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
     },
     "claude_code": {
         "display_name": "Claude Code",
-        "description": "Autonomous coding agent — implements features, fixes bugs, creates PRs",
+        "description": "Connect your Claude Code Pro/Max subscription for coding agent and AI chat",
         "icon": "FaTerminal",
         "credentials": [
-            {"key": "session_token", "label": "Session Token", "type": "password", "required": True,
+            {"key": "session_token", "label": "OAuth Token", "type": "password", "required": True,
+             "help": "Run 'claude setup-token' in your terminal and paste the token (valid 1 year)"},
              "help": "Run 'claude setup-token' in your terminal, then paste the token here"},
         ],
     },
@@ -166,16 +167,6 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
              "help": "e.g. gemini-2.5-pro, gemini-2.5-flash"}
         ],
         "auth_type": "manual"
-    },
-    "claude_code_cli": {
-        "display_name": "Claude Code (Subscription)",
-        "description": "Use your Claude Code Pro/Max subscription for AI agents",
-        "icon": "FaTerminal",
-        "credentials": [
-            {"key": "session_token", "label": "Session Token", "type": "password", "required": True,
-             "help": "Run 'claude auth status' in your terminal and paste the session token"},
-        ],
-        "auth_type": "manual",
     },
 }
 

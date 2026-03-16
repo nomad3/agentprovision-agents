@@ -1065,7 +1065,7 @@ async def deep_scan_emails(
                                                 """
                                                 INSERT INTO knowledge_relations
                                                 (id, tenant_id, from_entity_id, to_entity_id,
-                                                 relation_type, confidence, created_at)
+                                                 relation_type, strength, created_at)
                                                 VALUES ($1, $2, $3, $4, 'works_at', 0.8, NOW())
                                                 ON CONFLICT DO NOTHING
                                                 """,
