@@ -289,6 +289,7 @@ class ChatCliInput:
     mcp_config: str = ""  # JSON string
     image_b64: str = ""   # Base64-encoded image (optional)
     image_mime: str = ""   # e.g. "image/jpeg"
+    session_id: str = ""  # Claude Code session ID for continuity
 
 
 @dataclass
@@ -337,9 +338,15 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 "--add-dir", session_dir,
             ]
 
-            # Inject agent instructions as system prompt
+            # Session continuity: use --resume for existing sessions,
+            # --session-id for new ones
+            if task_input.session_id:
+                cmd.extend(["--resume", task_input.session_id])
+
+            # Inject agent instructions as system prompt (only on first message,
+            # resumed sessions already have it)
             claude_md_path = os.path.join(session_dir, "CLAUDE.md")
-            if os.path.exists(claude_md_path):
+            if os.path.exists(claude_md_path) and not task_input.session_id:
                 with open(claude_md_path) as f:
                     system_prompt = f.read()
                 if system_prompt.strip():
@@ -374,14 +381,16 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                     "input_tokens": (data.get("usage") or {}).get("input_tokens", 0),
                     "output_tokens": (data.get("usage") or {}).get("output_tokens", 0),
                     "model": data.get("model"),
+                    "claude_session_id": data.get("session_id", ""),
                 }
                 return ChatCliResult(response_text=text, success=True, metadata=meta)
             except json.JSONDecodeError:
                 return ChatCliResult(response_text=raw, success=True)
 
         finally:
-            import shutil
-            shutil.rmtree(session_dir, ignore_errors=True)
+            # Don't delete session_dir — Claude Code stores session state there
+            # for --resume. Cleanup happens on session rotation or pod restart.
+            pass
 
     except subprocess.TimeoutExpired:
         return ChatCliResult(response_text="", success=False, error="CLI timed out after 120s")

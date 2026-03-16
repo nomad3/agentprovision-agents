@@ -328,7 +328,18 @@ def _generate_agentic_response(
             conversation_summary=summary,
             image_b64=image_b64,
             image_mime=image_mime,
+            db_session_memory=session.memory_context,
         )
+
+        # Save Claude CLI session ID for continuity across messages
+        if context and isinstance(context, dict):
+            cli_session_id = context.get("claude_session_id") or context.get("claude_cli_session_id")
+            if cli_session_id:
+                _mem = dict(session.memory_context or {})
+                _mem["claude_cli_session_id"] = cli_session_id
+                session.memory_context = _mem
+                flag_modified(session, "memory_context")
+                db.commit()
 
         if response_text is None:
             error_msg = (context or {}).get("error", "Agent failed to respond. Please try again.")

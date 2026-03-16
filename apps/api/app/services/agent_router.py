@@ -33,6 +33,7 @@ def route_and_execute(
     conversation_summary: str = "",
     image_b64: str = "",
     image_mime: str = "",
+    db_session_memory: dict = None,
 ) -> Tuple[Optional[str], Dict[str, Any]]:
     """Route message to the appropriate CLI platform and execute.
 
@@ -88,6 +89,7 @@ def route_and_execute(
             conversation_summary=conversation_summary,
             image_b64=image_b64,
             image_mime=image_mime,
+            db_session_memory=db_session_memory,
         )
 
     # Future: gemini_cli, codex_cli, etc.

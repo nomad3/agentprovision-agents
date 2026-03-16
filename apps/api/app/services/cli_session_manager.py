@@ -294,6 +294,7 @@ def run_agent_session(
     conversation_summary: str,
     image_b64: str = "",
     image_mime: str = "",
+    db_session_memory: Dict = None,
 ) -> Tuple[Optional[str], Dict]:
     """Run a full stateless CLI agent session.
 
@@ -400,14 +401,19 @@ def run_agent_session(
                 mcp_config: str = ""
                 image_b64: str = ""
                 image_mime: str = ""
+                session_id: str = ""
+
+            # Reuse existing Claude session if available
+            existing_session_id = (db_session_memory or {}).get("claude_cli_session_id", "")
 
             task_input = _ChatCliInput(
                 message=message,
                 tenant_id=str(tenant_id),
-                claude_md_content=claude_md_content,
+                claude_md_content=claude_md_content if not existing_session_id else "",  # Only on first message
                 mcp_config=json.dumps(mcp_config),
                 image_b64=image_b64,
                 image_mime=image_mime,
+                session_id=existing_session_id,
             )
 
             result = await client.execute_workflow(
