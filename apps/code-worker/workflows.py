@@ -321,8 +321,16 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
 
             # Build command
             cmd = ["claude", "-p", task_input.message, "--output-format", "json"]
-            cmd.extend(["--project-dir", session_dir])
 
+            # Inject agent instructions as system prompt
+            claude_md_path = os.path.join(session_dir, "CLAUDE.md")
+            if os.path.exists(claude_md_path):
+                with open(claude_md_path) as f:
+                    system_prompt = f.read()
+                if system_prompt.strip():
+                    cmd.extend(["--append-system-prompt", system_prompt[:8000]])
+
+            # Connect to MCP server for tools
             mcp_path = os.path.join(session_dir, "mcp.json")
             if os.path.exists(mcp_path):
                 cmd.extend(["--mcp-config", mcp_path])
