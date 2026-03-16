@@ -336,13 +336,17 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             with open(img_path, "wb") as f:
                 f.write(b64.b64decode(task_input.image_b64))
 
-        # Build command
+        # Build command — full dev capabilities (git, edit, bash, MCP tools)
         cmd = [
             "claude", "-p", task_input.message,
             "--output-format", "json",
-            "--allowedTools", "mcp__servicetsunami__*,Read",
+            "--allowedTools", "mcp__servicetsunami__*,Bash,Read,Edit,Write",
             "--add-dir", session_dir,
         ]
+
+        # Give access to the repo workspace for code changes
+        if os.path.isdir(WORKSPACE):
+            cmd.extend(["--add-dir", WORKSPACE])
 
         # Session continuity: --resume for existing, --session-id for new
         if task_input.session_id:
