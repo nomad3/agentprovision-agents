@@ -5,4 +5,5 @@ mcp = FastMCP(
     "ServiceTsunami",
     stateless_http=True,
     json_response=True,
+    streamable_http_path="/mcp",
 )

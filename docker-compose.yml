@@ -125,11 +125,13 @@ services:
       dockerfile: Dockerfile
     command: ["python", "-m", "src.mcp_serve"]
     ports:
-      - "8087:8001"
+      - "8087:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/servicetsunami
       - MCP_API_KEY=${MCP_API_KEY:-dev_mcp_key}
       - API_BASE_URL=http://api:8000
+      - UVICORN_HOST=0.0.0.0
+      - UVICORN_PORT=8000
     depends_on:
       - db
     restart: unless-stopped
