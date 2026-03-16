@@ -287,6 +287,8 @@ class ChatCliInput:
     tenant_id: str
     claude_md_content: str = ""
     mcp_config: str = ""  # JSON string
+    image_b64: str = ""   # Base64-encoded image (optional)
+    image_mime: str = ""   # e.g. "image/jpeg"
 
 
 @dataclass
@@ -319,11 +321,20 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 with open(os.path.join(session_dir, "mcp.json"), "w") as f:
                     f.write(task_input.mcp_config)
 
-            # Build command — allow all MCP tools without permission prompts
+            # Save image to session directory if provided
+            if task_input.image_b64 and task_input.image_mime:
+                import base64 as b64
+                ext = task_input.image_mime.split("/")[-1].replace("jpeg", "jpg")
+                img_path = os.path.join(session_dir, f"user_image.{ext}")
+                with open(img_path, "wb") as f:
+                    f.write(b64.b64decode(task_input.image_b64))
+
+            # Build command — allow all MCP tools + Read for images
             cmd = [
                 "claude", "-p", task_input.message,
                 "--output-format", "json",
-                "--allowedTools", "mcp__servicetsunami__*",
+                "--allowedTools", "mcp__servicetsunami__*,Read",
+                "--add-dir", session_dir,
             ]
 
             # Inject agent instructions as system prompt

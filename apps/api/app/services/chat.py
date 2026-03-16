@@ -270,9 +270,8 @@ def _generate_agentic_response(
         TenantFeatures.tenant_id == session.tenant_id
     ).first()
 
-    if features and getattr(features, 'cli_orchestrator_enabled', False) and not media_parts:
-        # CLI path — text-only messages. Images/audio fall through to ADK
-        # because CLI agents can't process multimodal input.
+    if features and getattr(features, 'cli_orchestrator_enabled', False):
+        # CLI path — handles both text and media (images saved as files)
         from app.services.agent_router import route_and_execute
 
         # Derive agent_slug from session's agent kit (not hardcoded to Luna)
@@ -302,15 +301,33 @@ def _generate_agentic_response(
                     history_lines.append(f"  (attached: {attachment.get('type', 'file')} — {attachment.get('name', 'unnamed')})")
         summary = "\n\n".join(history_lines)
 
+        # If media_parts present, extract image data for CLI
+        cli_message = user_message
+        image_b64 = ""
+        image_mime = ""
+        if media_parts:
+            for part in media_parts:
+                if isinstance(part, dict):
+                    inline = part.get("inline_data")
+                    if inline and inline.get("data"):
+                        image_b64 = inline["data"]  # Already base64
+                        image_mime = inline.get("mime_type", "image/jpeg")
+                        ext = image_mime.split("/")[-1].replace("jpeg", "jpg")
+                        cli_message += f"\n\n[User attached an image (user_image.{ext}) in the working directory. Use your Read tool to view it and analyze its contents.]"
+                    elif part.get("text"):
+                        cli_message += f"\n\n{part['text']}"
+
         response_text, context = route_and_execute(
             db,
             tenant_id=session.tenant_id,
             user_id=user_id,
-            message=user_message,
+            message=cli_message,
             channel="whatsapp" if sender_phone else "web",
             sender_phone=sender_phone,
             agent_slug=agent_slug,
             conversation_summary=summary,
+            image_b64=image_b64,
+            image_mime=image_mime,
         )
 
         if response_text is None:

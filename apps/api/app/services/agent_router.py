@@ -31,6 +31,8 @@ def route_and_execute(
     sender_phone: str = None,
     agent_slug: str = None,
     conversation_summary: str = "",
+    image_b64: str = "",
+    image_mime: str = "",
 ) -> Tuple[Optional[str], Dict[str, Any]]:
     """Route message to the appropriate CLI platform and execute.
 
@@ -84,6 +86,8 @@ def route_and_execute(
             channel=channel,
             sender_phone=sender_phone,
             conversation_summary=conversation_summary,
+            image_b64=image_b64,
+            image_mime=image_mime,
         )
 
     # Future: gemini_cli, codex_cli, etc.

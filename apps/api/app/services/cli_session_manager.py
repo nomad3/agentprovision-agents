@@ -292,6 +292,8 @@ def run_agent_session(
     channel: str,
     sender_phone: Optional[str],
     conversation_summary: str,
+    image_b64: str = "",
+    image_mime: str = "",
 ) -> Tuple[Optional[str], Dict]:
     """Run a full stateless CLI agent session.
 
@@ -396,12 +398,16 @@ def run_agent_session(
                 tenant_id: str
                 claude_md_content: str = ""
                 mcp_config: str = ""
+                image_b64: str = ""
+                image_mime: str = ""
 
             task_input = _ChatCliInput(
                 message=message,
                 tenant_id=str(tenant_id),
                 claude_md_content=claude_md_content,
                 mcp_config=json.dumps(mcp_config),
+                image_b64=image_b64,
+                image_mime=image_mime,
             )
 
             result = await client.execute_workflow(
