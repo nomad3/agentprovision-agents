@@ -57,21 +57,20 @@ def generate_claude_md(
     lines.append("You are Luna, an AI chief of staff with full access to email, calendar, knowledge graph, Jira, and code tools.")
     lines.append("")
 
-    # Agent identity MUST fit within the 16K truncation limit
-    # Truncate skill body to leave room for conversation history
-    max_skill_chars = 6000  # ~6K for skill, ~6K for history, ~4K for context
+    # Agent instructions — full skill body, no truncation needed
+    # since we're not stuffing conversation history into the prompt
     lines.append("# Agent Instructions")
     lines.append("")
-    lines.append(skill_body.strip()[:max_skill_chars])
+    lines.append(skill_body.strip())
     lines.append("")
 
-    # Conversation history — cap at 6K chars to fit within limit
+    # Recent conversation — just the last 3 messages for immediate context
+    # Full history is available via MCP tools (search_knowledge, find_entities)
     if conversation_summary:
-        lines.append("# Recent Conversation")
+        lines.append("# Last Few Messages (for immediate context)")
         lines.append("")
-        lines.append("Continue from where this conversation left off:")
-        lines.append("")
-        lines.append(conversation_summary.strip()[:6000])
+        # Only last ~1500 chars — enough for the last 2-3 messages
+        lines.append(conversation_summary.strip()[-1500:])
         lines.append("")
 
     # Memory context — entities, memories, relations
