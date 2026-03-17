@@ -9,6 +9,8 @@ from app.services import tenants as tenant_service
 from app.schemas.tenant import TenantCreate
 from app.models.agent_kit import AgentKit
 from app.models.chat import ChatSession
+from app.models.integration_config import IntegrationConfig
+import os
 import uuid
 
 def get_user(db: Session, user_id: uuid.UUID) -> User | None:
@@ -72,6 +74,29 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         agent_kit_id=default_kit.id,
     )
     db.add(welcome_session)
+
+    # Auto-provision Claude Code integration with platform-wide token
+    # so new tenants get CLI orchestrator out of the box
+    platform_claude_token = os.environ.get("PLATFORM_CLAUDE_CODE_TOKEN", "")
+    if platform_claude_token:
+        claude_config = IntegrationConfig(
+            tenant_id=tenant.id,
+            integration_name="claude_code",
+            enabled=True,
+        )
+        db.add(claude_config)
+        db.flush()
+
+        from app.services.orchestration.credential_vault import store_credential
+        store_credential(
+            db,
+            integration_config_id=claude_config.id,
+            tenant_id=tenant.id,
+            credential_key="session_token",
+            plaintext_value=platform_claude_token,
+            credential_type="oauth_token",
+        )
+
     db.commit()
     db.refresh(db_user)
     return db_user
