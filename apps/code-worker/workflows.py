@@ -340,6 +340,7 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
         cmd = [
             "claude", "-p", task_input.message,
             "--output-format", "json",
+            "--model", "opus",
             "--allowedTools", "mcp__servicetsunami__*,Bash,Read,Edit,Write",
             "--add-dir", session_dir,
         ]
@@ -358,7 +359,7 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 with open(claude_md_path) as f:
                     system_prompt = f.read()
                 if system_prompt.strip():
-                    cmd.extend(["--append-system-prompt", system_prompt[:16000]])
+                    cmd.extend(["--append-system-prompt", system_prompt[:20000]])
 
         # MCP config
         mcp_path = os.path.join(session_dir, "mcp.json")
@@ -383,7 +384,7 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 with open(claude_md_path) as f:
                     system_prompt = f.read()
                 if system_prompt.strip() and "--append-system-prompt" not in cmd:
-                    cmd.extend(["--append-system-prompt", system_prompt[:16000]])
+                    cmd.extend(["--append-system-prompt", system_prompt[:20000]])
             result = subprocess.run(
                 cmd, capture_output=True, text=True,
                 timeout=1500, env=env, cwd=session_dir,

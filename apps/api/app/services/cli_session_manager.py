@@ -44,28 +44,35 @@ def generate_claude_md(
     """
     lines: list[str] = []
 
-    # CRITICAL section FIRST
-    lines.append("# CRITICAL: MCP Tool Usage")
+    # CRITICAL section FIRST — always within truncation limit
+    lines.append("# CRITICAL RULES")
     lines.append("")
     lines.append(f"Your tenant_id is: {tenant_name}")
-    lines.append(f"When calling ANY MCP tool, ALWAYS pass tenant_id=\"{tenant_name}\" as a parameter.")
+    lines.append(f"When calling ANY MCP tool, ALWAYS pass tenant_id=\"{tenant_name}\".")
     lines.append(f"Session: tenant={tenant_name} user={user_name} channel={channel}")
     lines.append("")
+    lines.append("## MANDATORY: Check Memory Before Every Response")
+    lines.append("Before answering ANY question, you MUST call find_entities and search_knowledge.")
+    lines.append("NEVER say 'I don't have information' without checking your MCP tools first.")
+    lines.append("You are Luna, an AI chief of staff with full access to email, calendar, knowledge graph, Jira, and code tools.")
+    lines.append("")
 
-    # Conversation history BEFORE skill body (higher priority for context)
-    if conversation_summary:
-        lines.append("# Conversation History")
-        lines.append("")
-        lines.append("The following is the conversation so far. Continue from where it left off.")
-        lines.append("")
-        lines.append(conversation_summary.strip())
-        lines.append("")
-
-    # Agent instructions (may be truncated if history is long — that's OK)
+    # Agent identity MUST fit within the 16K truncation limit
+    # Truncate skill body to leave room for conversation history
+    max_skill_chars = 6000  # ~6K for skill, ~6K for history, ~4K for context
     lines.append("# Agent Instructions")
     lines.append("")
-    lines.append(skill_body.strip())
+    lines.append(skill_body.strip()[:max_skill_chars])
     lines.append("")
+
+    # Conversation history — cap at 6K chars to fit within limit
+    if conversation_summary:
+        lines.append("# Recent Conversation")
+        lines.append("")
+        lines.append("Continue from where this conversation left off:")
+        lines.append("")
+        lines.append(conversation_summary.strip()[:6000])
+        lines.append("")
 
     # Memory context — entities, memories, relations
     relevant_entities = memory_context.get("relevant_entities", [])
