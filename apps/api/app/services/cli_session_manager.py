@@ -419,7 +419,7 @@ def run_agent_session(
             task_input = _ChatCliInput(
                 message=message,
                 tenant_id=str(tenant_id),
-                claude_md_content=claude_md_content if not existing_session_id else "",  # Only on first message
+                claude_md_content=claude_md_content,  # Always send — needed for --resume retry
                 mcp_config=json.dumps(mcp_config),
                 image_b64=image_b64,
                 image_mime=image_mime,

@@ -318,8 +318,8 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
         session_dir = os.path.join("/tmp", "st_sessions", task_input.tenant_id)
         os.makedirs(session_dir, exist_ok=True)
 
-        # Write CLAUDE.md (only if no existing session — first message)
-        if task_input.claude_md_content and not task_input.session_id:
+        # Always write CLAUDE.md — needed for --resume retry fallback
+        if task_input.claude_md_content:
             with open(os.path.join(session_dir, "CLAUDE.md"), "w") as f:
                 f.write(task_input.claude_md_content)
 
