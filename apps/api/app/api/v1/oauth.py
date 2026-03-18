@@ -51,9 +51,11 @@ OAUTH_PROVIDERS = {
             "https://www.googleapis.com/auth/gmail.send",
             "https://www.googleapis.com/auth/calendar.readonly",
             "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive.file",
             "https://www.googleapis.com/auth/userinfo.email",
         ],
-        "integration_names": ["gmail", "google_calendar"],
+        "integration_names": ["gmail", "google_calendar", "google_drive"],
     },
     "microsoft": {
         "authorize_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",

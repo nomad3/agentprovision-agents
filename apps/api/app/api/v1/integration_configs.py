@@ -26,6 +26,14 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         "auth_type": "oauth",
         "oauth_provider": "google",
     },
+    "google_drive": {
+        "display_name": "Google Drive",
+        "description": "Search, read, and manage files in Google Drive",
+        "icon": "FaGoogleDrive",
+        "credentials": [],
+        "auth_type": "oauth",
+        "oauth_provider": "google",
+    },
     "google_calendar": {
         "display_name": "Google Calendar",
         "description": "Manage calendar events and schedules",
