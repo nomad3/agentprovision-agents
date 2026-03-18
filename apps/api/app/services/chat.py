@@ -171,9 +171,9 @@ def _generate_agentic_response(
         if not agent_slug:
             # Try to find a matching skill by kit name (case-insensitive)
             kit_name_lower = session.agent_kit.name.lower()
-            for slug in skill_manager.list_skills():
-                if slug == kit_name_lower or kit_name_lower.startswith(slug):
-                    agent_slug = slug
+            for skill in skill_manager.list_skills():
+                if skill.slug == kit_name_lower or kit_name_lower.startswith(skill.slug):
+                    agent_slug = skill.slug
                     break
 
     # Build recent conversation history for CLI context

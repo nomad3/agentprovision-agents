@@ -167,7 +167,7 @@ env:
   - name: MCP_SERVER_URL
     value: "http://mcp-server:8000"
   - name: MCP_TOOLS_URL
-    value: "http://servicetsunami-mcp-tools:80"
+    value: "http://servicetsunami-mcp:80"
 
 # Horizontal Pod Autoscaler - disabled for cost savings
 autoscaling:
