@@ -55,7 +55,7 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         industry=None,
         config={
             "primary_objective": "Provide intelligent AI co-pilot assistance by routing requests to specialized teams and delivering actionable responses.",
-            "model": "claude-3-5-sonnet-20240620",
+            "skill_slug": "luna",
             "personality": "friendly",
             "temperature": 0.7,
             "max_tokens": 2000,
@@ -63,7 +63,6 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
             "system_prompt": "You are Luna, an intelligent AI co-pilot. Route requests to the best specialized team and provide helpful, actionable responses.",
         },
         default_hierarchy={
-            "skill_slug": "luna",
             "platform": "claude_code",
         },
         tenant_id=tenant.id,

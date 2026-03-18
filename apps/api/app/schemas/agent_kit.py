@@ -28,6 +28,7 @@ class AgentKitPlaybookStep(BaseModel):
 
 class AgentKitConfig(BaseModel):
     primary_objective: str = ""
+    skill_slug: str | None = None  # Maps kit to a skill directory for CLI routing
     triggers: List[str] = Field(default_factory=list)
     metrics: List[str] = Field(default_factory=list)
     constraints: List[str] = Field(default_factory=list)
