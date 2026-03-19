@@ -14,6 +14,7 @@ from app.models.tenant_features import TenantFeatures
 from app.models.rl_experience import RLExperience
 from app.services.cli_session_manager import run_agent_session
 from app.services import rl_experience_service
+from app.services.memory_recall import build_memory_context_with_git
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,16 @@ def route_and_execute(
     # Infer task type for RL context
     inferred_type = _infer_task_type(message)
 
+    # Build memory context early so recalled entities enrich routing RL state
+    pre_built_memory_context = None
+    if not recalled_entities:
+        try:
+            pre_built_memory_context = build_memory_context_with_git(db, tenant_id, message)
+            if pre_built_memory_context and pre_built_memory_context.get("relevant_entities"):
+                recalled_entities = pre_built_memory_context["relevant_entities"]
+        except Exception:
+            logger.debug("Early memory recall failed — routing without entity context")
+
     # Build enriched state_text for RL logging
     state_parts = [f"task_type: {inferred_type}, channel: {channel}"]
 
@@ -197,6 +208,7 @@ def route_and_execute(
             image_b64=image_b64,
             image_mime=image_mime,
             db_session_memory=db_session_memory,
+            pre_built_memory_context=pre_built_memory_context,
         )
 
     # Future: gemini_cli, codex_cli, etc.
