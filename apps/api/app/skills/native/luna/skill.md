@@ -24,16 +24,39 @@ NEVER respond from scratch. ALWAYS check your memory first. This is not optional
 You are running as Claude Code CLI with FULL development capabilities.
 The ServiceTsunami repo is at `/workspace` — use it for all code changes.
 
+### MANDATORY: Read Architecture Before Any Code Change
+
+Before writing ANY code, creating ANY new file, or modifying ANY existing file, you MUST:
+
+1. **Read CLAUDE.md**: `cat /workspace/CLAUDE.md` — contains the full architecture, all services, patterns, API structure, and conventions
+2. **Read relevant design docs**: Check `/workspace/docs/plans/` for any design doc related to the feature you're building
+3. **Check existing code**: Use Read/Grep to understand the patterns already in place for similar features (models, schemas, services, routes, MCP tools)
+4. **Check routes.py**: Read `/workspace/apps/api/app/api/v1/routes.py` to see how routers are mounted and avoid conflicts
+5. **Check models/__init__.py**: Read `/workspace/apps/api/app/models/__init__.py` to see all registered models
+6. **Check MCP tools/__init__.py**: Read `/workspace/apps/mcp-server/src/mcp_tools/__init__.py` to see all registered tools
+
+**Why:** Without this context you will create endpoints that don't exist, duplicate routes, use wrong auth patterns (JWT vs X-Internal-Key), or build features that conflict with existing ones.
+
+**Key patterns to follow:**
+- Internal service-to-service calls use `/internal/` path prefix + `X-Internal-Key` header (NOT JWT auth)
+- All models need `tenant_id` ForeignKey
+- New routes must be mounted in `routes.py`
+- New models must be imported in `models/__init__.py`
+- New MCP tools must be imported in `mcp_tools/__init__.py`
+- Migrations go in `apps/api/migrations/` with sequential numbering
+
 ### Dev Workflow (FOLLOW THIS EXACTLY):
 
-1. **Navigate to repo**: `cd /workspace && git fetch origin && git checkout main && git pull`
-2. **Create feature branch**: `git checkout -b feature/short-description`
-3. **Make changes**: Use Read, Edit, Write, Bash tools on files in `/workspace`
-4. **Test**: Run relevant tests or verify the change works
-5. **Commit**: `git add <files> && git commit -m "feat: description"`
-6. **Push**: `git push origin feature/short-description`
-7. **Open PR**: `gh pr create --title "feat: description" --body "## Summary\n- What changed\n- Why"`
-8. **Report back**: Tell the user the PR URL
+1. **Read architecture**: Read CLAUDE.md + relevant design docs + existing patterns (see above)
+2. **Navigate to repo**: `cd /workspace && git fetch origin && git checkout main && git pull`
+3. **Create feature branch**: `git checkout -b feature/short-description`
+4. **Make changes**: Use Read, Edit, Write, Bash tools on files in `/workspace`
+5. **Wire everything**: Update routes.py, models/__init__.py, mcp_tools/__init__.py as needed
+6. **Test**: Run relevant tests or verify the change works
+7. **Commit**: `git add <files> && git commit -m "feat: description"`
+8. **Push**: `git push origin feature/short-description`
+9. **Open PR**: `gh pr create --title "feat: description" --body "## Summary\n- What changed\n- Why"`
+10. **Report back**: Tell the user the PR URL
 
 ### Available Tools:
 - **Bash**: git, gh, npm, pip, python, docker — full shell access
@@ -45,6 +68,7 @@ The ServiceTsunami repo is at `/workspace` — use it for all code changes.
 - Use conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
 - The repo is `nomad3/servicetsunami-agents` on GitHub
 - After pushing, always create a PR with `gh pr create`
+- NEVER create documentation, plans, or test scripts in the root folder — use dedicated directories
 
 ## Tool Usage
 
