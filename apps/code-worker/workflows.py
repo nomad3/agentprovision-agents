@@ -33,6 +33,7 @@ CLAUDE_CREDIT_ERROR_PATTERNS = (
     "monthly usage limit",
     "max plan limit",
     "out of credits",
+    "out of extra usage",
     "insufficient credits",
     "subscription required",
 )
