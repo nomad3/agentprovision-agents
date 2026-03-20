@@ -20,6 +20,11 @@ WORKSPACE = "/workspace"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 API_INTERNAL_KEY = os.environ.get("API_INTERNAL_KEY", "").strip()
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://servicetsunami-api").strip()
+CODE_TASK_ACTIVITY_TIMEOUT = timedelta(minutes=45)
+CODE_TASK_SCHEDULE_TIMEOUT = timedelta(minutes=60)
+CODE_TASK_HEARTBEAT_TIMEOUT = timedelta(minutes=5)
+CODE_TASK_CLI_TIMEOUT_SECONDS = 40 * 60
+CLI_HEARTBEAT_INTERVAL_SECONDS = 30
 
 
 @dataclass
@@ -54,6 +59,48 @@ def _run(cmd: str, cwd: str = WORKSPACE, timeout: int = 600, extra_env: dict | N
         logger.error("Command failed: %s\nstderr: %s\nstdout: %s", cmd, result.stderr, result.stdout[:2000])
         raise RuntimeError(f"Command failed: {cmd}\n{error_detail}")
     return result.stdout.strip()
+
+
+def _run_long_process_with_heartbeat(
+    cmd: list[str],
+    *,
+    cwd: str = WORKSPACE,
+    env: dict | None = None,
+    timeout: int = CODE_TASK_CLI_TIMEOUT_SECONDS,
+    heartbeat_message: str,
+    heartbeat_interval: int = CLI_HEARTBEAT_INTERVAL_SECONDS,
+) -> subprocess.CompletedProcess[str]:
+    """Run a long-lived subprocess while keeping the Temporal activity alive."""
+    logger.info("Running long process: %s", " ".join(cmd))
+    started_at = time.monotonic()
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    stdout = ""
+    stderr = ""
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed > timeout:
+                process.kill()
+                stdout, stderr = process.communicate()
+                raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+            try:
+                stdout, stderr = process.communicate(timeout=heartbeat_interval)
+                break
+            except subprocess.TimeoutExpired:
+                activity.heartbeat(f"{heartbeat_message} ({int(elapsed)}s elapsed)")
+
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
 
 
 def _extract_goal(task_description: str) -> str:
@@ -201,22 +248,25 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             "Do NOT create documentation files, READMEs, or test scripts in the root folder. "
             "Make minimal, focused changes — only what the task requires."
         )
-        claude_result = subprocess.run(
-            [
-                "claude", "-p", prompt,
-                "--output-format", "json",
-                "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
-                "--append-system-prompt", system_prompt,
-                "--dangerously-skip-permissions",
-            ],
-            cwd=WORKSPACE, capture_output=True, text=True, timeout=600,
-            env={**os.environ, **claude_env},
-        )
-        # Clean up prompt file
         try:
-            os.remove(prompt_file)
-        except OSError:
-            pass
+            claude_result = _run_long_process_with_heartbeat(
+                [
+                    "claude", "-p", prompt,
+                    "--output-format", "json",
+                    "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
+                    "--append-system-prompt", system_prompt,
+                    "--dangerously-skip-permissions",
+                ],
+                cwd=WORKSPACE,
+                timeout=CODE_TASK_CLI_TIMEOUT_SECONDS,
+                env={**os.environ, **claude_env},
+                heartbeat_message="Claude Code still running",
+            )
+        finally:
+            try:
+                os.remove(prompt_file)
+            except OSError:
+                pass
         if claude_result.returncode != 0:
             error_detail = claude_result.stderr or claude_result.stdout
             logger.error("Claude Code failed: %s\nstdout: %s", claude_result.stderr, claude_result.stdout[:2000])
@@ -317,6 +367,22 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             success=True,
         )
 
+    except subprocess.TimeoutExpired as e:
+        logger.exception("Code task timed out: %s", e)
+        try:
+            _run("git checkout main", timeout=10)
+        except Exception:
+            pass
+
+        return CodeTaskResult(
+            pr_url="",
+            summary="",
+            branch=branch_name,
+            files_changed=[],
+            claude_output=(e.output or "")[:5000] if isinstance(e.output, str) else "",
+            success=False,
+            error=f"Claude Code timed out after {int(CODE_TASK_CLI_TIMEOUT_SECONDS / 60)} minutes",
+        )
     except Exception as e:
         logger.exception("Code task failed: %s", e)
         # Clean up: switch back to main
@@ -721,8 +787,8 @@ class CodeTaskWorkflow:
         return await workflow.execute_activity(
             execute_code_task,
             task_input,
-            start_to_close_timeout=timedelta(minutes=15),
-            schedule_to_close_timeout=timedelta(minutes=45),
-            heartbeat_timeout=timedelta(seconds=120),
+            start_to_close_timeout=CODE_TASK_ACTIVITY_TIMEOUT,
+            schedule_to_close_timeout=CODE_TASK_SCHEDULE_TIMEOUT,
+            heartbeat_timeout=CODE_TASK_HEARTBEAT_TIMEOUT,
             retry_policy=retry_policy,
         )
