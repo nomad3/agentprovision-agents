@@ -2,7 +2,7 @@
   "hero": {
     "badge": "AI Agent Orchestration Platform",
     "title": "Deploy AI Teams That Think, Learn & Act",
-    "lead": "ServiceTsunami is the enterprise platform for autonomous AI operations. Orchestrate agent teams that write code, monitor competitors, manage ad campaigns, triage your inbox, and automate business workflows — all with persistent memory.",
+    "lead": "wolfpoint.ai is the enterprise platform for autonomous AI operations. Orchestrate agent teams that write code, monitor competitors, manage ad campaigns, triage your inbox, and automate business workflows — all with persistent memory.",
     "subtext": "Stop building one-off chatbots. Deploy agent teams that code autonomously, track market signals, and execute real workflows across your business.",
     "subHighlight": "The agentic AI platform that scales with your ambition.",
     "spotlight": {
@@ -124,7 +124,7 @@
       },
       "programmablePipelines": {
         "title": "The Memory Problem",
-        "description": "Chatbots forget everything between sessions. ServiceTsunami's knowledge graph persists entities, relations, lead scores, and preferences across every conversation and channel."
+        "description": "Chatbots forget everything between sessions. wolfpoint.ai's knowledge graph persists entities, relations, lead scores, and preferences across every conversation and channel."
       },
       "compliantCollaboration": {
         "title": "The Integration Problem",
@@ -256,7 +256,7 @@
   },
   "testimonials": {
     "heading": "Built for Builders",
-    "subtitle": "How teams are using ServiceTsunami to deploy production AI agents",
+    "subtitle": "How teams are using wolfpoint.ai to deploy production AI agents",
     "items": [
       {
         "quote": "We went from a single chatbot to a full agent fleet in two weeks. Luna handles our client communications while the code agent ships features autonomously. The memory system means nothing falls through the cracks.",
