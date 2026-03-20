@@ -782,13 +782,161 @@ function SettingsTab({ t }) {
   );
 }
 
+// ── Platform Performance Tab ─────────────────────────────────────
+
+function PlatformPerformanceTab({ t }) {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        setLoading(true);
+        const result = await learningService.getPlatformPerformance(3);
+        setData(result || []);
+        setError(null);
+      } catch (err) {
+        setError('Failed to load platform performance');
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) {
+    return <div className="text-center py-5"><Spinner animation="border" size="sm" variant="primary" /></div>;
+  }
+  if (error) {
+    return <Alert variant="danger" style={{ fontSize: '0.85rem' }}>{error}</Alert>;
+  }
+  if (data.length === 0) {
+    return (
+      <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--color-muted)' }}>
+        <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem', opacity: 0.4 }}>📊</div>
+        <p style={{ fontSize: '0.9rem' }}>Not enough data yet. Use different platforms and agents to see performance comparisons.</p>
+      </div>
+    );
+  }
+
+  // Group by platform
+  const platforms = {};
+  data.forEach((item) => {
+    const p = item.platform || 'unknown';
+    if (!platforms[p]) platforms[p] = { items: [], totalReward: 0, totalCount: 0 };
+    platforms[p].items.push(item);
+    platforms[p].totalReward += (item.avg_reward || 0) * (item.total || 0);
+    platforms[p].totalCount += item.total || 0;
+  });
+
+  return (
+    <>
+      <div style={sectionLabel}>Platform Comparison</div>
+      <Row className="g-3 mb-4">
+        {Object.entries(platforms).map(([platform, info]) => {
+          const avgReward = info.totalCount > 0 ? info.totalReward / info.totalCount : 0;
+          const color = avgReward > 0 ? '#34d399' : avgReward < 0 ? '#f87171' : '#60a5fa';
+          return (
+            <Col md={4} sm={6} key={platform}>
+              <div style={{ ...cardStyle, borderLeft: `3px solid ${color}` }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--color-muted)', marginBottom: 8, letterSpacing: '0.05em' }}>
+                  {platform.replace(/_/g, ' ')}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <div>
+                    <span style={{ fontSize: '1.4rem', fontWeight: 700, color }}>
+                      {avgReward > 0 ? '+' : ''}{avgReward.toFixed(3)}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-muted)', marginLeft: 6 }}>avg reward</span>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-foreground)' }}>
+                      {info.totalCount}
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--color-muted)' }}>tasks</div>
+                  </div>
+                </div>
+              </div>
+            </Col>
+          );
+        })}
+      </Row>
+
+      <div style={sectionLabel}>Breakdown by Agent & Task Type</div>
+      <div style={cardStyle}>
+        <Table responsive hover style={{ marginBottom: 0, fontSize: '0.85rem' }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--color-border)' }}>
+              {['Platform', 'Agent', 'Task Type', 'Count', 'Avg Reward', 'Positive %'].map((h) => (
+                <th key={h} style={{ fontWeight: 600, color: 'var(--color-muted)', fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.05em', paddingBottom: 10, background: 'transparent', border: 'none' }}>
+                  {h}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {data.map((item, idx) => (
+              <tr key={idx} style={{ borderBottom: '1px solid var(--color-border)' }}>
+                <td style={{ color: 'var(--color-foreground)', fontWeight: 500, border: 'none', paddingTop: 10, paddingBottom: 10 }}>
+                  <Badge bg={item.platform === 'claude_code' ? 'primary' : item.platform === 'gemini_cli' ? 'success' : 'secondary'} style={{ fontSize: '0.7rem' }}>
+                    {(item.platform || 'unknown').replace(/_/g, ' ')}
+                  </Badge>
+                </td>
+                <td style={{ color: 'var(--color-foreground)', border: 'none', paddingTop: 10, paddingBottom: 10 }}>
+                  {item.agent_slug || '—'}
+                </td>
+                <td style={{ color: 'var(--color-foreground)', border: 'none', paddingTop: 10, paddingBottom: 10 }}>
+                  {item.task_type || '—'}
+                </td>
+                <td style={{ color: 'var(--color-foreground)', border: 'none', paddingTop: 10, paddingBottom: 10 }}>
+                  {item.total || 0}
+                </td>
+                <td style={{ color: (item.avg_reward || 0) > 0 ? '#34d399' : (item.avg_reward || 0) < 0 ? '#f87171' : '#60a5fa', fontWeight: 600, border: 'none', paddingTop: 10, paddingBottom: 10 }}>
+                  {item.avg_reward != null ? ((item.avg_reward > 0 ? '+' : '') + item.avg_reward.toFixed(3)) : '—'}
+                </td>
+                <td style={{ color: 'var(--color-foreground)', border: 'none', paddingTop: 10, paddingBottom: 10 }}>
+                  {item.positive_pct != null ? `${item.positive_pct.toFixed(1)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </div>
+    </>
+  );
+}
+
 // ── Main Page ────────────────────────────────────────────────────
 
-const TABS = ['overview', 'decisionPoints', 'experiments', 'reviews', 'settings'];
+const TABS = ['overview', 'platformPerformance', 'decisionPoints', 'experiments', 'reviews', 'settings'];
+
+const TAB_LABELS = {
+  overview: 'Overview',
+  platformPerformance: 'Platform Performance',
+  decisionPoints: 'Decision Points',
+  experiments: 'Experiments',
+  reviews: 'Reviews',
+  settings: 'Settings',
+};
 
 function LearningPage() {
   const { t } = useTranslation('learning');
   const [activeTab, setActiveTab] = useState('overview');
+
+  const handleExport = async () => {
+    try {
+      const blob = await learningService.exportExperiences();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `rl-experiences-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  };
 
   return (
     <Layout>
@@ -803,6 +951,9 @@ function LearningPage() {
               {t('subtitle')}
             </p>
           </div>
+          <Button variant="outline-secondary" size="sm" onClick={handleExport} style={{ fontSize: '0.8rem' }}>
+            Export CSV
+          </Button>
         </div>
 
         {/* Tabs */}
@@ -813,13 +964,14 @@ function LearningPage() {
               style={activeTab === tab ? tabBtnActive : tabBtnBase}
               onClick={() => setActiveTab(tab)}
             >
-              {t(`tabs.${tab}`)}
+              {TAB_LABELS[tab] || t(`tabs.${tab}`, tab)}
             </button>
           ))}
         </div>
 
         {/* Tab Content */}
         {activeTab === 'overview' && <OverviewTab t={t} />}
+        {activeTab === 'platformPerformance' && <PlatformPerformanceTab t={t} />}
         {activeTab === 'decisionPoints' && <DecisionPointsTab t={t} />}
         {activeTab === 'experiments' && <ExperimentsTab t={t} />}
         {activeTab === 'reviews' && <ReviewsTab t={t} />}

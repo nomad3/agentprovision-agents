@@ -16,6 +16,7 @@ const learningService = {
   updateSettings: async (data) => { const r = await api.put('/rl/settings', data); return r.data; },
   getPolicyVersions: async () => { const r = await api.get('/rl/policy/versions'); return r.data; },
   rollbackPolicy: async (decisionPoint, version) => { const r = await api.post(`/rl/policy/rollback?decision_point=${decisionPoint}&version=${version}`); return r.data; },
+  getPlatformPerformance: async (minExperiences = 3) => { const r = await api.get('/rl/platform-performance', { params: { min_experiences: minExperiences } }); return r.data; },
   exportExperiences: async (decisionPoint) => { const r = await api.get('/rl/export', { params: { decision_point: decisionPoint }, responseType: 'blob' }); return r.data; },
 };
 
