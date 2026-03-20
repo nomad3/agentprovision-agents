@@ -262,13 +262,13 @@ async def poll_pr_outcomes(task_input: PROutcomeInput) -> PROutcomeResult:
                             SELECT id FROM rl_experiences
                             WHERE tenant_id = CAST(:tid AS uuid)
                             AND decision_point = 'code_task'
-                            AND state::text LIKE :pr_pattern
+                            AND (state->>'pr_number')::int = :pr_num
                             AND reward IS NULL
                             ORDER BY created_at DESC LIMIT 1
                         """),
                         {
                             "tid": task_input.tenant_id,
-                            "pr_pattern": f"%PR #{pr_number}%",
+                            "pr_num": pr_number,
                         },
                     ).fetchone()
 
