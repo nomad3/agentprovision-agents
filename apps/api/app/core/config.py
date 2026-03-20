@@ -46,6 +46,8 @@ class Settings(BaseSettings):
 
     # Credential Vault encryption (Fernet key — generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     ENCRYPTION_KEY: str | None = None
+    PLATFORM_SHARED_CREDENTIALS_TENANT_ID: str | None = None
+    PLATFORM_CODEX_AUTH_JSON: str | None = None
 
     # OAuth2 - Google (Gmail + Calendar)
     GOOGLE_CLIENT_ID: str | None = None

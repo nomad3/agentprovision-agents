@@ -2,10 +2,13 @@ from typing import List
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import get_password_hash
+from app.models.integration_credential import IntegrationCredential
 from app.models.user import User
 from app.schemas.user import UserCreate, UserUpdate
 from app.services import tenants as tenant_service
+from app.services.orchestration.credential_vault import store_credential, retrieve_credentials_for_skill
 from app.schemas.tenant import TenantCreate
 from app.models.agent_kit import AgentKit
 from app.models.chat import ChatSession
@@ -34,6 +37,112 @@ def create_user(db: Session, *, user_in: UserCreate, tenant_id: uuid.UUID) -> Us
     db.commit()
     db.refresh(db_user)
     return db_user
+
+
+def _get_or_create_integration_config(
+    db: Session,
+    tenant_id: uuid.UUID,
+    integration_name: str,
+) -> IntegrationConfig:
+    config = (
+        db.query(IntegrationConfig)
+        .filter(
+            IntegrationConfig.tenant_id == tenant_id,
+            IntegrationConfig.integration_name == integration_name,
+        )
+        .first()
+    )
+    if config:
+        if not config.enabled:
+            config.enabled = True
+            db.add(config)
+            db.flush()
+        return config
+
+    config = IntegrationConfig(
+        tenant_id=tenant_id,
+        integration_name=integration_name,
+        enabled=True,
+    )
+    db.add(config)
+    db.flush()
+    return config
+
+
+def seed_shared_cli_credentials_for_tenant(
+    db: Session,
+    tenant_id: uuid.UUID,
+    source_tenant_id: uuid.UUID | None = None,
+) -> list[str]:
+    """Seed shared Claude Code / Codex credentials into a tenant when missing."""
+    copied: list[str] = []
+    source_tenant_value = source_tenant_id or (
+        uuid.UUID(settings.PLATFORM_SHARED_CREDENTIALS_TENANT_ID)
+        if settings.PLATFORM_SHARED_CREDENTIALS_TENANT_ID
+        else None
+    )
+
+    seed_specs = [
+        ("claude_code", {"session_token": os.environ.get("PLATFORM_CLAUDE_CODE_TOKEN", "").strip()}),
+        ("codex", {"auth_json": (settings.PLATFORM_CODEX_AUTH_JSON or "").strip()}),
+    ]
+
+    for integration_name, env_fallback in seed_specs:
+        active_count = (
+            db.query(IntegrationCredential)
+            .join(
+                IntegrationConfig,
+                IntegrationCredential.integration_config_id == IntegrationConfig.id,
+            )
+            .filter(
+                IntegrationCredential.tenant_id == tenant_id,
+                IntegrationCredential.status == "active",
+                IntegrationConfig.integration_name == integration_name,
+            )
+            .count()
+        )
+        if active_count:
+            continue
+
+        credentials_to_copy: dict[str, str] = {}
+
+        if source_tenant_value and source_tenant_value != tenant_id:
+            source_config = (
+                db.query(IntegrationConfig)
+                .filter(
+                    IntegrationConfig.tenant_id == source_tenant_value,
+                    IntegrationConfig.integration_name == integration_name,
+                    IntegrationConfig.enabled.is_(True),
+                )
+                .first()
+            )
+            if source_config:
+                credentials_to_copy = retrieve_credentials_for_skill(
+                    db,
+                    integration_config_id=source_config.id,
+                    tenant_id=source_tenant_value,
+                )
+
+        if not credentials_to_copy:
+            credentials_to_copy = {k: v for k, v in env_fallback.items() if v}
+
+        if not credentials_to_copy:
+            continue
+
+        target_config = _get_or_create_integration_config(db, tenant_id, integration_name)
+        credential_type = "oauth_token" if integration_name == "claude_code" else "api_key"
+        for credential_key, plaintext_value in credentials_to_copy.items():
+            store_credential(
+                db,
+                integration_config_id=target_config.id,
+                tenant_id=tenant_id,
+                credential_key=credential_key,
+                plaintext_value=plaintext_value,
+                credential_type=credential_type,
+            )
+        copied.append(integration_name)
+
+    return copied
 
 def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: TenantCreate) -> User:
     tenant = tenant_service.create_tenant(db, tenant_in=tenant_in)
@@ -85,27 +194,9 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
     )
     db.add(welcome_session)
 
-    # Auto-provision Claude Code integration with platform-wide token
-    # so new tenants get CLI orchestrator out of the box
-    platform_claude_token = os.environ.get("PLATFORM_CLAUDE_CODE_TOKEN", "")
-    if platform_claude_token:
-        claude_config = IntegrationConfig(
-            tenant_id=tenant.id,
-            integration_name="claude_code",
-            enabled=True,
-        )
-        db.add(claude_config)
-        db.flush()
-
-        from app.services.orchestration.credential_vault import store_credential
-        store_credential(
-            db,
-            integration_config_id=claude_config.id,
-            tenant_id=tenant.id,
-            credential_key="session_token",
-            plaintext_value=platform_claude_token,
-            credential_type="oauth_token",
-        )
+    # Auto-provision shared CLI credentials so new tenants inherit the
+    # platform owner's Claude Code and Codex subscriptions by default.
+    seed_shared_cli_credentials_for_tenant(db, tenant.id)
 
     db.commit()
     db.refresh(db_user)

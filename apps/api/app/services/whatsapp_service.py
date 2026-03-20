@@ -33,6 +33,27 @@ from app.models.chat import ChatSession
 logger = logging.getLogger(__name__)
 
 
+def _phone_variants(value: str | None) -> set[str]:
+    """Return normalized phone variants for allowlist matching.
+
+    Handles WhatsApp JIDs/domains, leading plus signs, and Mexico mobile
+    numbers which may appear as either 52... or 521....
+    """
+    if not value:
+        return set()
+
+    base = value.split("@", 1)[0].strip()
+    digits = "".join(ch for ch in base if ch.isdigit())
+    variants = {base, base.lstrip("+"), digits}
+
+    if digits.startswith("521") and len(digits) > 3:
+        variants.add("52" + digits[3:])
+    elif digits.startswith("52") and not digits.startswith("521") and len(digits) > 2:
+        variants.add("521" + digits[2:])
+
+    return {item for item in variants if item}
+
+
 class WhatsAppService:
     """Manages neonize WhatsApp clients per tenant:account."""
 
@@ -481,15 +502,16 @@ class WhatsAppService:
             if acct.dm_policy == "allowlist":
                 allowed = acct.allow_from or []
                 if "*" not in allowed:
-                    # Normalize: strip '+' for comparison to handle format mismatches
-                    allowed_normalized = {a.lstrip('+') for a in allowed}
-                    candidates = {
-                        sender_jid, sender_phone,
-                        sender_jid.lstrip('+'), sender_phone.lstrip('+'),
-                    }
-                    matches = bool(candidates & allowed_normalized) or bool(
-                        {sender_jid, f"+{sender_jid}", sender_phone, f"+{sender_phone}"} & set(allowed)
-                    )
+                    allowed_variants = set()
+                    for allowed_value in allowed:
+                        allowed_variants.update(_phone_variants(allowed_value))
+
+                    candidates = set()
+                    candidates.update(_phone_variants(sender_jid))
+                    candidates.update(_phone_variants(sender_phone))
+                    candidates.update(_phone_variants(chat_jid))
+
+                    matches = bool(candidates & allowed_variants)
                     if not matches:
                         logger.info(f"Blocked message from {sender_jid} (phone={sender_phone}, not in allowlist {allowed})")
                         return
