@@ -54,17 +54,21 @@ async def startup_skill_manager():
     from app.services.skill_manager import skill_manager
     skill_manager.scan()
 
-    # Sync skills to DB registry + embeddings
-    try:
-        from app.services.skill_registry_service import sync_skills_to_db
-        from app.db.session import SessionLocal as _SessionLocal
-        sync_db = _SessionLocal()
-        sync_skills_to_db(sync_db)
-        sync_db.close()
-    except Exception as e:
-        _logging.getLogger(__name__).warning(
-            "Skill registry sync failed (pgvector may not be ready): %s", e
-        )
+    # Sync skills to DB registry + embeddings (background — don't block API startup)
+    import threading
+    def _sync_skills_background():
+        try:
+            from app.services.skill_registry_service import sync_skills_to_db
+            from app.db.session import SessionLocal as _SessionLocal
+            sync_db = _SessionLocal()
+            sync_skills_to_db(sync_db)
+            sync_db.close()
+            _logging.getLogger(__name__).info("Skill registry synced in background")
+        except Exception as e:
+            _logging.getLogger(__name__).warning(
+                "Skill registry sync failed (pgvector may not be ready): %s", e
+            )
+    threading.Thread(target=_sync_skills_background, daemon=True).start()
 
 
 @app.on_event("startup")

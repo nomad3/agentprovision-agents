@@ -23,19 +23,62 @@ _DIMENSIONS = 768
 _MAX_INPUT_CHARS = 8000
 
 
+_model_loading = False
+_model_load_failures = 0
+_MAX_LOAD_RETRIES = 3
+
+
 def _get_model():
-    """Lazy-init the sentence-transformers model."""
-    global _model
+    """Lazy-init the sentence-transformers model with retry and timeout protection."""
+    global _model, _model_loading, _model_load_failures
     if _model is not None:
         return _model
+    if _model_loading:
+        return None  # Another thread is loading — skip
+    if _model_load_failures >= _MAX_LOAD_RETRIES:
+        return None  # Too many failures — stop trying until restart
+
+    _model_loading = True
     try:
+        import signal
+        import threading
         from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(_MODEL_NAME, trust_remote_code=True)
-        logger.info(f"Loaded embedding model: {_MODEL_NAME}")
+
+        # Load model with a timeout (120s) to prevent hanging on HF download
+        loaded = [None]
+        error = [None]
+
+        def _load():
+            try:
+                loaded[0] = SentenceTransformer(_MODEL_NAME, trust_remote_code=True)
+            except Exception as e:
+                error[0] = e
+
+        t = threading.Thread(target=_load, daemon=True)
+        t.start()
+        t.join(timeout=120)
+
+        if t.is_alive():
+            logger.warning("Embedding model load timed out (120s) — API continues without embeddings")
+            _model_load_failures += 1
+            return None
+
+        if error[0]:
+            logger.warning("Embedding model load failed: %s (attempt %d/%d)",
+                          error[0], _model_load_failures + 1, _MAX_LOAD_RETRIES)
+            _model_load_failures += 1
+            return None
+
+        _model = loaded[0]
+        _model_load_failures = 0
+        logger.info("Loaded embedding model: %s", _MODEL_NAME)
         return _model
     except Exception:
-        logger.exception(f"Failed to load embedding model {_MODEL_NAME}")
+        logger.exception("Failed to load embedding model %s", _MODEL_NAME)
+        _model_load_failures += 1
         return None
+    finally:
+        _model_loading = False
 
 
 # ------------------------------------------------------------------

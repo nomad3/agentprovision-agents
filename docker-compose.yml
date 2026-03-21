@@ -34,6 +34,7 @@ services:
       - MCP_SERVER_URL=http://mcp-server:8000
       - PLATFORM_CLAUDE_CODE_TOKEN=${PLATFORM_CLAUDE_CODE_TOKEN:-}
       - HF_HUB_ENABLE_HF_TRANSFER=0
+      - HF_HUB_DISABLE_XET=1
       - OLLAMA_BASE_URL=http://ollama:11434
 
   web:
