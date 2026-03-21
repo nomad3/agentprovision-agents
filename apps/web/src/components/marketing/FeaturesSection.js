@@ -33,10 +33,10 @@ const FeaturesSection = () => {
       <Container>
         <Row className="text-center mb-5">
           <Col>
-            <h2 className="display-5 fw-bold text-white mb-3">
+            <h2 className="display-5 fw-bold gradient-text mb-3">
               {t("landing:featuresGrid.heading")}
             </h2>
-            <p className="lead text-soft">
+            <p className="lead" style={{ color: '#5a6d80' }}>
               {t("landing:featuresGrid.subtitle")}
             </p>
           </Col>
