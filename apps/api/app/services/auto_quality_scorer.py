@@ -27,21 +27,13 @@ def score_and_log_async(
     """Fire-and-forget: score response quality and log RL reward.
 
     Call this AFTER returning the response to the user.
-    Runs in background — never blocks the response.
+    Runs in background thread — never blocks the response.
     """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_score_and_log(tenant_id, user_message, agent_response, trajectory_id))
-        else:
-            asyncio.run(_score_and_log(tenant_id, user_message, agent_response, trajectory_id))
-    except RuntimeError:
-        # No event loop — run synchronously in a new thread
-        import threading
-        threading.Thread(
-            target=lambda: asyncio.run(_score_and_log(tenant_id, user_message, agent_response, trajectory_id)),
-            daemon=True,
-        ).start()
+    import threading
+    threading.Thread(
+        target=lambda: asyncio.run(_score_and_log(tenant_id, user_message, agent_response, trajectory_id)),
+        daemon=True,
+    ).start()
 
 
 async def _score_and_log(
@@ -53,9 +45,11 @@ async def _score_and_log(
     """Score the response and log as RL reward."""
     from app.services.local_inference import score_response_quality, is_available
 
+    logger.info("Auto-quality scorer: starting for tenant %s", str(tenant_id)[:8])
+
     # Check if Ollama is available
     if not await is_available():
-        logger.debug("Ollama not available — skipping auto-quality scoring")
+        logger.info("Auto-quality scorer: Ollama not available — skipping")
         return
 
     # Score the response
@@ -75,14 +69,14 @@ async def _score_and_log(
         score, reward, reasoning[:80],
     )
 
-    # Log as RL experience
+    # Log as RL experience: create, then assign reward
     try:
         from app.db.session import SessionLocal
         from app.services import rl_experience_service
 
         db = SessionLocal()
         try:
-            rl_experience_service.log_experience(
+            exp = rl_experience_service.log_experience(
                 db,
                 tenant_id=tenant_id,
                 trajectory_id=trajectory_id or uuid.uuid4(),
@@ -96,15 +90,21 @@ async def _score_and_log(
                     "response_preview": agent_response[:100],
                 },
                 state_text=f"User: {user_message[:100]} → Response: {agent_response[:100]}",
+            )
+            # Now assign the reward
+            rl_experience_service.assign_reward(
+                db,
+                experience_id=exp.id,
                 reward=reward,
-                reward_source="auto_quality",
                 reward_components={
                     "score": score,
                     "reasoning": reasoning,
                     "model": result.get("model", ""),
                 },
+                reward_source="auto_quality",
             )
+            logger.info("Auto-quality RL experience saved: id=%s reward=%.2f", str(exp.id)[:8], reward)
         finally:
             db.close()
     except Exception as e:
-        logger.debug("Failed to log auto-quality RL experience: %s", e)
+        logger.warning("Failed to log auto-quality RL experience: %s", e)
