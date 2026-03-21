@@ -38,9 +38,6 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
             <p className="lead text-soft mb-4" style={{ fontSize: '1.15rem', lineHeight: 1.7 }}>
               {t('hero.lead')}
             </p>
-            <p className="text-soft mt-3" style={{ fontSize: '0.95rem', opacity: 0.7 }}>
-              {t('hero.subtext')}
-            </p>
           </Col>
         </Row>
       </Container>
