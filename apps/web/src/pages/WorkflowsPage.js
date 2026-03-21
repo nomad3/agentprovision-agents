@@ -48,6 +48,7 @@ import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import TaskTimeline from '../components/TaskTimeline';
 import taskService from '../services/taskService';
+import DynamicWorkflowsTab from '../components/workflows/DynamicWorkflowsTab';
 import './WorkflowsPage.css';
 
 // ===========================================================================
@@ -1543,6 +1544,13 @@ const WorkflowsPage = () => {
             {t('tabs.executions')}
           </button>
           <button
+            className={`workflows-tab-btn ${activeMainTab === 'dynamic' ? 'active' : ''}`}
+            onClick={() => setTab('dynamic')}
+          >
+            <FaBolt size={12} style={{ marginRight: '0.4rem' }} />
+            My Workflows
+          </button>
+          <button
             className={`workflows-tab-btn ${activeMainTab === 'designs' ? 'active' : ''}`}
             onClick={() => setTab('designs')}
           >
@@ -1552,6 +1560,7 @@ const WorkflowsPage = () => {
         </div>
 
         {activeMainTab === 'executions' && <ExecutionsTab />}
+        {activeMainTab === 'dynamic' && <DynamicWorkflowsTab />}
         {activeMainTab === 'designs' && <DesignsTab />}
       </div>
     </Layout>
