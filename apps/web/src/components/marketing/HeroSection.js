@@ -20,9 +20,6 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
             <h1 className="display-2 fw-bold mt-4 mb-3 section-heading">
               {t('hero.title')}
             </h1>
-            <p className="lead text-soft mb-4" style={{ fontSize: '1.15rem', lineHeight: 1.7 }}>
-              {t('hero.lead')}
-            </p>
             <div className="d-flex flex-column flex-md-row gap-3 justify-content-center justify-content-lg-start mt-4">
               <Button size="lg" className="wolf-btn-primary px-5 py-3" onClick={onPrimaryCta}>
                 {t('common:cta.startFree', 'Start Free')}
@@ -38,6 +35,9 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
             </div>
           </Col>
           <Col lg={6} className="text-center">
+            <p className="lead text-soft mb-4" style={{ fontSize: '1.15rem', lineHeight: 1.7 }}>
+              {t('hero.lead')}
+            </p>
             <p className="text-soft mt-3" style={{ fontSize: '0.95rem', opacity: 0.7 }}>
               {t('hero.subtext')}
             </p>
