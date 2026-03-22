@@ -210,12 +210,25 @@ def run_agent_session(
     )
     if subscription_missing:
         logger.warning(
-            "No %s credential for tenant %s — falling back to local Qwen via Codex CLI",
+            "No %s credential for tenant %s — falling back to local Qwen",
             platform, tenant_id,
         )
-        # Use Codex CLI with --oss --local-provider ollama for full MCP tool access
-        platform = "local_qwen"
-        metadata["fallback"] = True
+        from app.services.local_inference import generate_luna_response_sync
+        local_response = generate_luna_response_sync(
+            message=message,
+            conversation_summary=conversation_summary,
+            skill_body=skill_body,
+        )
+        if local_response:
+            metadata["platform"] = "local_qwen"
+            metadata["fallback"] = True
+            return local_response, metadata
+        err = (
+            f"{'Claude Code' if platform == 'claude_code' else 'Codex'} subscription is not connected "
+            "and the local model is unavailable. Please connect your account in Settings → Integrations."
+        )
+        metadata["error"] = err
+        return None, metadata
 
     if pre_built_memory_context is not None:
         memory_context = pre_built_memory_context
