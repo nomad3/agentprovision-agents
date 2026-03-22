@@ -34,15 +34,7 @@ QUALITY_MODEL = os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b")
 # ---------------------------------------------------------------------------
 _foreground_active = threading.Event()     # Set when any foreground caller holds GPU
 _ollama_sync_lock = threading.Lock()       # Sync foreground callers
-_background_semaphore: Optional[asyncio.Semaphore] = None
-
-
-def _get_bg_semaphore() -> asyncio.Semaphore:
-    """Get or create the background async semaphore."""
-    global _background_semaphore
-    if _background_semaphore is None:
-        _background_semaphore = asyncio.Semaphore(1)
-    return _background_semaphore
+_background_lock = threading.Lock()        # Serializes background calls (thread-safe, no event loop issues)
 
 
 async def generate(
@@ -84,15 +76,20 @@ async def _generate_background(prompt, model, system, temperature, max_tokens, t
     if _foreground_active.is_set():
         logger.debug("GPU busy with foreground — skipping background inference")
         return None
+    acquired = _background_lock.acquire(blocking=False)
+    if not acquired:
+        logger.debug("Background queue full — skipping")
+        return None
     try:
-        async with _get_bg_semaphore():
-            if _foreground_active.is_set():
-                logger.debug("GPU became busy — skipping background inference")
-                return None
-            return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
+        if _foreground_active.is_set():
+            logger.debug("GPU became busy — skipping background inference")
+            return None
+        return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
     except Exception as e:
         logger.warning("Background inference failed: %s", e)
         return None
+    finally:
+        _background_lock.release()
 
 
 async def _do_generate(prompt, model, system, temperature, max_tokens, timeout):
