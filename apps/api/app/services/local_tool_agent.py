@@ -77,47 +77,8 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             },
         },
     },
-    "create_entity": {
-        "category": "knowledge",
-        "integration": None,
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "create_entity",
-                "description": "Create a new entity in the knowledge graph.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Entity name"},
-                        "entity_type": {"type": "string", "description": "Type: person, organization, product, location, event, opportunity, concept"},
-                        "category": {"type": "string", "description": "Category: lead, contact, customer, competitor, etc"},
-                        "description": {"type": "string", "description": "Brief description"},
-                    },
-                    "required": ["name", "entity_type"],
-                },
-            },
-        },
-    },
-    "record_observation": {
-        "category": "knowledge",
-        "integration": None,
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "record_observation",
-                "description": "Record a fact or observation about an entity.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "observation_text": {"type": "string", "description": "The observation or fact to record"},
-                        "observation_type": {"type": "string", "description": "Type: fact, insight, preference, context"},
-                        "entity_id": {"type": "string", "description": "Entity ID to attach observation to (optional)"},
-                    },
-                    "required": ["observation_text"],
-                },
-            },
-        },
-    },
+    # NOTE: create_entity and record_observation removed — local model is read-only.
+    # These mutations require a subscribed CLI (Claude/Codex) for trust.
     # ── Email (requires gmail) ──
     "search_emails": {
         "category": "email",
@@ -137,26 +98,7 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             },
         },
     },
-    "send_email": {
-        "category": "email",
-        "integration": "gmail",
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "send_email",
-                "description": "Send an email.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "to": {"type": "string", "description": "Recipient email"},
-                        "subject": {"type": "string", "description": "Subject"},
-                        "body": {"type": "string", "description": "Body text"},
-                    },
-                    "required": ["to", "subject", "body"],
-                },
-            },
-        },
-    },
+    # NOTE: send_email removed — local model is read-only, no side effects.
     # ── Calendar (requires google_calendar) ──
     "list_calendar_events": {
         "category": "calendar",
@@ -195,27 +137,7 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
             },
         },
     },
-    "create_jira_issue": {
-        "category": "jira",
-        "integration": "jira",
-        "schema": {
-            "type": "function",
-            "function": {
-                "name": "create_jira_issue",
-                "description": "Create a new Jira issue.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "project_key": {"type": "string", "description": "Project key (e.g. ST)"},
-                        "summary": {"type": "string", "description": "Issue title"},
-                        "description": {"type": "string", "description": "Issue description"},
-                        "issue_type": {"type": "string", "description": "Type: Task, Bug, Story, Epic"},
-                    },
-                    "required": ["project_key", "summary"],
-                },
-            },
-        },
-    },
+    # NOTE: create_jira_issue removed — local model is read-only, no side effects.
 }
 
 
@@ -223,8 +145,13 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 # Pre-execution safety gate — block side-effect tools for local model
 # ---------------------------------------------------------------------------
 
-# Tools that cause external side effects — local model MUST NOT execute these
-_BLOCKED_TOOLS = {"send_email", "deploy_changes", "execute_shell", "create_jira_issue"}
+# Tools that cause side effects — local model MUST NOT execute these.
+# Local fallback is READ-ONLY: search and retrieve only, no mutations.
+_BLOCKED_TOOLS = {
+    "send_email", "deploy_changes", "execute_shell",       # External side effects
+    "create_jira_issue",                                     # External side effects
+    "create_entity", "record_observation",                   # Knowledge graph mutations
+}
 
 def _check_tool_risk(tool_name: str) -> str:
     """Returns 'allow' or 'block'. Local model cannot execute side-effect tools."""

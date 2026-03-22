@@ -27,10 +27,14 @@ QUALITY_MODEL = os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b")
 # ---------------------------------------------------------------------------
 # GPU inference bulkhead — foreground (user-blocking) has priority over
 # background (scoring/consensus). Background skips when foreground is active.
+#
+# Shared _foreground_active flag coordinates across async and sync callers:
+# - Sync foreground (local_tool_agent, generate_sync) sets the flag via _ollama_sync_lock
+# - Async background (scoring, consensus) checks the flag before entering
 # ---------------------------------------------------------------------------
-_foreground_lock = asyncio.Lock()          # Foreground gets exclusive GPU
+_foreground_active = threading.Event()     # Set when any foreground caller holds GPU
+_ollama_sync_lock = threading.Lock()       # Sync foreground callers
 _background_semaphore: Optional[asyncio.Semaphore] = None
-_ollama_sync_lock = threading.Lock()       # For sync callers (foreground only)
 
 
 def _get_bg_semaphore() -> asyncio.Semaphore:
@@ -64,23 +68,25 @@ async def generate(
 
 
 async def _generate_foreground(prompt, model, system, temperature, max_tokens, timeout):
-    """Foreground inference — acquires exclusive GPU lock."""
+    """Foreground async inference — sets shared flag so background skips."""
     try:
-        async with _foreground_lock:
-            return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
+        _foreground_active.set()
+        return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
     except Exception as e:
         logger.warning("Foreground inference failed: %s", e)
         return None
+    finally:
+        _foreground_active.clear()
 
 
 async def _generate_background(prompt, model, system, temperature, max_tokens, timeout):
-    """Background inference — skips if foreground is active, queues behind other background."""
-    if _foreground_lock.locked():
+    """Background inference — skips if any foreground caller (async or sync) is active."""
+    if _foreground_active.is_set():
         logger.debug("GPU busy with foreground — skipping background inference")
         return None
     try:
         async with _get_bg_semaphore():
-            if _foreground_lock.locked():
+            if _foreground_active.is_set():
                 logger.debug("GPU became busy — skipping background inference")
                 return None
             return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
@@ -276,10 +282,11 @@ def generate_sync(
     max_tokens: int = 500,
     timeout: float = 45.0,
 ) -> Optional[str]:
-    """Synchronous Ollama call. Returns None on failure. Serialized via GPU lock."""
+    """Synchronous Ollama call. Returns None on failure. Sets foreground flag so background skips."""
     model = model or DEFAULT_MODEL
-    try:
-        with _ollama_sync_lock:
+    with _ollama_sync_lock:
+        _foreground_active.set()
+        try:
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(
                     f"{OLLAMA_BASE_URL}/api/generate",
@@ -297,10 +304,12 @@ def generate_sync(
                 if resp.status_code == 200:
                     return resp.json().get("response", "").strip()
                 logger.warning("Ollama (sync) returned %s: %s", resp.status_code, resp.text[:200])
-    except httpx.ConnectError:
-        logger.debug("Ollama not available (sync) at %s", OLLAMA_BASE_URL)
-    except Exception as e:
-        logger.warning("Local inference (sync) failed: %s", e)
+        except httpx.ConnectError:
+            logger.debug("Ollama not available (sync) at %s", OLLAMA_BASE_URL)
+        except Exception as e:
+            logger.warning("Local inference (sync) failed: %s", e)
+        finally:
+            _foreground_active.clear()
     return None
 
 
