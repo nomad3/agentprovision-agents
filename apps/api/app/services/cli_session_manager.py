@@ -204,16 +204,19 @@ def run_agent_session(
     session_token = credentials.get("session_token")
     auth_json = credentials.get("auth_json")
     if platform == "claude_code" and not session_token:
-        err = f"No Claude Code session token for tenant {tenant_id}"
-        logger.error(err)
+        err = (
+            "Claude Code subscription is not connected. "
+            "Please connect your Claude Code account in Settings → Integrations to use this feature."
+        )
+        logger.error("No Claude Code session token for tenant %s", tenant_id)
         metadata["error"] = err
         return None, metadata
     if platform == "codex" and not (session_token or auth_json):
         err = (
-            "No Codex ChatGPT credential found for tenant "
-            f"{tenant_id}. Store the contents of ~/.codex/auth.json in the Codex integration."
+            "Codex (ChatGPT) subscription is not connected. "
+            "Please connect your OpenAI account in Settings → Integrations to use this feature."
         )
-        logger.error(err)
+        logger.error("No Codex credential found for tenant %s", tenant_id)
         metadata["error"] = err
         return None, metadata
 
