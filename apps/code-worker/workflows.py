@@ -537,6 +537,8 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             return _execute_codex_chat(task_input, session_dir, image_path)
         if task_input.platform == "gemini_cli":
             return _execute_gemini_chat(task_input, session_dir, image_path)
+        if task_input.platform == "local_qwen":
+            return _execute_local_qwen_chat(task_input, session_dir, image_path)
         return ChatCliResult(
             response_text="",
             success=False,
@@ -693,6 +695,88 @@ def _execute_codex_chat(task_input: ChatCliInput, session_dir: str, image_path: 
 
     metadata = _extract_codex_metadata(result.stdout)
     metadata["platform"] = "codex"
+    return ChatCliResult(response_text=response_text, success=True, metadata=metadata)
+
+
+def _execute_local_qwen_chat(task_input: ChatCliInput, session_dir: str, image_path: str) -> ChatCliResult:
+    """Run Codex CLI with --oss --local-provider ollama for local Qwen inference with full MCP tool access."""
+    QWEN_MODEL = os.environ.get("LOCAL_QWEN_MODEL", "qwen2.5:32b")
+
+    if task_input.instruction_md_content.strip():
+        with open(os.path.join(session_dir, "AGENTS.md"), "w") as f:
+            f.write(task_input.instruction_md_content)
+
+    # Prepare codex home with MCP config but no auth (local provider doesn't need it)
+    codex_home = os.path.join(session_dir, ".codex")
+    os.makedirs(codex_home, exist_ok=True)
+
+    config_lines = [
+        f'[projects."{WORKSPACE if os.path.isdir(WORKSPACE) else session_dir}"]',
+        'trust_level = "trusted"',
+        "",
+        f'[projects."{session_dir}"]',
+        'trust_level = "trusted"',
+    ]
+    if task_input.mcp_config:
+        config_lines.extend(_codex_mcp_config_lines(task_input.mcp_config))
+
+    with open(os.path.join(codex_home, "config.toml"), "w") as f:
+        f.write("\n".join(config_lines).strip() + "\n")
+
+    prompt = task_input.message
+    if task_input.instruction_md_content.strip():
+        prompt = f"{task_input.instruction_md_content.strip()}\n\n# User Request\n\n{task_input.message}"
+
+    output_path = os.path.join(session_dir, "codex-local-last-message.txt")
+    cmd = [
+        "codex",
+        "exec",
+        prompt,
+        "--oss",
+        "--local-provider", "ollama",
+        "-m", QWEN_MODEL,
+        "--json",
+        "--output-last-message", output_path,
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-C", WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+    ]
+
+    if os.path.isdir(WORKSPACE):
+        cmd.extend(["--add-dir", session_dir])
+    else:
+        cmd.extend(["--skip-git-repo-check"])
+
+    if image_path:
+        cmd.extend(["--image", image_path])
+
+    env = os.environ.copy()
+    env["CODEX_HOME"] = codex_home
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=1500,
+        env=env,
+        cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+    )
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "")[:2000]
+        return ChatCliResult(response_text="", success=False, error=f"Local Qwen CLI exit {result.returncode}: {err}")
+
+    response_text = ""
+    if os.path.exists(output_path):
+        with open(output_path) as f:
+            response_text = f.read().strip()
+    if not response_text:
+        response_text = _extract_codex_last_message(result.stdout)
+    if not response_text:
+        return ChatCliResult(response_text="", success=False, error="Local Qwen produced no final response")
+
+    metadata = _extract_codex_metadata(result.stdout)
+    metadata["platform"] = "local_qwen"
+    metadata["model"] = QWEN_MODEL
+    metadata["fallback"] = True
     return ChatCliResult(response_text=response_text, success=True, metadata=metadata)
 
 
