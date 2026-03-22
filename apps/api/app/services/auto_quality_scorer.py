@@ -9,6 +9,7 @@ Runs asynchronously after each chat response is returned to the user.
 
 import asyncio
 import logging
+import os
 import threading
 import uuid
 from typing import Optional
@@ -94,7 +95,7 @@ async def _score_and_log(
 
     raw = await generate(
         prompt=prompt,
-        model="qwen2.5-coder:1.5b",
+        model=os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b"),
         system=rubric["system_prompt"],
         temperature=0.1,
         max_tokens=300,
