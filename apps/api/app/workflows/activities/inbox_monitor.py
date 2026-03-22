@@ -335,6 +335,17 @@ Respond ONLY with a JSON array (no markdown fences):
 
 If nothing is high or medium priority, respond with: []"""
 
+    # ── Try local Qwen model first (zero token cost) ──
+    try:
+        from app.services.local_inference import triage_inbox_items as _qwen_triage
+        qwen_result = await _qwen_triage(items_text)
+        if qwen_result is not None:
+            logger.info("triage_items: used local Qwen model (saved Anthropic tokens)")
+            return qwen_result
+        logger.debug("Qwen triage returned None — falling back to Anthropic")
+    except Exception as e:
+        logger.debug("Qwen triage failed (%s) — falling back to Anthropic", e)
+
     try:
         from app.services.llm.legacy_service import get_llm_service
         llm = get_llm_service()

@@ -150,15 +150,25 @@ class ContextManager:
         Returns:
             Summary text
         """
-        if not self.client:
-            # Fallback: simple concatenation if no client
-            return self._simple_summary(messages)
-
         # Build conversation text
         conversation_text = "\n\n".join([
             f"{msg['role'].upper()}: {msg['content']}"
             for msg in messages
         ])
+
+        # ── Try local Qwen model first (zero token cost) ──
+        try:
+            from app.services.local_inference import summarize_conversation_sync as _qwen_summarize
+            qwen_summary = _qwen_summarize(conversation_text)
+            if qwen_summary:
+                logger.debug("_generate_summary: used local Qwen (saved Anthropic tokens)")
+                return qwen_summary
+        except Exception as e:
+            logger.debug("Qwen summarization failed (%s) — falling back to Anthropic", e)
+
+        # ── Fall back to Anthropic ──
+        if not self.client:
+            return self._simple_summary(messages)
 
         try:
             response = self.client.messages.create(
