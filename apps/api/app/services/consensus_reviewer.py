@@ -204,6 +204,7 @@ class ConsensusResult:
     report: str
     all_issues: list = field(default_factory=list)
     all_suggestions: list = field(default_factory=list)
+    fragile: bool = False  # True if removing one reviewer would flip consensus
 
 
 async def run_consensus_review(
@@ -264,12 +265,16 @@ async def run_consensus_review(
     all_suggestions = [s for r in reviews for s in r.get("suggestions", [])]
 
     approved_count = sum(1 for r in reviews if r.get("approved", True))
+    required = 2
+    # Leave-one-out fragility: if exactly at threshold, removing one approval flips it
+    fragile = passed and approved_count == required
 
     logger.info(
-        "Consensus review: %s (%d/%d) agent=%s | %s",
+        "Consensus review: %s (%d/%d%s) agent=%s | %s",
         "PASSED" if passed else "FAILED",
         approved_count,
         len(reviews),
+        " FRAGILE" if fragile else "",
         agent_slug,
         "; ".join(all_issues[:3]) if not passed else "no issues",
     )
@@ -282,4 +287,5 @@ async def run_consensus_review(
         report=report,
         all_issues=all_issues,
         all_suggestions=all_suggestions,
+        fragile=fragile,
     )

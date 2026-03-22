@@ -229,6 +229,7 @@ async def _score_and_log(
                     "consensus_issues": consensus.all_issues[:6],
                     "consensus_suggestions": consensus.all_suggestions[:6],
                     "consensus_penalty": consensus_penalty,
+                    "consensus_fragile": consensus.fragile,
                 },
                 reward_source="auto_quality_consensus",
             )
