@@ -70,6 +70,20 @@ async def startup_skill_manager():
             )
     threading.Thread(target=_sync_skills_background, daemon=True).start()
 
+    # Seed native workflow templates
+    def _seed_workflow_templates():
+        try:
+            from app.services.workflow_templates import seed_native_templates
+            from app.db.session import SessionLocal as _SessionLocal
+            tmpl_db = _SessionLocal()
+            count = seed_native_templates(tmpl_db)
+            tmpl_db.close()
+            if count:
+                _logging.getLogger(__name__).info("Seeded %d native workflow templates", count)
+        except Exception as e:
+            _logging.getLogger(__name__).debug("Workflow template seeding skipped: %s", e)
+    threading.Thread(target=_seed_workflow_templates, daemon=True).start()
+
 
 @app.on_event("startup")
 async def startup_whatsapp():
