@@ -220,6 +220,20 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
+# Pre-execution safety gate — block side-effect tools for local model
+# ---------------------------------------------------------------------------
+
+# Tools that cause external side effects — local model MUST NOT execute these
+_BLOCKED_TOOLS = {"send_email", "deploy_changes", "execute_shell", "create_jira_issue"}
+
+def _check_tool_risk(tool_name: str) -> str:
+    """Returns 'allow' or 'block'. Local model cannot execute side-effect tools."""
+    if tool_name in _BLOCKED_TOOLS:
+        return "block"
+    return "allow"
+
+
+# ---------------------------------------------------------------------------
 # Tool filtering by tenant integrations
 # ---------------------------------------------------------------------------
 
@@ -307,7 +321,7 @@ def _ollama_chat(
     tools: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     """Send a chat request to Ollama with tool schemas. Returns the response dict.
-    Acquires the GPU lock from local_inference to avoid contention."""
+    Uses the foreground sync lock — user-blocking calls have GPU priority."""
     from app.services.local_inference import _ollama_sync_lock
 
     body: Dict[str, Any] = {
@@ -320,7 +334,7 @@ def _ollama_chat(
         body["tools"] = tools
 
     try:
-        with _ollama_sync_lock:
+        with _ollama_sync_lock:  # foreground priority — blocks background scoring
             with httpx.Client(timeout=float(OLLAMA_TIMEOUT)) as client:
                 resp = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=body)
         if resp.status_code != 200:
@@ -430,6 +444,16 @@ def run(
                 messages.append({
                     "role": "tool",
                     "content": json.dumps({"error": "Invalid arguments format"}),
+                })
+                continue
+
+            # Pre-execution safety gate — block side-effect tools for local model
+            risk = _check_tool_risk(tool_name)
+            if risk == "block":
+                logger.warning("BLOCKED high-risk tool %s — local model cannot execute side effects", tool_name)
+                messages.append({
+                    "role": "tool",
+                    "content": json.dumps({"error": f"Tool '{tool_name}' requires a connected subscription (Claude/Codex). Please connect in Settings → Integrations."}),
                 })
                 continue
 

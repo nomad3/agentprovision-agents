@@ -24,17 +24,21 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
 DEFAULT_MODEL = os.environ.get("LOCAL_MODEL", "qwen2.5-coder:0.5b")
 QUALITY_MODEL = os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b")
 
-# GPU semaphore — serializes all Ollama calls so models don't compete for GPU
-_ollama_semaphore: Optional[asyncio.Semaphore] = None
-_ollama_sync_lock = threading.Lock()
+# ---------------------------------------------------------------------------
+# GPU inference bulkhead — foreground (user-blocking) has priority over
+# background (scoring/consensus). Background skips when foreground is active.
+# ---------------------------------------------------------------------------
+_foreground_lock = asyncio.Lock()          # Foreground gets exclusive GPU
+_background_semaphore: Optional[asyncio.Semaphore] = None
+_ollama_sync_lock = threading.Lock()       # For sync callers (foreground only)
 
 
-def _get_semaphore() -> asyncio.Semaphore:
-    """Get or create the async semaphore (bound to the current event loop)."""
-    global _ollama_semaphore
-    if _ollama_semaphore is None:
-        _ollama_semaphore = asyncio.Semaphore(1)
-    return _ollama_semaphore
+def _get_bg_semaphore() -> asyncio.Semaphore:
+    """Get or create the background async semaphore."""
+    global _background_semaphore
+    if _background_semaphore is None:
+        _background_semaphore = asyncio.Semaphore(1)
+    return _background_semaphore
 
 
 async def generate(
@@ -44,28 +48,67 @@ async def generate(
     temperature: float = 0.1,
     max_tokens: int = 500,
     timeout: float = 30.0,
+    priority: str = "background",
 ) -> Optional[str]:
-    """Call Ollama generate endpoint. Returns None on failure. Serialized via GPU semaphore."""
+    """Call Ollama generate endpoint. Returns None on failure.
+
+    priority="foreground" — user-blocking, gets exclusive GPU access
+    priority="background" — scoring/consensus, skips if foreground is active
+    """
     model = model or DEFAULT_MODEL
+
+    if priority == "foreground":
+        return await _generate_foreground(prompt, model, system, temperature, max_tokens, timeout)
+    else:
+        return await _generate_background(prompt, model, system, temperature, max_tokens, timeout)
+
+
+async def _generate_foreground(prompt, model, system, temperature, max_tokens, timeout):
+    """Foreground inference — acquires exclusive GPU lock."""
     try:
-        async with _get_semaphore():
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    f"{OLLAMA_BASE_URL}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "system": system,
-                        "stream": False,
-                        "options": {
-                            "temperature": temperature,
-                            "num_predict": max_tokens,
-                        },
+        async with _foreground_lock:
+            return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
+    except Exception as e:
+        logger.warning("Foreground inference failed: %s", e)
+        return None
+
+
+async def _generate_background(prompt, model, system, temperature, max_tokens, timeout):
+    """Background inference — skips if foreground is active, queues behind other background."""
+    if _foreground_lock.locked():
+        logger.debug("GPU busy with foreground — skipping background inference")
+        return None
+    try:
+        async with _get_bg_semaphore():
+            if _foreground_lock.locked():
+                logger.debug("GPU became busy — skipping background inference")
+                return None
+            return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
+    except Exception as e:
+        logger.warning("Background inference failed: %s", e)
+        return None
+
+
+async def _do_generate(prompt, model, system, temperature, max_tokens, timeout):
+    """Raw Ollama generate call — no locking, called by foreground/background wrappers."""
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "system": system,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
                     },
-                )
-                if resp.status_code == 200:
-                    return resp.json().get("response", "").strip()
-                logger.warning("Ollama returned %s: %s", resp.status_code, resp.text[:200])
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json().get("response", "").strip()
+            logger.warning("Ollama returned %s: %s", resp.status_code, resp.text[:200])
     except httpx.ConnectError:
         logger.debug("Ollama not available at %s", OLLAMA_BASE_URL)
     except Exception as e:

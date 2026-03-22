@@ -1,145 +1,142 @@
 # Consensus Resilience & Multi-Agent Hardening — Design Document
 
-**Date**: 2026-03-23
+**Date**: 2026-03-23 (revised after code review)
 **Status**: Design
-**Context**: Simon shared ChatGPT recommendations on multi-agent consensus systems. This document critically evaluates each recommendation and proposes what to implement.
+**Context**: Simon shared ChatGPT recommendations on multi-agent consensus systems. This document critically evaluates each recommendation and addresses the real failure modes observed in production testing.
 
-## Current State
+## Real Failure Modes (Observed 2026-03-22/23)
 
-What we have today:
-- **Consensus Review Council**: 3 local Qwen reviewers (Accuracy, Helpfulness, Persona) running in parallel via `asyncio.gather`, 2/3 majority to pass
-- **Auto Quality Scorer**: 6-dimension rubric (100pt scale) + consensus penalty (up to 15pt)
-- **RL Experience Logging**: Every response scored, reward components stored with consensus metadata
-- **GPU Semaphore**: Serialized Ollama calls to prevent contention
-- **Fallback chain**: subscribed CLI → local tool agent → plain text → error
+The actual production failures are NOT about consensus voting math:
 
-## Critical Review of Recommendations
+1. **Foreground/background GPU contention** — Background scoring (rubric + 3 consensus reviewers) competes with foreground local_tool_agent for the single Ollama GPU. The tool agent times out waiting for the GPU semaphore while background scoring holds it.
 
-### 1. Stability Tracking ("Track instability like a dynamical system")
+2. **Local tool agent timeouts** — qwen3:1.7b with 9 tool schemas takes 18-60s per call. With 3 rounds + background scoring queued, total time exceeds HTTP request timeouts.
 
-**Recommendation**: Track consensus time, position reversals, confidence variance, sensitivity to agent removal, KL divergence.
+3. **Dynamic workflow runs never finalize** — DB row stays "running" forever. Schema nullable fields cause 500s. (Fixed in `0b0c271` but separate reliability track.)
 
-**Assessment**: Partially useful, mostly over-engineered for our scale.
+4. **High-risk actions execute before review** — `send_email`, `create_jira_issue` etc. run immediately. The consensus reviewer only scores the response AFTER the action is done. Can't prevent bad actions.
 
-**What's worth implementing**:
-- **Sensitivity to agent removal** (leave-one-out): Cheap to compute. If removing any single reviewer flips the consensus, that's a weak consensus. Store as `fragile: bool` in ConsensusResult.
-- **Confidence variance**: If all 3 reviewers return widely different verdicts (one APPROVED, one REJECTED, one CONDITIONAL), flag as unstable.
+## Architecture: Three Separate Reliability Tracks
 
-**What's NOT worth implementing**:
-- KL divergence between initial/final belief states — we don't have iterative rounds, it's a single-shot vote
-- Position reversals — same reason, no deliberation rounds
-- Consensus time — all reviewers are identical Qwen calls, timing variance is just GPU scheduling noise
+### Track 1: Inference Bulkhead (Foreground vs Background)
 
-### 2. Chaos Engineering ("Inject controlled failures")
+**Problem**: Single GPU semaphore serializes everything. Background scoring blocks foreground chat.
 
-**Recommendation**: Kill agents mid-deliberation, delay by 10-30s, return stale results, inject malformed tool responses, swap models, corrupt memory.
+**Solution**: Priority-based inference queue.
 
-**Assessment**: Good for production hardening, but we already handle most of this.
+```
+Foreground (user-blocking):     HIGH priority — never waits for background
+  - local_tool_agent calls
+  - generate_agent_response_sync
+  - schema-aware extraction
 
-**What we already handle**:
-- Agent failure → `return_exceptions=True` + fail-open (reviewer marked SKIPPED)
-- Malformed response → JSON parse fallback with lenient extraction
-- Model unavailable → fallback chain (qwen3 → qwen2.5-coder → skip)
+Background (async, can wait):   LOW priority — yields to foreground
+  - auto_quality_scorer rubric
+  - consensus reviewer (3 calls)
+  - conversation summarization
+```
 
-**What's worth implementing**:
-- **Configurable chaos mode** for testing: env var `CHAOS_MODE=true` that randomly delays/fails one reviewer per consensus round. Run in staging only.
-- NOT worth building a full harness — the `return_exceptions` + fail-open pattern already provides the resilience these tests would verify.
+**Implementation**: Replace single semaphore with a priority queue. Foreground callers acquire immediately (or fail fast). Background callers wait in queue with a hard timeout and circuit breaker.
 
-### 3. Risk-Based Quorum Rules
+```python
+# In local_inference.py
+_foreground_lock = asyncio.Lock()       # Foreground gets exclusive GPU
+_background_semaphore = asyncio.Semaphore(1)  # Background waits
 
-**Recommendation**: Low-risk (2/3), Medium-risk (2/3 + verifier + grounding), High-risk (2 model families + tool validation + safety gate + human approval).
+async def generate(prompt, ..., priority="background"):
+    if priority == "foreground":
+        async with _foreground_lock:
+            return await _do_generate(...)
+    else:
+        # Background: skip if foreground is running
+        if _foreground_lock.locked():
+            logger.debug("GPU busy with foreground — skipping background inference")
+            return None
+        async with _background_semaphore:
+            return await _do_generate(...)
+```
 
-**Assessment**: The strongest recommendation. Currently we apply the same 2/3 rule to "what's the weather" and "deploy this to production."
+**Degradation order** (degrade scorer first, never foreground):
+1. Skip consensus reviewers (3 calls saved)
+2. Skip rubric scoring (1 call saved)
+3. Fall back to plain text response (no tools)
+4. Return error message (last resort)
 
-**What's worth implementing**:
-- **Risk classification**: Classify each message as low/medium/high risk based on:
-  - `low`: general chat, knowledge search, information retrieval
-  - `medium`: entity creation, email drafts, data modifications
-  - `high`: code tasks, email sending, Jira issue creation, deployment actions
-- **Tiered quorum**:
-  - `low`: 1/3 (or skip consensus entirely — just rubric score)
-  - `medium`: 2/3 (current behavior)
-  - `high`: 3/3 unanimous + tool validation
-- **Skip consensus for trivial messages**: "hello", "thanks", simple greetings don't need 3 reviewer calls
+### Track 2: Pre-Execution Safety Gate (High-Risk Actions)
 
-### 4. Fault-Tolerant Distributed Graph
+**Problem**: Consensus reviewer runs AFTER the response is returned. It can't prevent `send_email` from firing.
 
-**Recommendation**: Model agents as a graph with typed roles (planner, retriever, synthesizer, verifier, critic, policy gate, executor, auditor).
+**Solution**: Move high-risk gating into the MCP tool execution path, not the scorer.
 
-**Assessment**: Architecturally sound but we already have this via Temporal + the agent team hierarchy. Not actionable as a code change — it's a design philosophy we already follow.
+**Implementation**: Add a `_check_risk` gate in `local_tool_agent.py` before executing each tool call:
 
-### 5. Weighted Adjudication with Diversity Penalties
+```python
+HIGH_RISK_TOOLS = {"send_email", "deploy_changes", "execute_shell", "create_jira_issue"}
+CONFIRM_TOOLS = {"create_entity", "record_observation"}  # Medium risk — execute but flag
 
-**Recommendation**: Don't just majority vote — weight by model family diversity, grounding quality, and citation density.
+def _check_risk(tool_name: str, arguments: dict) -> str:
+    """Returns 'allow', 'confirm', or 'block'."""
+    if tool_name in HIGH_RISK_TOOLS:
+        return "block"  # Local model should NOT send emails or deploy
+    if tool_name in CONFIRM_TOOLS:
+        return "allow"  # Allow but log as medium-risk
+    return "allow"
+```
 
-**Assessment**: Over-engineered for our setup. All 3 reviewers use the same model (qwen3:1.7b). Weighting would only matter with heterogeneous model families. File this for when we add a cloud reviewer alongside local ones.
+For the local tool agent specifically: **block all side-effect tools**. A 1.7B model should not be trusted to send emails or create Jira issues autonomously. Only read/search operations should be allowed in the local fallback.
 
-### 6. Six-Stage Architecture
+This is NOT about consensus voting — it's about limiting the blast radius of a small model's decisions.
 
-**Recommendation**: Isolated first pass → Cross-examination → Adversarial review → Weighted adjudication → Meta-consensus → Chaos harness.
+### Track 3: Dynamic Workflow Reliability (Separate Track)
 
-**Assessment**: We implement stages 1 (agent response), 3 (consensus review), and 4 (rubric scoring + RL). Stages 2 (cross-examination between agents) and 5 (meta-consensus across sessions) are too expensive for local inference. Stage 6 (chaos) covered above.
+**Problem**: Workflow runs don't finalize, schema fields cause 500s.
+
+**Status**: Fixed in `0b0c271`:
+- `finalize_workflow_run` activity persists final state to DB
+- `WorkflowStepLogInDB` schema defaults for nullable fields
+
+**Remaining**: This track has nothing to do with consensus. Don't conflate it.
+
+## Consensus Optimization (Secondary — Reduces Load)
+
+These are valid optimizations but secondary to the bulkhead:
+
+### Low-Risk Consensus Skip
+Skip consensus for trivial messages (greetings, thanks, simple Q&A without tools).
+Saves 3 Ollama calls per trivial message (~50-70% of all messages).
+
+```python
+def _should_skip_consensus(tools_called: list, agent_response: str) -> bool:
+    if not tools_called and len(agent_response) < 200:
+        return True  # Trivial response, no tools — skip
+    return False
+```
+
+### Leave-One-Out Fragility
+Zero-cost check on existing results. If `approved_count == required`, consensus is fragile.
 
 ## Implementation Plan
 
-### Phase 1: Risk-Based Quorum (High Impact, Low Effort)
+### Phase 1: Inference Bulkhead (Highest Priority)
+- Split semaphore into foreground/background with priority
+- Background scorer skips when foreground is active
+- Hard 60s circuit breaker on background scoring
+- **Impact**: Local tool agent stops timing out
 
-**File**: `apps/api/app/services/consensus_reviewer.py`
+### Phase 2: Pre-Execution Safety Gate
+- Block HIGH_RISK_TOOLS in local_tool_agent (local model can't send emails)
+- Log medium-risk tool calls for audit
+- **Impact**: Prevents small model from executing dangerous side effects
 
-1. Add risk classifier function that maps task_type + tool usage to risk level
-2. Skip consensus for low-risk messages (saves 3 Ollama calls per trivial message)
-3. Require 3/3 unanimous for high-risk actions
-4. Add `risk_level` to ConsensusResult and RL metadata
-
-```python
-def _classify_risk(tools_called: list, agent_slug: str, channel: str) -> str:
-    HIGH_RISK_TOOLS = {"send_email", "create_jira_issue", "deploy_changes", "execute_shell"}
-    if any(t in HIGH_RISK_TOOLS for t in tools_called):
-        return "high"
-    if tools_called:  # any tool use = medium
-        return "medium"
-    return "low"
-```
-
-### Phase 2: Leave-One-Out Fragility Check (Low Effort)
-
-**File**: `apps/api/app/services/consensus_reviewer.py`
-
-After computing consensus, check if removing any single reviewer would flip the result. Store as `fragile: bool`.
-
-```python
-def _is_fragile(reviews: list, required: int = 2) -> bool:
-    approved = [r for r in reviews if r.get("approved")]
-    # If exactly at the threshold, removing one approved reviewer flips it
-    return len(approved) == required
-```
-
-### Phase 3: Chaos Testing Mode (Medium Effort, Staging Only)
-
-**File**: `apps/api/app/services/consensus_reviewer.py`
-
-When `CHAOS_MODE=true`:
-- Randomly delay one reviewer by 5-15s
-- Randomly return a malformed response from one reviewer
-- Log chaos injection details for analysis
-
-Not for production. Testing harness only.
+### Phase 3: Low-Risk Consensus Skip
+- Skip consensus for trivial messages
+- Add fragility flag to ConsensusResult
+- **Impact**: 50-70% reduction in background Ollama calls
 
 ## What NOT to Implement
 
-- KL divergence / position reversals — no iterative rounds to measure
-- Multiple model families — all reviewers use same Qwen, no diversity to weight
-- Cross-examination between reviewers — too expensive on local GPU
-- Meta-consensus across sessions — premature, need more RL data first
-- Full chaos engineering harness — `return_exceptions` + fail-open already provides resilience
-
-## Cost Analysis
-
-| Feature | Ollama Calls | GPU Time | Value |
-|---------|-------------|----------|-------|
-| Current (flat 2/3) | 4/msg (1 rubric + 3 consensus) | ~20s | Baseline |
-| Phase 1 (risk quorum) | 1-4/msg (skip consensus for low-risk) | 5-20s | 50-70% reduction for chat |
-| Phase 2 (fragility) | 0 extra | 0 | Pure compute on existing results |
-| Phase 3 (chaos) | 0 extra in prod | 0 in prod | Testing only |
-
-**Phase 1 alone would cut Ollama GPU usage by 50-70%** since most messages are low-risk chat.
+- KL divergence / position reversals — no iterative rounds
+- Weighted adjudication — all reviewers use same model
+- Cross-examination — too expensive locally
+- Full chaos harness — `return_exceptions` already handles failures
+- Risk-based quorum in the scorer — wrong layer, gate belongs in execution path

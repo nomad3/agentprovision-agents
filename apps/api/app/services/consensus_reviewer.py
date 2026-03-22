@@ -218,9 +218,19 @@ async def run_consensus_review(
     """Run 3 review agents in parallel and return consensus result.
 
     Never raises — always returns a ConsensusResult (may have skipped reviews).
+    Skips consensus for trivial messages (no tools, short response) to save GPU.
     """
     tools_called = tools_called or []
     entities_recalled = entities_recalled or []
+
+    # Low-risk skip: trivial messages don't need 3 reviewer calls
+    if not tools_called and len(agent_response) < 200:
+        logger.debug("Consensus skip: trivial response (no tools, <%d chars)", len(agent_response))
+        return ConsensusResult(
+            passed=True, approved_count=3, total_reviewers=3,
+            reviews=[{"role": "auto", "approved": True, "verdict": "SKIPPED_TRIVIAL", "issues": [], "suggestions": [], "summary": "Trivial response — consensus skipped"}],
+            report="Consensus skipped (trivial response, no tools)",
+        )
 
     prompt = REVIEW_PROMPT.format(
         user_message=user_message[:400],
