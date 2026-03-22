@@ -232,18 +232,21 @@ async def run_consensus_review(
         entities_recalled=", ".join(str(e) for e in entities_recalled[:5]) or "none",
     )
 
-    # Run all 3 reviewers in parallel
-    try:
-        reviews = await asyncio.gather(
-            *[_run_reviewer(agent, prompt) for agent in REVIEW_AGENTS],
-            return_exceptions=False,
-        )
-    except Exception as e:
-        logger.warning("Consensus review failed with exception: %s", e)
-        reviews = [
-            {"role": a.role, "approved": True, "verdict": "ERROR", "issues": [], "suggestions": [], "summary": str(e)[:100]}
-            for a in REVIEW_AGENTS
-        ]
+    # Run all 3 reviewers in parallel — return_exceptions so one failure doesn't drop others
+    raw_results = await asyncio.gather(
+        *[_run_reviewer(agent, prompt) for agent in REVIEW_AGENTS],
+        return_exceptions=True,
+    )
+    reviews = []
+    for i, result in enumerate(raw_results):
+        if isinstance(result, Exception):
+            logger.warning("Reviewer %s raised: %s — marking as skipped", REVIEW_AGENTS[i].role, result)
+            reviews.append({
+                "role": REVIEW_AGENTS[i].role, "approved": True, "verdict": "ERROR",
+                "issues": [], "suggestions": [], "summary": str(result)[:100],
+            })
+        else:
+            reviews.append(result)
 
     passed, report = _consensus_check(list(reviews))
 

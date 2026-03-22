@@ -127,7 +127,10 @@ async def _score_and_log(
     cost_efficiency = {}
     reasoning = ""
 
-    if rubric_raw:
+    if isinstance(rubric_raw, Exception):
+        logger.warning("Rubric scorer raised exception: %s — using default score", rubric_raw)
+        rubric_raw = None
+    if rubric_raw and isinstance(rubric_raw, str):
         try:
             clean = re.sub(r"<think>.*?</think>", "", rubric_raw, flags=re.DOTALL).strip()
             json_str = clean[clean.index('{'):clean.rindex('}') + 1]
