@@ -30,7 +30,7 @@ MCP_INTERNAL_KEY = os.environ.get("MCP_API_KEY", "dev_mcp_key")
 MAX_TOOL_ROUNDS = 3
 MAX_TOOLS_PER_TURN = 5
 TOOL_CALL_TIMEOUT = 30
-OLLAMA_TIMEOUT = 180
+OLLAMA_TIMEOUT = 300
 
 # ---------------------------------------------------------------------------
 # Curated tool registry — typed allowlist per category
@@ -368,6 +368,7 @@ def _ollama_chat(
         "model": LOCAL_TOOL_MODEL,
         "messages": messages,
         "stream": False,
+        "options": {"num_ctx": 4096},  # keep context small for speed
     }
     if tools:
         body["tools"] = tools
