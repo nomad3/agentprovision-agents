@@ -423,8 +423,9 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             with open(plan_file) as f:
                 plan_content = f.read()
 
-        # 4b. Plan Review Council — 2 agents verify the plan before implementation
-        activity.heartbeat("Phase 1: Plan review council (2 agents)...")
+        # 4b. Plan Review Council — 3 agents verify the plan before implementation
+        # Each agent checks: work planned, alignment with task, patterns, and good practices.
+        activity.heartbeat("Phase 1: Plan review council (3 agents)...")
         plan_context = (
             f"## Original Task\n{task_input.task_description}\n\n"
             f"## Proposed Plan (`.claude-plan.md`)\n{plan_content[:3000]}"
@@ -432,32 +433,51 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         plan_review_1 = _run_review_agent(
             role="Architect Reviewer",
             review_prompt=(
-                f"Read CLAUDE.md and `.claude-plan.md`, then review the plan for:\n"
+                f"Read CLAUDE.md and `.claude-plan.md`, then review the WORK PLANNED:\n"
                 f"1. Correct architectural patterns (multi-tenancy, auth, route mounting)\n"
-                f"2. Alignment with existing codebase conventions\n"
-                f"3. Are all required wiring steps mentioned (routes.py, __init__.py, migrations)?\n\n"
+                f"2. Alignment with existing codebase conventions (CLAUDE.md patterns)\n"
+                f"3. All required wiring steps mentioned (routes.py, __init__.py, migrations)?\n"
+                f"4. Does the plan respect good practices for this codebase?\n\n"
                 f"{plan_context}"
             ),
             extra_env=claude_env,
         )
+        activity.heartbeat("Phase 1: Plan review council — technical review...")
         plan_review_2 = _run_review_agent(
             role="Technical Reviewer",
             review_prompt=(
-                f"Read `.claude-plan.md` and the relevant existing source files mentioned in it, then review:\n"
+                f"Read `.claude-plan.md` and the relevant existing source files mentioned in it, "
+                f"then review the WORK PLANNED:\n"
                 f"1. Technical feasibility — can this plan be implemented as written?\n"
                 f"2. Completeness — is anything missing or ambiguous?\n"
-                f"3. Scope — is the plan focused? Does it avoid over-engineering?\n\n"
+                f"3. Scope — is the plan focused? Does it avoid over-engineering?\n"
+                f"4. Are the implementation steps in the right order with no gaps?\n\n"
                 f"{plan_context}"
             ),
             extra_env=claude_env,
         )
-        plan_passed, plan_consensus = _consensus_check([plan_review_1, plan_review_2], required=2)
+        activity.heartbeat("Phase 1: Plan review council — behavior review...")
+        plan_review_3 = _run_review_agent(
+            role="Behavior Reviewer",
+            review_prompt=(
+                f"Read `.claude-plan.md` and the original task, then review the WORK PLANNED:\n"
+                f"1. Does the plan fully address ALL behavioral requirements in the task?\n"
+                f"2. Are edge cases, error paths, and integration points accounted for?\n"
+                f"3. Will the planned outputs (endpoints, UI, DB schema) match what was asked?\n"
+                f"4. Any regressions to existing behavior that the plan should guard against?\n\n"
+                f"{plan_context}"
+            ),
+            extra_env=claude_env,
+        )
+        plan_reviews = [plan_review_1, plan_review_2, plan_review_3]
+        plan_passed, plan_consensus = _consensus_check(plan_reviews, required=2)
         logger.info("Plan review consensus:\n%s", plan_consensus)
         if not plan_passed:
-            # Collect issues and append them to the plan prompt as guidance
             all_plan_issues = []
-            for r in [plan_review_1, plan_review_2]:
-                all_plan_issues.extend(r.issues)
+            for r in plan_reviews:
+                if not r.approved:
+                    for issue in r.issues:
+                        all_plan_issues.append(f"[{r.agent_role}] {issue}")
             logger.warning(
                 "Plan review council did not fully approve. Issues: %s — proceeding with caution.",
                 all_plan_issues,
@@ -581,18 +601,35 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             )
 
         def _run_review_council(council_label: str) -> tuple:
-            """Run the 3-agent review council. Returns (passed, report, reviews)."""
+            """Run the 3-agent review council. Returns (passed, report, reviews).
+
+            Each agent reviews ALL 5 dimensions:
+              - Work planned (plan alignment)
+              - Work done (implementation completeness)
+              - Outputs (files and artifacts produced)
+              - Code review (quality and security)
+              - Behavior review (spec compliance and pattern adherence)
+            """
             activity.heartbeat(f"Phase 2: {council_label} — Architect review...")
             review_ctx = _build_review_context()
 
             impl_review_arch = _run_review_agent(
                 role="Architect Agent",
                 review_prompt=(
-                    f"Read CLAUDE.md and all changed files. Review:\n"
-                    f"1. Does the implementation follow established patterns? "
-                    f"(multi-tenancy, auth, route registration in routes.py, model in __init__.py)\n"
-                    f"2. Does it match the implementation plan?\n"
-                    f"3. Are there any architectural violations?\n\n"
+                    f"Read CLAUDE.md and all changed files. You must review ALL of the following:\n\n"
+                    f"WORK PLANNED vs WORK DONE:\n"
+                    f"- Does the implementation match the plan in `.claude-plan.md`?\n"
+                    f"- Were all planned steps executed? What was skipped or changed?\n\n"
+                    f"OUTPUTS:\n"
+                    f"- Are all expected files/endpoints/schemas present and correctly placed?\n"
+                    f"- Are new routes mounted in routes.py? Models in models/__init__.py?\n"
+                    f"- Are migrations included if schema changed?\n\n"
+                    f"CODE REVIEW (architectural perspective):\n"
+                    f"- Does the code follow established patterns (multi-tenancy, auth, services layer)?\n"
+                    f"- Any architectural violations or anti-patterns?\n\n"
+                    f"BEHAVIOR REVIEW:\n"
+                    f"- Does the implementation align with wolfpoint.ai conventions in CLAUDE.md?\n"
+                    f"- Good practices followed? No over-engineering?\n\n"
                     f"{review_ctx}"
                 ),
                 extra_env=claude_env,
@@ -601,10 +638,20 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             impl_review_code = _run_review_agent(
                 role="Code Review Agent",
                 review_prompt=(
-                    f"Read all changed files carefully. Review:\n"
-                    f"1. Code quality — clarity, correctness, error handling\n"
-                    f"2. Security — no injection, no hardcoded secrets, safe queries\n"
-                    f"3. Logic — edge cases covered? No obvious bugs?\n\n"
+                    f"Read all changed files carefully. You must review ALL of the following:\n\n"
+                    f"WORK PLANNED vs WORK DONE:\n"
+                    f"- Compare the plan in `.claude-plan.md` with actual changes — any drift?\n"
+                    f"- Were implementation steps followed in the right order?\n\n"
+                    f"OUTPUTS:\n"
+                    f"- Are outputs complete? Any half-implemented features or missing pieces?\n"
+                    f"- Are all referenced functions/classes/imports actually defined?\n\n"
+                    f"CODE REVIEW:\n"
+                    f"- Code quality — clarity, correctness, error handling, naming\n"
+                    f"- Security — no injection, no hardcoded secrets, safe queries\n"
+                    f"- Logic — edge cases covered? No obvious bugs or null-pointer risks?\n\n"
+                    f"BEHAVIOR REVIEW:\n"
+                    f"- Does the code do what the task description asked?\n"
+                    f"- Any regressions introduced in existing code paths?\n\n"
                     f"{review_ctx}"
                 ),
                 extra_env=claude_env,
@@ -613,11 +660,21 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             impl_review_beh = _run_review_agent(
                 role="Behavior Review Agent",
                 review_prompt=(
-                    f"Read the changed files and check:\n"
-                    f"1. Does the behavior match the task spec? Are all requirements met?\n"
-                    f"2. Are there regressions? Does existing functionality still work?\n"
-                    f"3. Integration points — are all wiring steps done "
-                    f"(migrations, imports, route mounts, __init__ registrations)?\n\n"
+                    f"Read the changed files and the original task. You must review ALL of the following:\n\n"
+                    f"WORK PLANNED vs WORK DONE:\n"
+                    f"- Does the implementation fulfill every requirement stated in the task?\n"
+                    f"- Compare the plan steps with git diff — is the delta what was expected?\n\n"
+                    f"OUTPUTS:\n"
+                    f"- Are all integration wiring steps done? "
+                    f"(route mounts, __init__ imports, DB migrations, env vars if needed)\n"
+                    f"- Are the outputs testable and deployable as-is?\n\n"
+                    f"CODE REVIEW:\n"
+                    f"- Are there any obvious runtime errors or broken imports?\n"
+                    f"- Does the code respect existing data contracts and API shapes?\n\n"
+                    f"BEHAVIOR REVIEW:\n"
+                    f"- Does the behavior match the spec? All acceptance criteria met?\n"
+                    f"- Any regressions to existing functionality?\n"
+                    f"- Does it align with established patterns and good practices in CLAUDE.md?\n\n"
                     f"{review_ctx}"
                 ),
                 extra_env=claude_env,
@@ -626,7 +683,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
             passed, report = _consensus_check(reviews, required=2)
             return passed, report, reviews
 
-        activity.heartbeat("Phase 2: Post-implementation review council (3 agents)...")
+        activity.heartbeat("Phase 2: Post-implementation review council (3 agents × 5 dimensions)...")
         impl_passed, impl_consensus, impl_reviews = _run_review_council("Review round 1")
         logger.info("Post-impl review consensus:\n%s", impl_consensus)
 
@@ -674,9 +731,13 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
                 logger.info("Post-correction review consensus:\n%s", impl_consensus)
 
         # Build the review summary section for the PR body
-        review_lines = [impl_consensus]
+        review_lines = []
         if plan_content:
-            review_lines.insert(0, plan_consensus)
+            review_lines.append("### Phase 1: Plan Review (3 agents)")
+            review_lines.append(plan_consensus)
+            review_lines.append("")
+        review_lines.append("### Phase 2: Implementation Review (3 agents × 5 dimensions)")
+        review_lines.append(impl_consensus)
         review_section = "\n".join(review_lines)
         # ── END PHASE 2 ──────────────────────────────────────────────────────
 
