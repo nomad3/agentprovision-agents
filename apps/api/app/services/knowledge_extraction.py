@@ -161,22 +161,39 @@ class KnowledgeExtractionService:
         prompt = self._build_prompt(content, content_type, entity_schema)
 
         try:
+            # ── Try local Qwen model first (zero token cost) ──
+            parsed = None
             try:
-                llm_service = get_llm_service()
-            except ValueError:
-                logger.warning(
-                    "LLM service not configured (missing API key). Skipping knowledge extraction."
+                from app.services.local_inference import extract_knowledge_sync as _qwen_extract
+                qwen_result = _qwen_extract(content, content_type)
+                if qwen_result is not None:
+                    parsed = qwen_result
+                    logger.info(
+                        "extract_from_content: used local Qwen for content_type=%s (saved Anthropic tokens)",
+                        content_type,
+                    )
+            except Exception as e:
+                logger.debug("Qwen knowledge extraction failed (%s) — falling back to Anthropic", e)
+
+            # ── Fall back to Anthropic if Qwen failed ──
+            if parsed is None:
+                try:
+                    llm_service = get_llm_service()
+                except ValueError:
+                    logger.warning(
+                        "LLM service not configured (missing API key). Skipping knowledge extraction."
+                    )
+                    return empty_result
+
+                response = llm_service.generate_chat_response(
+                    user_message=prompt,
+                    conversation_history=[],
+                    system_prompt="You are a knowledge extraction agent. Output valid JSON only.",
+                    temperature=0.0,
                 )
-                return empty_result
 
-            response = llm_service.generate_chat_response(
-                user_message=prompt,
-                conversation_history=[],
-                system_prompt="You are a knowledge extraction agent. Output valid JSON only.",
-                temperature=0.0,
-            )
+                parsed = self._parse_json_response(response.get("text", ""))
 
-            parsed = self._parse_json_response(response.get("text", ""))
             entities_data = parsed.get("entities", [])
             relations_data = parsed.get("relations", [])
             memories_data = parsed.get("memories", [])

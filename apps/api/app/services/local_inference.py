@@ -204,3 +204,178 @@ async def pull_model(model_name: str) -> bool:
     except Exception as e:
         logger.error("Failed to pull model %s: %s", model_name, e)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Synchronous helpers (for use in sync code paths like services/context_manager)
+# ---------------------------------------------------------------------------
+
+def generate_sync(
+    prompt: str,
+    model: str = None,
+    system: str = "",
+    temperature: float = 0.1,
+    max_tokens: int = 500,
+    timeout: float = 45.0,
+) -> Optional[str]:
+    """Synchronous Ollama call. Returns None on failure."""
+    model = model or DEFAULT_MODEL
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            resp = client.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "system": system,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json().get("response", "").strip()
+            logger.warning("Ollama (sync) returned %s: %s", resp.status_code, resp.text[:200])
+    except httpx.ConnectError:
+        logger.debug("Ollama not available (sync) at %s", OLLAMA_BASE_URL)
+    except Exception as e:
+        logger.warning("Local inference (sync) failed: %s", e)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Domain-specific offload functions
+# ---------------------------------------------------------------------------
+
+async def triage_inbox_items(items_text: str) -> Optional[list]:
+    """Triage emails and calendar events using local Qwen model.
+
+    Returns a JSON list of high/medium priority items, or None on failure.
+    Replaces the Anthropic LLM call in inbox_monitor.triage_items().
+    """
+    import json
+
+    prompt = f"""{items_text}
+
+Classify each item as "high" or "medium" priority. Skip all "low" priority items.
+Return ONLY a JSON array (no markdown fences, no explanation):
+[
+  {{
+    "source": "gmail" or "calendar",
+    "priority": "high" or "medium",
+    "title": "Brief summary (max 100 chars)",
+    "body": "Why this matters and suggested action (1-2 sentences)",
+    "reference_id": "the email id or event id",
+    "reference_type": "email" or "event"
+  }}
+]
+If nothing is high or medium priority, respond with: []"""
+
+    result = await generate(
+        prompt=prompt,
+        model=QUALITY_MODEL,
+        system=(
+            "You are an inbox triage assistant. Classify items as high/medium priority. "
+            "Output only valid JSON arrays. Skip low-priority items."
+        ),
+        temperature=0.1,
+        max_tokens=1500,
+        timeout=60.0,
+    )
+
+    if not result:
+        return None
+
+    try:
+        start = result.index("[")
+        end = result.rindex("]") + 1
+        parsed = json.loads(result[start:end])
+        if isinstance(parsed, list):
+            return parsed
+    except (json.JSONDecodeError, ValueError, IndexError):
+        logger.debug("Failed to parse Qwen triage result: %s", result[:200])
+    return None
+
+
+def extract_knowledge_sync(content: str, content_type: str = "plain_text") -> Optional[dict]:
+    """Extract entities/relations/memories from content using local Qwen model (sync).
+
+    Returns a dict with keys: entities, relations, memories, action_triggers.
+    Returns None on failure so callers can fall back to Anthropic.
+    """
+    import json
+
+    prompt = f"""Extract structured knowledge from this {content_type}.
+
+CONTENT:
+{content[:3000]}
+
+Return ONLY a JSON object (no markdown fences):
+{{
+  "entities": [
+    {{"name": "...", "entity_type": "person|company|project|concept|technology|location", "description": "...", "confidence": 0.9}}
+  ],
+  "relations": [
+    {{"from_entity": "...", "relation_type": "works_at|knows|manages|part_of|uses", "to_entity": "..."}}
+  ],
+  "memories": [
+    {{"content": "...", "memory_type": "fact|preference|context"}}
+  ],
+  "action_triggers": []
+}}
+If no entities found, return: {{"entities": [], "relations": [], "memories": [], "action_triggers": []}}"""
+
+    result = generate_sync(
+        prompt=prompt,
+        model=QUALITY_MODEL,
+        system="You are a knowledge extraction agent. Output valid JSON only.",
+        temperature=0.0,
+        max_tokens=1200,
+        timeout=60.0,
+    )
+
+    if not result:
+        return None
+
+    try:
+        start = result.index("{")
+        end = result.rindex("}") + 1
+        data = json.loads(result[start:end])
+        if "entities" in data:
+            return data
+    except (json.JSONDecodeError, ValueError, IndexError):
+        logger.debug("Failed to parse Qwen knowledge extraction: %s", result[:200])
+    return None
+
+
+def summarize_conversation_sync(conversation_text: str) -> Optional[str]:
+    """Summarize a conversation using local Qwen model (sync).
+
+    Returns summary text or None on failure.
+    Replaces the Anthropic call in context_manager._generate_summary().
+    """
+    prompt = f"""Summarize this conversation concisely. Focus on:
+- Key questions asked by the user
+- Important data points and insights discovered
+- SQL queries executed and their results
+- Calculations performed
+- Patterns or trends identified
+
+Use bullet points. Be factual and structured.
+
+CONVERSATION:
+{conversation_text[:4000]}"""
+
+    return generate_sync(
+        prompt=prompt,
+        model=QUALITY_MODEL,
+        system=(
+            "You are a conversation summarizer. Create concise, factual summaries "
+            "using bullet points. Output plain text only."
+        ),
+        temperature=0.2,
+        max_tokens=800,
+        timeout=45.0,
+    )
