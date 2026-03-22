@@ -203,17 +203,31 @@ def run_agent_session(
     credentials = _get_cli_platform_credentials(db, tenant_id, platform)
     session_token = credentials.get("session_token")
     auth_json = credentials.get("auth_json")
-    if platform == "claude_code" and not session_token:
-        err = f"No Claude Code session token for tenant {tenant_id}"
-        logger.error(err)
-        metadata["error"] = err
-        return None, metadata
-    if platform == "codex" and not (session_token or auth_json):
-        err = (
-            "No Codex ChatGPT credential found for tenant "
-            f"{tenant_id}. Store the contents of ~/.codex/auth.json in the Codex integration."
+
+    subscription_missing = (
+        (platform == "claude_code" and not session_token)
+        or (platform == "codex" and not (session_token or auth_json))
+    )
+    if subscription_missing:
+        logger.warning(
+            "No %s credential for tenant %s — falling back to local Qwen as Luna",
+            platform, tenant_id,
         )
-        logger.error(err)
+        from app.services.local_inference import generate_luna_response_sync
+        local_response = generate_luna_response_sync(
+            message=message,
+            conversation_summary=conversation_summary,
+            skill_body=skill_body,
+        )
+        if local_response:
+            metadata["platform"] = "local_qwen"
+            metadata["fallback"] = True
+            return local_response, metadata
+        # Local model also unavailable — surface a friendly message
+        err = (
+            f"{'Claude Code' if platform == 'claude_code' else 'Codex'} subscription is not connected "
+            "and the local model is unavailable. Please connect your account in Settings → Integrations."
+        )
         metadata["error"] = err
         return None, metadata
 

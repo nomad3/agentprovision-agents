@@ -175,6 +175,22 @@ def _is_claude_credit_exhausted(error_text: str) -> bool:
     return any(pattern in text for pattern in CLAUDE_CREDIT_ERROR_PATTERNS)
 
 
+_INTEGRATION_NOT_CONNECTED_MESSAGES = {
+    "claude_code": (
+        "Claude Code subscription is not connected. "
+        "Please connect your Claude Code account in Settings → Integrations."
+    ),
+    "codex": (
+        "Codex (ChatGPT) subscription is not connected. "
+        "Please connect your OpenAI account in Settings → Integrations."
+    ),
+    "gemini_cli": (
+        "Gemini CLI is not connected. "
+        "Please connect your Google account in Settings → Integrations."
+    ),
+}
+
+
 def _fetch_integration_credentials(integration_name: str, tenant_id: str) -> dict:
     """Fetch decrypted tenant credentials for an integration from the API."""
     url = f"{API_BASE_URL}/api/v1/oauth/internal/token/{integration_name}"
@@ -183,6 +199,12 @@ def _fetch_integration_credentials(integration_name: str, tenant_id: str) -> dic
 
     with httpx.Client(timeout=10.0) as client:
         resp = client.get(url, headers=headers, params=params)
+        if resp.status_code == 404:
+            friendly = _INTEGRATION_NOT_CONNECTED_MESSAGES.get(
+                integration_name,
+                f"{integration_name} integration is not connected. Please check Settings → Integrations.",
+            )
+            raise RuntimeError(friendly)
         resp.raise_for_status()
         return resp.json()
 
