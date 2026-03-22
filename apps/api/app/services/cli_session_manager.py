@@ -203,20 +203,31 @@ def run_agent_session(
     credentials = _get_cli_platform_credentials(db, tenant_id, platform)
     session_token = credentials.get("session_token")
     auth_json = credentials.get("auth_json")
-    if platform == "claude_code" and not session_token:
-        err = (
-            "Claude Code subscription is not connected. "
-            "Please connect your Claude Code account in Settings → Integrations to use this feature."
+
+    subscription_missing = (
+        (platform == "claude_code" and not session_token)
+        or (platform == "codex" and not (session_token or auth_json))
+    )
+    if subscription_missing:
+        logger.warning(
+            "No %s credential for tenant %s — falling back to local Qwen as Luna",
+            platform, tenant_id,
         )
-        logger.error("No Claude Code session token for tenant %s", tenant_id)
-        metadata["error"] = err
-        return None, metadata
-    if platform == "codex" and not (session_token or auth_json):
-        err = (
-            "Codex (ChatGPT) subscription is not connected. "
-            "Please connect your OpenAI account in Settings → Integrations to use this feature."
+        from app.services.local_inference import generate_luna_response_sync
+        local_response = generate_luna_response_sync(
+            message=message,
+            conversation_summary=conversation_summary,
+            skill_body=skill_body,
         )
-        logger.error("No Codex credential found for tenant %s", tenant_id)
+        if local_response:
+            metadata["platform"] = "local_qwen"
+            metadata["fallback"] = True
+            return local_response, metadata
+        # Local model also unavailable — surface a friendly message
+        err = (
+            f"{'Claude Code' if platform == 'claude_code' else 'Codex'} subscription is not connected "
+            "and the local model is unavailable. Please connect your account in Settings → Integrations."
+        )
         metadata["error"] = err
         return None, metadata
 

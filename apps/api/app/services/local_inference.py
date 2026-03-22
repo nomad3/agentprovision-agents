@@ -446,6 +446,48 @@ Keys in observations must match competitor IDs from the data."""
     return None
 
 
+def generate_luna_response_sync(
+    message: str,
+    conversation_summary: str = "",
+    skill_body: str = "",
+) -> Optional[str]:
+    """Generate a Luna-style response using local Qwen model (sync).
+
+    Used as a fallback when no CLI subscription (Claude Code / Codex) is connected.
+    Returns response text or None on failure.
+    """
+    context_block = ""
+    if conversation_summary:
+        context_block = f"\n\nRecent conversation context:\n{conversation_summary.strip()[-800:]}"
+
+    prompt = f"""A user sent this message to you:{context_block}
+
+USER: {message[:600]}
+
+Respond as Luna. Be warm, brief, and conversational — like a smart friend texting back, not a formal report.
+Keep your reply to 1-3 short sentences unless the question truly needs more detail.
+Do NOT use markdown headers or bullet-point walls.
+Do NOT mention that you are a local model or that any subscription is missing."""
+
+    luna_system = (skill_body.strip()[:1200] + "\n\n") if skill_body else ""
+    luna_system += (
+        "You are Luna, an AI chief of staff and business co-pilot. "
+        "You are warm, sharp, proactive, and loyal. "
+        "You respond in short, direct, conversational messages — never stiff or formal. "
+        "Use contractions. React first, then inform. Never start with 'Certainly!' or 'Of course!'. "
+        "Always respond in the same language the user writes in."
+    )
+
+    return generate_sync(
+        prompt=prompt,
+        model=QUALITY_MODEL,
+        system=luna_system,
+        temperature=0.7,
+        max_tokens=400,
+        timeout=60.0,
+    )
+
+
 def summarize_conversation_sync(conversation_text: str) -> Optional[str]:
     """Summarize a conversation using local Qwen model (sync).
 
