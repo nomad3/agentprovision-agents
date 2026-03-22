@@ -22,8 +22,8 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 API_INTERNAL_KEY = os.environ.get("API_INTERNAL_KEY", "").strip()
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://servicetsunami-api").strip()
 CODE_TASK_COMMAND_TIMEOUT_SECONDS = 45 * 60
-CODE_TASK_ACTIVITY_TIMEOUT_MINUTES = 50
-CODE_TASK_SCHEDULE_TIMEOUT_MINUTES = 60
+CODE_TASK_ACTIVITY_TIMEOUT_MINUTES = 120
+CODE_TASK_SCHEDULE_TIMEOUT_MINUTES = 150
 CODE_TASK_HEARTBEAT_SECONDS = 240
 CLAUDE_CODE_MODEL = os.environ.get("CLAUDE_CODE_MODEL", "sonnet").strip() or "sonnet"
 CLAUDE_CREDIT_ERROR_PATTERNS = (
@@ -55,6 +55,16 @@ class CodeTaskResult:
     claude_output: str
     success: bool
     error: Optional[str] = None
+
+
+@dataclass
+class AgentReview:
+    agent_role: str
+    approved: bool
+    verdict: str          # "APPROVED" | "REJECTED" | "CONDITIONAL"
+    issues: list
+    suggestions: list
+    summary: str
 
 
 def _run(cmd: str, cwd: str = WORKSPACE, timeout: int = 600, extra_env: dict | None = None) -> str:
@@ -252,6 +262,101 @@ def _log_code_task_rl(
         logger.debug("RL experience log failed: %s", e)
 
 
+CODE_TASK_REVIEW_TIMEOUT_SECONDS = 8 * 60  # 8 min per review agent
+
+
+def _run_review_agent(
+    role: str,
+    review_prompt: str,
+    extra_env: dict,
+    timeout: int = CODE_TASK_REVIEW_TIMEOUT_SECONDS,
+) -> AgentReview:
+    """Run a read-only review agent and return a structured AgentReview.
+
+    The agent is given Read/Glob/Grep/Bash tools (no write access) and asked
+    to output a single JSON verdict.  We parse that JSON defensively.
+    """
+    system_prompt = (
+        f"You are the {role} in a multi-agent code review council for the wolfpoint.ai platform. "
+        "Your job is REVIEW ONLY — do NOT create, edit, or delete any files. "
+        "Use Read, Glob, Grep, and Bash (read-only git commands) to inspect the code. "
+        "After your review, respond with a SINGLE valid JSON object (no markdown, no text outside JSON):\n"
+        '{"approved": true/false, "verdict": "APPROVED|REJECTED|CONDITIONAL", '
+        '"issues": ["specific issue 1", ...], '
+        '"suggestions": ["actionable suggestion 1", ...], '
+        '"summary": "2-3 sentence review summary"}'
+    )
+    result = subprocess.run(
+        [
+            "claude", "-p", review_prompt,
+            "--output-format", "json",
+            "--model", CLAUDE_CODE_MODEL,
+            "--allowedTools", "Read,Glob,Grep",
+            "--append-system-prompt", system_prompt,
+        ],
+        cwd=WORKSPACE,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env={**os.environ, **extra_env},
+    )
+
+    if result.returncode != 0:
+        logger.warning("%s review failed (exit %s): %s", role, result.returncode, result.stderr[:400])
+        return AgentReview(
+            agent_role=role, approved=False, verdict="REJECTED",
+            issues=[f"Review agent process failed: {result.stderr[:200]}"],
+            suggestions=[], summary=f"{role} could not complete review.",
+        )
+
+    try:
+        outer = json.loads(result.stdout.strip())
+        result_text = outer.get("result", "") if isinstance(outer, dict) else str(outer)
+        # Strip markdown code fences
+        result_text = re.sub(r"```(?:json)?\s*|\s*```", "", result_text).strip()
+        # Find the first JSON object
+        json_match = re.search(r"\{.*\}", result_text, re.DOTALL)
+        review_data = json.loads(json_match.group(0)) if json_match else json.loads(result_text)
+        return AgentReview(
+            agent_role=role,
+            approved=bool(review_data.get("approved", False)),
+            verdict=str(review_data.get("verdict", "REJECTED")),
+            issues=list(review_data.get("issues", [])),
+            suggestions=list(review_data.get("suggestions", [])),
+            summary=str(review_data.get("summary", "")),
+        )
+    except (json.JSONDecodeError, AttributeError, TypeError) as e:
+        raw = result.stdout[:800]
+        # Lenient fallback: scan text for signals
+        approved = bool(re.search(r'\bapproved\b', raw, re.IGNORECASE)) and not bool(
+            re.search(r'not\s+approved|rejected', raw, re.IGNORECASE)
+        )
+        return AgentReview(
+            agent_role=role, approved=approved, verdict="CONDITIONAL",
+            issues=[f"Could not parse structured review (parse error: {e})"],
+            suggestions=[], summary=raw[:400],
+        )
+
+
+def _consensus_check(reviews: list, required: int = 2) -> tuple:
+    """Return (passed: bool, report: str).
+
+    Consensus is reached when at least `required` agents approve.
+    """
+    approved_count = sum(1 for r in reviews if r.approved)
+    passed = approved_count >= required
+    lines = [
+        f"Review Council: {approved_count}/{len(reviews)} approved — "
+        f"{'✓ PASSED' if passed else '✗ FAILED'}"
+    ]
+    for r in reviews:
+        icon = "✓" if r.approved else "✗"
+        lines.append(f"  {icon} [{r.agent_role}] {r.verdict}")
+        for issue in r.issues[:3]:
+            lines.append(f"      • {issue}")
+    return passed, "\n".join(lines)
+
+
 @activity.defn
 async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
     """Execute a code task using Claude Code CLI."""
@@ -276,11 +381,118 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         activity.heartbeat("Creating feature branch...")
         _run(f"git checkout -b {branch_name}")
 
-        # 4. Build the prompt with full project context
+        # ── PHASE 1: Planning ────────────────────────────────────────────────
+        # 4a. Architect agent reads the task + CLAUDE.md and writes a plan file
+        activity.heartbeat("Phase 1: Architect agent creating implementation plan...")
+        plan_file = os.path.join(WORKSPACE, ".claude", "plan.md")
+        os.makedirs(os.path.join(WORKSPACE, ".claude"), exist_ok=True)
+        plan_prompt = (
+            f"Read CLAUDE.md carefully, then analyse the following task and write a detailed "
+            f"implementation plan to the file `.claude/plan.md`.\n\n"
+            f"## Task\n\n{task_input.task_description}\n\n"
+            f"The plan MUST include these sections:\n"
+            f"## Goal\n## Files to Change\n## Implementation Steps\n"
+            f"## Patterns to Follow\n## Risk Assessment\n\n"
+            f"Write the plan file, then confirm it is done. No code changes — planning only."
+        )
+        plan_system = (
+            "You are the Architect agent for the wolfpoint.ai platform. "
+            "Your ONLY job right now is to read the existing code and write a concise implementation plan. "
+            "Do NOT write any production code yet. Do NOT modify any source files. "
+            "Only create/write `.claude/plan.md`."
+        )
+        _run_long_command(
+            [
+                "claude", "-p", plan_prompt,
+                "--output-format", "json",
+                "--model", CLAUDE_CODE_MODEL,
+                "--allowedTools", "Read,Glob,Grep,Bash,Write",
+                "--append-system-prompt", plan_system,
+                "--dangerously-skip-permissions",
+            ],
+            cwd=WORKSPACE,
+            timeout=10 * 60,          # 10 min for planning
+            extra_env=claude_env,
+            heartbeat_message="Architect agent is planning",
+            heartbeat_interval=30,
+        )
+
+        # Read the plan so we can include it in the implementation prompt
+        plan_content = ""
+        if os.path.exists(plan_file):
+            with open(plan_file) as f:
+                plan_content = f.read()
+
+        # 4b. Plan Review Council — 3 agents verify the plan before implementation
+        # Each agent checks: work planned, alignment with task, patterns, and good practices.
+        activity.heartbeat("Phase 1: Plan review council (3 agents)...")
+        plan_context = (
+            f"## Original Task\n{task_input.task_description}\n\n"
+            f"## Proposed Plan (`.claude/plan.md`)\n{plan_content[:3000]}"
+        )
+        plan_review_1 = _run_review_agent(
+            role="Architect Reviewer",
+            review_prompt=(
+                f"Read CLAUDE.md and `.claude/plan.md`, then review the WORK PLANNED:\n"
+                f"1. Correct architectural patterns (multi-tenancy, auth, route mounting)\n"
+                f"2. Alignment with existing codebase conventions (CLAUDE.md patterns)\n"
+                f"3. All required wiring steps mentioned (routes.py, __init__.py, migrations)?\n"
+                f"4. Does the plan respect good practices for this codebase?\n\n"
+                f"{plan_context}"
+            ),
+            extra_env=claude_env,
+        )
+        activity.heartbeat("Phase 1: Plan review council — technical review...")
+        plan_review_2 = _run_review_agent(
+            role="Technical Reviewer",
+            review_prompt=(
+                f"Read `.claude/plan.md` and the relevant existing source files mentioned in it, "
+                f"then review the WORK PLANNED:\n"
+                f"1. Technical feasibility — can this plan be implemented as written?\n"
+                f"2. Completeness — is anything missing or ambiguous?\n"
+                f"3. Scope — is the plan focused? Does it avoid over-engineering?\n"
+                f"4. Are the implementation steps in the right order with no gaps?\n\n"
+                f"{plan_context}"
+            ),
+            extra_env=claude_env,
+        )
+        activity.heartbeat("Phase 1: Plan review council — behavior review...")
+        plan_review_3 = _run_review_agent(
+            role="Behavior Reviewer",
+            review_prompt=(
+                f"Read `.claude/plan.md` and the original task, then review the WORK PLANNED:\n"
+                f"1. Does the plan fully address ALL behavioral requirements in the task?\n"
+                f"2. Are edge cases, error paths, and integration points accounted for?\n"
+                f"3. Will the planned outputs (endpoints, UI, DB schema) match what was asked?\n"
+                f"4. Any regressions to existing behavior that the plan should guard against?\n\n"
+                f"{plan_context}"
+            ),
+            extra_env=claude_env,
+        )
+        plan_reviews = [plan_review_1, plan_review_2, plan_review_3]
+        plan_passed, plan_consensus = _consensus_check(plan_reviews, required=2)
+        logger.info("Plan review consensus:\n%s", plan_consensus)
+        if not plan_passed:
+            all_plan_issues = []
+            for r in plan_reviews:
+                if not r.approved:
+                    for issue in r.issues:
+                        all_plan_issues.append(f"[{r.agent_role}] {issue}")
+            logger.warning(
+                "Plan review council did not fully approve. Issues: %s — proceeding with caution.",
+                all_plan_issues,
+            )
+        # ── END PHASE 1 ──────────────────────────────────────────────────────
+
+        # 4. Build the prompt with full project context (now includes approved plan)
         prompt_parts = []
         if task_input.context:
             prompt_parts.append(task_input.context)
         prompt_parts.append(task_input.task_description)
+        if plan_content:
+            prompt_parts.append(
+                f"## Implementation Plan (approved by review council)\n\n{plan_content}"
+            )
         prompt = "\n\n".join(prompt_parts)
 
         # Write prompt to temp file (avoids shell escaping issues)
@@ -362,6 +574,173 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
                 success=True,
             )
 
+        # ── PHASE 2: Post-implementation Review Council ───────────────────────
+        # Three agents review every aspect: planned vs done, outputs, code quality,
+        # and behavior/pattern alignment.  Consensus = 2/3 agents approve.
+        # If consensus fails we do ONE correction pass, then re-review.
+
+        def _build_review_context() -> str:
+            diff_stat = ""
+            diff_patch = ""
+            try:
+                diff_stat = subprocess.run(
+                    ["git", "diff", "--stat", "main"],
+                    cwd=WORKSPACE, capture_output=True, text=True, timeout=15,
+                ).stdout.strip()
+                diff_patch = subprocess.run(
+                    ["git", "diff", "main", "--", "*.py", "*.js", "*.ts", "*.tsx"],
+                    cwd=WORKSPACE, capture_output=True, text=True, timeout=15,
+                ).stdout.strip()[:4000]
+            except Exception:
+                pass
+            return (
+                f"## Original Task\n{task_input.task_description[:500]}\n\n"
+                f"## Implementation Plan\n{plan_content[:1000]}\n\n"
+                f"## Git Diff Stat\n{diff_stat}\n\n"
+                f"## Key Code Changes (truncated)\n```\n{diff_patch}\n```"
+            )
+
+        def _run_review_council(council_label: str) -> tuple:
+            """Run the 3-agent review council. Returns (passed, report, reviews).
+
+            Each agent reviews ALL 5 dimensions:
+              - Work planned (plan alignment)
+              - Work done (implementation completeness)
+              - Outputs (files and artifacts produced)
+              - Code review (quality and security)
+              - Behavior review (spec compliance and pattern adherence)
+            """
+            activity.heartbeat(f"Phase 2: {council_label} — Architect review...")
+            review_ctx = _build_review_context()
+
+            impl_review_arch = _run_review_agent(
+                role="Architect Agent",
+                review_prompt=(
+                    f"Read CLAUDE.md and all changed files. You must review ALL of the following:\n\n"
+                    f"WORK PLANNED vs WORK DONE:\n"
+                    f"- Does the implementation match the plan in `.claude/plan.md`?\n"
+                    f"- Were all planned steps executed? What was skipped or changed?\n\n"
+                    f"OUTPUTS:\n"
+                    f"- Are all expected files/endpoints/schemas present and correctly placed?\n"
+                    f"- Are new routes mounted in routes.py? Models in models/__init__.py?\n"
+                    f"- Are migrations included if schema changed?\n\n"
+                    f"CODE REVIEW (architectural perspective):\n"
+                    f"- Does the code follow established patterns (multi-tenancy, auth, services layer)?\n"
+                    f"- Any architectural violations or anti-patterns?\n\n"
+                    f"BEHAVIOR REVIEW:\n"
+                    f"- Does the implementation align with wolfpoint.ai conventions in CLAUDE.md?\n"
+                    f"- Good practices followed? No over-engineering?\n\n"
+                    f"{review_ctx}"
+                ),
+                extra_env=claude_env,
+            )
+            activity.heartbeat(f"Phase 2: {council_label} — Code review...")
+            impl_review_code = _run_review_agent(
+                role="Code Review Agent",
+                review_prompt=(
+                    f"Read all changed files carefully. You must review ALL of the following:\n\n"
+                    f"WORK PLANNED vs WORK DONE:\n"
+                    f"- Compare the plan in `.claude/plan.md` with actual changes — any drift?\n"
+                    f"- Were implementation steps followed in the right order?\n\n"
+                    f"OUTPUTS:\n"
+                    f"- Are outputs complete? Any half-implemented features or missing pieces?\n"
+                    f"- Are all referenced functions/classes/imports actually defined?\n\n"
+                    f"CODE REVIEW:\n"
+                    f"- Code quality — clarity, correctness, error handling, naming\n"
+                    f"- Security — no injection, no hardcoded secrets, safe queries\n"
+                    f"- Logic — edge cases covered? No obvious bugs or null-pointer risks?\n\n"
+                    f"BEHAVIOR REVIEW:\n"
+                    f"- Does the code do what the task description asked?\n"
+                    f"- Any regressions introduced in existing code paths?\n\n"
+                    f"{review_ctx}"
+                ),
+                extra_env=claude_env,
+            )
+            activity.heartbeat(f"Phase 2: {council_label} — Behavior review...")
+            impl_review_beh = _run_review_agent(
+                role="Behavior Review Agent",
+                review_prompt=(
+                    f"Read the changed files and the original task. You must review ALL of the following:\n\n"
+                    f"WORK PLANNED vs WORK DONE:\n"
+                    f"- Does the implementation fulfill every requirement stated in the task?\n"
+                    f"- Compare the plan steps with git diff — is the delta what was expected?\n\n"
+                    f"OUTPUTS:\n"
+                    f"- Are all integration wiring steps done? "
+                    f"(route mounts, __init__ imports, DB migrations, env vars if needed)\n"
+                    f"- Are the outputs testable and deployable as-is?\n\n"
+                    f"CODE REVIEW:\n"
+                    f"- Are there any obvious runtime errors or broken imports?\n"
+                    f"- Does the code respect existing data contracts and API shapes?\n\n"
+                    f"BEHAVIOR REVIEW:\n"
+                    f"- Does the behavior match the spec? All acceptance criteria met?\n"
+                    f"- Any regressions to existing functionality?\n"
+                    f"- Does it align with established patterns and good practices in CLAUDE.md?\n\n"
+                    f"{review_ctx}"
+                ),
+                extra_env=claude_env,
+            )
+            reviews = [impl_review_arch, impl_review_code, impl_review_beh]
+            passed, report = _consensus_check(reviews, required=2)
+            return passed, report, reviews
+
+        activity.heartbeat("Phase 2: Post-implementation review council (3 agents × 5 dimensions)...")
+        impl_passed, impl_consensus, impl_reviews = _run_review_council("Review round 1")
+        logger.info("Post-impl review consensus:\n%s", impl_consensus)
+
+        if not impl_passed:
+            # Collect all issues from failing reviewers
+            all_impl_issues = []
+            for r in impl_reviews:
+                if not r.approved:
+                    for issue in r.issues:
+                        all_impl_issues.append(f"[{r.agent_role}] {issue}")
+
+            if all_impl_issues:
+                activity.heartbeat("Phase 2: Review failed — running correction pass...")
+                issues_text = "\n".join(f"- {i}" for i in all_impl_issues[:12])
+                correction_prompt = (
+                    f"The code review council found these issues with your implementation.\n"
+                    f"Fix ONLY these specific issues. Do not make any other changes.\n\n"
+                    f"## Issues to Fix\n{issues_text}\n\n"
+                    f"## Original Task\n{task_input.task_description}\n\n"
+                    f"## Implementation Plan\n{plan_content[:1000]}"
+                )
+                correction_system = (
+                    "You are fixing specific issues flagged by the code review council. "
+                    "Make minimal, targeted changes only. Follow all patterns in CLAUDE.md."
+                )
+                correction_result = _run_long_command(
+                    [
+                        "claude", "-p", correction_prompt,
+                        "--output-format", "json",
+                        "--model", CLAUDE_CODE_MODEL,
+                        "--allowedTools", "Edit,Write,Bash,Read,Glob,Grep",
+                        "--append-system-prompt", correction_system,
+                        "--dangerously-skip-permissions",
+                    ],
+                    cwd=WORKSPACE,
+                    timeout=15 * 60,          # 15 min for correction
+                    extra_env=claude_env,
+                    heartbeat_message="Correction pass running",
+                )
+                logger.info("Correction pass complete (exit %s)", correction_result.returncode)
+
+                # Re-run the review council
+                activity.heartbeat("Phase 2: Re-reviewing after correction pass...")
+                impl_passed, impl_consensus, impl_reviews = _run_review_council("Review round 2")
+                logger.info("Post-correction review consensus:\n%s", impl_consensus)
+
+        # Build the review summary section for the PR body
+        review_lines = []
+        if plan_content:
+            review_lines.append("### Phase 1: Plan Review (3 agents)")
+            review_lines.append(plan_consensus)
+            review_lines.append("")
+        review_lines.append("### Phase 2: Implementation Review (3 agents × 5 dimensions)")
+        review_lines.append(impl_consensus)
+        review_section = "\n".join(review_lines)
+        # ── END PHASE 2 ──────────────────────────────────────────────────────
+
         # 8. Stage, commit and push
         activity.heartbeat("Pushing changes...")
         _run("git add -A")
@@ -385,14 +764,17 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         if not claude_summary:
             claude_summary = claude_output[:1500]
         files_list = "\n".join(f"- `{f}`" for f in files_changed)
+        review_flag = "" if impl_passed else "\n> ⚠️ **Review council did not reach full consensus — please review carefully.**\n"
 
         pr_body = (
             f"## Summary\n\n"
-            f"Autonomously implemented by {provider_label}.\n\n"
+            f"Autonomously implemented by {provider_label}.{review_flag}\n\n"
             f"## Task\n\n"
             f"{task_input.task_description}\n\n"
             f"## {provider_label} Output\n\n"
             f"{claude_summary}\n\n"
+            f"## Review Council Results\n\n"
+            f"```\n{review_section}\n```\n\n"
             f"## Commits\n\n"
             f"{commit_log}\n\n"
             f"## Files Changed ({len(files_changed)})\n\n"
