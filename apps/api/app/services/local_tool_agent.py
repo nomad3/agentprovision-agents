@@ -306,7 +306,10 @@ def _ollama_chat(
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """Send a chat request to Ollama with tool schemas. Returns the response dict."""
+    """Send a chat request to Ollama with tool schemas. Returns the response dict.
+    Acquires the GPU lock from local_inference to avoid contention."""
+    from app.services.local_inference import _ollama_sync_lock
+
     body: Dict[str, Any] = {
         "model": LOCAL_TOOL_MODEL,
         "messages": messages,
@@ -317,8 +320,9 @@ def _ollama_chat(
         body["tools"] = tools
 
     try:
-        with httpx.Client(timeout=float(OLLAMA_TIMEOUT)) as client:
-            resp = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=body)
+        with _ollama_sync_lock:
+            with httpx.Client(timeout=float(OLLAMA_TIMEOUT)) as client:
+                resp = client.post(f"{OLLAMA_BASE_URL}/api/chat", json=body)
         if resp.status_code != 200:
             logger.error("Ollama chat failed: HTTP %s — %s", resp.status_code, resp.text[:300])
             return None

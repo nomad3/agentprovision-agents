@@ -9,7 +9,7 @@ from temporalio.worker import Worker
 from app.core.config import settings
 from app.workflows.task_execution import TaskExecutionWorkflow
 from app.workflows.dynamic_executor import DynamicWorkflowExecutor
-from app.workflows.activities.dynamic_step import execute_dynamic_step
+from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
     dispatch_task,
     recall_memory,
@@ -208,6 +208,7 @@ async def run_orchestration_worker():
             log_consolidation_results,
             # Dynamic workflow step executor
             execute_dynamic_step,
+            finalize_workflow_run,
         ],
     )
 

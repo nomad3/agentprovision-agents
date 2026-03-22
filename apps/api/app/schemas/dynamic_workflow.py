@@ -124,10 +124,10 @@ class WorkflowStepLogInDB(BaseModel):
     completed_at: Optional[datetime]
     duration_ms: Optional[int]
     error: Optional[str]
-    tokens_used: int
-    cost_usd: float
-    platform: Optional[str]
-    retry_count: int
+    tokens_used: int = 0
+    cost_usd: float = 0.0
+    platform: Optional[str] = None
+    retry_count: int = 0
 
     class Config:
         from_attributes = True

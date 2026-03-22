@@ -272,3 +272,43 @@ def _log_step(run_id: str, step_id: str, step_type: str, status: str,
             db.close()
     except Exception as e:
         logger.debug("Step log failed: %s", e)
+
+
+@activity.defn
+async def finalize_workflow_run(
+    run_id: str,
+    status: str,
+    steps_completed: int,
+    total_tokens: int,
+    total_cost: float,
+    error: str = "",
+) -> dict:
+    """Persist final workflow run status back to the DB."""
+    try:
+        from app.db.session import SessionLocal
+        from app.models.dynamic_workflow import WorkflowRun
+        db = SessionLocal()
+        try:
+            run = db.query(WorkflowRun).filter(WorkflowRun.id == run_id).first()
+            if run:
+                run.status = status
+                run.completed_at = datetime.utcnow()
+                run.duration_ms = int((datetime.utcnow() - run.started_at).total_seconds() * 1000) if run.started_at else None
+                run.step_results = {
+                    "steps_completed": steps_completed,
+                    "total_tokens": total_tokens,
+                    "total_cost": total_cost,
+                }
+                if error:
+                    run.error = error
+                db.commit()
+                logger.info("Finalized workflow run %s: status=%s steps=%d", run_id, status, steps_completed)
+                return {"finalized": True, "status": status}
+            else:
+                logger.warning("Workflow run %s not found for finalization", run_id)
+                return {"finalized": False, "error": "run not found"}
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("Failed to finalize workflow run %s: %s", run_id, e)
+        return {"finalized": False, "error": str(e)}

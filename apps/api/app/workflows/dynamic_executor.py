@@ -15,7 +15,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from app.workflows.activities.dynamic_step import execute_dynamic_step
+    from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 
 
 @dataclass
@@ -144,15 +144,26 @@ class DynamicWorkflowExecutor:
 
             except Exception as e:
                 workflow.logger.error("Step %s failed: %s", step.get("id"), str(e))
+                error_msg = f"Step {step.get('id', '?')} failed: {str(e)}"
+                await workflow.execute_activity(
+                    finalize_workflow_run,
+                    args=[input.run_id, "failed", steps_completed, total_tokens, total_cost, error_msg],
+                    start_to_close_timeout=timedelta(seconds=30),
+                )
                 return DynamicWorkflowResult(
                     status="failed",
                     output=context,
                     total_tokens=total_tokens,
                     total_cost=total_cost,
                     steps_completed=steps_completed,
-                    error=f"Step {step.get('id', '?')} failed: {str(e)}",
+                    error=error_msg,
                 )
 
+        await workflow.execute_activity(
+            finalize_workflow_run,
+            args=[input.run_id, "completed", steps_completed, total_tokens, total_cost],
+            start_to_close_timeout=timedelta(seconds=30),
+        )
         return DynamicWorkflowResult(
             status="completed",
             output=context,

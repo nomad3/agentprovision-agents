@@ -10,8 +10,10 @@ Ollama instance for:
 All inference is async and non-blocking — never delays user responses.
 """
 
+import asyncio
 import logging
 import os
+import threading
 from typing import Optional
 
 import httpx
@@ -22,6 +24,18 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
 DEFAULT_MODEL = os.environ.get("LOCAL_MODEL", "qwen2.5-coder:0.5b")
 QUALITY_MODEL = os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b")
 
+# GPU semaphore — serializes all Ollama calls so models don't compete for GPU
+_ollama_semaphore: Optional[asyncio.Semaphore] = None
+_ollama_sync_lock = threading.Lock()
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    """Get or create the async semaphore (bound to the current event loop)."""
+    global _ollama_semaphore
+    if _ollama_semaphore is None:
+        _ollama_semaphore = asyncio.Semaphore(1)
+    return _ollama_semaphore
+
 
 async def generate(
     prompt: str,
@@ -31,26 +45,27 @@ async def generate(
     max_tokens: int = 500,
     timeout: float = 30.0,
 ) -> Optional[str]:
-    """Call Ollama generate endpoint. Returns None on failure."""
+    """Call Ollama generate endpoint. Returns None on failure. Serialized via GPU semaphore."""
     model = model or DEFAULT_MODEL
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "system": system,
-                    "stream": False,
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
+        async with _get_semaphore():
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json={
+                        "model": model,
+                        "prompt": prompt,
+                        "system": system,
+                        "stream": False,
+                        "options": {
+                            "temperature": temperature,
+                            "num_predict": max_tokens,
+                        },
                     },
-                },
-            )
-            if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
-            logger.warning("Ollama returned %s: %s", resp.status_code, resp.text[:200])
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("response", "").strip()
+                logger.warning("Ollama returned %s: %s", resp.status_code, resp.text[:200])
     except httpx.ConnectError:
         logger.debug("Ollama not available at %s", OLLAMA_BASE_URL)
     except Exception as e:
@@ -218,26 +233,27 @@ def generate_sync(
     max_tokens: int = 500,
     timeout: float = 45.0,
 ) -> Optional[str]:
-    """Synchronous Ollama call. Returns None on failure."""
+    """Synchronous Ollama call. Returns None on failure. Serialized via GPU lock."""
     model = model or DEFAULT_MODEL
     try:
-        with httpx.Client(timeout=timeout) as client:
-            resp = client.post(
-                f"{OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "system": system,
-                    "stream": False,
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
+        with _ollama_sync_lock:
+            with httpx.Client(timeout=timeout) as client:
+                resp = client.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json={
+                        "model": model,
+                        "prompt": prompt,
+                        "system": system,
+                        "stream": False,
+                        "options": {
+                            "temperature": temperature,
+                            "num_predict": max_tokens,
+                        },
                     },
-                },
-            )
-            if resp.status_code == 200:
-                return resp.json().get("response", "").strip()
-            logger.warning("Ollama (sync) returned %s: %s", resp.status_code, resp.text[:200])
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("response", "").strip()
+                logger.warning("Ollama (sync) returned %s: %s", resp.status_code, resp.text[:200])
     except httpx.ConnectError:
         logger.debug("Ollama not available (sync) at %s", OLLAMA_BASE_URL)
     except Exception as e:
