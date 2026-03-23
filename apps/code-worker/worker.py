@@ -41,7 +41,7 @@ async def main():
         ],
         workflow_runner=SandboxedWorkflowRunner(
             restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                "httpx", "subprocess",
+                "httpx", "subprocess", "asyncio",
             )
         ),
     )

@@ -1676,11 +1676,13 @@ class ProviderReviewWorkflow:
                     error=str(e)[:200],
                 )
 
-        results = await asyncio.gather(
+        # Start all three reviews as concurrent coroutines
+        import asyncio as _asyncio
+        results = list(await _asyncio.gather(
             _safe_review(review_with_claude, "claude_code"),
             _safe_review(review_with_codex, "codex"),
             _safe_review(review_with_local_qwen, "local_qwen"),
-        )
+        ))
 
         # Filter to actual reviews (not errors/skipped)
         reviews = [r for r in results if isinstance(r, ProviderReview)]
