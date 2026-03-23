@@ -35,6 +35,33 @@ class InternalExperienceCreate(BaseModel):
     state_text: str = ""
 
 
+class ProviderCouncilUpdate(BaseModel):
+    tenant_id: str
+    experience_id: str
+    provider_council: dict
+
+
+@router.post("/internal/provider-council")
+def update_provider_council(
+    payload: ProviderCouncilUpdate,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """Merge provider council results into an existing RL experience."""
+    exp = db.query(RLExperience).filter(RLExperience.id == payload.experience_id).first()
+    if not exp:
+        raise HTTPException(404, "Experience not found")
+    # Merge provider council into existing reward_components
+    components = exp.reward_components or {}
+    components["provider_council"] = payload.provider_council
+    exp.reward_components = components
+    # Force SQLAlchemy to detect the JSONB change
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(exp, "reward_components")
+    db.commit()
+    return {"status": "updated", "experience_id": payload.experience_id}
+
+
 @router.post("/internal/experience")
 def create_internal_experience(
     payload: InternalExperienceCreate,

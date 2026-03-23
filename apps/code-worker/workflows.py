@@ -1657,23 +1657,29 @@ class ProviderReviewWorkflow:
 
     @workflow.run
     async def run(self, input: ProviderReviewInput) -> ProviderCouncilResult:
-        # Run all available providers in parallel
+        # Run all available providers in parallel — each wrapped so one failure
+        # doesn't abort the others
         retry = RetryPolicy(maximum_attempts=1)
         timeout = timedelta(minutes=5)
 
+        async def _safe_review(activity_fn, provider_name):
+            try:
+                return await workflow.execute_activity(
+                    activity_fn, input,
+                    start_to_close_timeout=timeout, retry_policy=retry,
+                )
+            except Exception as e:
+                return ProviderReview(
+                    provider=provider_name, approved=True, verdict="ERROR",
+                    score=0, issues=[], suggestions=[],
+                    summary=f"Activity failed: {str(e)[:200]}",
+                    error=str(e)[:200],
+                )
+
         results = await asyncio.gather(
-            workflow.execute_activity(
-                review_with_claude, input,
-                start_to_close_timeout=timeout, retry_policy=retry,
-            ),
-            workflow.execute_activity(
-                review_with_codex, input,
-                start_to_close_timeout=timeout, retry_policy=retry,
-            ),
-            workflow.execute_activity(
-                review_with_local_qwen, input,
-                start_to_close_timeout=timeout, retry_policy=retry,
-            ),
+            _safe_review(review_with_claude, "claude_code"),
+            _safe_review(review_with_codex, "codex"),
+            _safe_review(review_with_local_qwen, "local_qwen"),
         )
 
         # Filter to actual reviews (not errors/skipped)
