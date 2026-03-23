@@ -36,6 +36,7 @@ services:
       - HF_HUB_ENABLE_HF_TRANSFER=0
       - HF_HUB_DISABLE_XET=1
       - OLLAMA_BASE_URL=http://ollama:11434
+      - PROVIDER_COUNCIL_SAMPLE_RATE=${PROVIDER_COUNCIL_SAMPLE_RATE:-0.05}
 
   web:
     build:

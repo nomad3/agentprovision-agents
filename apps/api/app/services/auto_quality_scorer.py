@@ -311,37 +311,42 @@ def _maybe_trigger_provider_council(
         trigger_reason, adjusted_score, platform, agent_slug,
     )
 
-    # Dispatch async Temporal workflow — fire and forget
-    try:
-        import asyncio
-        from temporalio.client import Client as TemporalClient
-        from app.core.config import settings
-
-        async def _dispatch():
-            client = await TemporalClient.connect(settings.TEMPORAL_ADDRESS)
-            await client.start_workflow(
-                "ProviderReviewWorkflow",
-                {
-                    "user_message": user_message[:500],
-                    "agent_response": agent_response[:1000],
-                    "agent_slug": agent_slug,
-                    "platform_used": platform,
-                    "tools_called": ", ".join(str(t) for t in (tools_called or [])[:8]),
-                    "entities_recalled": ", ".join(str(e) for e in (entities_recalled or [])[:5]),
-                    "channel": channel,
-                    "tenant_id": str(tenant_id),
-                    "original_experience_id": experience_id,
-                },
-                id=f"provider-review-{experience_id[:8]}-{uuid.uuid4().hex[:6]}",
-                task_queue="servicetsunami-code",
-                execution_timeout=timedelta(minutes=15),
-            )
-            logger.info("Provider council workflow dispatched for experience %s", experience_id[:8])
-
-        loop = asyncio.new_event_loop()
+    # Dispatch Temporal workflow in a separate thread (this function is called
+    # from a background thread that may or may not have an event loop)
+    def _dispatch_in_thread():
         try:
-            loop.run_until_complete(_dispatch())
-        finally:
-            loop.close()
-    except Exception as e:
-        logger.warning("Failed to dispatch provider council: %s", e)
+            import asyncio
+            from temporalio.client import Client as TemporalClient
+            from app.core.config import settings
+
+            async def _do_dispatch():
+                client = await TemporalClient.connect(settings.TEMPORAL_ADDRESS)
+                await client.start_workflow(
+                    "ProviderReviewWorkflow",
+                    {
+                        "user_message": user_message[:500],
+                        "agent_response": agent_response[:1000],
+                        "agent_slug": agent_slug,
+                        "platform_used": platform,
+                        "tools_called": ", ".join(str(t) for t in (tools_called or [])[:8]),
+                        "entities_recalled": ", ".join(str(e) for e in (entities_recalled or [])[:5]),
+                        "channel": channel,
+                        "tenant_id": str(tenant_id),
+                        "original_experience_id": experience_id,
+                    },
+                    id=f"provider-review-{experience_id[:8]}-{uuid.uuid4().hex[:6]}",
+                    task_queue="servicetsunami-code",
+                    execution_timeout=timedelta(minutes=15),
+                )
+                logger.info("Provider council workflow dispatched for experience %s", experience_id[:8])
+
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_do_dispatch())
+            finally:
+                loop.close()
+        except Exception as e:
+            logger.warning("Failed to dispatch provider council: %s", e)
+
+    t = threading.Thread(target=_dispatch_in_thread, daemon=True)
+    t.start()
