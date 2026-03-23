@@ -1389,3 +1389,356 @@ class CodeTaskWorkflow:
             heartbeat_timeout=timedelta(seconds=CODE_TASK_HEARTBEAT_SECONDS),
             retry_policy=retry_policy,
         )
+
+
+# ---------------------------------------------------------------------------
+# Multi-Provider Review Council
+# ---------------------------------------------------------------------------
+
+PROVIDER_REVIEW_PROMPT = """You are reviewing an AI agent response for quality. Evaluate it and return a JSON verdict.
+
+USER MESSAGE:
+{user_message}
+
+AGENT RESPONSE ({agent_slug} via {platform_used}):
+{agent_response}
+
+CONTEXT:
+- Channel: {channel}
+- Tools called: {tools_called}
+- Entities recalled: {entities_recalled}
+
+Score the response 0-100 across these dimensions:
+- Accuracy (0-25): factually correct, no hallucinations
+- Helpfulness (0-20): addresses user need, actionable
+- Tool usage (0-20): appropriate tool selection
+- Efficiency (0-10): concise, no padding
+- Context (0-10): uses conversation history
+
+Return ONLY this JSON:
+{{"approved": true/false, "verdict": "APPROVED|REJECTED|CONDITIONAL", "score": <0-100>, "issues": ["issue 1"], "suggestions": ["fix 1"], "summary": "1-2 sentence review"}}"""
+
+
+@dataclass
+class ProviderReviewInput:
+    user_message: str
+    agent_response: str
+    agent_slug: str
+    platform_used: str
+    tools_called: str
+    entities_recalled: str
+    channel: str
+    tenant_id: str
+    original_experience_id: str = ""
+
+
+@dataclass
+class ProviderReview:
+    provider: str
+    approved: bool
+    verdict: str
+    score: int
+    issues: list
+    suggestions: list
+    summary: str
+    tokens_used: int = 0
+    cost_usd: float = 0.0
+    duration_ms: int = 0
+    error: Optional[str] = None
+
+
+@dataclass
+class ProviderCouncilResult:
+    consensus: bool
+    provider_agreement: float
+    reviews: list
+    disagreements: list
+    recommended_platform: str
+    total_cost: float
+    total_tokens: int
+
+
+def _parse_provider_review(provider: str, raw_output: str, duration_ms: int) -> ProviderReview:
+    """Parse CLI output into a ProviderReview. Defensively handles bad JSON."""
+    try:
+        # Handle Claude JSON wrapper
+        outer = json.loads(raw_output.strip()) if raw_output.strip() else {}
+        text = outer.get("result", "") if isinstance(outer, dict) else str(outer)
+        # Strip markdown fences and <think> tags
+        text = re.sub(r"```(?:json)?\s*|\s*```", "", text).strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        data = json.loads(match.group(0)) if match else json.loads(text)
+
+        return ProviderReview(
+            provider=provider,
+            approved=bool(data.get("approved", False)),
+            verdict=str(data.get("verdict", "UNKNOWN")),
+            score=max(0, min(100, int(data.get("score", 50)))),
+            issues=list(data.get("issues", []))[:5],
+            suggestions=list(data.get("suggestions", []))[:5],
+            summary=str(data.get("summary", ""))[:300],
+            tokens_used=outer.get("usage", {}).get("input_tokens", 0) + outer.get("usage", {}).get("output_tokens", 0) if isinstance(outer, dict) else 0,
+            cost_usd=outer.get("total_cost_usd", 0) if isinstance(outer, dict) else 0,
+            duration_ms=duration_ms,
+        )
+    except Exception as e:
+        return ProviderReview(
+            provider=provider, approved=True, verdict="PARSE_ERROR",
+            score=50, issues=[], suggestions=[],
+            summary=f"Could not parse review: {e}",
+            duration_ms=duration_ms, error=str(e),
+        )
+
+
+@activity.defn
+async def review_with_claude(input: ProviderReviewInput) -> ProviderReview:
+    """Review a response using Claude Code CLI (tenant's subscription, sonnet model)."""
+    try:
+        token = _fetch_claude_token(input.tenant_id)
+        if not token:
+            return ProviderReview(provider="claude_code", approved=True, verdict="SKIPPED",
+                                  score=0, issues=[], suggestions=[], summary="No Claude subscription")
+    except Exception:
+        return ProviderReview(provider="claude_code", approved=True, verdict="SKIPPED",
+                              score=0, issues=[], suggestions=[], summary="Claude credential fetch failed")
+
+    prompt = PROVIDER_REVIEW_PROMPT.format(
+        user_message=input.user_message[:500],
+        agent_response=input.agent_response[:1000],
+        agent_slug=input.agent_slug,
+        platform_used=input.platform_used,
+        tools_called=input.tools_called,
+        entities_recalled=input.entities_recalled,
+        channel=input.channel,
+    )
+
+    start = time.time()
+    result = subprocess.run(
+        ["claude", "-p", prompt, "--output-format", "json", "--model", "sonnet"],
+        capture_output=True, text=True, timeout=300,
+        env={**os.environ, "CLAUDE_CODE_OAUTH_TOKEN": token},
+    )
+    duration_ms = int((time.time() - start) * 1000)
+
+    if result.returncode != 0:
+        return ProviderReview(provider="claude_code", approved=True, verdict="ERROR",
+                              score=0, issues=[], suggestions=[],
+                              summary=f"CLI exit {result.returncode}: {result.stderr[:200]}",
+                              duration_ms=duration_ms)
+
+    return _parse_provider_review("claude_code", result.stdout, duration_ms)
+
+
+@activity.defn
+async def review_with_codex(input: ProviderReviewInput) -> ProviderReview:
+    """Review a response using Codex CLI (tenant's subscription)."""
+    try:
+        creds = _fetch_integration_credentials("codex", input.tenant_id)
+        raw_auth = creds.get("auth_json") or creds.get("session_token")
+        if not raw_auth:
+            return ProviderReview(provider="codex", approved=True, verdict="SKIPPED",
+                                  score=0, issues=[], suggestions=[], summary="No Codex subscription")
+        auth_payload = raw_auth if isinstance(raw_auth, dict) else json.loads(raw_auth)
+    except Exception:
+        return ProviderReview(provider="codex", approved=True, verdict="SKIPPED",
+                              score=0, issues=[], suggestions=[], summary="Codex credential fetch failed")
+
+    session_dir = os.path.join("/tmp", "st_provider_review", input.tenant_id)
+    os.makedirs(session_dir, exist_ok=True)
+    codex_home = _prepare_codex_home(session_dir, auth_payload, "")
+
+    prompt = PROVIDER_REVIEW_PROMPT.format(
+        user_message=input.user_message[:500],
+        agent_response=input.agent_response[:1000],
+        agent_slug=input.agent_slug,
+        platform_used=input.platform_used,
+        tools_called=input.tools_called,
+        entities_recalled=input.entities_recalled,
+        channel=input.channel,
+    )
+
+    output_path = os.path.join(session_dir, "review-output.txt")
+    start = time.time()
+    result = subprocess.run(
+        ["codex", "exec", prompt, "--json", "--output-last-message", output_path,
+         "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
+        capture_output=True, text=True, timeout=300,
+        env={**os.environ, "CODEX_HOME": codex_home},
+    )
+    duration_ms = int((time.time() - start) * 1000)
+
+    if result.returncode != 0:
+        return ProviderReview(provider="codex", approved=True, verdict="ERROR",
+                              score=0, issues=[], suggestions=[],
+                              summary=f"CLI exit {result.returncode}: {result.stderr[:200]}",
+                              duration_ms=duration_ms)
+
+    # Read output
+    response_text = ""
+    if os.path.exists(output_path):
+        with open(output_path) as f:
+            response_text = f.read().strip()
+    if not response_text:
+        response_text = result.stdout
+
+    return _parse_provider_review("codex", response_text, duration_ms)
+
+
+@activity.defn
+async def review_with_local_qwen(input: ProviderReviewInput) -> ProviderReview:
+    """Review a response using local Qwen via Ollama (free, always available)."""
+    import httpx as _httpx
+
+    OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
+    MODEL = os.environ.get("LOCAL_TOOL_MODEL", "qwen3:1.7b")
+
+    prompt = PROVIDER_REVIEW_PROMPT.format(
+        user_message=input.user_message[:500],
+        agent_response=input.agent_response[:1000],
+        agent_slug=input.agent_slug,
+        platform_used=input.platform_used,
+        tools_called=input.tools_called,
+        entities_recalled=input.entities_recalled,
+        channel=input.channel,
+    )
+
+    start = time.time()
+    try:
+        with _httpx.Client(timeout=120) as client:
+            resp = client.post(f"{OLLAMA_URL}/api/generate", json={
+                "model": MODEL, "prompt": prompt,
+                "system": "You are a response quality reviewer. Return only valid JSON.",
+                "stream": False,
+                "options": {"temperature": 0.1, "num_predict": 300},
+            })
+        duration_ms = int((time.time() - start) * 1000)
+        if resp.status_code != 200:
+            return ProviderReview(provider="local_qwen", approved=True, verdict="ERROR",
+                                  score=0, issues=[], suggestions=[],
+                                  summary=f"Ollama HTTP {resp.status_code}", duration_ms=duration_ms)
+        raw = resp.json().get("response", "")
+        return _parse_provider_review("local_qwen", raw, duration_ms)
+    except Exception as e:
+        duration_ms = int((time.time() - start) * 1000)
+        return ProviderReview(provider="local_qwen", approved=True, verdict="ERROR",
+                              score=0, issues=[], suggestions=[],
+                              summary=str(e)[:200], duration_ms=duration_ms)
+
+
+@activity.defn
+async def finalize_provider_council(
+    tenant_id: str,
+    experience_id: str,
+    result_json: str,
+) -> dict:
+    """Update the RL experience with provider council results."""
+    try:
+        resp = httpx.post(
+            f"{API_BASE_URL}/api/v1/rl/internal/provider-council",
+            headers={"X-Internal-Key": API_INTERNAL_KEY or "dev_mcp_key"},
+            json={
+                "tenant_id": tenant_id,
+                "experience_id": experience_id,
+                "provider_council": json.loads(result_json),
+            },
+            timeout=10,
+        )
+        logger.info("Provider council RL update: %s", resp.status_code)
+        return {"updated": resp.status_code == 200}
+    except Exception as e:
+        logger.warning("Provider council RL update failed: %s", e)
+        return {"updated": False, "error": str(e)}
+
+
+@workflow.defn
+class ProviderReviewWorkflow:
+    """Multi-provider review council — Claude, Codex, and Qwen each review a response."""
+
+    @workflow.run
+    async def run(self, input: ProviderReviewInput) -> ProviderCouncilResult:
+        # Run all available providers in parallel
+        retry = RetryPolicy(maximum_attempts=1)
+        timeout = timedelta(minutes=5)
+
+        results = await asyncio.gather(
+            workflow.execute_activity(
+                review_with_claude, input,
+                start_to_close_timeout=timeout, retry_policy=retry,
+            ),
+            workflow.execute_activity(
+                review_with_codex, input,
+                start_to_close_timeout=timeout, retry_policy=retry,
+            ),
+            workflow.execute_activity(
+                review_with_local_qwen, input,
+                start_to_close_timeout=timeout, retry_policy=retry,
+            ),
+        )
+
+        # Filter to actual reviews (not errors/skipped)
+        reviews = [r for r in results if isinstance(r, ProviderReview)]
+        active = [r for r in reviews if r.verdict not in ("SKIPPED", "ERROR", "PARSE_ERROR")]
+
+        # Meta-adjudication
+        if active:
+            approved_count = sum(1 for r in active if r.approved)
+            consensus = approved_count > len(active) / 2
+            scores = [r.score for r in active if r.score > 0]
+            avg_score = sum(scores) / len(scores) if scores else 0
+
+            # Detect disagreements
+            disagreements = []
+            approvals = {r.provider: r.approved for r in active}
+            if len(set(approvals.values())) > 1:
+                for r in active:
+                    if not r.approved:
+                        for issue in r.issues[:2]:
+                            disagreements.append(f"[{r.provider}] {issue}")
+
+            # Recommend platform with highest score
+            best = max(active, key=lambda r: r.score)
+            recommended = best.provider
+
+            agreement = approved_count / len(active) if active else 1.0
+        else:
+            consensus = True
+            agreement = 1.0
+            disagreements = []
+            recommended = "unknown"
+
+        total_cost = sum(r.cost_usd for r in reviews)
+        total_tokens = sum(r.tokens_used for r in reviews)
+
+        council_result = ProviderCouncilResult(
+            consensus=consensus,
+            provider_agreement=agreement,
+            reviews=[{
+                "provider": r.provider, "approved": r.approved,
+                "verdict": r.verdict, "score": r.score,
+                "issues": r.issues, "summary": r.summary,
+                "cost_usd": r.cost_usd, "duration_ms": r.duration_ms,
+            } for r in reviews],
+            disagreements=disagreements,
+            recommended_platform=recommended,
+            total_cost=total_cost,
+            total_tokens=total_tokens,
+        )
+
+        # Update RL experience if we have one
+        if input.original_experience_id:
+            await workflow.execute_activity(
+                finalize_provider_council,
+                args=[input.tenant_id, input.original_experience_id,
+                      json.dumps({
+                          "consensus": council_result.consensus,
+                          "agreement": council_result.provider_agreement,
+                          "reviews": council_result.reviews,
+                          "disagreements": council_result.disagreements,
+                          "recommended_platform": council_result.recommended_platform,
+                          "total_cost": council_result.total_cost,
+                      })],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+
+        return council_result

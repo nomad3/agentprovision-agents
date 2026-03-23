@@ -11,7 +11,12 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from workflows import CodeTaskWorkflow, execute_code_task, ChatCliWorkflow, execute_chat_cli
+from workflows import (
+    CodeTaskWorkflow, execute_code_task,
+    ChatCliWorkflow, execute_chat_cli,
+    ProviderReviewWorkflow, review_with_claude, review_with_codex,
+    review_with_local_qwen, finalize_provider_council,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,8 +33,12 @@ async def main():
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[CodeTaskWorkflow, ChatCliWorkflow],
-        activities=[execute_code_task, execute_chat_cli],
+        workflows=[CodeTaskWorkflow, ChatCliWorkflow, ProviderReviewWorkflow],
+        activities=[
+            execute_code_task, execute_chat_cli,
+            review_with_claude, review_with_codex,
+            review_with_local_qwen, finalize_provider_council,
+        ],
         workflow_runner=SandboxedWorkflowRunner(
             restrictions=SandboxRestrictions.default.with_passthrough_modules(
                 "httpx", "subprocess",

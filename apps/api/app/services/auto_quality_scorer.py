@@ -16,6 +16,7 @@ import logging
 import os
 import threading
 import uuid
+from datetime import timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -238,7 +239,109 @@ async def _score_and_log(
                 str(exp.id)[:8], score, adjusted_score,
                 consensus.approved_count, consensus.total_reviewers, platform,
             )
+            # ── Decision gate: trigger provider council for high-value cases ──
+            _maybe_trigger_provider_council(
+                tenant_id=tenant_id,
+                experience_id=str(exp.id),
+                user_message=user_message,
+                agent_response=agent_response,
+                agent_slug=agent_slug,
+                platform=platform,
+                channel=channel,
+                tools_called=tools_called,
+                entities_recalled=entities_recalled,
+                adjusted_score=adjusted_score,
+                consensus_fragile=consensus.fragile,
+            )
         finally:
             db.close()
     except Exception as e:
         logger.warning("Failed to log auto-quality RL: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Provider council decision gate
+# ---------------------------------------------------------------------------
+
+_SIDE_EFFECT_TOOLS = {"send_email", "create_jira_issue", "deploy_changes", "execute_shell"}
+
+
+def _maybe_trigger_provider_council(
+    tenant_id,
+    experience_id: str,
+    user_message: str,
+    agent_response: str,
+    agent_slug: str,
+    platform: str,
+    channel: str,
+    tools_called: list,
+    entities_recalled: list,
+    adjusted_score: int,
+    consensus_fragile: bool,
+):
+    """Decide whether to trigger the multi-provider review council.
+
+    Triggers on: side-effect tools, fragile consensus, low scores, or 5% sample.
+    """
+    import random
+
+    trigger_reason = None
+
+    # 1. Side-effect tools used
+    if tools_called and any(t in _SIDE_EFFECT_TOOLS for t in tools_called):
+        trigger_reason = "side_effect_tools"
+
+    # 2. Fragile consensus (2/3 exactly)
+    elif consensus_fragile:
+        trigger_reason = "fragile_consensus"
+
+    # 3. Low score
+    elif adjusted_score < 40:
+        trigger_reason = "low_score"
+
+    # 4. Random 5% sample
+    elif random.random() < 0.05:
+        trigger_reason = "sampled"
+
+    if not trigger_reason:
+        return
+
+    logger.info(
+        "Provider council triggered: reason=%s score=%d platform=%s agent=%s",
+        trigger_reason, adjusted_score, platform, agent_slug,
+    )
+
+    # Dispatch async Temporal workflow — fire and forget
+    try:
+        import asyncio
+        from temporalio.client import Client as TemporalClient
+        from app.core.config import settings
+
+        async def _dispatch():
+            client = await TemporalClient.connect(settings.TEMPORAL_ADDRESS)
+            await client.start_workflow(
+                "ProviderReviewWorkflow",
+                {
+                    "user_message": user_message[:500],
+                    "agent_response": agent_response[:1000],
+                    "agent_slug": agent_slug,
+                    "platform_used": platform,
+                    "tools_called": ", ".join(str(t) for t in (tools_called or [])[:8]),
+                    "entities_recalled": ", ".join(str(e) for e in (entities_recalled or [])[:5]),
+                    "channel": channel,
+                    "tenant_id": str(tenant_id),
+                    "original_experience_id": experience_id,
+                },
+                id=f"provider-review-{experience_id[:8]}-{uuid.uuid4().hex[:6]}",
+                task_queue="servicetsunami-code",
+                execution_timeout=timedelta(minutes=15),
+            )
+            logger.info("Provider council workflow dispatched for experience %s", experience_id[:8])
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_dispatch())
+        finally:
+            loop.close()
+    except Exception as e:
+        logger.warning("Failed to dispatch provider council: %s", e)
