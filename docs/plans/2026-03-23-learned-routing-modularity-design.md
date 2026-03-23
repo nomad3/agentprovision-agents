@@ -55,7 +55,7 @@ For qualifying responses, `reward_components.provider_council` contains:
 
 ### Current Volume
 - ~2,625 RL experiences (and growing)
-- ~50+ provider council reviews
+- ~11 provider council reviews (accumulating)
 - Platform breakdown across claude_code, codex, local_qwen
 
 ## What We Need (Learned Routing)
@@ -191,7 +191,7 @@ The learning itself happens offline:
 | Provider recommendation | 20 provider council runs | Moderate |
 | Full learned routing | 100+ experiences per task_type | High |
 
-Current data: ~2,625 experiences, ~50 provider council runs. Enough for platform selection. Agent selection needs more task-type diversity.
+Current data: ~2,834 experiences, ~11 provider council runs. Enough for platform selection. Provider council data still accumulating — agent selection needs more task-type diversity and provider reviews.
 
 ## Missing Modules (from Modularity Hypothesis)
 

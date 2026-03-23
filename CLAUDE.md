@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ServiceTsunami is an AI agent orchestration platform that routes tasks to **Claude Code CLI** (Opus 4.6) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Runs from a laptop via **Cloudflare Tunnel** serving both `servicetsunami.com` and `agentprovision.com`.
+ServiceTsunami is an AI agent orchestration platform that routes tasks to **Claude Code CLI** (Sonnet by default, configurable via `CLAUDE_CODE_MODEL`) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Runs from a laptop via **Cloudflare Tunnel** serving both `servicetsunami.com` and `agentprovision.com`.
 
-**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Temporal → code-worker (Claude Code CLI with `--model opus`) → MCP tools (FastMCP, 81 tools) → response. Every response is auto-scored by a local Qwen council (3 reviewers, 6-dimension rubric) and selectively reviewed by a multi-provider council (Claude + Codex + Qwen in parallel via Temporal). All scores logged as RL experiences for continuous improvement and platform routing optimization.
+**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Temporal → code-worker (Claude Code CLI with `--model sonnet`) → MCP tools (FastMCP, 81 tools) → response. Every response is auto-scored by a local Qwen council (3 reviewers, 6-dimension rubric) and selectively reviewed by a multi-provider council (Claude + Codex + Qwen in parallel via Temporal). All scores logged as RL experiences for continuous improvement and platform routing optimization.
 
 ## Architecture
 
