@@ -1684,35 +1684,39 @@ class ProviderReviewWorkflow:
             _safe_review(review_with_local_qwen, "local_qwen"),
         ))
 
-        # Filter to actual reviews (not errors/skipped)
+        # All reviews including errors
         reviews = [r for r in results if isinstance(r, ProviderReview)]
+        # Active = produced a real verdict (not skipped/errored/parse-failed)
         active = [r for r in reviews if r.verdict not in ("SKIPPED", "ERROR", "PARSE_ERROR")]
+        failed = [r for r in reviews if r.verdict in ("ERROR", "PARSE_ERROR")]
 
-        # Meta-adjudication
+        # Meta-adjudication — agreement is computed over ALL reviews, not just active
+        total_reviewers = len(reviews)
+        active_approved = sum(1 for r in active if r.approved)
+
         if active:
-            approved_count = sum(1 for r in active if r.approved)
-            consensus = approved_count > len(active) / 2
+            consensus = active_approved > len(active) / 2
             scores = [r.score for r in active if r.score > 0]
-            avg_score = sum(scores) / len(scores) if scores else 0
 
             # Detect disagreements
             disagreements = []
-            approvals = {r.provider: r.approved for r in active}
-            if len(set(approvals.values())) > 1:
-                for r in active:
-                    if not r.approved:
-                        for issue in r.issues[:2]:
-                            disagreements.append(f"[{r.provider}] {issue}")
+            for r in failed:
+                disagreements.append(f"[{r.provider}] {r.verdict}: {r.summary[:100]}")
+            for r in active:
+                if not r.approved:
+                    for issue in r.issues[:2]:
+                        disagreements.append(f"[{r.provider}] {issue}")
 
             # Recommend platform with highest score
             best = max(active, key=lambda r: r.score)
             recommended = best.provider
 
-            agreement = approved_count / len(active) if active else 1.0
+            # Agreement = active approvals / total reviewers (failed count as non-approvals)
+            agreement = active_approved / total_reviewers if total_reviewers > 0 else 0.0
         else:
-            consensus = True
-            agreement = 1.0
-            disagreements = []
+            consensus = False  # No valid reviews = no consensus
+            agreement = 0.0
+            disagreements = [f"[{r.provider}] {r.verdict}: {r.summary[:100]}" for r in failed]
             recommended = "unknown"
 
         total_cost = sum(r.cost_usd for r in reviews)
