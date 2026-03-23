@@ -1459,16 +1459,56 @@ class ProviderCouncilResult:
 
 
 def _parse_provider_review(provider: str, raw_output: str, duration_ms: int) -> ProviderReview:
-    """Parse CLI output into a ProviderReview. Defensively handles bad JSON."""
+    """Parse CLI output into a ProviderReview. Defensively handles bad JSON.
+
+    Handles multiple output formats:
+    - Claude: {"result": "...", "usage": {...}, "total_cost_usd": ...}
+    - Codex: multi-line JSON stream or plain text with --output-last-message
+    - Qwen/Ollama: raw text possibly with <think>...</think> tags
+    """
+    if not raw_output or not raw_output.strip():
+        return ProviderReview(
+            provider=provider, approved=True, verdict="PARSE_ERROR",
+            score=50, issues=[], suggestions=[],
+            summary="Empty response from provider",
+            duration_ms=duration_ms, error="empty_response",
+        )
+
+    text = raw_output.strip()
+    outer = {}
+    tokens = 0
+    cost = 0.0
+
     try:
-        # Handle Claude JSON wrapper
-        outer = json.loads(raw_output.strip()) if raw_output.strip() else {}
-        text = outer.get("result", "") if isinstance(outer, dict) else str(outer)
-        # Strip markdown fences and <think> tags
+        # Try parsing as a JSON wrapper first (Claude format)
+        try:
+            outer = json.loads(text)
+            if isinstance(outer, dict) and "result" in outer:
+                text = str(outer.get("result", ""))
+                tokens = (outer.get("usage") or {}).get("input_tokens", 0) + (outer.get("usage") or {}).get("output_tokens", 0)
+                cost = outer.get("total_cost_usd", 0) or 0
+        except json.JSONDecodeError:
+            pass  # Not a JSON wrapper — treat as raw text
+
+        # Strip ALL <think>...</think> blocks (greedy, handles nested braces inside)
+        text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+        # Strip unclosed <think> tags (model cut off mid-thought)
+        text = re.sub(r"<think>[\s\S]*$", "", text).strip()
+        # Strip markdown fences
         text = re.sub(r"```(?:json)?\s*|\s*```", "", text).strip()
-        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        data = json.loads(match.group(0)) if match else json.loads(text)
+
+        # Find the JSON object with "approved" key (most reliable signal)
+        # Use a targeted regex that finds JSON objects containing "approved"
+        json_candidates = re.findall(r"\{[^{}]*\"approved\"[^{}]*\}", text)
+        if json_candidates:
+            data = json.loads(json_candidates[0])
+        else:
+            # Fallback: find any JSON object
+            match = re.search(r"\{[^{}]+\}", text)
+            if match:
+                data = json.loads(match.group(0))
+            else:
+                data = json.loads(text)
 
         return ProviderReview(
             provider=provider,
@@ -1478,11 +1518,13 @@ def _parse_provider_review(provider: str, raw_output: str, duration_ms: int) -> 
             issues=list(data.get("issues", []))[:5],
             suggestions=list(data.get("suggestions", []))[:5],
             summary=str(data.get("summary", ""))[:300],
-            tokens_used=outer.get("usage", {}).get("input_tokens", 0) + outer.get("usage", {}).get("output_tokens", 0) if isinstance(outer, dict) else 0,
-            cost_usd=outer.get("total_cost_usd", 0) if isinstance(outer, dict) else 0,
+            tokens_used=tokens,
+            cost_usd=cost,
             duration_ms=duration_ms,
         )
     except Exception as e:
+        # Log enough of the raw output for debugging
+        logger.debug("Provider %s parse failed on: %s", provider, text[:300])
         return ProviderReview(
             provider=provider, approved=True, verdict="PARSE_ERROR",
             score=50, issues=[], suggestions=[],
@@ -1574,13 +1616,16 @@ async def review_with_codex(input: ProviderReviewInput) -> ProviderReview:
                               summary=f"CLI exit {result.returncode}: {result.stderr[:200]}",
                               duration_ms=duration_ms)
 
-    # Read output
+    # Read output — try --output-last-message file first, then parse stdout
     response_text = ""
     if os.path.exists(output_path):
         with open(output_path) as f:
             response_text = f.read().strip()
     if not response_text:
-        response_text = result.stdout
+        # Codex --json outputs multiple JSON lines; extract the last agent_message
+        response_text = _extract_codex_last_message(result.stdout)
+    if not response_text:
+        response_text = result.stdout.strip()
 
     return _parse_provider_review("codex", response_text, duration_ms)
 
