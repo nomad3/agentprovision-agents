@@ -52,10 +52,7 @@ def get_best_platform(
         WHERE tenant_id = CAST(:tid AS uuid)
           AND reward IS NOT NULL
           AND archived_at IS NULL
-          AND (
-              state->>'task_type' = :task_type
-              OR :task_type = 'general'
-          )
+          AND state->>'task_type' = :task_type
         GROUP BY action->>'platform'
         HAVING COUNT(*) >= :min_exp
         ORDER BY AVG(reward) DESC
@@ -187,6 +184,17 @@ def get_best_agent(
     )
 
 
+@dataclass
+class CombinedRoutingRecommendation:
+    """Separate platform and agent recommendations — no confidence leakage."""
+    platform: Optional[str] = None
+    platform_confidence: float = 0.0
+    platform_reasoning: str = ""
+    agent_slug: Optional[str] = None
+    agent_confidence: float = 0.0
+    agent_reasoning: str = ""
+
+
 def get_routing_recommendation(
     db: Session,
     tenant_id: uuid.UUID,
@@ -194,29 +202,23 @@ def get_routing_recommendation(
     task_type: str = "general",
     current_platform: str = "claude_code",
     current_agent: str = "luna",
-) -> RoutingRecommendation:
-    """Combined recommendation: check platform first, then agent.
+) -> CombinedRoutingRecommendation:
+    """Return separate platform and agent recommendations.
 
-    Returns the strongest recommendation found, or defaults if no data.
+    Each has its own confidence — caller applies thresholds independently.
+    Agent lookup skipped to avoid embedding call on hot path (see P2 note).
     """
-    # Check platform performance
+    result = CombinedRoutingRecommendation()
+
+    # Platform: fast DB query, no model call
     platform_rec = get_best_platform(db, tenant_id, task_type)
+    if platform_rec.platform:
+        result.platform = platform_rec.platform
+        result.platform_confidence = platform_rec.confidence
+        result.platform_reasoning = platform_rec.reasoning
 
-    # Check agent performance via semantic similarity
-    agent_rec = get_best_agent(db, tenant_id, message)
+    # Agent: SKIP by default — requires embedding which adds latency.
+    # Only enabled when explicitly requested or when we have a pre-computed embedding.
+    # Callers can use get_best_agent() directly when they have an embedding.
 
-    # Return the stronger signal
-    if platform_rec.confidence > agent_rec.confidence and platform_rec.platform:
-        result = platform_rec
-        if agent_rec.agent_slug and agent_rec.confidence > 0.3:
-            result.agent_slug = agent_rec.agent_slug
-        return result
-    elif agent_rec.confidence > 0 and agent_rec.agent_slug:
-        result = agent_rec
-        if platform_rec.platform and platform_rec.confidence > 0.3:
-            result.platform = platform_rec.platform
-        return result
-
-    return RoutingRecommendation(
-        reasoning="Insufficient RL data — using defaults",
-    )
+    return result
