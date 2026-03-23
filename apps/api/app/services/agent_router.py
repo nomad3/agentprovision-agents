@@ -4,6 +4,7 @@ Phase 1: Deterministic routing (tenant default + agent affinity).
 Phase 3: RL-driven routing added on top.
 """
 import logging
+import os
 import uuid
 from typing import Optional, Tuple, Dict, Any, List
 
@@ -124,32 +125,59 @@ def route_and_execute(
     # Infer task type for RL context
     inferred_type = _infer_task_type(message)
 
-    # ── RL-learned routing: override platform if strong signal ──
-    # Agent override disabled on hot path (requires embedding call — too slow)
+    # ── RL exploration: route to underexplored platforms for training data ──
+    # EXPLORATION_MODE controls the training strategy:
+    #   "off"      — no exploration, use default/RL (production)
+    #   "codex"    — route EXPLORATION_RATE % to codex for data collection
+    #   "balanced" — route to whichever platform has fewest experiences
+    import random
+    exploration_mode = os.environ.get("EXPLORATION_MODE", "off")
+    exploration_rate = float(os.environ.get("EXPLORATION_RATE", "0.7"))
     routing_source = "default"
-    try:
-        from app.services.rl_routing import get_routing_recommendation
-        rl_rec = get_routing_recommendation(
-            db, tenant_id, message,
-            task_type=inferred_type,
-            current_platform=platform,
-            current_agent=agent_slug,
-        )
-        if rl_rec.platform and rl_rec.platform_confidence >= 0.4:
-            if rl_rec.platform != platform:
-                logger.info(
-                    "RL routing override: platform %s→%s (confidence=%.2f, %s)",
-                    platform, rl_rec.platform, rl_rec.platform_confidence, rl_rec.platform_reasoning,
-                )
-                platform = rl_rec.platform
-            else:
-                logger.info(
-                    "RL routing confirmed: %s (confidence=%.2f, %s)",
-                    platform, rl_rec.platform_confidence, rl_rec.platform_reasoning,
-                )
-            routing_source = "rl_platform"
-    except Exception as e:
-        logger.debug("RL routing lookup failed: %s — using defaults", e)
+
+    if exploration_mode != "off" and random.random() < exploration_rate:
+        if exploration_mode == "codex":
+            logger.info("RL exploration: routing to codex (training mode, rate=%.0f%%)", exploration_rate * 100)
+            platform = "codex"
+            routing_source = "exploration_codex"
+        elif exploration_mode == "balanced":
+            # Pick the platform with fewest scored experiences
+            try:
+                from app.services.rl_routing import get_best_platform
+                rec = get_best_platform(db, tenant_id, inferred_type)
+                if rec.alternatives:
+                    # Find platform with lowest total
+                    least = min(rec.alternatives, key=lambda a: a["total"])
+                    platform = least["platform"]
+                    routing_source = "exploration_balanced"
+                    logger.info("RL exploration: routing to %s (least data: %d experiences)", platform, least["total"])
+            except Exception:
+                pass
+    else:
+        # ── RL-learned routing: override platform if strong signal ──
+        try:
+            from app.services.rl_routing import get_routing_recommendation
+            rl_rec = get_routing_recommendation(
+                db, tenant_id, message,
+                task_type=inferred_type,
+                current_platform=platform,
+                current_agent=agent_slug,
+            )
+            if rl_rec.platform and rl_rec.platform_confidence >= 0.4:
+                if rl_rec.platform != platform:
+                    logger.info(
+                        "RL routing override: platform %s→%s (confidence=%.2f, %s)",
+                        platform, rl_rec.platform, rl_rec.platform_confidence, rl_rec.platform_reasoning,
+                    )
+                    platform = rl_rec.platform
+                else:
+                    logger.info(
+                        "RL routing confirmed: %s (confidence=%.2f, %s)",
+                        platform, rl_rec.platform_confidence, rl_rec.platform_reasoning,
+                    )
+                routing_source = "rl_platform"
+        except Exception as e:
+            logger.debug("RL routing lookup failed: %s — using defaults", e)
 
     # Build memory context early so recalled entities enrich routing RL state
     pre_built_memory_context = None
