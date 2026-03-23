@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ServiceTsunami is an AI agent orchestration platform that routes tasks to **Claude Code CLI** (Opus 4.6) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Runs from a laptop via **Cloudflare Tunnel** serving both `servicetsunami.com` and `agentprovision.com`.
 
-**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Temporal → code-worker (Claude Code CLI with `--model opus`) → MCP tools (FastMCP, 81 tools) → response. Every response is auto-scored by a local LLM (Qwen) across 6 quality dimensions and logged as an RL experience for continuous improvement.
+**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Temporal → code-worker (Claude Code CLI with `--model opus`) → MCP tools (FastMCP, 81 tools) → response. Every response is auto-scored by a local Qwen council (3 reviewers, 6-dimension rubric) and selectively reviewed by a multi-provider council (Claude + Codex + Qwen in parallel via Temporal). All scores logged as RL experiences for continuous improvement and platform routing optimization.
 
 ## Architecture
 
@@ -100,9 +100,13 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - **Memory Usage** (15pts): Knowledge graph recall, context building
 - **Efficiency** (10pts): Concise, fast, no padding
 - **Context Awareness** (10pts): Conversation continuity, history usage
-Scores are logged as RL experiences (`rl_experience` table) with reward components, cost tracking (tokens/cost per quality point), and platform recommendation. The scoring runs async after each response via `auto_quality_scorer.py` using the `agent_response_quality` rubric from `scoring_rubrics.py`. Zero cloud cost — fully local inference.
+Scores are logged as RL experiences (`rl_experience` table) with reward components, cost tracking (tokens/cost per quality point), and platform recommendation. The scoring runs async after each response via `auto_quality_scorer.py` using the `agent_response_quality` rubric from `scoring_rubrics.py`. Zero cloud cost — fully local inference. Includes leave-one-out fragility detection (flags when removing one reviewer would flip consensus).
 
-**Reinforcement Learning System**: RL experiences track agent decisions across multiple decision points (`chat_response`, `code_task`, `agent_routing`). Each experience stores state, action, reward (0-1 scale from quality score), and reward components (the 6-dimension breakdown). Services: `rl_experience_service.py` (CRUD + querying), `rl_reward_service.py` (reward assignment), `rl_policy_engine.py` (policy updates). The `RLPolicyUpdateWorkflow` (Temporal) periodically retrains policies from accumulated experiences. Embeddings of state text enable semantic similarity search over past decisions.
+**Multi-Provider Review Council**: Async Temporal workflow (`ProviderReviewWorkflow` on `servicetsunami-code` queue) where Claude, Codex, and Qwen each independently review the same response. Triggers on: side-effect tools, fragile local consensus, low scores (<40), or 5% random sample (`PROVIDER_COUNCIL_SAMPLE_RATE` env var). Each provider returns score (0-100), verdict, issues, suggestions. Meta-adjudicator computes agreement (over ALL reviewers including failed), detects disagreements, and recommends best platform. Results merged into RL experience via `POST /api/v1/rl/internal/provider-council`. Provider failures are isolated (`_safe_review` wrapper) — one timeout doesn't abort the others.
+
+**Inference Bulkhead**: Foreground (user-blocking) and background (scoring/consensus) Ollama calls are isolated via `_foreground_active` threading.Event. Background scoring skips when foreground is active — degrade scorer first, never the user path. Local tool agent is read-only (search tools only, no mutations). Pre-execution safety gate blocks side-effect tools for local model.
+
+**Reinforcement Learning System**: RL experiences track agent decisions across multiple decision points (`chat_response`, `code_task`, `agent_routing`). Each experience stores state, action, reward (0-1 scale from quality score), and reward components (the 6-dimension breakdown plus provider council results when available). Services: `rl_experience_service.py` (CRUD + querying), `rl_reward_service.py` (reward assignment), `rl_policy_engine.py` (policy updates). The `RLPolicyUpdateWorkflow` (Temporal) periodically retrains policies from accumulated experiences. Embeddings of state text enable semantic similarity search over past decisions.
 
 **Local ML Inference** (`local_inference.py`): All lightweight ML tasks run locally via Ollama (zero cloud cost):
 - `generate_luna_response_sync()`: Free-tier fallback when no CLI subscription connected
@@ -111,7 +115,7 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - `triage_inbox_items()`: Email/calendar triage for inbox monitor
 - `analyze_competitor_data()`: Competitor monitoring analysis
 - `classify_task_type()`: Message intent classification for agent routing
-- Models: `qwen2.5-coder:0.5b` (default fast), `qwen2.5-coder:1.5b` (quality scoring), `qwen3:4b` (tool calling — planned for MCP bridge)
+- Models: `qwen2.5-coder:0.5b` (default fast), `qwen2.5-coder:1.5b` (quality scoring), `qwen3:1.7b` (tool calling + provider review, `think:false` for direct JSON output)
 
 **Skill Marketplace**: Three-tier file-based skill system with GitHub import:
 - **Native tier**: Bundled skills shipped with the container (read-only): sql_query, calculator, data_summary, entity_extraction, knowledge_search, lead_scoring, report_generation
