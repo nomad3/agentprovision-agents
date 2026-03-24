@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS plan_steps (
     updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_plan_steps_plan
+CREATE UNIQUE INDEX IF NOT EXISTS uq_plan_steps_plan_index
 ON plan_steps(plan_id, step_index);
 
 

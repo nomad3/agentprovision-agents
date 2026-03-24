@@ -27,6 +27,17 @@ def _validate_goal_ref(db: Session, tenant_id: uuid.UUID, goal_id: Optional[uuid
         raise ValueError(f"Goal {goal_id} not found in this tenant")
 
 
+def _validate_assertion_ref(db: Session, tenant_id: uuid.UUID, assertion_id: Optional[uuid.UUID]) -> None:
+    if not assertion_id:
+        return
+    from app.models.world_state import WorldStateAssertion
+    exists = db.query(WorldStateAssertion).filter(
+        WorldStateAssertion.id == assertion_id, WorldStateAssertion.tenant_id == tenant_id,
+    ).first()
+    if not exists:
+        raise ValueError(f"Assertion {assertion_id} not found in this tenant")
+
+
 def _log_event(
     db: Session,
     plan_id: uuid.UUID,
@@ -91,6 +102,7 @@ def create_plan(
         db.add(step)
 
     for assumption_in in plan_in.assumptions:
+        _validate_assertion_ref(db, tenant_id, assumption_in.assertion_id)
         assumption = PlanAssumption(
             plan_id=plan.id,
             description=assumption_in.description,
@@ -166,10 +178,27 @@ def update_plan(
             new_status = new_status.value
         data["status"] = new_status
         _log_event(
-            db, plan_id, f"status_change",
+            db, plan_id, "status_change",
             previous_status=old_status, new_status=new_status,
             agent_slug=plan.owner_agent_slug,
         )
+
+        # When transitioning to executing, start the first step
+        if new_status == "executing" and old_status != "executing":
+            first_step = (
+                db.query(PlanStep).filter(
+                    PlanStep.plan_id == plan_id,
+                    PlanStep.step_index == plan.current_step_index,
+                ).first()
+            )
+            if first_step and first_step.status == "pending":
+                first_step.status = "running"
+                first_step.started_at = datetime.utcnow()
+                _log_event(
+                    db, plan_id, "step_started",
+                    new_status="running", step_id=first_step.id,
+                    metadata_json={"step_index": plan.current_step_index},
+                )
 
     for key, value in data.items():
         if hasattr(plan, key):
