@@ -54,6 +54,7 @@ from .world_state import WorldStateAssertion, WorldStateSnapshot
 from .causal_edge import CausalEdge
 from .plan import Plan, PlanStep, PlanAssumption, PlanEvent
 from .blackboard import Blackboard, BlackboardEntry
+from .collaboration import CollaborationSession
 from .dynamic_workflow import DynamicWorkflow, WorkflowRun, WorkflowStepLog
 
 __all__ = [
@@ -81,6 +82,6 @@ __all__ = [
     "GoalRecord", "CommitmentRecord", "AgentIdentityProfile",
     "WorldStateAssertion", "WorldStateSnapshot", "CausalEdge",
     "Plan", "PlanStep", "PlanAssumption", "PlanEvent",
-    "Blackboard", "BlackboardEntry",
+    "Blackboard", "BlackboardEntry", "CollaborationSession",
     "DynamicWorkflow", "WorkflowRun", "WorkflowStepLog",
 ]
