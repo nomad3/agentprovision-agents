@@ -286,6 +286,8 @@ def _generate_agentic_response(
             channel="whatsapp" if sender_phone else "web",
             tokens_used=meta.get("input_tokens", 0) + meta.get("output_tokens", 0),
             cost_usd=meta.get("cost_usd", 0.0),
+            rollout_experiment_id=meta.get("rollout_experiment_id"),
+            rollout_arm=meta.get("rollout_arm"),
         )
     except Exception:
         pass  # Never block response delivery for scoring

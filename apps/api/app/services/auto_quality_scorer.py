@@ -36,6 +36,8 @@ def score_and_log_async(
     cost_usd: float = 0.0,
     tools_called: list = None,
     entities_recalled: list = None,
+    rollout_experiment_id: Optional[str] = None,
+    rollout_arm: Optional[str] = None,
 ):
     """Fire-and-forget: score response quality and log RL reward.
 
@@ -239,6 +241,19 @@ async def _score_and_log(
                 str(exp.id)[:8], score, adjusted_score,
                 consensus.approved_count, consensus.total_reviewers, platform,
             )
+            # ── Rollout reward: feed scored reward back into the live experiment ──
+            if rollout_experiment_id:
+                try:
+                    from app.services import policy_rollout_service
+                    policy_rollout_service.record_rollout_observation(
+                        db, tenant_id,
+                        experiment_id=uuid.UUID(rollout_experiment_id),
+                        is_treatment=(rollout_arm == "treatment"),
+                        reward=reward,
+                    )
+                except Exception as e:
+                    logger.debug("Rollout reward update failed: %s", e)
+
             # ── Decision gate: trigger provider council for high-value cases ──
             _maybe_trigger_provider_council(
                 tenant_id=tenant_id,

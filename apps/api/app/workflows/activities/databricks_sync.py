@@ -14,7 +14,10 @@ from app.services import data_source as data_source_service
 from app.core.config import settings
 import requests
 import base64
-from databricks import sql
+try:
+    from databricks import sql
+except ImportError:
+    sql = None  # Optional: only needed when Databricks sync is active
 
 logger = get_logger(__name__)
 
