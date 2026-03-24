@@ -178,6 +178,15 @@ async def create_review_notifications(
             "reference_type": "goal_review",
         })
 
+    for g in goal_review.get("no_progress", []):
+        items_to_notify.append({
+            "title": f"No progress: {g['title']}",
+            "message": f"Goal '{g['title']}' (agent: {g['agent']}) has been active for 14+ days with 0% progress.",
+            "priority": "medium",
+            "reference_id": f"goal:{g['id']}:no_progress",
+            "reference_type": "goal_review",
+        })
+
     for g in goal_review.get("overdue_goals", []):
         items_to_notify.append({
             "title": f"Overdue goal: {g['title']}",
