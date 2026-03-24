@@ -34,7 +34,7 @@ from .notification import Notification
 from .pipeline_run import PipelineRun
 from .rl_experience import RLExperience
 from .rl_policy_state import RLPolicyState
-from .safety_policy import SafetyEvidencePack, TenantActionPolicy
+from .safety_policy import AgentTrustProfile, SafetyEvidencePack, TenantActionPolicy
 from .integration_config import IntegrationConfig
 from .integration_credential import IntegrationCredential
 from .skill import Skill
@@ -63,7 +63,7 @@ __all__ = [
     "MemoryActivity", "Notebook", "Notification",
     "PipelineRun",
     "RLExperience", "RLPolicyState",
-    "TenantActionPolicy", "SafetyEvidencePack",
+    "TenantActionPolicy", "SafetyEvidencePack", "AgentTrustProfile",
     "IntegrationConfig", "IntegrationCredential",
     "Embedding",
     "Skill", "SkillExecution", "SkillRegistry",

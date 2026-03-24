@@ -93,6 +93,7 @@ async def _call_mcp_tool(step: dict, context: dict, tenant_id: str, run_id: str)
                 context_summary=f"Dynamic workflow MCP step '{step.get('id', 'unknown')}'.",
                 context_ref={"workflow_run_id": run_id, "step_id": step.get("id", "unknown")},
                 expected_downside=f"Workflow tool '{tool_name}' may mutate tenant or external state.",
+                agent_slug=context.get("agent_slug") or step.get("agent"),
             ),
         )
     finally:
