@@ -10,20 +10,41 @@ from app.models.causal_edge import CausalEdge
 from app.schemas.causal_edge import CausalEdgeCreate
 
 
+def _validate_assertion_ref(
+    db: Session,
+    tenant_id: uuid.UUID,
+    assertion_id: Optional[uuid.UUID],
+) -> None:
+    if not assertion_id:
+        return
+    from app.models.world_state import WorldStateAssertion
+    exists = db.query(WorldStateAssertion).filter(
+        WorldStateAssertion.id == assertion_id,
+        WorldStateAssertion.tenant_id == tenant_id,
+    ).first()
+    if not exists:
+        raise ValueError(f"Assertion {assertion_id} not found in this tenant")
+
+
 def record_causal_edge(
     db: Session,
     tenant_id: uuid.UUID,
     edge_in: CausalEdgeCreate,
 ) -> CausalEdge:
     """Record a causal hypothesis. If a matching cause→effect pair exists, corroborate it."""
+    _validate_assertion_ref(db, tenant_id, edge_in.source_assertion_id)
+
+    # Match on structured refs + summaries to avoid merging distinct events
     existing = (
         db.query(CausalEdge)
         .filter(
             CausalEdge.tenant_id == tenant_id,
             CausalEdge.cause_type == edge_in.cause_type.value,
             CausalEdge.cause_summary == edge_in.cause_summary,
+            CausalEdge.cause_ref == edge_in.cause_ref,
             CausalEdge.effect_type == edge_in.effect_type.value,
             CausalEdge.effect_summary == edge_in.effect_summary,
+            CausalEdge.effect_ref == edge_in.effect_ref,
             CausalEdge.status.in_(["hypothesis", "corroborated", "confirmed"]),
         )
         .first()

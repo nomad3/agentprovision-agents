@@ -43,11 +43,14 @@ def record_causal_edge(
     current_user: User = Depends(get_current_user),
 ):
     """Record a causal hypothesis. Corroborates if matching cause→effect exists."""
-    return causal_edge_service.record_causal_edge(
-        db,
-        tenant_id=current_user.tenant_id,
-        edge_in=edge_in,
-    )
+    try:
+        return causal_edge_service.record_causal_edge(
+            db,
+            tenant_id=current_user.tenant_id,
+            edge_in=edge_in,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("/causes", response_model=List[CausalEdgeInDB])
