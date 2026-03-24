@@ -5,11 +5,14 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.safety_policy import (
     ActionType,
+    AgentTrustProfile,
+    AgentTrustRecomputeRequest,
     SafetyActionCatalogEntry,
     SafetyActionEvaluation,
     SafetyActionEvaluationRequest,
@@ -21,6 +24,7 @@ from app.schemas.safety_policy import (
 )
 from app.services import safety_enforcement as enforcement_service
 from app.services import safety_policies as service
+from app.services import safety_trust
 
 router = APIRouter()
 
@@ -130,3 +134,67 @@ def get_evidence_pack(
     if not evidence_pack:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence pack not found")
     return evidence_pack
+
+
+@router.get("/trust/agents", response_model=List[AgentTrustProfile])
+def list_agent_trust_profiles(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List tenant trust profiles for agent slugs."""
+    return safety_trust.list_agent_trust_profiles(db, current_user.tenant_id)
+
+
+@router.get("/trust/agents/{agent_slug}", response_model=AgentTrustProfile)
+def get_agent_trust_profile(
+    agent_slug: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch or bootstrap a trust profile for one agent slug."""
+    profile = safety_trust.get_agent_trust_profile(
+        db,
+        current_user.tenant_id,
+        agent_slug,
+        auto_create=True,
+    )
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent trust profile not found")
+    return profile
+
+
+@router.post("/trust/recompute", response_model=List[AgentTrustProfile])
+def recompute_agent_trust_profiles(
+    request: AgentTrustRecomputeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recompute trust profile(s) from RL and provider-council history."""
+    if request.agent_slug:
+        return [
+            safety_trust.recompute_agent_trust_profile(
+                db,
+                current_user.tenant_id,
+                request.agent_slug,
+            )
+        ]
+
+    # Discover agent slugs from RL traces first; include luna as default if empty.
+    rows = db.execute(
+        text(
+            """
+        SELECT DISTINCT COALESCE(action->>'agent_slug', state->>'agent_slug') AS agent_slug
+        FROM rl_experiences
+        WHERE tenant_id = CAST(:tenant_id AS uuid)
+          AND archived_at IS NULL
+          AND COALESCE(action->>'agent_slug', state->>'agent_slug') IS NOT NULL
+        ORDER BY agent_slug
+        """
+        ),
+        {"tenant_id": str(current_user.tenant_id)},
+    ).fetchall()
+    slugs = [row.agent_slug for row in rows if row.agent_slug] or ["luna"]
+    return [
+        safety_trust.recompute_agent_trust_profile(db, current_user.tenant_id, slug)
+        for slug in slugs
+    ]

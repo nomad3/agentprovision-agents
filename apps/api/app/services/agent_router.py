@@ -15,6 +15,7 @@ from app.models.tenant_features import TenantFeatures
 from app.services.cli_session_manager import run_agent_session
 from app.services import rl_experience_service
 from app.services.memory_recall import build_memory_context_with_git
+from app.services import safety_trust
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,13 @@ def route_and_execute(
     platform = "claude_code"
     if features and hasattr(features, 'default_cli_platform') and features.default_cli_platform:
         platform = features.default_cli_platform
+
+    trust_profile = safety_trust.get_agent_trust_profile(
+        db,
+        tenant_id,
+        agent_slug,
+        auto_create=True,
+    )
 
     # Infer task type for RL context
     inferred_type = _infer_task_type(message)
@@ -238,6 +246,8 @@ def route_and_execute(
                 "platform": platform,
                 "agent_slug": agent_slug,
                 "routing_source": routing_source,
+                "agent_trust_score": round(float(trust_profile.trust_score), 3) if trust_profile else None,
+                "agent_autonomy_tier": trust_profile.autonomy_tier if trust_profile else None,
             },
             state_text=state_text,
         )
@@ -245,14 +255,16 @@ def route_and_execute(
         logger.debug("Failed to log agent_routing RL experience — continuing")
 
     logger.info(
-        "Routing: tenant=%s agent=%s platform=%s channel=%s task_type=%s entities=%d",
+        "Routing: tenant=%s agent=%s platform=%s channel=%s task_type=%s entities=%d trust=%s tier=%s",
         str(tenant_id)[:8], agent_slug, platform, channel, inferred_type,
         len(recalled_entities) if recalled_entities else 0,
+        round(float(trust_profile.trust_score), 3) if trust_profile else "n/a",
+        trust_profile.autonomy_tier if trust_profile else "n/a",
     )
 
     # Execute on the selected platform
     if platform in ("claude_code", "gemini_cli", "codex"):
-        return run_agent_session(
+        response_text, metadata = run_agent_session(
             db,
             tenant_id=tenant_id,
             user_id=user_id,
@@ -267,6 +279,12 @@ def route_and_execute(
             db_session_memory=db_session_memory,
             pre_built_memory_context=pre_built_memory_context,
         )
+        metadata = metadata or {}
+        if trust_profile:
+            metadata.setdefault("agent_trust_score", round(float(trust_profile.trust_score), 3))
+            metadata.setdefault("agent_autonomy_tier", trust_profile.autonomy_tier)
+            metadata.setdefault("agent_trust_confidence", round(float(trust_profile.confidence), 3))
+        return response_text, metadata
 
     # Future: gemini_cli and additional providers.
     return None, {"error": f"Platform '{platform}' not yet supported"}

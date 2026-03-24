@@ -50,6 +50,13 @@ class PolicyDecision(str, Enum):
     BLOCK = "block"
 
 
+class AutonomyTier(str, Enum):
+    OBSERVE_ONLY = "observe_only"
+    RECOMMEND_ONLY = "recommend_only"
+    SUPERVISED_EXECUTION = "supervised_execution"
+    BOUNDED_AUTONOMOUS_EXECUTION = "bounded_autonomous_execution"
+
+
 class TenantActionPolicyBase(BaseModel):
     action_type: ActionType
     action_name: str
@@ -145,6 +152,32 @@ class SafetyEvidencePack(SafetyEvidencePackBase):
         from_attributes = True
 
 
+class AgentTrustProfileBase(BaseModel):
+    agent_slug: str
+    trust_score: float
+    confidence: float
+    autonomy_tier: AutonomyTier
+    reward_signal: float
+    provider_signal: float
+    rated_experience_count: int
+    provider_review_count: int
+    rationale: str
+
+
+class AgentTrustProfile(AgentTrustProfileBase):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AgentTrustRecomputeRequest(BaseModel):
+    agent_slug: Optional[str] = None
+
+
 class SafetyEnforcementRequest(BaseModel):
     action_type: ActionType
     action_name: str
@@ -164,3 +197,7 @@ class SafetyEnforcementResult(SafetyActionEvaluation):
     evidence_required: bool
     evidence_sufficient: bool
     evidence_pack_id: Optional[uuid.UUID] = None
+    agent_trust_score: Optional[float] = None
+    autonomy_tier: Optional[AutonomyTier] = None
+    trust_confidence: Optional[float] = None
+    trust_source: Optional[str] = None

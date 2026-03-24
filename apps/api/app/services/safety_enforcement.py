@@ -10,15 +10,23 @@ from sqlalchemy.orm import Session
 
 from app.models.safety_policy import SafetyEvidencePack
 from app.schemas.safety_policy import (
+    AutonomyTier,
     ActionType,
     PolicyDecision,
     SafetyEnforcementRequest,
     SafetyEnforcementResult,
 )
-from app.services import safety_policies
+from app.services import safety_policies, safety_trust
 
 AUTOMATED_CHANNELS = {"workflow", "webhook", "local_agent"}
 EVIDENCE_PACK_TTL_DAYS = 30
+_DECISION_SEVERITY = {
+    PolicyDecision.ALLOW: 0,
+    PolicyDecision.ALLOW_WITH_LOGGING: 1,
+    PolicyDecision.REQUIRE_CONFIRMATION: 2,
+    PolicyDecision.REQUIRE_REVIEW: 3,
+    PolicyDecision.BLOCK: 4,
+}
 
 
 def _normalize_items(values: Optional[List[Any]]) -> List[Any]:
@@ -61,6 +69,69 @@ def _resolve_automated_channel_decision(
         result.rationale = (
             f"{result.rationale} Channel '{channel}' cannot collect inline human confirmation."
         )
+    return result
+
+
+def _escalate_decision(
+    result: SafetyEnforcementResult,
+    target: PolicyDecision,
+    reason: str,
+) -> SafetyEnforcementResult:
+    if _DECISION_SEVERITY[target] > _DECISION_SEVERITY[result.decision]:
+        result.decision = target
+        result.rationale = f"{result.rationale} {reason}".strip()
+    return result
+
+
+def _apply_agent_autonomy_restrictions(
+    result: SafetyEnforcementResult,
+    request: SafetyEnforcementRequest,
+    tenant_id: uuid.UUID,
+    db: Session,
+) -> SafetyEnforcementResult:
+    profile = safety_trust.get_agent_trust_profile(
+        db,
+        tenant_id,
+        request.agent_slug,
+    )
+    if not profile:
+        return result
+
+    result.agent_trust_score = round(float(profile.trust_score or 0.0), 3)
+    result.autonomy_tier = AutonomyTier(profile.autonomy_tier)
+    result.trust_confidence = round(float(profile.confidence or 0.0), 3)
+    result.trust_source = "agent_trust_profile"
+
+    if result.autonomy_tier == AutonomyTier.OBSERVE_ONLY:
+        return _escalate_decision(
+            result,
+            PolicyDecision.BLOCK,
+            f"Agent '{request.agent_slug}' is restricted to observe-only autonomy.",
+        )
+
+    if result.autonomy_tier == AutonomyTier.RECOMMEND_ONLY:
+        if result.risk_class.value == "read_only" and result.side_effect_level.value == "none":
+            return _escalate_decision(
+                result,
+                PolicyDecision.ALLOW_WITH_LOGGING,
+                f"Agent '{request.agent_slug}' is restricted to recommend-only autonomy.",
+            )
+        return _escalate_decision(
+            result,
+            PolicyDecision.REQUIRE_REVIEW,
+            f"Agent '{request.agent_slug}' is restricted to recommend-only autonomy.",
+        )
+
+    if (
+        result.autonomy_tier == AutonomyTier.SUPERVISED_EXECUTION
+        and result.risk_level.value in {"high", "critical"}
+    ):
+        return _escalate_decision(
+            result,
+            PolicyDecision.REQUIRE_REVIEW,
+            f"Agent '{request.agent_slug}' requires supervision for high-risk actions.",
+        )
+
     return result
 
 
@@ -121,8 +192,13 @@ def enforce_action(
         evidence_required=False,
         evidence_sufficient=False,
         evidence_pack_id=None,
+        agent_trust_score=None,
+        autonomy_tier=None,
+        trust_confidence=None,
+        trust_source=None,
     )
     result = _resolve_automated_channel_decision(result, request.channel)
+    result = _apply_agent_autonomy_restrictions(result, request, tenant_id, db)
     result.evidence_required = _evidence_required(result)
     result.evidence_sufficient = (
         _evidence_sufficient(request) if result.evidence_required else True
