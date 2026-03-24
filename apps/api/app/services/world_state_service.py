@@ -88,6 +88,9 @@ def assert_state(
         .first()
     )
 
+    is_dispute = False
+    dispute_reason = None
+
     if existing:
         # Same value = corroboration
         if existing.value_json == assertion_in.value_json:
@@ -100,8 +103,19 @@ def assert_state(
             db.refresh(existing)
             return existing
 
-        # Different value = supersede old assertion
-        existing.status = "superseded"
+        # Different value from same source type = supersede (source updated its own claim)
+        # Different value from different source type = dispute (neither side wins)
+        is_dispute = existing.source_type != assertion_in.source_type.value
+        if is_dispute:
+            dispute_reason = (
+                f"Conflicting value from {assertion_in.source_type.value} "
+                f"(was {existing.source_type}): "
+                f"{existing.value_json} vs {assertion_in.value_json}"
+            )
+            existing.status = "disputed"
+            existing.dispute_reason = dispute_reason
+        else:
+            existing.status = "superseded"
         existing.valid_to = datetime.utcnow()
 
     assertion = WorldStateAssertion(
@@ -115,7 +129,9 @@ def assert_state(
         source_observation_id=assertion_in.source_observation_id,
         source_type=assertion_in.source_type.value,
         freshness_ttl_hours=assertion_in.freshness_ttl_hours,
-        status="active",
+        # Disputes: new assertion also disputed — neither side wins until resolved
+        status="disputed" if (existing and is_dispute) else "active",
+        dispute_reason=dispute_reason if (existing and is_dispute) else None,
         valid_from=datetime.utcnow(),
     )
     db.add(assertion)
@@ -217,12 +233,89 @@ def get_unstable_assertions(
     )
 
 
+def _compute_decayed_confidence(assertion: WorldStateAssertion) -> float:
+    """Apply time-based confidence decay relative to TTL.
+
+    Confidence decays linearly once the assertion is past 50% of its TTL.
+    At 100% of TTL it would hit 0, but expiry catches it first.
+    """
+    now = datetime.utcnow()
+    age_hours = (now - assertion.valid_from).total_seconds() / 3600
+    ttl = assertion.freshness_ttl_hours
+    if age_hours < ttl * 0.5:
+        return assertion.confidence
+    decay_fraction = (age_hours - ttl * 0.5) / (ttl * 0.5)
+    decay_fraction = min(1.0, max(0.0, decay_fraction))
+    return max(0.0, assertion.confidence * (1.0 - decay_fraction * 0.5))
+
+
+def list_disputed_assertions(
+    db: Session,
+    tenant_id: uuid.UUID,
+    subject_slug: Optional[str] = None,
+    limit: int = 50,
+) -> List[WorldStateAssertion]:
+    """Find assertions marked as disputed (conflicting claims from different sources)."""
+    q = db.query(WorldStateAssertion).filter(
+        WorldStateAssertion.tenant_id == tenant_id,
+        WorldStateAssertion.status == "disputed",
+    )
+    if subject_slug:
+        q = q.filter(WorldStateAssertion.subject_slug == subject_slug)
+    return q.order_by(WorldStateAssertion.updated_at.desc()).limit(limit).all()
+
+
+def resolve_dispute(
+    db: Session,
+    tenant_id: uuid.UUID,
+    assertion_id: uuid.UUID,
+    resolution: str = "superseded",
+) -> Optional[WorldStateAssertion]:
+    """Resolve a disputed assertion by marking it superseded or reactivating it.
+
+    When reactivating: supersedes any currently active assertion for the same
+    attribute so only one active claim exists per attribute.
+    """
+    assertion = get_assertion(db, tenant_id, assertion_id)
+    if not assertion or assertion.status != "disputed":
+        return None
+
+    now = datetime.utcnow()
+
+    if resolution == "active":
+        # Supersede any other active assertion for this attribute first
+        db.query(WorldStateAssertion).filter(
+            WorldStateAssertion.tenant_id == tenant_id,
+            WorldStateAssertion.subject_slug == assertion.subject_slug,
+            WorldStateAssertion.attribute_path == assertion.attribute_path,
+            WorldStateAssertion.status == "active",
+            WorldStateAssertion.id != assertion_id,
+        ).update({"status": "superseded", "valid_to": now}, synchronize_session="fetch")
+        assertion.status = "active"
+        assertion.dispute_reason = None
+        assertion.valid_to = None
+    else:
+        assertion.status = "superseded"
+        assertion.valid_to = now
+
+    assertion.updated_at = now
+    db.flush()
+    _update_snapshot_no_expire(db, tenant_id, assertion.subject_slug, assertion.subject_entity_id)
+    db.commit()
+    db.refresh(assertion)
+    return assertion
+
+
 def build_world_state_context(
     db: Session,
     tenant_id: uuid.UUID,
     subject_slugs: List[str],
 ) -> str:
-    """Build markdown context for runtime injection from snapshots."""
+    """Build markdown context for runtime injection from snapshots.
+
+    Includes freshness metadata and dispute warnings so agents can
+    distinguish reliable state from assumptions needing verification.
+    """
     parts = []
     for slug in subject_slugs[:10]:
         snapshot = get_snapshot(db, tenant_id, slug)
@@ -232,9 +325,12 @@ def build_world_state_context(
         state = snapshot.projected_state or {}
         for key, val in state.items():
             parts.append(f"- **{key}**: {val}")
+        if snapshot.disputed_attributes:
+            parts.append(f"- _DISPUTED (conflicting sources)_: {', '.join(snapshot.disputed_attributes)}")
         if snapshot.unstable_attributes:
-            parts.append(f"- _Unstable_: {', '.join(snapshot.unstable_attributes)}")
-        parts.append(f"- _Confidence_: avg={snapshot.avg_confidence:.2f}, min={snapshot.min_confidence:.2f}")
+            parts.append(f"- _Needs verification_: {', '.join(snapshot.unstable_attributes)}")
+        freshness = "fresh" if snapshot.min_confidence > 0.7 else "aging" if snapshot.min_confidence > 0.4 else "stale"
+        parts.append(f"- _Confidence_: avg={snapshot.avg_confidence:.2f}, min={snapshot.min_confidence:.2f} ({freshness})")
         parts.append("")
     return "\n".join(parts) if parts else ""
 
@@ -261,7 +357,10 @@ def _update_snapshot_no_expire(
     subject_slug: str,
     subject_entity_id: Optional[uuid.UUID] = None,
 ) -> WorldStateSnapshot:
-    """Recompute snapshot without triggering expiry (avoids recursion)."""
+    """Recompute snapshot without triggering expiry (avoids recursion).
+
+    Uses decayed confidence and tracks disputed attributes.
+    """
     active = (
         db.query(WorldStateAssertion)
         .filter(
@@ -272,18 +371,34 @@ def _update_snapshot_no_expire(
         .all()
     )
 
+    # Also count disputed assertions for this subject
+    disputed = (
+        db.query(WorldStateAssertion)
+        .filter(
+            WorldStateAssertion.tenant_id == tenant_id,
+            WorldStateAssertion.subject_slug == subject_slug,
+            WorldStateAssertion.status == "disputed",
+        )
+        .all()
+    )
+
     now = datetime.utcnow()
     projected: Dict[str, Any] = {}
     confidences: List[float] = []
     unstable: List[str] = []
+    disputed_attrs: List[str] = []
 
     for a in active:
+        decayed = _compute_decayed_confidence(a)
         projected[a.attribute_path] = a.value_json
-        confidences.append(a.confidence)
-        # Check freshness
+        confidences.append(decayed)
         expiry = a.valid_from + timedelta(hours=a.freshness_ttl_hours)
-        if a.confidence < 0.5 or expiry < now + timedelta(hours=24):
+        if decayed < 0.5 or expiry < now + timedelta(hours=24):
             unstable.append(a.attribute_path)
+
+    for d in disputed:
+        if d.attribute_path not in disputed_attrs:
+            disputed_attrs.append(d.attribute_path)
 
     snapshot = (
         db.query(WorldStateSnapshot)
@@ -306,6 +421,8 @@ def _update_snapshot_no_expire(
     snapshot.min_confidence = min(confidences) if confidences else 1.0
     snapshot.avg_confidence = sum(confidences) / len(confidences) if confidences else 1.0
     snapshot.unstable_attributes = unstable
+    snapshot.disputed_attributes = disputed_attrs
+    snapshot.disputed_count = len(disputed)
     snapshot.last_projected_at = now
     snapshot.updated_at = now
 
