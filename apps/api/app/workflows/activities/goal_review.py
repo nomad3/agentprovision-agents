@@ -67,8 +67,16 @@ async def review_goals(tenant_id: str) -> dict:
             ):
                 long_blocked.append(goal_info)
 
-            # Mark as reviewed
-            goal.last_reviewed_at = now
+            # Only mark non-flagged goals as reviewed.
+            # Stalled/blocked goals keep their old timestamp so they stay
+            # flagged until a human or agent actually touches them.
+            is_flagged = (
+                goal_info in stalled
+                or goal_info in no_progress
+                or goal_info in long_blocked
+            )
+            if not is_flagged:
+                goal.last_reviewed_at = now
 
         # Overdue deadlines
         overdue_goals = [
@@ -166,6 +174,8 @@ async def create_review_notifications(
             "title": f"Stalled goal: {g['title']}",
             "message": f"Goal '{g['title']}' (agent: {g['agent']}) has not been reviewed recently.",
             "priority": "medium",
+            "reference_id": f"goal:{g['id']}:stalled",
+            "reference_type": "goal_review",
         })
 
     for g in goal_review.get("overdue_goals", []):
@@ -173,6 +183,8 @@ async def create_review_notifications(
             "title": f"Overdue goal: {g['title']}",
             "message": f"Goal '{g['title']}' (agent: {g['agent']}) is past its deadline ({g.get('deadline', 'unknown')}).",
             "priority": "high",
+            "reference_id": f"goal:{g['id']}:overdue",
+            "reference_type": "goal_review",
         })
 
     for g in goal_review.get("long_blocked", []):
@@ -180,6 +192,8 @@ async def create_review_notifications(
             "title": f"Blocked goal: {g['title']}",
             "message": f"Goal '{g['title']}' (agent: {g['agent']}) has been blocked for more than 3 days.",
             "priority": "medium",
+            "reference_id": f"goal:{g['id']}:blocked",
+            "reference_type": "goal_review",
         })
 
     for c in commitment_review.get("overdue", []):
@@ -187,6 +201,8 @@ async def create_review_notifications(
             "title": f"Overdue commitment: {c['title']}",
             "message": f"Commitment '{c['title']}' (agent: {c['agent']}) is past due ({c.get('due_at', 'unknown')}).",
             "priority": "high",
+            "reference_id": f"commitment:{c['id']}:overdue",
+            "reference_type": "goal_review",
         })
 
     if not items_to_notify:
@@ -194,18 +210,35 @@ async def create_review_notifications(
 
     db = SessionLocal()
     try:
+        created = 0
         for item in items_to_notify[:50]:  # cap at 50 per cycle
+            # Dedup: skip if an active (not dismissed) notification exists for same ref
+            existing = (
+                db.query(Notification)
+                .filter(
+                    Notification.tenant_id == tenant_id,
+                    Notification.source == "goal_review",
+                    Notification.reference_id == item["reference_id"],
+                    Notification.dismissed == False,  # noqa: E712
+                )
+                .first()
+            )
+            if existing:
+                continue
             notification = Notification(
                 tenant_id=tenant_id,
                 source="goal_review",
                 title=item["title"],
-                message=item["message"],
+                body=item["message"],
                 priority=item["priority"],
+                reference_id=item["reference_id"],
+                reference_type=item["reference_type"],
             )
             db.add(notification)
+            created += 1
         db.commit()
-        logger.info("Created %d goal review notifications for tenant %s", len(items_to_notify), tenant_id[:8])
-        return min(len(items_to_notify), 50)
+        logger.info("Created %d goal review notifications for tenant %s", created, tenant_id[:8])
+        return created
     except Exception as e:
         logger.error("create_review_notifications failed: %s", e)
         db.rollback()
