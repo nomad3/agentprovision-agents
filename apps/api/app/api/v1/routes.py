@@ -46,6 +46,7 @@ from app.api.v1 import (
     commitments,
     agent_identity,
     world_state,
+    causal_edges,
     branding_domain,
 )
 
@@ -101,4 +102,5 @@ router.include_router(goals.router, prefix="/goals", tags=["goals"])
 router.include_router(commitments.router, prefix="/commitments", tags=["commitments"])
 router.include_router(agent_identity.router, prefix="/agent-identity", tags=["agent-identity"])
 router.include_router(world_state.router, prefix="/world-state", tags=["world-state"])
+router.include_router(causal_edges.router, prefix="/causal-edges", tags=["causal-edges"])
 router.include_router(branding_domain.router, tags=["domain-branding"])

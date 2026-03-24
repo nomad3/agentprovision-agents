@@ -51,6 +51,7 @@ from .goal_record import GoalRecord
 from .commitment_record import CommitmentRecord
 from .agent_identity_profile import AgentIdentityProfile
 from .world_state import WorldStateAssertion, WorldStateSnapshot
+from .causal_edge import CausalEdge
 from .dynamic_workflow import DynamicWorkflow, WorkflowRun, WorkflowStepLog
 
 __all__ = [
@@ -76,6 +77,6 @@ __all__ = [
     "WebhookConnector", "WebhookDeliveryLog",
     "MCPServerConnector", "MCPServerCallLog",
     "GoalRecord", "CommitmentRecord", "AgentIdentityProfile",
-    "WorldStateAssertion", "WorldStateSnapshot",
+    "WorldStateAssertion", "WorldStateSnapshot", "CausalEdge",
     "DynamicWorkflow", "WorkflowRun", "WorkflowStepLog",
 ]
