@@ -113,6 +113,43 @@ def fail_plan_step(
     return {"step_failed": str(step.id), "error": error}
 
 
+@router.post("/{plan_id}/handle-failure", response_model=dict)
+def handle_step_failure(
+    plan_id: uuid.UUID,
+    error: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Classify a step failure and apply the appropriate repair policy.
+
+    Returns the failure class, recommended repair action, and what was done.
+    """
+    result = plan_service.handle_step_failure(db, current_user.tenant_id, plan_id, error)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot handle failure: plan not executing or no current step",
+        )
+    return result
+
+
+@router.post("/{plan_id}/resume", response_model=dict)
+def resume_plan(
+    plan_id: uuid.UUID,
+    from_step_index: Optional[int] = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resume a paused or failed plan from the last confirmed step or a specific step."""
+    result = plan_service.resume_plan(db, current_user.tenant_id, plan_id, from_step_index)
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot resume: plan not paused/failed or no resumable step found",
+        )
+    return result
+
+
 @router.get("/{plan_id}/events", response_model=List[PlanEventInDB])
 def list_plan_events(
     plan_id: uuid.UUID,
