@@ -113,16 +113,31 @@ def resolve_entry(
 ):
     """Resolve an entry (authority-checked). Returns the new resolution entry.
 
-    Note: resolved_by_agent and resolved_by_role are currently self-declared
-    by the caller. The authenticated user_id is recorded for audit. Server-side
-    agent identity verification is planned for Phase 2.
+    The agent's role is derived from agent_identity_profiles (server-side),
+    not from the request. If no profile exists, the agent defaults to
+    'contributor' (lowest authority).
     """
+    from app.services import agent_identity_service
+
+    # Server-side role lookup — don't trust client-supplied role
+    profile = agent_identity_service.get_profile(
+        db, current_user.tenant_id, request.resolved_by_agent
+    )
+    server_role = "contributor"
+    if profile and profile.role:
+        # Map identity profile roles to blackboard authority roles
+        role_lower = profile.role.lower()
+        for authority_role in ("auditor", "synthesizer", "verifier", "critic", "executor", "planner", "researcher"):
+            if authority_role in role_lower:
+                server_role = authority_role
+                break
+
     try:
         entry = blackboard_service.resolve_entry(
             db, current_user.tenant_id, board_id, entry_id,
             resolution_status=request.resolution_status.value,
             resolved_by_agent=request.resolved_by_agent,
-            resolved_by_role=request.resolved_by_role.value,
+            resolved_by_role=server_role,
             resolution_reason=request.resolution_reason,
             authenticated_user_id=current_user.id,
         )
