@@ -45,6 +45,18 @@ def create_session(
     if not phases:
         raise ValueError(f"Unknown pattern: {session_in.pattern.value}")
 
+    # Require role assignments for all roles needed by the pattern
+    all_required_roles = set()
+    for phase in phases:
+        all_required_roles.update(PHASE_REQUIRED_ROLES.get(phase, []))
+    assigned_roles = set(session_in.role_assignments.keys())
+    missing = all_required_roles - assigned_roles
+    if missing:
+        raise ValueError(
+            f"Pattern '{session_in.pattern.value}' requires role assignments for: "
+            f"{sorted(missing)}. Provide them in role_assignments."
+        )
+
     session = CollaborationSession(
         tenant_id=tenant_id,
         blackboard_id=session_in.blackboard_id,
@@ -116,6 +128,14 @@ def advance_phase(
 
     current_phase = session.current_phase
     required_roles = PHASE_REQUIRED_ROLES.get(current_phase, [])
+
+    # Check if this is the terminal phase — require explicit approval before any writes
+    is_terminal_phase = (session.phase_index + 1) >= len(phases)
+    if is_terminal_phase and agrees_with_previous is None:
+        raise ValueError(
+            f"Phase '{current_phase}' is the final phase — "
+            f"'agrees_with_previous' must be true or false (not omitted)"
+        )
 
     # Enforce role assignment: check the agent is assigned to a required role
     if required_roles and session.role_assignments:
@@ -197,15 +217,8 @@ def advance_phase(
         result["next_phase"] = session.current_phase
         result["next_required_roles"] = PHASE_REQUIRED_ROLES.get(session.current_phase, [])
     else:
-        # All phases complete — check consensus
+        # All phases complete — agrees_with_previous already validated above
         session.rounds_completed += 1
-
-        if agrees_with_previous is None:
-            # Terminal phase must explicitly signal agreement or disagreement
-            raise ValueError(
-                f"Phase '{current_phase}' is the final phase — "
-                f"'agrees_with_previous' must be true or false (not omitted)"
-            )
 
         if not agrees_with_previous and session.rounds_completed < session.max_rounds:
             # Disagreement → start another round from critique
