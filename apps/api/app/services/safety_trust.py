@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+import os
 import uuid
 
 from sqlalchemy import text
@@ -13,6 +14,7 @@ from app.models.safety_policy import AgentTrustProfile
 from app.schemas.safety_policy import AutonomyTier
 
 DEFAULT_TRUST_SCORE = 0.5
+TRUST_PROFILE_STALE_AFTER_HOURS = int(os.environ.get("TRUST_PROFILE_STALE_AFTER_HOURS", "6"))
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -106,10 +108,18 @@ def _query_provider_council_signal(
     }
 
 
+def _is_profile_stale(profile: AgentTrustProfile) -> bool:
+    if not profile.updated_at:
+        return True
+    return profile.updated_at < datetime.utcnow() - timedelta(hours=TRUST_PROFILE_STALE_AFTER_HOURS)
+
+
 def recompute_agent_trust_profile(
     db: Session,
     tenant_id: uuid.UUID,
     agent_slug: str,
+    *,
+    commit: bool = True,
 ) -> AgentTrustProfile:
     reward_stats = _query_agent_reward_stats(db, tenant_id, agent_slug)
     provider_stats = _query_provider_council_signal(db, tenant_id, agent_slug)
@@ -158,7 +168,9 @@ def recompute_agent_trust_profile(
     profile.rationale = rationale
     profile.updated_at = datetime.utcnow()
 
-    db.commit()
+    db.flush()
+    if commit:
+        db.commit()
     db.refresh(profile)
     return profile
 
@@ -169,6 +181,8 @@ def get_agent_trust_profile(
     agent_slug: Optional[str],
     *,
     auto_create: bool = True,
+    refresh_stale: bool = True,
+    commit_on_refresh: bool = True,
 ) -> Optional[AgentTrustProfile]:
     if not agent_slug:
         return None
@@ -181,9 +195,22 @@ def get_agent_trust_profile(
         )
         .first()
     )
+    if profile and refresh_stale and _is_profile_stale(profile):
+        return recompute_agent_trust_profile(
+            db,
+            tenant_id,
+            agent_slug,
+            commit=commit_on_refresh,
+        )
+
     if profile or not auto_create:
         return profile
-    return recompute_agent_trust_profile(db, tenant_id, agent_slug)
+    return recompute_agent_trust_profile(
+        db,
+        tenant_id,
+        agent_slug,
+        commit=commit_on_refresh,
+    )
 
 
 def list_agent_trust_profiles(
@@ -196,4 +223,3 @@ def list_agent_trust_profiles(
         .order_by(AgentTrustProfile.trust_score.desc(), AgentTrustProfile.updated_at.desc())
         .all()
     )
-

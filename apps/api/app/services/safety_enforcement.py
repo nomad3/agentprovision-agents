@@ -93,6 +93,7 @@ def _apply_agent_autonomy_restrictions(
         db,
         tenant_id,
         request.agent_slug,
+        commit_on_refresh=False,
     )
     if not profile:
         return result
