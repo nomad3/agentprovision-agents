@@ -30,6 +30,7 @@ class WorldStateAssertion(Base):
     corroboration_count = Column(Integer, nullable=False, default=1)
 
     status = Column(String(30), nullable=False, default="active")
+    dispute_reason = Column(String(500), nullable=True)
     superseded_by_id = Column(UUID(as_uuid=True), ForeignKey("world_state_assertions.id"), nullable=True)
 
     valid_from = Column(DateTime, nullable=False, default=datetime.utcnow)
@@ -63,6 +64,8 @@ class WorldStateSnapshot(Base):
     min_confidence = Column(Float, nullable=False, default=1.0)
     avg_confidence = Column(Float, nullable=False, default=1.0)
     unstable_attributes = Column(JSONB, nullable=False, default=list)
+    disputed_attributes = Column(JSONB, nullable=False, default=list)
+    disputed_count = Column(Integer, nullable=False, default=0)
 
     last_projected_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

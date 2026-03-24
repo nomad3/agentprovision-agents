@@ -47,6 +47,7 @@ class WorldStateAssertionInDB(BaseModel):
     source_type: str
     corroboration_count: int
     status: str
+    dispute_reason: Optional[str] = None
     superseded_by_id: Optional[uuid.UUID] = None
     valid_from: datetime
     valid_to: Optional[datetime] = None
@@ -68,6 +69,8 @@ class WorldStateSnapshotInDB(BaseModel):
     min_confidence: float
     avg_confidence: float
     unstable_attributes: List[str] = Field(default_factory=list)
+    disputed_attributes: List[str] = Field(default_factory=list)
+    disputed_count: int = 0
     last_projected_at: datetime
     created_at: datetime
     updated_at: datetime

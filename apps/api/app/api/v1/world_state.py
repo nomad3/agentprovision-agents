@@ -103,3 +103,38 @@ def get_snapshot(
     if not snapshot:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Snapshot not found")
     return snapshot
+
+
+@router.get("/disputes", response_model=List[WorldStateAssertionInDB])
+def list_disputed_assertions(
+    subject_slug: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List assertions with conflicting claims from different sources."""
+    return world_state_service.list_disputed_assertions(
+        db,
+        tenant_id=current_user.tenant_id,
+        subject_slug=subject_slug,
+        limit=limit,
+    )
+
+
+@router.post("/disputes/{assertion_id}/resolve", response_model=WorldStateAssertionInDB)
+def resolve_dispute(
+    assertion_id: uuid.UUID,
+    resolution: str = Query(default="superseded", regex="^(superseded|active)$"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Resolve a disputed assertion by superseding it or reactivating it."""
+    result = world_state_service.resolve_dispute(
+        db, current_user.tenant_id, assertion_id, resolution
+    )
+    if not result:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Disputed assertion not found",
+        )
+    return result
