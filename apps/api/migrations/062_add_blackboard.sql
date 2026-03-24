@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS blackboard_entries (
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_blackboard_entries_board_version
+CREATE UNIQUE INDEX IF NOT EXISTS uq_blackboard_entries_board_version
 ON blackboard_entries(blackboard_id, board_version);
 
 CREATE INDEX IF NOT EXISTS idx_blackboard_entries_board_status

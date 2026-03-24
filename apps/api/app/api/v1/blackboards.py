@@ -108,12 +108,13 @@ def resolve_entry(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Resolve an entry (authority-checked)."""
+    """Resolve an entry (authority-checked). Returns the new resolution entry."""
     try:
         entry = blackboard_service.resolve_entry(
             db, current_user.tenant_id, board_id, entry_id,
             resolution_status=request.resolution_status.value,
             resolved_by_agent=request.resolved_by_agent,
+            resolved_by_role=request.resolved_by_role.value,
             resolution_reason=request.resolution_reason,
         )
     except ValueError as e:

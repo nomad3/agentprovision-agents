@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 import uuid
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.blackboard import Blackboard, BlackboardEntry
@@ -22,11 +23,42 @@ AUTHORITY_HIERARCHY = {
 }
 
 
+def _validate_plan_ref(db: Session, tenant_id: uuid.UUID, plan_id: Optional[uuid.UUID]) -> None:
+    if not plan_id:
+        return
+    from app.models.plan import Plan
+    exists = db.query(Plan).filter(Plan.id == plan_id, Plan.tenant_id == tenant_id).first()
+    if not exists:
+        raise ValueError(f"Plan {plan_id} not found in this tenant")
+
+
+def _validate_goal_ref(db: Session, tenant_id: uuid.UUID, goal_id: Optional[uuid.UUID]) -> None:
+    if not goal_id:
+        return
+    from app.models.goal_record import GoalRecord
+    exists = db.query(GoalRecord).filter(GoalRecord.id == goal_id, GoalRecord.tenant_id == tenant_id).first()
+    if not exists:
+        raise ValueError(f"Goal {goal_id} not found in this tenant")
+
+
+def _next_version(db: Session, board_id: uuid.UUID) -> int:
+    """Atomically increment and return the next board version using a row lock."""
+    row = db.execute(
+        text("UPDATE blackboards SET version = version + 1, updated_at = NOW() "
+             "WHERE id = CAST(:bid AS uuid) RETURNING version"),
+        {"bid": str(board_id)},
+    ).fetchone()
+    return row.version if row else 0
+
+
 def create_blackboard(
     db: Session,
     tenant_id: uuid.UUID,
     board_in: BlackboardCreate,
 ) -> Blackboard:
+    _validate_plan_ref(db, tenant_id, board_in.plan_id)
+    _validate_goal_ref(db, tenant_id, board_in.goal_id)
+
     board = Blackboard(
         tenant_id=tenant_id,
         title=board_in.title,
@@ -88,7 +120,7 @@ def add_entry(
     board_id: uuid.UUID,
     entry_in: BlackboardEntryCreate,
 ) -> Optional[BlackboardEntry]:
-    """Append an entry to the blackboard. Increments board version."""
+    """Append an entry to the blackboard. Version assigned atomically."""
     board = get_blackboard(db, tenant_id, board_id)
     if not board or board.status != "active":
         return None
@@ -103,6 +135,7 @@ def add_entry(
             raise ValueError(f"Parent entry {entry_in.parent_entry_id} not found on this blackboard")
 
     # Validate supersedes entry belongs to same blackboard
+    # Record supersession as a NEW entry (append-only), don't mutate the old row
     if entry_in.supersedes_entry_id:
         superseded = db.query(BlackboardEntry).filter(
             BlackboardEntry.id == entry_in.supersedes_entry_id,
@@ -110,14 +143,13 @@ def add_entry(
         ).first()
         if not superseded:
             raise ValueError(f"Superseded entry {entry_in.supersedes_entry_id} not found on this blackboard")
-        superseded.status = "superseded"
 
-    board.version += 1
-    board.updated_at = datetime.utcnow()
+    # Atomically get next version (row-level lock on blackboards row)
+    new_version = _next_version(db, board_id)
 
     entry = BlackboardEntry(
         blackboard_id=board_id,
-        board_version=board.version,
+        board_version=new_version,
         entry_type=entry_in.entry_type.value,
         content=entry_in.content,
         evidence=entry_in.evidence,
@@ -144,7 +176,11 @@ def resolve_entry(
     resolved_by_role: str = "contributor",
     resolution_reason: Optional[str] = None,
 ) -> Optional[BlackboardEntry]:
-    """Resolve an entry. Only the owner or a higher-authority role can resolve."""
+    """Resolve an entry by appending a resolution entry (append-only).
+
+    Authority check: resolver must have >= authority of the entry author,
+    OR be the original author.
+    """
     board = get_blackboard(db, tenant_id, board_id)
     if not board:
         return None
@@ -156,7 +192,7 @@ def resolve_entry(
     if not entry:
         return None
 
-    # Authority check: resolver must have >= authority of the entry author
+    # Authority check
     resolver_authority = AUTHORITY_HIERARCHY.get(resolved_by_role, 0)
     author_authority = AUTHORITY_HIERARCHY.get(entry.author_role, 0)
     if resolver_authority < author_authority and resolved_by_agent != entry.author_agent_slug:
@@ -165,16 +201,26 @@ def resolve_entry(
             f"to resolve entry by '{entry.author_agent_slug}' (role={entry.author_role})"
         )
 
-    entry.status = resolution_status
-    entry.resolved_by_agent = resolved_by_agent
-    entry.resolution_reason = resolution_reason
+    # Append-only: create a resolution entry rather than mutating the original
+    new_version = _next_version(db, board_id)
 
-    board.version += 1
-    board.updated_at = datetime.utcnow()
-
+    resolution_entry = BlackboardEntry(
+        blackboard_id=board_id,
+        board_version=new_version,
+        entry_type="resolution",
+        content=f"Resolved entry to '{resolution_status}': {resolution_reason or 'no reason given'}",
+        confidence=1.0,
+        author_agent_slug=resolved_by_agent,
+        author_role=resolved_by_role,
+        parent_entry_id=entry_id,
+        status=resolution_status,
+        resolved_by_agent=resolved_by_agent,
+        resolution_reason=resolution_reason,
+    )
+    db.add(resolution_entry)
     db.commit()
-    db.refresh(entry)
-    return entry
+    db.refresh(resolution_entry)
+    return resolution_entry
 
 
 def get_active_entries(
@@ -183,20 +229,51 @@ def get_active_entries(
     board_id: uuid.UUID,
     entry_type: Optional[str] = None,
 ) -> List[BlackboardEntry]:
-    """Get non-superseded, non-resolved entries (the current working state)."""
+    """Get current working state: entries that haven't been superseded or resolved.
+
+    An entry is superseded if another entry references it via supersedes_entry_id.
+    An entry is resolved if a resolution entry references it via parent_entry_id
+    with entry_type='resolution'.
+    """
     board = get_blackboard(db, tenant_id, board_id)
     if not board:
         return []
+
+    # Get IDs of superseded entries
+    superseded_ids = {
+        row.supersedes_entry_id
+        for row in db.query(BlackboardEntry.supersedes_entry_id)
+        .filter(
+            BlackboardEntry.blackboard_id == board_id,
+            BlackboardEntry.supersedes_entry_id.isnot(None),
+        ).all()
+    }
+
+    # Get IDs of resolved entries
+    resolved_ids = {
+        row.parent_entry_id
+        for row in db.query(BlackboardEntry.parent_entry_id)
+        .filter(
+            BlackboardEntry.blackboard_id == board_id,
+            BlackboardEntry.entry_type == "resolution",
+            BlackboardEntry.parent_entry_id.isnot(None),
+        ).all()
+    }
+
+    excluded = superseded_ids | resolved_ids
+
     q = (
         db.query(BlackboardEntry)
         .filter(
             BlackboardEntry.blackboard_id == board_id,
-            BlackboardEntry.status.in_(["proposed", "accepted", "disputed"]),
+            BlackboardEntry.entry_type != "resolution",
         )
     )
     if entry_type:
         q = q.filter(BlackboardEntry.entry_type == entry_type)
-    return q.order_by(BlackboardEntry.board_version.asc()).all()
+
+    entries = q.order_by(BlackboardEntry.board_version.asc()).all()
+    return [e for e in entries if e.id not in excluded]
 
 
 def get_disagreements(
@@ -208,16 +285,28 @@ def get_disagreements(
     board = get_blackboard(db, tenant_id, board_id)
     if not board:
         return []
-    return (
+
+    # Get IDs of resolved entries
+    resolved_ids = {
+        row.parent_entry_id
+        for row in db.query(BlackboardEntry.parent_entry_id)
+        .filter(
+            BlackboardEntry.blackboard_id == board_id,
+            BlackboardEntry.entry_type == "resolution",
+            BlackboardEntry.parent_entry_id.isnot(None),
+        ).all()
+    }
+
+    disagreements = (
         db.query(BlackboardEntry)
         .filter(
             BlackboardEntry.blackboard_id == board_id,
             BlackboardEntry.entry_type == "disagreement",
-            BlackboardEntry.status.in_(["proposed", "disputed"]),
         )
         .order_by(BlackboardEntry.created_at.asc())
         .all()
     )
+    return [d for d in disagreements if d.id not in resolved_ids]
 
 
 def get_version_diff(
@@ -227,7 +316,11 @@ def get_version_diff(
     from_version: int,
     to_version: Optional[int] = None,
 ) -> List[BlackboardEntry]:
-    """Get entries added between two versions for replay/diff."""
+    """Get entries added between two versions (for replay/diff).
+
+    Since the blackboard is append-only, this is a complete and accurate
+    replay of all state changes between the two versions.
+    """
     board = get_blackboard(db, tenant_id, board_id)
     if not board:
         return []

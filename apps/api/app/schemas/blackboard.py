@@ -99,4 +99,5 @@ class BlackboardDetailInDB(BlackboardInDB):
 class ResolveEntryRequest(BaseModel):
     resolution_status: EntryStatus
     resolved_by_agent: str
+    resolved_by_role: AuthorRole = AuthorRole.CONTRIBUTOR
     resolution_reason: Optional[str] = None
