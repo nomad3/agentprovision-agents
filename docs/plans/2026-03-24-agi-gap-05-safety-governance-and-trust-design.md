@@ -59,7 +59,9 @@ Output:
 
 ### 4.2 Evidence packs
 
-Before high-risk actions, require a structured evidence pack:
+Phase 2 attaches and persists a structured evidence pack at enforcement time for every sensitive action decision so the system can explain why execution was blocked, escalated, or allowed under supervision.
+
+That pack should include:
 
 - relevant world-state facts
 - recent observations
@@ -68,7 +70,7 @@ Before high-risk actions, require a structured evidence pack:
 - proposed action
 - expected downside
 
-This prevents autonomous action from being based on thin context.
+Phase 3 extends this from auditability into a true pre-flight requirement: agents must assemble the pack before high-risk actions, and policy can gate execution on evidence quality instead of only recording it after enforcement.
 
 ### 4.3 Trust scores
 
@@ -102,6 +104,8 @@ Promotion between tiers requires evidence, not optimism.
 
 - Centralize allow/confirm/block checks
 - Attach evidence packs to sensitive actions
+- Escalate `require_confirmation` to `require_review` on unattended channels (workflows, webhooks, local autonomous loops)
+- Add evidence-pack retention metadata and cleanup policy
 
 ### Phase 3: Trust-aware autonomy
 

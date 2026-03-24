@@ -139,6 +139,7 @@ class SafetyEvidencePack(SafetyEvidencePackBase):
     tenant_id: uuid.UUID
     created_by: Optional[uuid.UUID] = None
     created_at: datetime
+    expires_at: datetime
 
     class Config:
         from_attributes = True

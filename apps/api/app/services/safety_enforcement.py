@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 import uuid
 
@@ -15,6 +16,9 @@ from app.schemas.safety_policy import (
     SafetyEnforcementResult,
 )
 from app.services import safety_policies
+
+AUTOMATED_CHANNELS = {"workflow", "webhook", "local_agent"}
+EVIDENCE_PACK_TTL_DAYS = 30
 
 
 def _normalize_items(values: Optional[List[Any]]) -> List[Any]:
@@ -45,6 +49,21 @@ def _evidence_sufficient(request: SafetyEnforcementRequest) -> bool:
     return has_context and has_proposed_action and has_downside
 
 
+def _resolve_automated_channel_decision(
+    result: SafetyEnforcementResult,
+    channel: str,
+) -> SafetyEnforcementResult:
+    if (
+        channel in AUTOMATED_CHANNELS
+        and result.decision == PolicyDecision.REQUIRE_CONFIRMATION
+    ):
+        result.decision = PolicyDecision.REQUIRE_REVIEW
+        result.rationale = (
+            f"{result.rationale} Channel '{channel}' cannot collect inline human confirmation."
+        )
+    return result
+
+
 def list_evidence_packs(
     db: Session,
     tenant_id: uuid.UUID,
@@ -52,7 +71,10 @@ def list_evidence_packs(
 ) -> List[SafetyEvidencePack]:
     return (
         db.query(SafetyEvidencePack)
-        .filter(SafetyEvidencePack.tenant_id == tenant_id)
+        .filter(
+            SafetyEvidencePack.tenant_id == tenant_id,
+            SafetyEvidencePack.expires_at > datetime.utcnow(),
+        )
         .order_by(SafetyEvidencePack.created_at.desc())
         .limit(limit)
         .all()
@@ -69,6 +91,7 @@ def get_evidence_pack(
         .filter(
             SafetyEvidencePack.id == evidence_pack_id,
             SafetyEvidencePack.tenant_id == tenant_id,
+            SafetyEvidencePack.expires_at > datetime.utcnow(),
         )
         .first()
     )
@@ -99,6 +122,7 @@ def enforce_action(
         evidence_sufficient=False,
         evidence_pack_id=None,
     )
+    result = _resolve_automated_channel_decision(result, request.channel)
     result.evidence_required = _evidence_required(result)
     result.evidence_sufficient = (
         _evidence_sufficient(request) if result.evidence_required else True
@@ -137,6 +161,7 @@ def enforce_action(
             context_ref=request.context_ref,
             agent_slug=request.agent_slug,
             created_by=created_by,
+            expires_at=datetime.utcnow() + timedelta(days=EVIDENCE_PACK_TTL_DAYS),
         )
         db.add(evidence_pack)
         db.commit()

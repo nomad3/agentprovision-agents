@@ -67,6 +67,7 @@ class SafetyEvidencePack(Base):
     agent_slug = Column(String(100))
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
 
     tenant = relationship("Tenant")
     creator = relationship("User")
