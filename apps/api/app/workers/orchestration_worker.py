@@ -85,6 +85,12 @@ from app.workflows.prospecting_pipeline import (
     prospect_outreach,
     prospect_notify,
 )
+from app.workflows.goal_review import GoalReviewWorkflow
+from app.workflows.activities.goal_review import (
+    review_goals,
+    review_commitments,
+    create_review_notifications,
+)
 from app.workflows.activities.skill_activities import execute_skill
 from app.workflows.activities.rl_policy_update import (
     collect_tenant_experiences,
@@ -149,6 +155,7 @@ async def run_orchestration_worker():
             RLPolicyUpdateWorkflow,
             MemoryConsolidationWorkflow,
             DynamicWorkflowExecutor,
+            GoalReviewWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -206,6 +213,10 @@ async def run_orchestration_worker():
             promote_entities,
             sync_memories_and_entities,
             log_consolidation_results,
+            # Goal review activities
+            review_goals,
+            review_commitments,
+            create_review_notifications,
             # Dynamic workflow step executor
             execute_dynamic_step,
             finalize_workflow_run,
