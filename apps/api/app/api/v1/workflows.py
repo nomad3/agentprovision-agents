@@ -505,6 +505,87 @@ async def competitor_monitor_status(
 
 
 # ---------------------------------------------------------------------------
+# POST /workflows/goal-review/start
+# ---------------------------------------------------------------------------
+@router.post("/goal-review/start")
+async def start_goal_review(
+    review_interval_hours: int = 6,
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Start the periodic goal review workflow for the current tenant."""
+    from temporalio.client import Client
+    from app.workflows.goal_review import GoalReviewWorkflow
+    workflow_id = f"goal-review-{tenant_id}"
+    interval = max(1, min(review_interval_hours, 48)) * 3600
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        handle = await client.start_workflow(
+            GoalReviewWorkflow.run,
+            args=[tenant_id, interval],
+            id=workflow_id,
+            task_queue="servicetsunami-orchestration",
+        )
+        return {
+            "status": "started",
+            "workflow_id": workflow_id,
+            "run_id": handle.result_run_id,
+            "interval_hours": review_interval_hours,
+        }
+    except Exception as e:
+        if "already started" in str(e).lower() or "already running" in str(e).lower():
+            return {"status": "already_running", "workflow_id": workflow_id}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# POST /workflows/goal-review/stop
+# ---------------------------------------------------------------------------
+@router.post("/goal-review/stop")
+async def stop_goal_review(
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Stop the goal review workflow for the current tenant."""
+    from temporalio.client import Client
+    workflow_id = f"goal-review-{tenant_id}"
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.cancel()
+        return {"status": "stopped", "workflow_id": workflow_id}
+    except Exception as e:
+        if "not found" in str(e).lower():
+            return {"status": "not_running", "workflow_id": workflow_id}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# GET /workflows/goal-review/status
+# ---------------------------------------------------------------------------
+@router.get("/goal-review/status")
+async def goal_review_status(
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Check if the goal review workflow is running for the current tenant."""
+    workflow_id = f"goal-review-{tenant_id}"
+
+    try:
+        client = await _get_temporal_client()
+        handle = client.get_workflow_handle(workflow_id)
+        desc = await handle.describe()
+        status = desc.status.name if desc.status else None
+        return {
+            "running": status == "RUNNING",
+            "workflow_id": workflow_id,
+            "status": status,
+            "start_time": desc.start_time.isoformat() if desc.start_time else None,
+        }
+    except Exception:
+        return {"running": False, "workflow_id": workflow_id, "status": None}
+
+
+# ---------------------------------------------------------------------------
 # GET /workflows/{workflow_id} — Describe single workflow
 # ---------------------------------------------------------------------------
 @router.get("/{workflow_id}")
