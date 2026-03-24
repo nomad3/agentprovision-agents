@@ -42,7 +42,7 @@ async def execute_dynamic_step(
 
     try:
         if step_type == "mcp_tool":
-            result = await _call_mcp_tool(step, context, tenant_id)
+            result = await _call_mcp_tool(step, context, tenant_id, run_id)
         elif step_type == "agent":
             result = await _call_agent(step, context, tenant_id)
         elif step_type == "condition":
@@ -64,13 +64,46 @@ async def execute_dynamic_step(
         raise
 
 
-async def _call_mcp_tool(step: dict, context: dict, tenant_id: str) -> dict:
+async def _call_mcp_tool(step: dict, context: dict, tenant_id: str, run_id: str) -> dict:
     """Call an MCP tool via the MCP tools server."""
+    from app.db.session import SessionLocal
+    from app.schemas.safety_policy import ActionType, PolicyDecision, SafetyEnforcementRequest
+    from app.services import safety_enforcement
+
     tool_name = step.get("tool", "")
     params = _resolve_params(step.get("params", {}), context)
     params["tenant_id"] = tenant_id
 
     activity.heartbeat(f"Calling MCP tool: {tool_name}")
+
+    db = SessionLocal()
+    try:
+        enforcement = safety_enforcement.enforce_action(
+            db,
+            tenant_id=uuid.UUID(tenant_id),
+            request=SafetyEnforcementRequest(
+                action_type=ActionType.MCP_TOOL,
+                action_name=tool_name,
+                channel="workflow",
+                proposed_action={"arguments": params},
+                world_state_facts=[],
+                recent_observations=[],
+                assumptions=["This tool is running as part of an automated workflow."],
+                uncertainty_notes=["No inline human confirmation is available during workflow execution."],
+                context_summary=f"Dynamic workflow MCP step '{step.get('id', 'unknown')}'.",
+                context_ref={"workflow_run_id": run_id, "step_id": step.get("id", "unknown")},
+                expected_downside=f"Workflow tool '{tool_name}' may mutate tenant or external state.",
+                agent_slug=context.get("agent_slug") or step.get("agent"),
+            ),
+        )
+    finally:
+        db.close()
+
+    if enforcement.decision not in (PolicyDecision.ALLOW, PolicyDecision.ALLOW_WITH_LOGGING):
+        raise PermissionError(
+            f"Governed action '{tool_name}' requires {enforcement.decision.value} "
+            f"for channel 'workflow'. evidence_pack_id={enforcement.evidence_pack_id}"
+        )
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
