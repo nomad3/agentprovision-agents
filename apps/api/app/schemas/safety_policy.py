@@ -1,8 +1,8 @@
-"""Schemas for governed action taxonomy and tenant safety policies."""
+"""Schemas for governed action taxonomy, policy enforcement, and evidence packs."""
 
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 
 from pydantic import BaseModel, Field
@@ -111,3 +111,55 @@ class SafetyActionCatalogEntry(BaseModel):
     decision_source: str
     rationale: str
     policy_override_id: Optional[uuid.UUID] = None
+
+
+class SafetyEvidencePackBase(BaseModel):
+    action_type: ActionType
+    action_name: str
+    channel: str
+    decision: PolicyDecision
+    decision_source: str
+    risk_class: RiskClass
+    risk_level: RiskLevel
+    evidence_required: bool
+    evidence_sufficient: bool
+    world_state_facts: List[Dict[str, Any] | str] = Field(default_factory=list)
+    recent_observations: List[Dict[str, Any] | str] = Field(default_factory=list)
+    assumptions: List[str] = Field(default_factory=list)
+    uncertainty_notes: List[str] = Field(default_factory=list)
+    proposed_action: Dict[str, Any] = Field(default_factory=dict)
+    expected_downside: Optional[str] = None
+    context_summary: Optional[str] = None
+    context_ref: Dict[str, Any] = Field(default_factory=dict)
+    agent_slug: Optional[str] = None
+
+
+class SafetyEvidencePack(SafetyEvidencePackBase):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    created_by: Optional[uuid.UUID] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SafetyEnforcementRequest(BaseModel):
+    action_type: ActionType
+    action_name: str
+    channel: str = "web"
+    world_state_facts: List[Dict[str, Any] | str] = Field(default_factory=list)
+    recent_observations: List[Dict[str, Any] | str] = Field(default_factory=list)
+    assumptions: List[str] = Field(default_factory=list)
+    uncertainty_notes: List[str] = Field(default_factory=list)
+    proposed_action: Dict[str, Any] = Field(default_factory=dict)
+    expected_downside: Optional[str] = None
+    context_summary: Optional[str] = None
+    context_ref: Dict[str, Any] = Field(default_factory=dict)
+    agent_slug: Optional[str] = None
+
+
+class SafetyEnforcementResult(SafetyActionEvaluation):
+    evidence_required: bool
+    evidence_sufficient: bool
+    evidence_pack_id: Optional[uuid.UUID] = None

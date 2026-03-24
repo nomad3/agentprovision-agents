@@ -17,8 +17,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
 from app.db.session import SessionLocal
-from app.schemas.safety_policy import ActionType, PolicyDecision
-from app.services import safety_policies
+from app.schemas.safety_policy import ActionType, PolicyDecision, SafetyEnforcementRequest
+from app.services import safety_enforcement
 
 logger = logging.getLogger(__name__)
 
@@ -145,41 +145,6 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Pre-execution safety gate — evaluate through the shared policy engine
-# ---------------------------------------------------------------------------
-
-def _load_local_tool_policies(tenant_id: uuid.UUID) -> Dict[str, Tuple[str, str]]:
-    """Evaluate local-agent policy once per request for every curated tool."""
-    db = SessionLocal()
-    try:
-        policies: Dict[str, Tuple[str, str]] = {}
-        for tool_name in _TOOL_REGISTRY:
-            try:
-                evaluation = safety_policies.evaluate_action(
-                    db,
-                    tenant_id=tenant_id,
-                    action_type=ActionType.MCP_TOOL,
-                    action_name=tool_name,
-                    channel="local_agent",
-                )
-            except ValueError:
-                policies[tool_name] = (
-                    "block",
-                    f"Tool '{tool_name}' is not registered in the governed action catalog.",
-                )
-                continue
-
-            if evaluation.decision in (PolicyDecision.ALLOW, PolicyDecision.ALLOW_WITH_LOGGING):
-                policies[tool_name] = ("allow", evaluation.rationale)
-            else:
-                policies[tool_name] = ("block", evaluation.rationale)
-        return policies
-    finally:
-        db.close()
-
-
-# ---------------------------------------------------------------------------
 # Tool filtering by tenant integrations
 # ---------------------------------------------------------------------------
 
@@ -336,7 +301,7 @@ def run(
     if not tools:
         logger.info("No tools available for tenant %s — skipping tool agent", tenant_id)
         return None, metadata
-    tool_policies = _load_local_tool_policies(tenant_id)
+    policy_db = SessionLocal()
 
     # Build initial messages
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
@@ -348,88 +313,110 @@ def run(
     messages.append({"role": "user", "content": message})
 
     # Agent loop — max rounds
-    for round_num in range(MAX_TOOL_ROUNDS):
-        resp = _ollama_chat(messages, tools)
-        if not resp:
-            return None, metadata
+    try:
+        for round_num in range(MAX_TOOL_ROUNDS):
+            resp = _ollama_chat(messages, tools)
+            if not resp:
+                return None, metadata
 
-        msg = resp.get("message", {})
-        tool_calls = msg.get("tool_calls")
+            msg = resp.get("message", {})
+            tool_calls = msg.get("tool_calls")
 
-        # No tool calls — model is done, return text
-        if not tool_calls:
-            text = _clean_response(msg.get("content", ""))
+            # No tool calls — model is done, return text
+            if not tool_calls:
+                text = _clean_response(msg.get("content", ""))
+                if text:
+                    metadata["tool_rounds"] = round_num
+                    return text, metadata
+                return None, metadata
+
+            # Enforce per-turn tool limit
+            tool_calls = tool_calls[:MAX_TOOLS_PER_TURN]
+
+            # Add assistant message with tool calls to conversation
+            messages.append(msg)
+
+            # Execute each tool call
+            for tc in tool_calls:
+                fn = tc.get("function", {})
+                tool_name = fn.get("name", "")
+                arguments = fn.get("arguments", {})
+
+                # Validate tool is in our allowlist
+                if tool_name not in _TOOL_REGISTRY:
+                    logger.warning("Model requested unlisted tool: %s — skipping", tool_name)
+                    messages.append({
+                        "role": "tool",
+                        "content": json.dumps({"error": f"Tool '{tool_name}' is not available"}),
+                    })
+                    continue
+
+                # Validate arguments is a dict
+                if not isinstance(arguments, dict):
+                    logger.warning("Malformed tool arguments for %s: %s", tool_name, type(arguments))
+                    messages.append({
+                        "role": "tool",
+                        "content": json.dumps({"error": "Invalid arguments format"}),
+                    })
+                    continue
+
+                enforcement = safety_enforcement.enforce_action(
+                    policy_db,
+                    tenant_id=tenant_id,
+                    request=SafetyEnforcementRequest(
+                        action_type=ActionType.MCP_TOOL,
+                        action_name=tool_name,
+                        channel="local_agent",
+                        proposed_action={"arguments": arguments},
+                        assumptions=["Local-tool fallback is an unsupervised runtime."],
+                        uncertainty_notes=["No human confirmation is available inline for the local agent."],
+                        context_summary=f"Local tool request from agent '{agent_slug}'.",
+                        context_ref={"agent_slug": agent_slug, "message_excerpt": message[:200]},
+                        expected_downside=f"Tool '{tool_name}' could operate beyond read-only bounds if misclassified.",
+                        agent_slug=agent_slug,
+                    ),
+                )
+                if enforcement.decision not in (PolicyDecision.ALLOW, PolicyDecision.ALLOW_WITH_LOGGING):
+                    logger.warning(
+                        "BLOCKED governed tool %s for local agent — %s (evidence_pack_id=%s)",
+                        tool_name,
+                        enforcement.rationale,
+                        enforcement.evidence_pack_id,
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "content": json.dumps({
+                            "error": f"Tool '{tool_name}' is blocked for the local runtime. {enforcement.rationale} Connect Claude Code or Codex in Settings → Integrations for supervised execution.",
+                            "evidence_pack_id": str(enforcement.evidence_pack_id) if enforcement.evidence_pack_id else None,
+                        }),
+                    })
+                    continue
+
+                logger.info("Local tool agent calling: %s(%s)", tool_name, json.dumps(arguments)[:200])
+                result = _call_mcp_tool(tool_name, arguments, str(tenant_id))
+                metadata["tools_used"].append(tool_name)
+
+                messages.append({
+                    "role": "tool",
+                    "content": json.dumps(result, default=str)[:4000],
+                })
+
+            metadata["tool_rounds"] = round_num + 1
+
+        # Exhausted rounds — do one final call without tools to get a summary
+        messages.append({
+            "role": "user",
+            "content": "Now summarize the tool results above and give a final answer to the user. Do not call any more tools.",
+        })
+        resp = _ollama_chat(messages, tools=[])
+        if resp:
+            text = _clean_response(resp.get("message", {}).get("content", ""))
             if text:
-                metadata["tool_rounds"] = round_num
                 return text, metadata
-            return None, metadata
 
-        # Enforce per-turn tool limit
-        tool_calls = tool_calls[:MAX_TOOLS_PER_TURN]
-
-        # Add assistant message with tool calls to conversation
-        messages.append(msg)
-
-        # Execute each tool call
-        for tc in tool_calls:
-            fn = tc.get("function", {})
-            tool_name = fn.get("name", "")
-            arguments = fn.get("arguments", {})
-
-            # Validate tool is in our allowlist
-            if tool_name not in _TOOL_REGISTRY:
-                logger.warning("Model requested unlisted tool: %s — skipping", tool_name)
-                messages.append({
-                    "role": "tool",
-                    "content": json.dumps({"error": f"Tool '{tool_name}' is not available"}),
-                })
-                continue
-
-            # Validate arguments is a dict
-            if not isinstance(arguments, dict):
-                logger.warning("Malformed tool arguments for %s: %s", tool_name, type(arguments))
-                messages.append({
-                    "role": "tool",
-                    "content": json.dumps({"error": "Invalid arguments format"}),
-                })
-                continue
-
-            # Pre-execution safety gate — block side-effect tools for local model
-            risk, rationale = tool_policies.get(
-                tool_name,
-                ("block", f"Tool '{tool_name}' is not registered in the governed action catalog."),
-            )
-            if risk == "block":
-                logger.warning("BLOCKED governed tool %s for local agent — %s", tool_name, rationale)
-                messages.append({
-                    "role": "tool",
-                    "content": json.dumps({"error": f"Tool '{tool_name}' is blocked for the local runtime. {rationale} Connect Claude Code or Codex in Settings → Integrations for supervised execution."}),
-                })
-                continue
-
-            logger.info("Local tool agent calling: %s(%s)", tool_name, json.dumps(arguments)[:200])
-            result = _call_mcp_tool(tool_name, arguments, str(tenant_id))
-            metadata["tools_used"].append(tool_name)
-
-            messages.append({
-                "role": "tool",
-                "content": json.dumps(result, default=str)[:4000],
-            })
-
-        metadata["tool_rounds"] = round_num + 1
-
-    # Exhausted rounds — do one final call without tools to get a summary
-    messages.append({
-        "role": "user",
-        "content": "Now summarize the tool results above and give a final answer to the user. Do not call any more tools.",
-    })
-    resp = _ollama_chat(messages, tools=[])
-    if resp:
-        text = _clean_response(resp.get("message", {}).get("content", ""))
-        if text:
-            return text, metadata
-
-    return None, metadata
+        return None, metadata
+    finally:
+        policy_db.close()
 
 
 def _clean_response(text: str) -> str:

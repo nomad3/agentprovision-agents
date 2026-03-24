@@ -13,9 +13,13 @@ from app.schemas.safety_policy import (
     SafetyActionCatalogEntry,
     SafetyActionEvaluation,
     SafetyActionEvaluationRequest,
+    SafetyEnforcementRequest,
+    SafetyEnforcementResult,
+    SafetyEvidencePack,
     TenantActionPolicy,
     TenantActionPolicyUpsert,
 )
+from app.services import safety_enforcement as enforcement_service
 from app.services import safety_policies as service
 
 router = APIRouter()
@@ -88,3 +92,41 @@ def evaluate_action(
         action_name=request.action_name,
         channel=request.channel,
     )
+
+
+@router.post("/enforce", response_model=SafetyEnforcementResult)
+def enforce_action(
+    request: SafetyEnforcementRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Evaluate and persist an evidence-backed safety enforcement decision."""
+    return enforcement_service.enforce_action(
+        db,
+        tenant_id=current_user.tenant_id,
+        request=request,
+        created_by=current_user.id,
+    )
+
+
+@router.get("/evidence-packs", response_model=List[SafetyEvidencePack])
+def list_evidence_packs(
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List recent safety evidence packs for the current tenant."""
+    return enforcement_service.list_evidence_packs(db, current_user.tenant_id, limit=limit)
+
+
+@router.get("/evidence-packs/{evidence_pack_id}", response_model=SafetyEvidencePack)
+def get_evidence_pack(
+    evidence_pack_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch a single evidence pack by id."""
+    evidence_pack = enforcement_service.get_evidence_pack(db, current_user.tenant_id, evidence_pack_id)
+    if not evidence_pack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence pack not found")
+    return evidence_pack
