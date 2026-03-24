@@ -108,6 +108,35 @@ def generate_cli_instructions(
             lines.append(f"- [{gtype}] {gtext} ({gdate})")
         lines.append("")
 
+    # Self-model context: identity, goals, commitments
+    self_model = memory_context.get("self_model", {})
+    identity_context = self_model.get("identity_context")
+    active_goals = self_model.get("active_goals", [])
+    open_commitments = self_model.get("open_commitments", [])
+
+    if identity_context:
+        lines.append(identity_context)
+        lines.append("")
+
+    if active_goals:
+        lines.append("## Active Goals")
+        lines.append("")
+        for g in active_goals:
+            state_tag = f"[{g.get('state', 'active')}]"
+            priority = g.get("priority", "")
+            lines.append(f"- {state_tag} **{g.get('title', '')}** (priority: {priority})")
+            if g.get("progress_summary"):
+                lines.append(f"  Progress: {g['progress_summary']}")
+        lines.append("")
+
+    if open_commitments:
+        lines.append("## Open Commitments")
+        lines.append("")
+        for c in open_commitments:
+            due = f" (due: {c['due_at'][:10]})" if c.get("due_at") else ""
+            lines.append(f"- **{c.get('title', '')}**{due}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -265,6 +294,30 @@ def run_agent_session(
         except Exception as exc:
             logger.warning("Memory recall failed for tenant %s: %s", tenant_id, exc)
             memory_context = {}
+
+    # Inject self-model context: identity profile, active goals, open commitments
+    try:
+        from app.services import agent_identity_service, goal_service, commitment_service
+        self_model: Dict[str, Any] = {}
+        identity_md = agent_identity_service.build_runtime_identity_context(db, tenant_id, agent_slug)
+        if identity_md:
+            self_model["identity_context"] = identity_md
+        active_goals = goal_service.list_active_goals_for_agent(db, tenant_id, agent_slug)
+        if active_goals:
+            self_model["active_goals"] = [
+                {"title": g.title, "state": g.state, "priority": g.priority, "progress_summary": g.progress_summary}
+                for g in active_goals
+            ]
+        open_commitments = commitment_service.list_open_commitments_for_agent(db, tenant_id, agent_slug)
+        if open_commitments:
+            self_model["open_commitments"] = [
+                {"title": c.title, "due_at": c.due_at.isoformat() if c.due_at else None}
+                for c in open_commitments
+            ]
+        if self_model:
+            memory_context["self_model"] = self_model
+    except Exception as exc:
+        logger.debug("Self-model injection failed for %s: %s", agent_slug, exc)
 
     tenant_name = str(tenant_id)
     user_name = sender_phone or str(user_id)

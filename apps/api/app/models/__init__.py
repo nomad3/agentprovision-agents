@@ -49,6 +49,7 @@ from .webhook_connector import WebhookConnector, WebhookDeliveryLog
 from .mcp_server_connector import MCPServerConnector, MCPServerCallLog
 from .goal_record import GoalRecord
 from .commitment_record import CommitmentRecord
+from .agent_identity_profile import AgentIdentityProfile
 from .dynamic_workflow import DynamicWorkflow, WorkflowRun, WorkflowStepLog
 
 __all__ = [
@@ -73,6 +74,6 @@ __all__ = [
     "Tool", "VectorStore",
     "WebhookConnector", "WebhookDeliveryLog",
     "MCPServerConnector", "MCPServerCallLog",
-    "GoalRecord", "CommitmentRecord",
+    "GoalRecord", "CommitmentRecord", "AgentIdentityProfile",
     "DynamicWorkflow", "WorkflowRun", "WorkflowStepLog",
 ]
