@@ -320,3 +320,270 @@ def list_plan_events(
         db.query(PlanEvent).filter(PlanEvent.plan_id == plan_id)
         .order_by(PlanEvent.created_at.desc()).limit(limit).all()
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Failure classification, repair policies, and resume
+# ---------------------------------------------------------------------------
+
+FAILURE_CLASSES = {
+    "transient": "Temporary execution error — safe to retry",
+    "missing_info": "Step needs data that is not yet available",
+    "invalid_assumption": "A plan assumption has been invalidated",
+    "blocked_approval": "Human approval required before continuing",
+    "world_state_change": "External state changed, plan may need revision",
+}
+
+REPAIR_POLICIES = {
+    "transient": "retry",
+    "missing_info": "gather_info",
+    "invalid_assumption": "replan",
+    "blocked_approval": "escalate",
+    "world_state_change": "replan",
+}
+
+TRANSIENT_PATTERNS = (
+    "timeout", "timed out", "connection refused", "503", "502",
+    "rate limit", "retry", "temporary", "EAGAIN", "ECONNRESET",
+)
+
+
+def classify_failure(error: str) -> str:
+    """Classify a step failure into a failure class."""
+    lower = (error or "").lower()
+    if any(p in lower for p in TRANSIENT_PATTERNS):
+        return "transient"
+    if any(p in lower for p in ("not found", "missing", "no data", "unavailable")):
+        return "missing_info"
+    if any(p in lower for p in ("assumption", "invalidated", "no longer true")):
+        return "invalid_assumption"
+    if any(p in lower for p in ("approval", "permission", "unauthorized", "require_review")):
+        return "blocked_approval"
+    if any(p in lower for p in ("changed", "stale", "outdated", "conflict")):
+        return "world_state_change"
+    return "transient"
+
+
+def get_repair_action(failure_class: str) -> str:
+    """Get the recommended repair action for a failure class."""
+    return REPAIR_POLICIES.get(failure_class, "retry")
+
+
+def handle_step_failure(
+    db: Session,
+    tenant_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    error: str,
+) -> Optional[dict]:
+    """Classify failure, apply repair policy, and return the action taken.
+
+    Returns dict with failure_class, repair_action, and what happened.
+    """
+    plan = get_plan(db, tenant_id, plan_id)
+    if not plan or plan.status != "executing":
+        return None
+
+    current_step = (
+        db.query(PlanStep).filter(
+            PlanStep.plan_id == plan_id,
+            PlanStep.step_index == plan.current_step_index,
+        ).first()
+    )
+    if not current_step:
+        return None
+
+    failure_class = classify_failure(error)
+    repair_action = get_repair_action(failure_class)
+
+    now = datetime.utcnow()
+    result = {
+        "failure_class": failure_class,
+        "failure_description": FAILURE_CLASSES.get(failure_class, "Unknown"),
+        "repair_action": repair_action,
+        "step_index": current_step.step_index,
+        "step_title": current_step.title,
+    }
+
+    if repair_action == "retry":
+        # Check retry policy
+        retry_max = (current_step.retry_policy or {}).get("max_attempts", 3)
+        retry_count = (current_step.retry_policy or {}).get("_attempts", 0)
+        if retry_count < retry_max:
+            current_step.retry_policy = {
+                **(current_step.retry_policy or {}),
+                "_attempts": retry_count + 1,
+            }
+            current_step.error = None
+            current_step.started_at = now
+            _log_event(
+                db, plan_id, "step_started",
+                previous_status="failed", new_status="running",
+                step_id=current_step.id, reason=f"Retry {retry_count + 1}/{retry_max}: {error}",
+                metadata_json={"failure_class": failure_class, "retry_attempt": retry_count + 1},
+            )
+            result["action_taken"] = f"retry ({retry_count + 1}/{retry_max})"
+        else:
+            # Max retries exhausted — fail the step
+            current_step.status = "failed"
+            current_step.error = error
+            current_step.completed_at = now
+
+            # Try fallback if available
+            if current_step.fallback_step_index is not None:
+                result = _apply_fallback(db, plan, current_step, error, failure_class)
+            else:
+                plan.status = "failed"
+                _log_event(db, plan_id, "step_failed", step_id=current_step.id, reason=error)
+                _log_event(db, plan_id, "failed", previous_status="executing", new_status="failed",
+                           reason=f"Max retries exhausted: {error}")
+                result["action_taken"] = "failed (max retries exhausted, no fallback)"
+
+    elif repair_action == "gather_info":
+        plan.status = "paused"
+        current_step.status = "failed"
+        current_step.error = error
+        current_step.completed_at = now
+        _log_event(db, plan_id, "step_failed", step_id=current_step.id, reason=error)
+        _log_event(db, plan_id, "paused", previous_status="executing", new_status="paused",
+                   reason=f"Missing information: {error}",
+                   metadata_json={"failure_class": failure_class})
+        result["action_taken"] = "paused (awaiting missing information)"
+
+    elif repair_action == "escalate":
+        plan.status = "paused"
+        current_step.status = "failed"
+        current_step.error = error
+        current_step.completed_at = now
+        _log_event(db, plan_id, "step_failed", step_id=current_step.id, reason=error)
+        _log_event(db, plan_id, "paused", previous_status="executing", new_status="paused",
+                   reason=f"Approval required: {error}",
+                   metadata_json={"failure_class": failure_class})
+        result["action_taken"] = "paused (escalated for approval)"
+
+    elif repair_action == "replan":
+        current_step.status = "failed"
+        current_step.error = error
+        current_step.completed_at = now
+        plan.status = "paused"
+        plan.replan_count += 1
+        _log_event(db, plan_id, "step_failed", step_id=current_step.id, reason=error)
+        _log_event(db, plan_id, "replanned", previous_status="executing", new_status="paused",
+                   reason=f"Replan needed ({failure_class}): {error}",
+                   metadata_json={"failure_class": failure_class, "replan_count": plan.replan_count})
+        result["action_taken"] = f"paused for replanning (replan #{plan.replan_count})"
+
+    plan.updated_at = now
+    db.commit()
+    return result
+
+
+def _apply_fallback(
+    db: Session,
+    plan: Plan,
+    failed_step: PlanStep,
+    error: str,
+    failure_class: str,
+) -> dict:
+    """Jump to the fallback step when a step fails."""
+    fallback = (
+        db.query(PlanStep).filter(
+            PlanStep.plan_id == plan.id,
+            PlanStep.step_index == failed_step.fallback_step_index,
+        ).first()
+    )
+    if not fallback:
+        plan.status = "failed"
+        _log_event(db, plan.id, "failed", previous_status="executing", new_status="failed",
+                   reason=f"Fallback step {failed_step.fallback_step_index} not found")
+        return {
+            "failure_class": failure_class,
+            "repair_action": "fallback",
+            "action_taken": f"failed (fallback step {failed_step.fallback_step_index} not found)",
+        }
+
+    now = datetime.utcnow()
+    plan.current_step_index = fallback.step_index
+    fallback.status = "running"
+    fallback.started_at = now
+
+    _log_event(db, plan.id, "step_failed", step_id=failed_step.id, reason=error)
+    _log_event(db, plan.id, "step_started", new_status="running", step_id=fallback.id,
+               reason=f"Fallback from step {failed_step.step_index}",
+               metadata_json={"failure_class": failure_class, "fallback_from": failed_step.step_index})
+
+    return {
+        "failure_class": failure_class,
+        "repair_action": "fallback",
+        "action_taken": f"jumped to fallback step {fallback.step_index}: {fallback.title}",
+        "fallback_step_index": fallback.step_index,
+    }
+
+
+def resume_plan(
+    db: Session,
+    tenant_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    from_step_index: Optional[int] = None,
+) -> Optional[dict]:
+    """Resume a paused or failed plan from the last confirmed step or a specific step.
+
+    If from_step_index is None, resumes from the first non-completed step.
+    """
+    plan = get_plan(db, tenant_id, plan_id)
+    if not plan or plan.status not in ("paused", "failed"):
+        return None
+
+    now = datetime.utcnow()
+
+    if from_step_index is not None:
+        resume_step = (
+            db.query(PlanStep).filter(
+                PlanStep.plan_id == plan_id,
+                PlanStep.step_index == from_step_index,
+            ).first()
+        )
+    else:
+        # Find the first non-completed step
+        resume_step = (
+            db.query(PlanStep).filter(
+                PlanStep.plan_id == plan_id,
+                PlanStep.status.in_(["pending", "failed"]),
+            )
+            .order_by(PlanStep.step_index.asc())
+            .first()
+        )
+
+    if not resume_step:
+        return None
+
+    # Reset the step for re-execution
+    old_status = resume_step.status
+    resume_step.status = "running"
+    resume_step.started_at = now
+    resume_step.error = None
+    resume_step.output = None
+    resume_step.completed_at = None
+
+    plan.status = "executing"
+    plan.current_step_index = resume_step.step_index
+    plan.updated_at = now
+
+    _log_event(
+        db, plan_id, "resumed",
+        previous_status=old_status, new_status="executing",
+        step_id=resume_step.id,
+        reason=f"Resumed from step {resume_step.step_index}",
+        metadata_json={"from_step_index": resume_step.step_index},
+    )
+    _log_event(
+        db, plan_id, "step_started",
+        new_status="running", step_id=resume_step.id,
+        metadata_json={"step_index": resume_step.step_index, "resumed": True},
+    )
+
+    db.commit()
+    return {
+        "resumed_from_step": resume_step.step_index,
+        "step_title": resume_step.title,
+        "plan_status": "executing",
+    }
