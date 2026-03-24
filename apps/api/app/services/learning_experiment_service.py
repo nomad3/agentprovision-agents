@@ -216,7 +216,26 @@ def run_offline_evaluation(
     # incumbent routing. Exploration data has routing_source like 'exploration_%'.
     exploration_filter = "action->>'routing_source' LIKE 'exploration_%'"
 
-    # Control: all exploration experiences for this decision point
+    # Build treatment filters from proposed policy
+    proposed = candidate.proposed_policy or {}
+    treatment_match_filters = []
+    params = {"tid": str(tenant_id), "dp": candidate.decision_point}
+
+    if "platform" in proposed:
+        treatment_match_filters.append("action->>'platform' = :platform")
+        params["platform"] = proposed["platform"]
+    if "agent_slug" in proposed:
+        treatment_match_filters.append("COALESCE(action->>'agent_slug', state->>'agent_slug') = :agent")
+        params["agent"] = proposed["agent_slug"]
+
+    treatment_match = " AND ".join(treatment_match_filters) if treatment_match_filters else "1=1"
+    # Negate for control: exploration experiences NOT matching the proposed policy
+    control_exclude = " OR ".join(
+        f.replace(" = ", " != ") for f in treatment_match_filters
+    ) if treatment_match_filters else "1=0"
+
+    # Control: exploration experiences that did NOT use the proposed policy
+    # This is the true baseline — what happens without the proposed change
     control_sql = text(f"""
         SELECT COUNT(*) AS cnt, AVG(reward) AS avg_reward
         FROM rl_experiences
@@ -225,28 +244,14 @@ def run_offline_evaluation(
           AND reward IS NOT NULL
           AND archived_at IS NULL
           AND {exploration_filter}
+          AND ({control_exclude})
     """)
-    control_row = db.execute(control_sql, {
-        "tid": str(tenant_id),
-        "dp": candidate.decision_point,
-    }).one()
+    control_row = db.execute(control_sql, params).one()
 
     experiment.control_sample_size = int(control_row.cnt or 0)
     experiment.control_avg_reward = float(control_row.avg_reward) if control_row.avg_reward is not None else None
 
     # Treatment: exploration experiences matching the proposed policy
-    proposed = candidate.proposed_policy or {}
-    treatment_filters = [exploration_filter]
-    params = {"tid": str(tenant_id), "dp": candidate.decision_point}
-
-    if "platform" in proposed:
-        treatment_filters.append("action->>'platform' = :platform")
-        params["platform"] = proposed["platform"]
-    if "agent_slug" in proposed:
-        treatment_filters.append("COALESCE(action->>'agent_slug', state->>'agent_slug') = :agent")
-        params["agent"] = proposed["agent_slug"]
-
-    where_clause = " AND ".join(treatment_filters)
     treatment_sql = text(f"""
         SELECT COUNT(*) AS cnt, AVG(reward) AS avg_reward
         FROM rl_experiences
@@ -254,7 +259,8 @@ def run_offline_evaluation(
           AND decision_point = :dp
           AND reward IS NOT NULL
           AND archived_at IS NULL
-          AND {where_clause}
+          AND {exploration_filter}
+          AND {treatment_match}
     """)
     treatment_row = db.execute(treatment_sql, params).one()
 
