@@ -43,24 +43,14 @@ def create_assertion(
     current_user: User = Depends(get_current_user),
 ):
     """Assert a state claim. Supersedes prior active assertion for same subject+attribute."""
-    return world_state_service.assert_state(
-        db,
-        tenant_id=current_user.tenant_id,
-        assertion_in=assertion_in,
-    )
-
-
-@router.get("/assertions/{assertion_id}", response_model=WorldStateAssertionInDB)
-def get_assertion(
-    assertion_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Get a single assertion by ID."""
-    assertion = world_state_service.get_assertion(db, current_user.tenant_id, assertion_id)
-    if not assertion:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assertion not found")
-    return assertion
+    try:
+        return world_state_service.assert_state(
+            db,
+            tenant_id=current_user.tenant_id,
+            assertion_in=assertion_in,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("/assertions/unstable", response_model=List[WorldStateAssertionInDB])
@@ -77,6 +67,19 @@ def list_unstable_assertions(
         confidence_threshold=confidence_threshold,
         limit=limit,
     )
+
+
+@router.get("/assertions/{assertion_id}", response_model=WorldStateAssertionInDB)
+def get_assertion(
+    assertion_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get a single assertion by ID."""
+    assertion = world_state_service.get_assertion(db, current_user.tenant_id, assertion_id)
+    if not assertion:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Assertion not found")
+    return assertion
 
 
 @router.get("/snapshots", response_model=List[WorldStateSnapshotInDB])

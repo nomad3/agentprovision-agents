@@ -10,12 +10,57 @@ from app.models.world_state import WorldStateAssertion, WorldStateSnapshot
 from app.schemas.world_state import WorldStateAssertionCreate
 
 
+def _validate_entity_ref(db: Session, tenant_id: uuid.UUID, entity_id: Optional[uuid.UUID]) -> None:
+    if not entity_id:
+        return
+    from app.models.knowledge_entity import KnowledgeEntity
+    exists = db.query(KnowledgeEntity).filter(
+        KnowledgeEntity.id == entity_id, KnowledgeEntity.tenant_id == tenant_id,
+    ).first()
+    if not exists:
+        raise ValueError(f"Entity {entity_id} not found in this tenant")
+
+
+def _validate_observation_ref(db: Session, tenant_id: uuid.UUID, obs_id: Optional[uuid.UUID]) -> None:
+    if not obs_id:
+        return
+    from app.models.knowledge_observation import KnowledgeObservation
+    exists = db.query(KnowledgeObservation).filter(
+        KnowledgeObservation.id == obs_id, KnowledgeObservation.tenant_id == tenant_id,
+    ).first()
+    if not exists:
+        raise ValueError(f"Observation {obs_id} not found in this tenant")
+
+
+def _expire_stale_assertions(db: Session, tenant_id: uuid.UUID) -> int:
+    """Transition active assertions past their freshness TTL to expired."""
+    now = datetime.utcnow()
+    expired_count = (
+        db.query(WorldStateAssertion)
+        .filter(
+            WorldStateAssertion.tenant_id == tenant_id,
+            WorldStateAssertion.status == "active",
+            WorldStateAssertion.valid_from + WorldStateAssertion.freshness_ttl_hours * timedelta(hours=1) < now,
+        )
+        .update({"status": "expired", "valid_to": now}, synchronize_session="fetch")
+    )
+    if expired_count:
+        db.commit()
+    return expired_count
+
+
 def assert_state(
     db: Session,
     tenant_id: uuid.UUID,
     assertion_in: WorldStateAssertionCreate,
 ) -> WorldStateAssertion:
     """Create or update an assertion. Supersedes prior active assertion for same attribute."""
+    _validate_entity_ref(db, tenant_id, assertion_in.subject_entity_id)
+    _validate_observation_ref(db, tenant_id, assertion_in.source_observation_id)
+
+    # Expire stale assertions before evaluating
+    _expire_stale_assertions(db, tenant_id)
+
     # Find existing active assertion for same subject + attribute
     existing = (
         db.query(WorldStateAssertion)
@@ -57,9 +102,10 @@ def assert_state(
         status="active",
         valid_from=datetime.utcnow(),
     )
+    db.add(assertion)
+    db.flush()  # Populate assertion.id before linking supersession chain
     if existing:
         existing.superseded_by_id = assertion.id
-    db.add(assertion)
     db.commit()
     db.refresh(assertion)
 
@@ -184,7 +230,10 @@ def _update_snapshot(
     subject_slug: str,
     subject_entity_id: Optional[uuid.UUID] = None,
 ) -> WorldStateSnapshot:
-    """Recompute the snapshot for a subject from its active assertions."""
+    """Recompute the snapshot for a subject from its active, non-expired assertions."""
+    # Expire stale assertions first so they don't pollute the snapshot
+    _expire_stale_assertions(db, tenant_id)
+
     active = (
         db.query(WorldStateAssertion)
         .filter(
