@@ -43,6 +43,14 @@ Create a shared working memory for a task containing:
 - open disagreements
 - final synthesized answer or plan
 
+**Concurrency and authority model**: Since the execution model is distributed and Temporal-driven, concurrent writes from planner/researcher/verifier are the normal case, not an edge case. The blackboard MUST implement:
+
+- **Append-only semantics**: Agents add entries, never overwrite. Each entry tagged with author agent, timestamp, and confidence.
+- **Versioning**: Every blackboard state change creates a version. Diffs between versions are inspectable.
+- **Ownership**: Each subproblem/hypothesis has an owner agent. Only the owner or a higher-authority role (synthesizer, auditor) can mark it resolved.
+- **Conflict resolution**: When agents disagree on a fact, both positions are stored as competing entries. Resolution requires either consensus voting or synthesizer adjudication — not silent overwrite.
+- **Replayability**: The full append log enables replaying the collaboration for debugging and RL training.
+
 ### 4.2 Stable coordination roles
 
 Define reusable internal roles such as:

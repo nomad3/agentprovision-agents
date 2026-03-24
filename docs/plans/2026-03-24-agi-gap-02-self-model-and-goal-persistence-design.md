@@ -74,7 +74,18 @@ Each goal should include:
 
 ### 4.3 Commitment tracking
 
-When Luna or another agent says "I'll follow up", "I'll remind you", or "I'll check that later", the system should create a commitment object automatically. Commitments then feed reminders, reviews, and overdue detection.
+When an agent makes an explicit commitment to the user, the system should create a commitment object. Commitments then feed reminders, reviews, and overdue detection.
+
+**Speech-act classification boundary**: Not every mention of future action is a real commitment. The system will encounter hypothetical examples, quoted text, drafted messages, and tool-generated language that was never intended as an actual system obligation. To avoid filling the commitment layer with false reminders:
+
+- **Phase 1**: Only create commitments from explicit tool calls (e.g., `schedule_followup`, `create_calendar_event`) — these are unambiguous system actions.
+- **Phase 2**: Add LLM-based speech-act classification to detect genuine commitments in natural language. Must distinguish:
+  - Direct commitments: "I'll send that report by Friday" → create commitment
+  - Hypothetical: "If you want, I could follow up" → do NOT create commitment
+  - Quoted/drafted: "Here's a draft: I'll follow up on..." → do NOT create commitment
+- **Phase 3**: User-confirmable commitments — agent proposes, user confirms before it becomes a tracked obligation.
+
+Without this filter, the commitment layer will degrade trust faster than it builds it.
 
 ### 4.4 Identity profile
 

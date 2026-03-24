@@ -38,13 +38,23 @@ Introduce a plan model with:
 
 - `goal_id`
 - `plan_version`
-- `steps_json`
-- `assumptions_json`
-- `success_metrics_json`
-- `budget_json` (time, cost, risk)
 - `current_step_id`
 - `status`
 - `replan_count`
+- `budget_json` (time, cost, risk)
+
+**Steps, assumptions, and metrics as first-class records** (not JSON blobs):
+
+Steps, assumptions, and success metrics should be separate tables (`plan_steps`, `plan_assumptions`, `plan_metrics`), not opaque JSON on the parent plan row. This is critical because:
+
+- Individual steps need their own execution/replan history and provenance
+- Plan diffs between versions require per-step comparison
+- "Resume from last confirmed step" requires addressable step records
+- Assumptions need independent status tracking (valid, invalidated, unverified)
+
+The existing `dynamic_workflows` system already suffers from JSON-blob step definitions making inspection and finalization harder — this design should not repeat that pattern.
+
+**Relationship to PR #25's Architect agent**: The code-worker already has a planning phase (Architect agent creates `.claude/plan.md`, plan review council validates, implementation follows). The Plan Runtime should formalize and extend that pattern into durable DB-backed plans, not ignore or duplicate it.
 
 ### 4.2 Execution semantics
 

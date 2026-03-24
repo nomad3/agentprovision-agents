@@ -2,7 +2,7 @@
 
 **Date**: 2026-03-24  
 **Status**: Design  
-**Depends on**: `2026-03-12-reinforcement-learning-framework-design.md`, `2026-03-23-learned-routing-modularity-design.md`, `2026-02-26-self-modifying-agents-design.md`
+**Depends on**: `2026-03-12-reinforcement-learning-framework-design.md`, `2026-03-23-learned-routing-modularity-design.md`, `2026-02-26-self-modifying-agents-design.md` (design-only, not yet implemented)
 
 ## 1. Why this exists
 
@@ -34,11 +34,20 @@ Create a **Learning Control Plane** that converts operational data into tested p
 
 ### 4.1 Learning pipeline
 
-1. Collect experiences and outcomes  
-2. Cluster recurring failure/success patterns  
-3. Generate candidate policy changes  
-4. Evaluate them in shadow mode or limited rollout  
+1. Collect experiences and outcomes
+2. Cluster recurring failure/success patterns
+3. Generate candidate policy changes
+4. Evaluate them in shadow mode or limited rollout
 5. Promote or reject based on measurable gains
+
+**Critical constraint — counterfactual evaluation**: The experience stream is heavily biased toward incumbent policies (e.g., most routing data comes from `claude_code` because it was the default). Observational reward averages alone cannot prove a new policy is better — they may just reflect exploration gaps. Every candidate policy evaluation MUST include:
+
+- A randomized baseline period (exploration mode) to collect unbiased data
+- Comparison against the incumbent under the same task distribution
+- Minimum sample size before promotion decisions (not just "avg reward went up")
+- Explicit tracking of whether improvement is real or just selection bias
+
+Without this, the learning control plane will systematically reinforce the current winner and mistake familiarity for quality.
 
 ### 4.2 Policy artifacts
 

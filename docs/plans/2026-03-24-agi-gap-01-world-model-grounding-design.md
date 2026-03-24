@@ -46,17 +46,19 @@ Add a **World State Layer** that turns raw observations into a structured, time-
 
 ### 4.1 New conceptual layers
 
-1. **Observations**  
-Raw facts from chat, email, workflows, monitors, and external tools.
+1. **Observations** (existing — `knowledge_observations` table)
+Raw facts from chat, email, workflows, monitors, and external tools. Already exists with 4,823+ rows, embeddings, and observation types. This layer is NOT replaced — it remains the intake layer.
 
-2. **Assertions**  
-Normalized claims derived from observations, e.g. `company.stage = proposal`, `campaign.status = paused`.
+2. **Assertions** (new — layers ON TOP of observations)
+Normalized claims derived from observations, e.g. `company.stage = proposal`, `campaign.status = paused`. Each assertion links back to its source observation(s) via `source_observation_id`. Multiple observations can corroborate or contradict a single assertion.
 
-3. **World State Projections**  
-The current best-known state per entity or system object, with provenance and confidence.
+3. **World State Projections** (new)
+The current best-known state per entity or system object, with provenance and confidence. Projections are computed from assertions, not directly from observations.
 
-4. **Causal Edges**  
+4. **Causal Edges** (new)
 Links from events to outcomes, e.g. `email_followup_sent -> meeting_booked`.
+
+**Relationship to existing tables**: The assertion and projection layers build on top of `knowledge_observations` and `knowledge_entities`, not replace them. Observations remain the raw intake; assertions are the normalized, conflict-aware interpretation layer.
 
 ### 4.2 Proposed data model
 
