@@ -149,25 +149,34 @@ _TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 # Pre-execution safety gate — evaluate through the shared policy engine
 # ---------------------------------------------------------------------------
 
-def _check_tool_risk(tool_name: str, tenant_id: uuid.UUID) -> Tuple[str, str]:
-    """Returns ('allow'|'block', rationale) using the tenant-aware safety policy engine."""
+def _load_local_tool_policies(tenant_id: uuid.UUID) -> Dict[str, Tuple[str, str]]:
+    """Evaluate local-agent policy once per request for every curated tool."""
     db = SessionLocal()
     try:
-        evaluation = safety_policies.evaluate_action(
-            db,
-            tenant_id=tenant_id,
-            action_type=ActionType.MCP_TOOL,
-            action_name=tool_name,
-            channel="local_agent",
-        )
-    except ValueError:
-        return "block", f"Tool '{tool_name}' is not registered in the governed action catalog."
+        policies: Dict[str, Tuple[str, str]] = {}
+        for tool_name in _TOOL_REGISTRY:
+            try:
+                evaluation = safety_policies.evaluate_action(
+                    db,
+                    tenant_id=tenant_id,
+                    action_type=ActionType.MCP_TOOL,
+                    action_name=tool_name,
+                    channel="local_agent",
+                )
+            except ValueError:
+                policies[tool_name] = (
+                    "block",
+                    f"Tool '{tool_name}' is not registered in the governed action catalog.",
+                )
+                continue
+
+            if evaluation.decision in (PolicyDecision.ALLOW, PolicyDecision.ALLOW_WITH_LOGGING):
+                policies[tool_name] = ("allow", evaluation.rationale)
+            else:
+                policies[tool_name] = ("block", evaluation.rationale)
+        return policies
     finally:
         db.close()
-
-    if evaluation.decision in (PolicyDecision.ALLOW, PolicyDecision.ALLOW_WITH_LOGGING):
-        return "allow", evaluation.rationale
-    return "block", evaluation.rationale
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +336,7 @@ def run(
     if not tools:
         logger.info("No tools available for tenant %s — skipping tool agent", tenant_id)
         return None, metadata
+    tool_policies = _load_local_tool_policies(tenant_id)
 
     # Build initial messages
     messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
@@ -385,7 +395,10 @@ def run(
                 continue
 
             # Pre-execution safety gate — block side-effect tools for local model
-            risk, rationale = _check_tool_risk(tool_name, tenant_id)
+            risk, rationale = tool_policies.get(
+                tool_name,
+                ("block", f"Tool '{tool_name}' is not registered in the governed action catalog."),
+            )
             if risk == "block":
                 logger.warning("BLOCKED governed tool %s for local agent — %s", tool_name, rationale)
                 messages.append({
