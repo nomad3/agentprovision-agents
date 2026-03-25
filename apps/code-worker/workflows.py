@@ -919,39 +919,45 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
 
         if task_input.platform == "claude_code":
             claude_result = _execute_claude_chat(task_input, session_dir)
-            if claude_result.success or not _is_claude_credit_exhausted(claude_result.error or ""):
+            if claude_result.success:
                 return claude_result
 
+            # Claude Code failed — fallback to Codex regardless of error type
+            logger.warning("Claude Code failed (%s), falling back to Codex", claude_result.error[:200] if claude_result.error else "unknown")
             codex_result = _execute_codex_chat(task_input, session_dir, image_path)
             if codex_result.success:
                 meta = dict(codex_result.metadata or {})
                 meta["fallback_from"] = "claude_code"
                 meta["requested_platform"] = "claude_code"
+                meta["claude_error"] = (claude_result.error or "")[:200]
                 codex_result.metadata = meta
                 return codex_result
 
             return ChatCliResult(
                 response_text="",
                 success=False,
-                error=f"Claude Code credits exhausted. Codex fallback also failed: {codex_result.error}",
+                error=f"Claude Code failed: {claude_result.error}. Codex fallback also failed: {codex_result.error}",
             )
         if task_input.platform == "codex":
             codex_result = _execute_codex_chat(task_input, session_dir, image_path)
-            if codex_result.success or not _is_codex_credit_exhausted(codex_result.error or ""):
+            if codex_result.success:
                 return codex_result
 
+            # Codex failed — fallback to Claude Code regardless of error type
+            logger.warning("Codex failed (%s), falling back to Claude Code", codex_result.error[:200] if codex_result.error else "unknown")
             claude_result = _execute_claude_chat(task_input, session_dir)
             if claude_result.success:
                 meta = dict(claude_result.metadata or {})
                 meta["fallback_from"] = "codex"
                 meta["requested_platform"] = "codex"
+                meta["codex_error"] = (codex_result.error or "")[:200]
                 claude_result.metadata = meta
                 return claude_result
 
             return ChatCliResult(
                 response_text="",
                 success=False,
-                error=f"Codex credits exhausted. Claude Code fallback also failed: {claude_result.error}",
+                error=f"Codex failed: {codex_result.error}. Claude Code fallback also failed: {claude_result.error}",
             )
         if task_input.platform == "gemini_cli":
             return _execute_gemini_chat(task_input, session_dir, image_path)
