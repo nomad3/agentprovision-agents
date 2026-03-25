@@ -569,12 +569,24 @@ class WhatsAppService:
         # it every 4s in a background task until the response is ready.
         reply_jid = build_jid(sender_phone)
 
+        # Helper to send a message and track its ID for echo suppression
+        async def _send_and_track(msg: str):
+            try:
+                resp = await client.send_message(reply_jid, msg)
+                if resp and hasattr(resp, 'ID') and resp.ID:
+                    _ids = self._sent_message_ids.setdefault(key, set())
+                    _ids.add(resp.ID)
+                    if len(_ids) > 100:
+                        _ids.pop()
+            except Exception:
+                pass
+
         # Send immediate acknowledgment before CLI processing
         try:
             from app.services.agent_router import _infer_task_type
             _task_type = _infer_task_type(text or media_caption or "")
             _ack_msg = _build_ack_message(text or media_caption or "", _task_type)
-            await client.send_message(reply_jid, _ack_msg)
+            await _send_and_track(_ack_msg)
         except Exception:
             pass  # Never block on ack failure
 
@@ -593,11 +605,8 @@ class WhatsAppService:
                     pass
                 # Send a progress message every ~32s (8 ticks * 4s)
                 if _tick > 0 and _tick % 8 == 0:
-                    try:
-                        _prog = _get_progress_message(_tick // 8)
-                        await client.send_message(reply_jid, _prog)
-                    except Exception:
-                        pass
+                    _prog = _get_progress_message(_tick // 8)
+                    await _send_and_track(_prog)
                 _tick += 1
                 try:
                     await asyncio.wait_for(typing_done.wait(), timeout=4.0)
@@ -705,7 +714,7 @@ class WhatsAppService:
             _completion = _build_completion_summary(response_text, _elapsed)
             if _completion:
                 try:
-                    await client.send_message(reply_jid, _completion)
+                    await _send_and_track(_completion)
                 except Exception:
                     pass
 
