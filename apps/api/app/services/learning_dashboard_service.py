@@ -39,6 +39,7 @@ def get_policy_improvement_summary(
                 LearningExperiment.status == "completed",
                 LearningExperiment.is_significant == "yes",
             )
+            .order_by(LearningExperiment.completed_at.desc())
             .first()
         )
         improvements.append({
@@ -66,9 +67,15 @@ def get_policy_improvement_summary(
         .scalar()
     )
 
+    promoted_count = (
+        db.query(func.count(PolicyCandidate.id))
+        .filter(PolicyCandidate.tenant_id == tenant_id, PolicyCandidate.status == "promoted")
+        .scalar()
+    )
+
     return {
         "total_candidates": total,
-        "promoted_count": len(promoted),
+        "promoted_count": promoted_count,
         "rejected_count": rejected,
         "improvements": improvements,
     }
@@ -227,6 +234,7 @@ def get_rollout_status(
         .filter(
             LearningExperiment.tenant_id == tenant_id,
             LearningExperiment.status.in_(["completed", "aborted"]),
+            LearningExperiment.experiment_type == "split",
         )
         .order_by(LearningExperiment.completed_at.desc())
         .limit(10)
