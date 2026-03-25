@@ -91,6 +91,13 @@ from app.workflows.activities.goal_review import (
     review_commitments,
     create_review_notifications,
 )
+from app.workflows.autonomous_learning import AutonomousLearningWorkflow
+from app.workflows.activities.autonomous_learning import (
+    collect_learning_metrics,
+    generate_and_evaluate_candidates,
+    manage_active_rollouts,
+    generate_morning_report,
+)
 from app.workflows.activities.skill_activities import execute_skill
 from app.workflows.activities.rl_policy_update import (
     collect_tenant_experiences,
@@ -155,6 +162,7 @@ async def run_orchestration_worker():
             RLPolicyUpdateWorkflow,
             MemoryConsolidationWorkflow,
             DynamicWorkflowExecutor,
+            AutonomousLearningWorkflow,
             GoalReviewWorkflow,
         ],
         activities=[
@@ -213,6 +221,11 @@ async def run_orchestration_worker():
             promote_entities,
             sync_memories_and_entities,
             log_consolidation_results,
+            # Autonomous learning activities
+            collect_learning_metrics,
+            generate_and_evaluate_candidates,
+            manage_active_rollouts,
+            generate_morning_report,
             # Goal review activities
             review_goals,
             review_commitments,

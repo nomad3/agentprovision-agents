@@ -505,6 +505,87 @@ async def competitor_monitor_status(
 
 
 # ---------------------------------------------------------------------------
+# POST /workflows/autonomous-learning/start
+# ---------------------------------------------------------------------------
+@router.post("/autonomous-learning/start")
+async def start_autonomous_learning(
+    cycle_interval_hours: int = 24,
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Start the autonomous learning cycle for the current tenant."""
+    from temporalio.client import Client
+    from app.workflows.autonomous_learning import AutonomousLearningWorkflow
+    workflow_id = f"autonomous-learning-{tenant_id}"
+    interval = max(1, min(cycle_interval_hours, 168)) * 3600
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        handle = await client.start_workflow(
+            AutonomousLearningWorkflow.run,
+            args=[tenant_id, interval],
+            id=workflow_id,
+            task_queue="servicetsunami-orchestration",
+        )
+        return {
+            "status": "started",
+            "workflow_id": workflow_id,
+            "run_id": handle.result_run_id,
+            "interval_hours": cycle_interval_hours,
+        }
+    except Exception as e:
+        if "already started" in str(e).lower() or "already running" in str(e).lower():
+            return {"status": "already_running", "workflow_id": workflow_id}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# POST /workflows/autonomous-learning/stop
+# ---------------------------------------------------------------------------
+@router.post("/autonomous-learning/stop")
+async def stop_autonomous_learning(
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Stop the autonomous learning cycle."""
+    from temporalio.client import Client
+    workflow_id = f"autonomous-learning-{tenant_id}"
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        handle = client.get_workflow_handle(workflow_id)
+        await handle.cancel()
+        return {"status": "stopped", "workflow_id": workflow_id}
+    except Exception as e:
+        if "not found" in str(e).lower():
+            return {"status": "not_running", "workflow_id": workflow_id}
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# GET /workflows/autonomous-learning/status
+# ---------------------------------------------------------------------------
+@router.get("/autonomous-learning/status")
+async def autonomous_learning_status(
+    tenant_id: str = Depends(_get_tenant_id_from_internal_or_user),
+):
+    """Check if the autonomous learning cycle is running."""
+    workflow_id = f"autonomous-learning-{tenant_id}"
+
+    try:
+        client = await _get_temporal_client()
+        handle = client.get_workflow_handle(workflow_id)
+        desc = await handle.describe()
+        status = desc.status.name if desc.status else None
+        return {
+            "running": status == "RUNNING",
+            "workflow_id": workflow_id,
+            "status": status,
+            "start_time": desc.start_time.isoformat() if desc.start_time else None,
+        }
+    except Exception:
+        return {"running": False, "workflow_id": workflow_id, "status": None}
+
+
+# ---------------------------------------------------------------------------
 # POST /workflows/goal-review/start
 # ---------------------------------------------------------------------------
 @router.post("/goal-review/start")
