@@ -50,6 +50,18 @@ class AutonomousLearningWorkflow:
             "candidates_generated": 0,
             "candidates_evaluated": 0,
             "rollouts_managed": 0,
+            # Self-simulation fields
+            "personas_selected": 0,
+            "scenarios_generated": 0,
+            "simulation_executed": 0,
+            "simulation_avg_score": None,
+            "skill_gaps_detected": 0,
+            # Proactive agent fields
+            "proactive_actions": 0,
+            # Feedback + diagnosis fields
+            "feedback_processed": 0,
+            "diagnosis": {},
+            "regressions_detected": 0,
             "report_sent": False,
             "errors": [],
         }
@@ -94,6 +106,99 @@ class AutonomousLearningWorkflow:
             workflow.logger.error(f"Step 3 (manage_rollouts) failed: {e}")
             cycle_result["errors"].append(f"manage_rollouts: {e}")
 
+        # Step 3b: Self-simulation
+        try:
+            persona_result = await workflow.execute_activity(
+                "select_personas_for_cycle",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=retry_policy,
+            )
+            cycle_result["personas_selected"] = persona_result.get("selected", 0)
+
+            if persona_result.get("persona_ids"):
+                scenario_result = await workflow.execute_activity(
+                    "generate_simulation_scenarios",
+                    args=[tenant_id, persona_result["persona_ids"]],
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=retry_policy,
+                )
+                cycle_result["scenarios_generated"] = scenario_result.get("scenarios_created", 0)
+
+            exec_result = await workflow.execute_activity(
+                "execute_simulation_scenarios",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=1),
+            )
+            cycle_result["simulation_avg_score"] = exec_result.get("avg_score")
+            cycle_result["simulation_executed"] = exec_result.get("executed", 0)
+
+            failure_data = await workflow.execute_activity(
+                "classify_simulation_failures",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=3),
+                retry_policy=retry_policy,
+            )
+            gap_result = await workflow.execute_activity(
+                "detect_skill_gaps",
+                args=[tenant_id, failure_data],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=retry_policy,
+            )
+            cycle_result["skill_gaps_detected"] = gap_result.get("gaps_detected", 0)
+        except Exception as e:
+            workflow.logger.error(f"Step 3b (self-simulation) failed: {e}")
+            cycle_result["errors"].append(f"self_simulation: {e}")
+
+        # Step 3c: Proactive actions
+        try:
+            proactive_result = await workflow.execute_activity(
+                "scan_for_proactive_actions",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=3),
+                retry_policy=retry_policy,
+            )
+            await workflow.execute_activity(
+                "send_proactive_notifications",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=retry_policy,
+            )
+            cycle_result["proactive_actions"] = proactive_result.get("actions_queued", 0)
+        except Exception as e:
+            workflow.logger.error(f"Step 3c (proactive actions) failed: {e}")
+            cycle_result["errors"].append(f"proactive: {e}")
+
+        # Step 3d: Feedback + diagnosis
+        try:
+            feedback_result = await workflow.execute_activity(
+                "process_human_feedback",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=2),
+                retry_policy=retry_policy,
+            )
+            cycle_result["feedback_processed"] = feedback_result.get("feedback_processed", 0)
+
+            diagnosis = await workflow.execute_activity(
+                "run_self_diagnosis",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=3),
+                retry_policy=retry_policy,
+            )
+            cycle_result["diagnosis"] = diagnosis
+
+            regression_result = await workflow.execute_activity(
+                "monitor_regression",
+                args=[tenant_id],
+                start_to_close_timeout=timedelta(minutes=3),
+                retry_policy=retry_policy,
+            )
+            cycle_result["regressions_detected"] = regression_result.get("regressions_detected", 0)
+        except Exception as e:
+            workflow.logger.error(f"Step 3d (feedback/diagnosis) failed: {e}")
+            cycle_result["errors"].append(f"feedback_diagnosis: {e}")
+
         # Step 4: Generate and send morning report
         try:
             report_result = await workflow.execute_activity(
@@ -111,6 +216,11 @@ class AutonomousLearningWorkflow:
             f"cycle complete: {cycle_result['candidates_generated']} generated, "
             f"{cycle_result['candidates_evaluated']} evaluated, "
             f"{cycle_result['rollouts_managed']} rollouts managed, "
+            f"simulations={cycle_result['simulation_executed']} "
+            f"(avg={cycle_result['simulation_avg_score']}), "
+            f"gaps={cycle_result['skill_gaps_detected']}, "
+            f"proactive={cycle_result['proactive_actions']}, "
+            f"regressions={cycle_result['regressions_detected']}, "
             f"report={'sent' if cycle_result['report_sent'] else 'failed'}, "
             f"errors={len(cycle_result['errors'])}"
         )

@@ -344,6 +344,7 @@ async def generate_morning_report(
     from app.db.session import SessionLocal
     from app.models.notification import Notification
     from app.services import learning_dashboard_service
+    from sqlalchemy import text
     import uuid
 
     db = SessionLocal()
@@ -411,6 +412,57 @@ async def generate_morning_report(
             lines.append(f"  Commitments: {commitments['overdue']} overdue")
         if ws.get("disputed", 0) > 0:
             lines.append(f"  World state: {ws['disputed']} disputed assertions")
+
+        # Simulation results section
+        sim_executed = cycle_result.get("simulation_executed", 0)
+        sim_avg = cycle_result.get("simulation_avg_score")
+        gaps_detected = cycle_result.get("skill_gaps_detected", 0)
+        if sim_executed:
+            avg_str = f", avg_score={sim_avg:.2f}" if sim_avg is not None else ""
+            lines.append(f"Simulation: {sim_executed} scenarios run{avg_str}")
+            lines.append("")
+
+        # Skill gaps section
+        if gaps_detected:
+            lines.append(f"Skill Gaps Detected: {gaps_detected} new gap(s)")
+            try:
+                today = datetime.utcnow().date()
+                gap_rows = db.execute(text("""
+                    SELECT industry, description, severity
+                    FROM skill_gaps
+                    WHERE tenant_id = CAST(:tid AS uuid)
+                      AND DATE(detected_at) = :today
+                    ORDER BY
+                        CASE severity WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+                        detected_at DESC
+                    LIMIT 3
+                """), {"tid": tenant_id, "today": today}).fetchall()
+                for gap in gap_rows:
+                    ind = f"[{gap.industry}] " if gap.industry else ""
+                    lines.append(f"  {ind}{gap.description[:80]} ({gap.severity})")
+            except Exception:
+                pass
+            lines.append("")
+
+        # Proactive actions
+        proactive = cycle_result.get("proactive_actions", 0)
+        if proactive:
+            lines.append(f"Proactive Actions Queued: {proactive} nudge(s)/briefing(s)")
+            lines.append("")
+
+        # Regression alerts
+        regressions = cycle_result.get("regressions_detected", 0)
+        if regressions:
+            lines.append(f"REGRESSION ALERTS: {regressions} promoted policy candidate(s) reverted")
+            lines.append("")
+
+        # Diagnosis summary
+        diagnosis = cycle_result.get("diagnosis", {})
+        if diagnosis:
+            health = diagnosis.get("overall_health", "unknown")
+            failure_rate = diagnosis.get("failure_rate", 0)
+            lines.append(f"Platform Health: {health} (simulation failure rate: {failure_rate:.0%})")
+            lines.append("")
 
         # Errors
         errors = cycle_result.get("errors", [])
