@@ -39,6 +39,22 @@ class AutonomousLearningWorkflow:
             maximum_interval=timedelta(seconds=120),
         )
         activity_timeout = timedelta(minutes=5)
+        simulation_execution_timeout = timedelta(minutes=150)
+
+        async def run_activity(
+            activity_name: str,
+            *activity_args,
+            start_to_close_timeout: timedelta,
+            retry_policy: RetryPolicy,
+            schedule_slack: timedelta = timedelta(minutes=5),
+        ):
+            return await workflow.execute_activity(
+                activity_name,
+                args=list(activity_args),
+                start_to_close_timeout=start_to_close_timeout,
+                schedule_to_close_timeout=start_to_close_timeout + schedule_slack,
+                retry_policy=retry_policy,
+            )
 
         workflow.logger.info(
             f"Autonomous learning cycle starting for tenant {tenant_id[:8]}"
@@ -74,9 +90,9 @@ class AutonomousLearningWorkflow:
 
         # Step 1: Collect learning metrics
         try:
-            metrics = await workflow.execute_activity(
+            metrics = await run_activity(
                 "collect_learning_metrics",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=activity_timeout,
                 retry_policy=retry_policy,
             )
@@ -87,9 +103,10 @@ class AutonomousLearningWorkflow:
 
         # Step 2: Generate and evaluate candidates
         try:
-            eval_result = await workflow.execute_activity(
+            eval_result = await run_activity(
                 "generate_and_evaluate_candidates",
-                args=[tenant_id, cycle_result.get("metrics", {})],
+                tenant_id,
+                cycle_result.get("metrics", {}),
                 start_to_close_timeout=timedelta(minutes=10),
                 retry_policy=retry_policy,
             )
@@ -101,9 +118,9 @@ class AutonomousLearningWorkflow:
 
         # Step 3: Manage active rollouts
         try:
-            rollout_result = await workflow.execute_activity(
+            rollout_result = await run_activity(
                 "manage_active_rollouts",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=activity_timeout,
                 retry_policy=retry_policy,
             )
@@ -114,41 +131,44 @@ class AutonomousLearningWorkflow:
 
         # Step 3b: Self-simulation
         try:
-            persona_result = await workflow.execute_activity(
+            persona_result = await run_activity(
                 "select_personas_for_cycle",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
             cycle_result["personas_selected"] = persona_result.get("selected", 0)
 
             if persona_result.get("persona_ids"):
-                scenario_result = await workflow.execute_activity(
+                scenario_result = await run_activity(
                     "generate_simulation_scenarios",
-                    args=[tenant_id, persona_result["persona_ids"]],
+                    tenant_id,
+                    persona_result["persona_ids"],
                     start_to_close_timeout=timedelta(minutes=5),
                     retry_policy=retry_policy,
                 )
                 cycle_result["scenarios_generated"] = scenario_result.get("scenarios_created", 0)
 
-            exec_result = await workflow.execute_activity(
+            exec_result = await run_activity(
                 "execute_simulation_scenarios",
-                args=[tenant_id],
-                start_to_close_timeout=timedelta(minutes=30),
+                tenant_id,
+                start_to_close_timeout=simulation_execution_timeout,
                 retry_policy=RetryPolicy(maximum_attempts=1),
+                schedule_slack=timedelta(minutes=15),
             )
             cycle_result["simulation_avg_score"] = exec_result.get("avg_score")
             cycle_result["simulation_executed"] = exec_result.get("executed", 0)
 
-            failure_data = await workflow.execute_activity(
+            failure_data = await run_activity(
                 "classify_simulation_failures",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=3),
                 retry_policy=retry_policy,
             )
-            gap_result = await workflow.execute_activity(
+            gap_result = await run_activity(
                 "detect_skill_gaps",
-                args=[tenant_id, failure_data],
+                tenant_id,
+                failure_data,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
@@ -159,15 +179,15 @@ class AutonomousLearningWorkflow:
 
         # Step 3c: Proactive actions
         try:
-            proactive_result = await workflow.execute_activity(
+            proactive_result = await run_activity(
                 "scan_for_proactive_actions",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=3),
                 retry_policy=retry_policy,
             )
-            await workflow.execute_activity(
+            await run_activity(
                 "send_proactive_notifications",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
@@ -178,43 +198,44 @@ class AutonomousLearningWorkflow:
 
         # Step 3d: Feedback + diagnosis
         try:
-            feedback_result = await workflow.execute_activity(
+            feedback_result = await run_activity(
                 "process_human_feedback",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
             cycle_result["feedback_processed"] = feedback_result.get("feedback_processed", 0)
 
             # Apply collected feedback to candidates and exploration config
-            apply_result = await workflow.execute_activity(
+            apply_result = await run_activity(
                 "apply_feedback_to_cycle",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
             cycle_result["feedback_applied"] = apply_result.get("feedback_applied", 0)
 
-            diagnosis = await workflow.execute_activity(
+            diagnosis = await run_activity(
                 "run_self_diagnosis",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=3),
                 retry_policy=retry_policy,
             )
             cycle_result["diagnosis"] = diagnosis
 
-            regression_result = await workflow.execute_activity(
+            regression_result = await run_activity(
                 "monitor_regression",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=3),
                 retry_policy=retry_policy,
             )
             cycle_result["regressions_detected"] = regression_result.get("regressions_detected", 0)
 
             # Tune per-decision-point exploration rates based on stall/performance data
-            await workflow.execute_activity(
+            await run_activity(
                 "adjust_exploration_rates",
-                args=[tenant_id, cycle_result.get("metrics", {})],
+                tenant_id,
+                cycle_result.get("metrics", {}),
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
@@ -224,9 +245,9 @@ class AutonomousLearningWorkflow:
 
         # Step 3e: Skill auto-creation from gaps (Phase 6)
         try:
-            stub_result = await workflow.execute_activity(
+            stub_result = await run_activity(
                 "auto_create_skill_stubs",
-                args=[tenant_id],
+                tenant_id,
                 start_to_close_timeout=timedelta(minutes=5),
                 retry_policy=retry_policy,
             )
@@ -237,9 +258,10 @@ class AutonomousLearningWorkflow:
 
         # Step 3f: Track cycle cost against budget
         try:
-            cost_result = await workflow.execute_activity(
+            cost_result = await run_activity(
                 "track_cycle_cost",
-                args=[tenant_id, cycle_result],
+                tenant_id,
+                cycle_result,
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=retry_policy,
             )
@@ -251,9 +273,10 @@ class AutonomousLearningWorkflow:
 
         # Step 4: Generate and send morning report
         try:
-            report_result = await workflow.execute_activity(
+            report_result = await run_activity(
                 "generate_morning_report",
-                args=[tenant_id, cycle_result],
+                tenant_id,
+                cycle_result,
                 start_to_close_timeout=activity_timeout,
                 retry_policy=retry_policy,
             )
