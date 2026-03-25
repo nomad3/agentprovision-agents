@@ -608,23 +608,9 @@ class WhatsAppService:
             except Exception:
                 pass
 
-        # Prepare ack but don't send yet — let _keep_typing send it after 5s
-        # if the response hasn't come back by then. This avoids ack noise
-        # on quick conversational messages.
-        _msg_text = (text or media_caption or "").strip()
-        _ack_sent = False
-        try:
-            from app.services.agent_router import _infer_task_type
-            _task_type = _infer_task_type(_msg_text)
-            _ack_msg = _build_ack_message(_msg_text, _task_type)
-        except Exception:
-            _ack_msg = None
-
         typing_done = asyncio.Event()
 
         async def _keep_typing():
-            nonlocal _ack_sent
-            _tick = 0
             while not typing_done.is_set():
                 try:
                     await client.send_chat_presence(
@@ -634,15 +620,6 @@ class WhatsAppService:
                     )
                 except Exception:
                     pass
-                # Send ack after ~5s if response hasn't arrived yet
-                if not _ack_sent and _tick == 1 and _ack_msg:
-                    await _send_and_track(_ack_msg)
-                    _ack_sent = True
-                # Send progress messages every ~32s after the ack
-                elif _ack_sent and _tick > 1 and (_tick - 1) % 8 == 0:
-                    _prog = _get_progress_message((_tick - 1) // 8)
-                    await _send_and_track(_prog)
-                _tick += 1
                 try:
                     await asyncio.wait_for(typing_done.wait(), timeout=4.0)
                     break
