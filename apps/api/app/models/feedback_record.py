@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Text, Boolean, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
-from app.db.base_class import Base
+from app.db.base import Base
 
 
 class FeedbackRecord(Base):

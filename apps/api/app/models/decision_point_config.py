@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Numeric, ARRAY, Text, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID
-from app.db.base_class import Base
+from app.db.base import Base
 
 
 class DecisionPointConfig(Base):

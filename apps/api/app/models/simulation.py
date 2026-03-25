@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, Integer, Numeric, Date, Text, ARRAY, TIMESTAMP
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from app.db.base_class import Base
+from app.db.base import Base
 
 
 class SimulationPersona(Base):
