@@ -38,6 +38,20 @@ CLAUDE_CREDIT_ERROR_PATTERNS = (
     "subscription required",
 )
 
+CODEX_CREDIT_ERROR_PATTERNS = (
+    "rate limit",
+    "rate_limit",
+    "usage limit",
+    "quota exceeded",
+    "insufficient_quota",
+    "billing",
+    "out of credits",
+    "token limit exceeded",
+    "capacity",
+    "too many requests",
+    "429",
+)
+
 
 @dataclass
 class CodeTaskInput:
@@ -183,6 +197,11 @@ def _fetch_claude_token(tenant_id: str) -> str:
 def _is_claude_credit_exhausted(error_text: str) -> bool:
     text = (error_text or "").lower()
     return any(pattern in text for pattern in CLAUDE_CREDIT_ERROR_PATTERNS)
+
+
+def _is_codex_credit_exhausted(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    return any(pattern in text for pattern in CODEX_CREDIT_ERROR_PATTERNS)
 
 
 _INTEGRATION_NOT_CONNECTED_MESSAGES = {
@@ -916,7 +935,23 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 error=f"Claude Code credits exhausted. Codex fallback also failed: {codex_result.error}",
             )
         if task_input.platform == "codex":
-            return _execute_codex_chat(task_input, session_dir, image_path)
+            codex_result = _execute_codex_chat(task_input, session_dir, image_path)
+            if codex_result.success or not _is_codex_credit_exhausted(codex_result.error or ""):
+                return codex_result
+
+            claude_result = _execute_claude_chat(task_input, session_dir)
+            if claude_result.success:
+                meta = dict(claude_result.metadata or {})
+                meta["fallback_from"] = "codex"
+                meta["requested_platform"] = "codex"
+                claude_result.metadata = meta
+                return claude_result
+
+            return ChatCliResult(
+                response_text="",
+                success=False,
+                error=f"Codex credits exhausted. Claude Code fallback also failed: {claude_result.error}",
+            )
         if task_input.platform == "gemini_cli":
             return _execute_gemini_chat(task_input, session_dir, image_path)
         return ChatCliResult(

@@ -25,9 +25,9 @@ class CandidateStatus(str, Enum):
 
 
 class ExperimentType(str, Enum):
-    SHADOW = "shadow"
     SPLIT = "split"
     OFFLINE = "offline"
+    # SHADOW = "shadow"  # Phase 3: requires parallel CLI execution
 
 
 class ExperimentStatus(str, Enum):
@@ -86,6 +86,7 @@ class LearningExperimentInDB(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     candidate_id: uuid.UUID
+    decision_point: Optional[str] = None
     experiment_type: str
     rollout_pct: float
     min_sample_size: int

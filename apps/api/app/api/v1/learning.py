@@ -152,3 +152,55 @@ def get_experiment(
     if not experiment:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Experiment not found")
     return experiment
+
+
+# --- Rollouts (Phase 2) ---
+
+@router.post("/rollouts/start", response_model=LearningExperimentInDB)
+def start_rollout(
+    candidate_id: uuid.UUID = Query(...),
+    rollout_pct: float = Query(default=0.1, ge=0.01, le=1.0),
+    experiment_type: str = Query(default="split", regex="^(split)$"),
+    min_sample_size: int = Query(default=30, ge=5),
+    max_duration_hours: int = Query(default=168, ge=1),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start a controlled split rollout for a policy candidate."""
+    from app.services import policy_rollout_service
+    try:
+        return policy_rollout_service.start_rollout(
+            db, current_user.tenant_id, candidate_id,
+            rollout_pct=rollout_pct,
+            experiment_type=experiment_type,
+            min_sample_size=min_sample_size,
+            max_duration_hours=max_duration_hours,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/rollouts/{experiment_id}/stop", response_model=LearningExperimentInDB)
+def stop_rollout(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Manually stop a running rollout."""
+    from app.services import policy_rollout_service
+    experiment = policy_rollout_service.stop_rollout(db, current_user.tenant_id, experiment_id)
+    if not experiment:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No running rollout found")
+    return experiment
+
+
+@router.get("/rollouts/active", response_model=dict)
+def get_active_rollout(
+    decision_point: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Check if there's an active rollout for a decision point."""
+    from app.services import policy_rollout_service
+    rollout = policy_rollout_service.get_active_rollout(db, current_user.tenant_id, decision_point)
+    return rollout or {"active": False}

@@ -68,6 +68,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
+    image: servicetsunami-agents-api
     command: python -m app.workers.orchestration_worker
     volumes:
       - ./apps/api:/app

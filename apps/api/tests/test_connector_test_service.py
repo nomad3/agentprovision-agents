@@ -4,7 +4,7 @@ Tests real public datasources and APIs.
 """
 import pytest
 import asyncio
-from app.services.connector_test import (
+from app.services.connector_testing import (
     test_connector,
     test_api_connection,
     CONNECTOR_TESTERS

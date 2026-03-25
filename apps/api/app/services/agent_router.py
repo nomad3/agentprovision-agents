@@ -187,6 +187,30 @@ def route_and_execute(
         except Exception as e:
             logger.debug("RL routing lookup failed: %s — using defaults", e)
 
+    # ── Policy rollout: check if a live A/B experiment overrides routing ──
+    rollout_experiment_id = None
+    try:
+        from app.services import policy_rollout_service
+        rollout = policy_rollout_service.get_active_rollout(db, tenant_id, "chat_response")
+        if rollout:
+            apply_policy, is_treatment = policy_rollout_service.should_apply_rollout(rollout)
+            rollout_experiment_id = rollout["experiment_id"]
+            if is_treatment and apply_policy:
+                routing_source = "rollout_treatment"
+                proposed = rollout.get("proposed_policy", {})
+                if "platform" in proposed:
+                    platform = proposed["platform"]
+                if "agent_slug" in proposed:
+                    agent_slug = proposed["agent_slug"]
+                logger.info(
+                    "Policy rollout: applying treatment (experiment=%s, pct=%.0f%%)",
+                    rollout["experiment_id"], rollout["rollout_pct"] * 100,
+                )
+            else:
+                routing_source = "rollout_control"
+    except Exception as e:
+        logger.debug("Policy rollout check failed: %s", e)
+
     # Build memory context early so recalled entities enrich routing RL state
     pre_built_memory_context = None
     if not recalled_entities:
@@ -284,6 +308,13 @@ def route_and_execute(
             metadata.setdefault("agent_trust_score", round(float(trust_profile.trust_score), 3))
             metadata.setdefault("agent_autonomy_tier", trust_profile.autonomy_tier)
             metadata.setdefault("agent_trust_confidence", round(float(trust_profile.confidence), 3))
+
+        # Tag rollout metadata so the async scorer can record the observation
+        # with the scored reward (single recording point, no double-counting)
+        if rollout_experiment_id:
+            metadata["rollout_experiment_id"] = rollout_experiment_id
+            metadata["rollout_arm"] = "treatment" if routing_source == "rollout_treatment" else "control"
+
         return response_text, metadata
 
     # Future: gemini_cli and additional providers.

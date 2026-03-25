@@ -111,7 +111,10 @@ def _query_provider_council_signal(
 def _is_profile_stale(profile: AgentTrustProfile) -> bool:
     if not profile.updated_at:
         return True
-    return profile.updated_at < datetime.utcnow() - timedelta(hours=TRUST_PROFILE_STALE_AFTER_HOURS)
+    try:
+        return profile.updated_at < datetime.utcnow() - timedelta(hours=TRUST_PROFILE_STALE_AFTER_HOURS)
+    except TypeError:
+        return True
 
 
 def recompute_agent_trust_profile(

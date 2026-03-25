@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.api import deps
 from app.services import connectors as connector_service
-from app.services.connector_test import test_connector
+from app.services.connector_testing import test_connector
 from app.models.user import User
 import uuid
 
