@@ -307,21 +307,11 @@ def route_and_execute(
             metadata.setdefault("agent_autonomy_tier", trust_profile.autonomy_tier)
             metadata.setdefault("agent_trust_confidence", round(float(trust_profile.confidence), 3))
 
-        # Record rollout observation if a live experiment is active
+        # Tag rollout metadata so the async scorer can record the observation
+        # with the scored reward (single recording point, no double-counting)
         if rollout_experiment_id:
-            try:
-                from app.services import policy_rollout_service
-                is_treatment = routing_source == "rollout_treatment"
-                policy_rollout_service.record_rollout_observation(
-                    db, tenant_id,
-                    experiment_id=uuid.UUID(rollout_experiment_id),
-                    is_treatment=is_treatment,
-                    reward=None,  # Reward assigned later by auto-quality-scorer
-                )
-                metadata["rollout_experiment_id"] = rollout_experiment_id
-                metadata["rollout_arm"] = "treatment" if is_treatment else "control"
-            except Exception as e:
-                logger.debug("Rollout observation failed: %s", e)
+            metadata["rollout_experiment_id"] = rollout_experiment_id
+            metadata["rollout_arm"] = "treatment" if routing_source == "rollout_treatment" else "control"
 
         return response_text, metadata
 
