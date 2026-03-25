@@ -54,6 +54,44 @@ def _phone_variants(value: str | None) -> set[str]:
     return {item for item in variants if item}
 
 
+def _build_ack_message(user_message: str, task_type: str) -> str:
+    """Build a brief acknowledgment based on the inferred task type."""
+    acks = {
+        "code": "Analyzing code — give me a moment...",
+        "research": "Researching that — checking my sources...",
+        "email": "Checking emails — one moment...",
+        "calendar": "Looking at your calendar...",
+        "sales": "Pulling up pipeline data...",
+        "data": "Querying the data — hang tight...",
+    }
+    return acks.get(task_type, "On it — thinking...")
+
+
+_PROGRESS_MESSAGES = [
+    "Checking memory and knowledge base...",
+    "Analyzing your request...",
+    "Working through the details...",
+    "Almost there — finalizing response...",
+    "Still working on this — it's a complex one...",
+    "Gathering all the context I need...",
+    "Running tools and cross-referencing data...",
+]
+
+def _get_progress_message(tick: int) -> str:
+    """Get a rotating progress message based on elapsed ticks."""
+    return _PROGRESS_MESSAGES[tick % len(_PROGRESS_MESSAGES)]
+
+
+def _build_completion_summary(response_text: str, elapsed_seconds: float):
+    """Build a brief completion note for long-running responses."""
+    if elapsed_seconds < 15 or len(response_text) < 200:
+        return None
+    mins = int(elapsed_seconds // 60)
+    secs = int(elapsed_seconds % 60)
+    time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+    return f"Done ({time_str}). Here's what I found:"
+
+
 class WhatsAppService:
     """Manages neonize WhatsApp clients per tenant:account."""
 
