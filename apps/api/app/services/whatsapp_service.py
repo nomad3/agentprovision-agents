@@ -105,28 +105,18 @@ def _build_ack_message(user_message: str, task_type: str) -> str:
 
 
 _PROGRESS_MESSAGES = [
-    "Still on it...",
-    "Digging deeper...",
-    "Bear with me, almost there",
-    "Getting closer...",
-    "This one needs a bit more thought",
-    "Putting it all together for you",
-    "Just a bit more...",
+    "Still working on it",
+    "Taking a bit longer than usual",
+    "Almost there",
+    "This one's a bit involved, hang tight",
+    "Still going",
+    "Bear with me",
+    "Nearly done",
 ]
 
 def _get_progress_message(tick: int) -> str:
     """Get a rotating progress message based on elapsed ticks."""
     return _PROGRESS_MESSAGES[tick % len(_PROGRESS_MESSAGES)]
-
-
-def _build_completion_summary(response_text: str, elapsed_seconds: float):
-    """Build a brief completion note for long-running responses."""
-    if elapsed_seconds < 15 or len(response_text) < 200:
-        return None
-    mins = int(elapsed_seconds // 60)
-    secs = int(elapsed_seconds % 60)
-    time_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
-    return f"Done ({time_str}). Here's what I found:"
 
 
 class WhatsAppService:
@@ -740,9 +730,6 @@ class WhatsAppService:
             else:
                 agent_text = media_caption or text or f"[Sent {media_type}]"
 
-            import time as _time_mod
-            _dispatch_time = _time_mod.monotonic()
-
             response_text = await self._process_through_agent(
                 tenant_id, sender_phone, agent_text, media_parts=media_parts,
             )
@@ -754,15 +741,6 @@ class WhatsAppService:
         if not response_text:
             logger.warning(f"Empty response from agent for {sender_phone}, not sending reply")
         if response_text:
-            # Completion summary for slow responses
-            _elapsed = _time_mod.monotonic() - _dispatch_time
-            _completion = _build_completion_summary(response_text, _elapsed)
-            if _completion:
-                try:
-                    await _send_and_track(_completion)
-                except Exception:
-                    pass
-
             try:
                 # Split long messages — WhatsApp limits to ~4096 chars
                 chunks = [response_text] if len(response_text) <= 4000 else [
