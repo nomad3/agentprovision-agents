@@ -25,9 +25,9 @@ class CandidateStatus(str, Enum):
 
 
 class ExperimentType(str, Enum):
-    SHADOW = "shadow"
     SPLIT = "split"
     OFFLINE = "offline"
+    # SHADOW = "shadow"  # Phase 3: requires parallel CLI execution
 
 
 class ExperimentStatus(str, Enum):

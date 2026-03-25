@@ -166,7 +166,7 @@ def start_rollout(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start a controlled rollout (split or shadow) for a policy candidate."""
+    """Start a controlled split rollout for a policy candidate."""
     from app.services import policy_rollout_service
     try:
         return policy_rollout_service.start_rollout(
