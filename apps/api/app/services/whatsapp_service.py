@@ -633,6 +633,7 @@ class WhatsAppService:
         typing_done = asyncio.Event()
 
         async def _keep_typing():
+            nonlocal _ack_sent
             _tick = 0
             while not typing_done.is_set():
                 try:
