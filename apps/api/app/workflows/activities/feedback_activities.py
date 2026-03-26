@@ -31,19 +31,21 @@ async def process_human_feedback(tenant_id: str) -> dict:
         since = datetime.utcnow() - timedelta(hours=24)
 
         # Look for recent messages that mention learning reports
+        # tenant_id lives on chat_sessions, not chat_messages — join through session
         messages = db.execute(text("""
-            SELECT id, content, created_at, session_id
-            FROM chat_messages
-            WHERE tenant_id = CAST(:tid AS uuid)
-              AND created_at > :since
-              AND role = 'user'
+            SELECT cm.id, cm.content, cm.created_at, cm.session_id
+            FROM chat_messages cm
+            JOIN chat_sessions cs ON cs.id = cm.session_id
+            WHERE cs.tenant_id = CAST(:tid AS uuid)
+              AND cm.created_at > :since
+              AND cm.role = 'user'
               AND (
-                LOWER(content) LIKE '%learning report%'
-                OR LOWER(content) LIKE '%morning report%'
-                OR LOWER(content) LIKE '%nightly report%'
-                OR LOWER(content) LIKE '%your report%'
+                LOWER(cm.content) LIKE '%learning report%'
+                OR LOWER(cm.content) LIKE '%morning report%'
+                OR LOWER(cm.content) LIKE '%nightly report%'
+                OR LOWER(cm.content) LIKE '%your report%'
               )
-            ORDER BY created_at DESC
+            ORDER BY cm.created_at DESC
             LIMIT 20
         """), {"tid": tenant_id, "since": since}).fetchall()
 
@@ -195,7 +197,7 @@ async def monitor_regression(tenant_id: str) -> dict:
         now = datetime.utcnow()
         last_24h = now - timedelta(hours=24)
 
-        # Get all promoted candidates with a baseline_reward stored in evidence
+        # Get all promoted candidates with a baseline_reward
         promoted = (
             db.query(PolicyCandidate)
             .filter(
@@ -209,13 +211,12 @@ async def monitor_regression(tenant_id: str) -> dict:
         candidates_checked = len(promoted)
 
         for candidate in promoted:
-            evidence = candidate.evidence or {}
-            baseline_reward = evidence.get("baseline_reward")
-            if baseline_reward is None:
+            # baseline_reward is a direct Float column on PolicyCandidate
+            if candidate.baseline_reward is None:
                 continue
 
             try:
-                baseline_reward = float(baseline_reward)
+                baseline_reward = float(candidate.baseline_reward)
             except (TypeError, ValueError):
                 continue
 
@@ -253,10 +254,11 @@ async def monitor_regression(tenant_id: str) -> dict:
                 )
 
                 candidate.status = "evaluating"
-                evidence["regression_detected_at"] = now.isoformat()
-                evidence["regression_pct"] = round(regression_pct, 2)
-                evidence["regression_current_avg"] = round(current_avg, 3)
-                candidate.evidence = evidence
+                candidate.rejection_reason = (
+                    f"Regression detected at {now.isoformat()}: "
+                    f"{regression_pct:.2f}% drop (current avg: {current_avg:.3f}, "
+                    f"baseline: {baseline_reward:.3f})"
+                )
 
                 # Create regression notification
                 notification = Notification(
@@ -334,10 +336,8 @@ async def apply_feedback_to_cycle(tenant_id: str) -> dict:
                             .first()
                         )
                         if candidate:
-                            ev = candidate.evidence or {}
-                            ev["human_approved"] = True
-                            ev["human_approved_at"] = datetime.utcnow().isoformat()
-                            candidate.evidence = ev
+                            candidate.status = "promoted"
+                            candidate.promoted_at = datetime.utcnow()
                             logger.info("Human approved candidate %s", str(candidate.id)[:8])
 
                 elif intent in ("reject_platform", "general_rejection"):
@@ -350,10 +350,8 @@ async def apply_feedback_to_cycle(tenant_id: str) -> dict:
                         q = q.filter(PolicyCandidate.proposed_policy.contains(platform))
                     for c in q.limit(5).all():
                         c.status = "rejected"
-                        ev = c.evidence or {}
-                        ev["human_rejected"] = True
-                        ev["human_rejected_reason"] = record.content[:200]
-                        c.evidence = ev
+                        c.rejected_at = datetime.utcnow()
+                        c.rejection_reason = f"Human rejected: {record.content[:200]}"
                         logger.info("Human-rejected candidate %s", str(c.id)[:8])
 
                 elif intent == "request_rollback":
