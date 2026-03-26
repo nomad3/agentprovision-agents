@@ -256,6 +256,35 @@ class AutonomousLearningWorkflow:
             workflow.logger.error(f"Step 3e (skill stubs) failed: {e}")
             cycle_result["errors"].append(f"skill_stubs: {e}")
 
+        # Step 3e2: Dispatch self-improvement code tasks for critical findings
+        if cycle_result.get("skill_gaps_detected", 0) > 0 or cycle_result.get("regressions_detected", 0) > 0:
+            try:
+                # The skill_gap_activities already dispatches code tasks for high-severity gaps
+                # Here we also dispatch for regressions that need code fixes
+                if cycle_result.get("regressions_detected", 0) > 0:
+                    diagnosis = cycle_result.get("diagnosis", {})
+                    regression_detail = diagnosis.get("regression_detail", "Performance regression detected")
+                    await run_activity(
+                        "dispatch_self_improvement_task",
+                        tenant_id,
+                        f"## Self-Improvement: Fix Performance Regression\n\n"
+                        f"The autonomous learning system detected a regression:\n"
+                        f"{regression_detail}\n\n"
+                        f"### Task\n"
+                        f"Investigate the regression, identify root cause, and implement a fix.\n"
+                        f"Check recent commits, RL experience data, and routing configuration.\n\n"
+                        f"### Constraints\n"
+                        f"- Create a branch, commit, and open a PR\n"
+                        f"- Do NOT modify safety policies\n"
+                        f"- Include verification that the fix addresses the regression\n",
+                        start_to_close_timeout=timedelta(minutes=2),
+                        retry_policy=RetryPolicy(maximum_attempts=1),
+                    )
+                    cycle_result["self_improvement_dispatched"] = True
+            except Exception as e:
+                workflow.logger.error(f"Step 3e2 (self-improvement dispatch) failed: {e}")
+                cycle_result["errors"].append(f"self_improvement: {e}")
+
         # Step 3f: Track cycle cost against budget
         try:
             cost_result = await run_activity(

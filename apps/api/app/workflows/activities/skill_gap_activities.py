@@ -252,11 +252,40 @@ async def auto_create_skill_stubs(tenant_id: str) -> dict:
             )
 
         db.commit()
+
+        # Dispatch code tasks for high-severity gaps to actually implement fixes
+        code_tasks_dispatched = 0
+        for gap in gaps:
+            if gap.severity == "high" and gap.status == "in_progress":
+                try:
+                    from app.workflows.activities.self_improvement import (
+                        dispatch_self_improvement_task,
+                        build_skill_creation_task,
+                    )
+                    import asyncio
+                    task_desc = build_skill_creation_task(
+                        gap_type=gap.gap_type or "tool_missing",
+                        industry=gap.industry or "general",
+                        description=gap.description or "",
+                    )
+                    loop = asyncio.get_event_loop()
+                    result = loop.run_until_complete(
+                        dispatch_self_improvement_task(tenant_id, task_desc)
+                    )
+                    if result.get("dispatched"):
+                        code_tasks_dispatched += 1
+                        logger.info(
+                            "Dispatched code task for gap %s: %s",
+                            str(gap.id)[:8], result.get("workflow_id"),
+                        )
+                except Exception as dispatch_err:
+                    logger.debug("Could not dispatch code task for gap %s: %s", str(gap.id)[:8], dispatch_err)
+
         logger.info(
-            "Skill stubs: %d created, %d skipped (tenant %s)",
-            created, skipped, tenant_id[:8],
+            "Skill stubs: %d created, %d skipped, %d code tasks dispatched (tenant %s)",
+            created, skipped, code_tasks_dispatched, tenant_id[:8],
         )
-        return {"stubs_created": created, "stubs_skipped": skipped}
+        return {"stubs_created": created, "stubs_skipped": skipped, "code_tasks_dispatched": code_tasks_dispatched}
     except Exception as e:
         logger.error("auto_create_skill_stubs failed for %s: %s", tenant_id[:8], e)
         raise

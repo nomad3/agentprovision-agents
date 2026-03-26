@@ -117,6 +117,7 @@ from app.workflows.activities.feedback_activities import (
     adjust_exploration_rates,
 )
 from app.workflows.activities.skill_gap_activities import auto_create_skill_stubs
+from app.workflows.activities.self_improvement import dispatch_self_improvement_task
 from app.workflows.activities.cost_tracking_activities import track_cycle_cost
 from app.workflows.activities.skill_activities import execute_skill
 from app.workflows.activities.rl_policy_update import (
@@ -261,8 +262,9 @@ async def run_orchestration_worker():
             monitor_regression,
             apply_feedback_to_cycle,
             adjust_exploration_rates,
-            # Phase 6: skill auto-creation + cost tracking
+            # Phase 6: skill auto-creation + self-improvement + cost tracking
             auto_create_skill_stubs,
+            dispatch_self_improvement_task,
             track_cycle_cost,
             # Goal review activities
             review_goals,
