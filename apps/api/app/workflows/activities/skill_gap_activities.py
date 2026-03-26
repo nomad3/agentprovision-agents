@@ -230,6 +230,19 @@ async def auto_create_skill_stubs(tenant_id: str) -> dict:
                 "config": skill_config,
             })
 
+            # Also write the skill file so the skill manager can discover it
+            try:
+                import os
+                skills_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "skills", skill_name)
+                os.makedirs(skills_dir, exist_ok=True)
+                skill_file = os.path.join(skills_dir, "skill.md")
+                if not os.path.exists(skill_file):
+                    with open(skill_file, "w") as f:
+                        f.write(prompt_content)
+                    logger.info("Wrote skill file: %s", skill_file)
+            except Exception as file_err:
+                logger.debug("Could not write skill file for %s: %s", skill_name, file_err)
+
             # Move gap to in_progress
             gap.status = "in_progress"
             created += 1
