@@ -244,6 +244,98 @@ _FAILURE_KEYWORDS = {
 }
 
 
+_REAL_COMPANY_NAMES = [
+    "Stripe", "Shopify", "HubSpot", "Salesforce", "Notion", "Figma", "Vercel",
+    "Datadog", "Snowflake", "Confluent", "HashiCorp", "PagerDuty", "Twilio",
+    "Cloudflare", "Atlassian", "Monday.com", "Airtable", "Linear", "Retool",
+    "Loom", "Calendly", "Gusto", "Rippling", "Brex", "Ramp", "Mercury",
+    "AngelList", "Carta", "Deel", "Remote.com", "Lattice", "Culture Amp",
+    "Vetcove", "PetDesk", "Covetrus", "Banfield", "VCA Animal Hospitals",
+    "DoorDash", "Instacart", "Faire", "Bolt", "Meesho", "Coupang",
+    "Wealthfront", "Betterment", "Robinhood", "Fundrise", "AngelList Venture",
+    "Clio", "LegalZoom", "Rocket Lawyer", "Ironclad", "DocuSign",
+    "OpenTable", "Resy", "Toast", "Square", "Lightspeed", "Olo",
+    "Benchling", "Roam Research", "Overleaf", "Semantic Scholar",
+    "Zillow", "Redfin", "Compass", "Opendoor", "Offerpad",
+    "ADP", "BambooHR", "Greenhouse", "Lever", "Workday",
+]
+
+
+def _generate_dynamic_scenarios(persona) -> list:
+    """Use local Qwen to generate realistic simulation scenarios for a persona.
+
+    Uses real company names and randomized context so each cycle produces
+    unique, realistic scenarios that test different capabilities.
+    """
+    try:
+        from app.services.local_inference import generate_luna_response_sync
+    except ImportError:
+        return []
+
+    company = random.choice(_REAL_COMPANY_NAMES)
+    partner = random.choice(_REAL_COMPANY_NAMES)
+    while partner == company:
+        partner = random.choice(_REAL_COMPANY_NAMES)
+
+    prompt = (
+        f"You are {persona.name}, a {persona.role} at {company} in the {persona.industry} industry.\n"
+        f"You work with partners like {partner}.\n"
+        f"Your typical daily actions: {', '.join(persona.typical_actions or [])}.\n\n"
+        f"Generate exactly 4 realistic messages you would send to your AI assistant today.\n"
+        f"Use specific names, numbers, dates, and real-sounding details.\n"
+        f"Each message should test a different capability:\n"
+        f"1. A quick question about today's work (type: simple_query)\n"
+        f"2. A request that needs data lookup or tool use (type: tool_exercise)\n"
+        f"3. A complex multi-step task (type: multi_step)\n"
+        f"4. An unexpected situation or edge case (type: edge_case)\n\n"
+        f"Reply ONLY with this JSON array, no other text:\n"
+        f'[{{"type":"simple_query","message":"..."}},{{"type":"tool_exercise","message":"..."}}'
+        f',{{"type":"multi_step","message":"..."}},{{"type":"edge_case","message":"..."}}]'
+    )
+
+    try:
+        import json
+        raw = generate_luna_response_sync(prompt, max_tokens=500)
+        if not raw:
+            return []
+
+        # Extract JSON from response (may have markdown fences)
+        text = raw.strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+            text = text.strip()
+
+        # Find the JSON array
+        start = text.find("[")
+        end = text.rfind("]") + 1
+        if start < 0 or end <= start:
+            return []
+
+        scenarios = json.loads(text[start:end])
+        if not isinstance(scenarios, list) or len(scenarios) < 2:
+            return []
+
+        # Validate structure
+        valid = []
+        for s in scenarios:
+            if isinstance(s, dict) and "type" in s and "message" in s:
+                msg = s["message"].strip()
+                if len(msg) > 10 and len(msg) < 500:
+                    valid.append({"type": s["type"], "message": msg})
+
+        if len(valid) >= 2:
+            logger.info("Qwen generated %d dynamic scenarios for %s (%s)",
+                        len(valid), persona.name, persona.industry)
+            return valid[:4]
+
+        return []
+    except Exception as e:
+        logger.debug("Dynamic scenario generation failed for %s: %s", persona.name, e)
+        return []
+
+
 @activity.defn(name="select_personas_for_cycle")
 async def select_personas_for_cycle(tenant_id: str) -> dict:
     """Seed default personas if none exist; return today's rotation."""
@@ -289,23 +381,8 @@ async def select_personas_for_cycle(tenant_id: str) -> dict:
                 .all()
             )
 
-        # Select today's rotation based on weekday
-        weekday = datetime.utcnow().weekday()
-        target_industries = []
-        indices = _WEEKDAY_PERSONA_INDICES.get(weekday, [0, 5])
-        for i in indices:
-            if i < len(_DEFAULT_PERSONAS):
-                target_industries.append(_DEFAULT_PERSONAS[i]["industry"])
-
-        # Filter existing personas to today's industries
-        todays_personas = [
-            p for p in existing
-            if p.industry in target_industries
-        ]
-
-        # Fallback: take first 3 if filter yields nothing
-        if not todays_personas:
-            todays_personas = existing[:3]
+        # Select today's rotation — random 4 personas each cycle for variety
+        todays_personas = random.sample(existing, min(4, len(existing)))
 
         persona_ids = [str(p.id) for p in todays_personas]
         persona_list = [
@@ -374,11 +451,15 @@ async def generate_simulation_scenarios(tenant_id: str, persona_ids: list) -> di
             if existing_count > 0:
                 continue
 
-            # Get templates for this industry, fall back to default
-            templates = _SCENARIO_TEMPLATES.get(persona.industry, _DEFAULT_SCENARIOS)
+            # Try dynamic scenario generation via local Qwen first
+            dynamic_scenarios = _generate_dynamic_scenarios(persona)
 
-            # Pick 3 scenarios per persona (varied types)
-            selected = templates[:3]
+            if dynamic_scenarios:
+                selected = dynamic_scenarios
+            else:
+                # Fallback to hardcoded templates
+                templates = _SCENARIO_TEMPLATES.get(persona.industry, _DEFAULT_SCENARIOS)
+                selected = random.sample(templates, min(4, len(templates)))
 
             for tmpl in selected:
                 scenario = SimulationScenario(
@@ -391,6 +472,7 @@ async def generate_simulation_scenarios(tenant_id: str, persona_ids: list) -> di
                         "min_length": 50,
                         "should_mention_tools": tmpl["type"] == "tool_exercise",
                         "industry": persona.industry,
+                        "dynamic": bool(dynamic_scenarios),
                     },
                     status="pending",
                 )
