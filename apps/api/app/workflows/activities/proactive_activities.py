@@ -114,16 +114,16 @@ async def scan_for_proactive_actions(tenant_id: str) -> dict:
             actions_queued += 1
 
         # 3. Expiring world state assertions (within 48h)
+        # Uses freshness_ttl_hours to compute expiry: valid_from + ttl
         expiry_window = now + timedelta(hours=48)
         expiring_assertions = db.execute(text("""
-            SELECT id, subject, predicate, object_value
+            SELECT id, subject_slug, attribute_path, value_json
             FROM world_state_assertions
             WHERE tenant_id = CAST(:tid AS uuid)
               AND status = 'active'
-              AND expires_at IS NOT NULL
-              AND expires_at <= :window
-              AND expires_at > :now
-            ORDER BY expires_at ASC
+              AND (valid_from + freshness_ttl_hours * INTERVAL '1 hour') <= :window
+              AND (valid_from + freshness_ttl_hours * INTERVAL '1 hour') > :now
+            ORDER BY (valid_from + freshness_ttl_hours * INTERVAL '1 hour') ASC
             LIMIT 5
         """), {"tid": tenant_id, "window": expiry_window, "now": now}).fetchall()
 
@@ -143,8 +143,8 @@ async def scan_for_proactive_actions(tenant_id: str) -> dict:
                 target_ref=target_ref,
                 priority="medium",
                 content=(
-                    f"World state fact expiring soon: '{assertion.subject} {assertion.predicate} "
-                    f"{assertion.object_value}'. Should I verify and refresh this information?"
+                    f"World state fact expiring soon: '{assertion.subject_slug}.{assertion.attribute_path} = "
+                    f"{assertion.value_json}'. Should I verify and refresh this information?"
                 ),
                 channel="notification",
                 status="pending",
