@@ -483,11 +483,23 @@ def run_agent_session(
                 execution_timeout=timedelta(minutes=180),
             )
 
-        loop = asyncio.new_event_loop()
         try:
-            result = loop.run_until_complete(_run_workflow())
-        finally:
-            loop.close()
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop is not None and running_loop.is_running():
+            # Already inside an async context (e.g. Temporal worker).
+            # Run the workflow in a separate thread with its own loop.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                result = pool.submit(lambda: asyncio.run(_run_workflow())).result(timeout=200)
+        else:
+            loop = asyncio.new_event_loop()
+            try:
+                result = loop.run_until_complete(_run_workflow())
+            finally:
+                loop.close()
 
         if isinstance(result, dict):
             success = result.get("success", False)
