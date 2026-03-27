@@ -1,4 +1,4 @@
-<h1 align="center">ServiceTsunami / Wolfpoint.ai</h1>
+<h1 align="center">ServiceTsunami / AgentProvision</h1>
 
 <p align="center"><strong>The Orchestration Layer for AI Agents</strong></p>
 

@@ -150,8 +150,8 @@
   overflow: hidden;
 }
 
-/* Wolf background art */
-.hero-wolf-bg {
+/* Hero background art */
+.hero-bg {
   position: absolute;
   top: 0;
   left: 0;
@@ -165,8 +165,8 @@
   pointer-events: none;
 }
 
-/* Wolf branded CTA buttons */
-.wolf-btn-primary {
+/* Branded CTA buttons */
+.ap-btn-primary {
   background: linear-gradient(135deg, #0ce9e9, #005be6) !important;
   border: none !important;
   color: #fff !important;
@@ -175,12 +175,12 @@
   transition: all 0.3s ease;
   box-shadow: 0 4px 20px rgba(12, 233, 233, 0.3);
 }
-.wolf-btn-primary:hover {
+.ap-btn-primary:hover {
   transform: translateY(-2px);
   box-shadow: 0 6px 30px rgba(12, 233, 233, 0.5);
 }
 
-.wolf-btn-secondary {
+.ap-btn-secondary {
   background: transparent !important;
   border: 2px solid rgba(12, 233, 233, 0.5) !important;
   color: #fff !important;
@@ -188,7 +188,7 @@
   border-radius: 50px;
   transition: all 0.3s ease;
 }
-.wolf-btn-secondary:hover {
+.ap-btn-secondary:hover {
   background: rgba(12, 233, 233, 0.1) !important;
   border-color: #0ce9e9 !important;
   transform: translateY(-2px);

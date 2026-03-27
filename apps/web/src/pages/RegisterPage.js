@@ -35,7 +35,7 @@ const RegisterPage = () => {
       <Card style={{ width: '400px' }} className="shadow-lg p-4">
         <Card.Body>
           <div className="text-center mb-4">
-            <img src={`${process.env.PUBLIC_URL}/assets/brand/wolf-logo-dark.png`} alt="wolfpoint.ai" style={{ width: 120, marginBottom: 16 }} />
+            <img src={`${process.env.PUBLIC_URL}/assets/brand/ap-logo-dark.png`} alt="agentprovision.com" style={{ width: 120, marginBottom: 16 }} />
             <h2>{t('register.title')}</h2>
           </div>
           {error && <Alert variant="danger">{error}</Alert>}

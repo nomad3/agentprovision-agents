@@ -1,5 +1,5 @@
 {
-  "brand": "wolfpoint.ai",
+  "brand": "agentprovision.com",
   "nav": {
     "platform": "Plataforma",
     "architecture": "Arquitectura",
@@ -73,6 +73,6 @@
     "setActive": "Establecer como Activo"
   },
   "footer": {
-    "copyright": "© {{year}} wolfpoint.ai. Todos los derechos reservados."
+    "copyright": "© {{year}} agentprovision.com. Todos los derechos reservados."
   }
 }

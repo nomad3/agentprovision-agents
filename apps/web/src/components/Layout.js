@@ -91,7 +91,7 @@ const Layout = ({ children }) => {
         <div className="sidebar-header">
           <div className="d-flex align-items-center justify-content-between">
             <Link to="/dashboard" className="brand-link">
-              <img src={`${process.env.PUBLIC_URL}/assets/brand/wolf-icon.png`} alt="" width={28} height={28} style={{ borderRadius: 6 }} />
+              <img src={`${process.env.PUBLIC_URL}/assets/brand/ap-icon.png`} alt="" width={28} height={28} style={{ borderRadius: 6 }} />
               <span className="brand-text">{t('brand')}</span>
             </Link>
             <div className="d-flex align-items-center gap-1">

@@ -25,10 +25,9 @@ app.add_middleware(ForceHTTPSRedirectMiddleware)
 
 # Set up CORS middleware
 origins = [
-    "https://wolfpoint.ai",
-    "https://app.wolfpoint.ai",
-    "https://servicetsunami.com",
     "https://agentprovision.com",
+    "https://app.agentprovision.com",
+    "https://servicetsunami.com",
     "https://www.agentprovision.com",
     "http://localhost:3000", # For local development
     "http://127.0.0.1:3000", # For local development

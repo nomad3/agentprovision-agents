@@ -190,7 +190,7 @@ const LandingPage = () => {
       >
         <Container>
           <Navbar.Brand href="#hero" className="fw-semibold text-white d-flex align-items-center gap-2">
-            <img src={`${process.env.PUBLIC_URL}/assets/brand/wolf-icon.png`} alt="" width={32} height={32} style={{ borderRadius: 6 }} />
+            <img src={`${process.env.PUBLIC_URL}/assets/brand/ap-icon.png`} alt="" width={32} height={32} style={{ borderRadius: 6 }} />
             {t("common:brand")}
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="primary-nav" className="border-0" />

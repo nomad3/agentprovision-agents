@@ -30,4 +30,4 @@ def test_server_has_tools():
 
 def test_server_name():
     """Test server has correct name"""
-    assert mcp.name == "wolfpoint.ai"
+    assert mcp.name == "agentprovision.com"

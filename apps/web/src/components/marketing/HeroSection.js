@@ -10,7 +10,7 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
 
   return (
     <section className="hero-section pt-5 pb-4" id="hero">
-      <div className="hero-wolf-bg" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/assets/brand/wolf-hero-bg.png)` }} />
+      <div className="hero-bg" style={{ backgroundImage: `url(${process.env.PUBLIC_URL}/assets/brand/hero-bg.png)` }} />
       <NeuralCanvas />
       <div className="hero-overlay" />
       <Container className="hero-content py-5">
@@ -21,12 +21,12 @@ const HeroSection = ({ onPrimaryCta = noop, onSecondaryCta = noop }) => {
               {t('hero.title')}
             </h1>
             <div className="d-flex flex-column flex-md-row gap-3 justify-content-center justify-content-lg-start mt-4">
-              <Button size="lg" className="wolf-btn-primary px-5 py-3" onClick={onPrimaryCta}>
+              <Button size="lg" className="ap-btn-primary px-5 py-3" onClick={onPrimaryCta}>
                 {t('common:cta.startFree', 'Start Free')}
               </Button>
               <Button
                 size="lg"
-                className="wolf-btn-secondary px-5 py-3"
+                className="ap-btn-secondary px-5 py-3"
                 onClick={onSecondaryCta}
               >
                 {t('common:cta.signIn', 'Sign In')}
