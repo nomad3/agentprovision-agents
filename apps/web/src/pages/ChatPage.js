@@ -32,6 +32,8 @@ const ChatPage = () => {
   const [formErrors, setFormErrors] = useState('');
   const [globalError, setGlobalError] = useState('');
   const [attachedFile, setAttachedFile] = useState(null);
+  const [streamingText, setStreamingText] = useState('');
+  const streamAbortRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
@@ -211,35 +213,59 @@ const ChatPage = () => {
       }
     }
 
-    try {
-      let response;
-      if (sentFile) {
-        response = await chatService.postMessageWithFile(selectedSession.id, sentText, sentFile);
-      } else {
-        response = await chatService.postMessage(selectedSession.id, sentText);
+    if (sentFile) {
+      // File upload: no streaming, use existing endpoint
+      try {
+        const response = await chatService.postMessageWithFile(selectedSession.id, sentText, sentFile);
+        setMessages((prev) => {
+          const withoutTemp = prev.filter((m) => m.id !== tempUserMsg.id);
+          return [...withoutTemp, response.data.user_message, response.data.assistant_message];
+        });
+      } catch (err) {
+        console.error(err);
+        const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || '';
+        const userMsg = detail.includes('timeout') || detail.includes('timed out')
+          ? t('errors.timeout')
+          : detail.includes('connection') || detail.includes('Connection')
+          ? t('errors.connection')
+          : detail
+          ? t('errors.genericDetail', { detail: detail.slice(0, 150) })
+          : t('errors.generic');
+        setGlobalError(userMsg);
+        setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
+      } finally {
+        setPostingMessage(false);
       }
-      // Replace temp user message with real ones
-      setMessages((prev) => {
-        const withoutTemp = prev.filter((m) => m.id !== tempUserMsg.id);
-        return [...withoutTemp, response.data.user_message, response.data.assistant_message];
-      });
-    } catch (err) {
-      console.error(err);
-      // Extract meaningful error from API response
-      const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || '';
-      const userMsg = detail.includes('timeout') || detail.includes('timed out')
-        ? t('errors.timeout')
-        : detail.includes('connection') || detail.includes('Connection')
-        ? t('errors.connection')
-        : detail
-        ? t('errors.genericDetail', { detail: detail.slice(0, 150) })
-        : t('errors.generic');
-      setGlobalError(userMsg);
-      // Remove the temp user message on error so they can retry
-      setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
-    } finally {
-      setPostingMessage(false);
+      return;
     }
+
+    // Text message: stream 2 tokens at a time
+    setStreamingText('');
+    const ctrl = chatService.postMessageStream(
+      selectedSession.id,
+      sentText,
+      // onToken
+      (chunk) => setStreamingText((prev) => prev + chunk),
+      // onUserSaved — swap temp user message with persisted one
+      (userMsg) => setMessages((prev) => {
+        const withoutTemp = prev.filter((m) => m.id !== tempUserMsg.id);
+        return [...withoutTemp, userMsg];
+      }),
+      // onDone — replace streaming bubble with final persisted message
+      (assistantMsg) => {
+        setStreamingText('');
+        setPostingMessage(false);
+        setMessages((prev) => [...prev, assistantMsg]);
+      },
+      // onError
+      (errMsg) => {
+        setStreamingText('');
+        setPostingMessage(false);
+        setGlobalError(errMsg || t('errors.generic'));
+        setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
+      },
+    );
+    streamAbortRef.current = ctrl;
   };
 
   const handleCreateSessionModal = () => {
@@ -445,13 +471,25 @@ const ChatPage = () => {
                     ) : (
                       <ListGroup variant="flush">
                         {messages.map((message) => renderMessage(message))}
-                        {postingMessage && (
+                        {postingMessage && !streamingText && (
                           <ListGroup.Item className="border-0 py-2">
                             <div className="d-flex align-items-center gap-2 text-muted" style={{ fontSize: '0.9rem' }}>
                               <Spinner animation="grow" size="sm" style={{ width: '8px', height: '8px' }} />
                               <Spinner animation="grow" size="sm" style={{ width: '8px', height: '8px', animationDelay: '0.2s' }} />
                               <Spinner animation="grow" size="sm" style={{ width: '8px', height: '8px', animationDelay: '0.4s' }} />
                               <span className="ms-1">{t('thinking')}</span>
+                            </div>
+                          </ListGroup.Item>
+                        )}
+                        {streamingText && (
+                          <ListGroup.Item style={{ background: 'var(--surface-contrast)' }}>
+                            <div className="d-flex justify-content-between align-items-start">
+                              <div>
+                                <Badge bg="primary" className="me-2 text-uppercase">assistant</Badge>
+                                <div className="chat-markdown" style={{ fontSize: '0.9rem', lineHeight: 1.6 }}>
+                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingText}</ReactMarkdown>
+                                </div>
+                              </div>
                             </div>
                           </ListGroup.Item>
                         )}
