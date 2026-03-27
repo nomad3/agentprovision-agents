@@ -227,9 +227,13 @@ def route_and_execute(
 
     # Build memory context early so recalled entities enrich routing RL state
     pre_built_memory_context = None
+    session_entity_names = (db_session_memory or {}).get("recalled_entity_names")
     if not recalled_entities:
         try:
-            pre_built_memory_context = build_memory_context_with_git(db, tenant_id, message)
+            pre_built_memory_context = build_memory_context_with_git(
+                db, tenant_id, message,
+                session_entity_names=session_entity_names,
+            )
             if pre_built_memory_context and pre_built_memory_context.get("relevant_entities"):
                 recalled_entities = pre_built_memory_context["relevant_entities"]
         except Exception:

@@ -306,6 +306,8 @@ def search_memories_semantic(
             memory_type,
             content,
             importance,
+            decay_rate,
+            last_accessed_at,
             1 - (content_embedding <=> CAST('{vector_literal}' AS vector)) AS similarity
         FROM agent_memories
         WHERE tenant_id = CAST(:tenant_id AS uuid)
@@ -322,6 +324,8 @@ def search_memories_semantic(
             "memory_type": r["memory_type"],
             "content": r["content"],
             "importance": float(r["importance"]) if r["importance"] else 0.5,
+            "decay_rate": float(r["decay_rate"]) if r["decay_rate"] is not None else 0.01,
+            "last_accessed_at": r["last_accessed_at"].isoformat() if r["last_accessed_at"] else None,
             "similarity": float(r["similarity"]),
         }
         for r in rows

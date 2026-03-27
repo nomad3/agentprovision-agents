@@ -872,7 +872,7 @@ class ChatCliInput:
     mcp_config: str = ""  # JSON string
     image_b64: str = ""   # Base64-encoded image (optional)
     image_mime: str = ""   # e.g. "image/jpeg"
-    session_id: str = ""  # Reserved for future platform-native session continuity
+    session_id: str = ""  # Platform-native session continuity (e.g. Claude --resume)
 
 
 @dataclass
@@ -996,6 +996,10 @@ def _execute_claude_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliR
     if os.path.isdir(WORKSPACE):
         cmd.extend(["--add-dir", WORKSPACE])
 
+    # Resume previous conversation if session_id is available
+    if task_input.session_id:
+        cmd.extend(["--resume", task_input.session_id])
+
     claude_md_path = os.path.join(session_dir, "CLAUDE.md")
     if os.path.exists(claude_md_path):
         with open(claude_md_path) as f:
@@ -1117,6 +1121,14 @@ def _execute_codex_chat(task_input: ChatCliInput, session_dir: str, image_path: 
 
     metadata = _extract_codex_metadata(result.stdout)
     metadata["platform"] = "codex"
+    # Codex exec is one-shot — no native session resume. Continuity via
+    # conversation summary in the prompt. Track a synthetic session ID so
+    # the platform can persist it uniformly.
+    if not metadata.get("codex_session_id"):
+        import hashlib
+        metadata["codex_session_id"] = hashlib.sha1(
+            f"{task_input.tenant_id}-codex".encode()
+        ).hexdigest()[:16]
     return ChatCliResult(response_text=response_text, success=True, metadata=metadata)
 
 

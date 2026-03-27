@@ -97,13 +97,26 @@ def generate_cli_instructions(
                 lines.append(f"  - {o.get('text', '')}")
         lines.append("")
 
-    if relevant_memories:
+    # Separate dream-learned patterns from regular memories
+    dream_memories = [m for m in relevant_memories if m.get("content", "").startswith("[Auto-dream]")]
+    regular_memories = [m for m in relevant_memories if not m.get("content", "").startswith("[Auto-dream]")]
+
+    if regular_memories:
         lines.append("## Relevant Memories")
         lines.append("")
-        for memory in relevant_memories:
+        for memory in regular_memories:
             mtype = memory.get("type", "")
             content = memory.get("content", "")
             lines.append(f"- [{mtype}] {content}")
+        lines.append("")
+
+    if dream_memories:
+        lines.append("## Learned Patterns (from RL consolidation)")
+        lines.append("These patterns were learned from analyzing your past performance:")
+        lines.append("")
+        for memory in dream_memories:
+            content = memory.get("content", "").replace("[Auto-dream] ", "")
+            lines.append(f"- {content}")
         lines.append("")
 
     if relevant_relations:
@@ -333,11 +346,17 @@ def run_agent_session(
         metadata["error"] = err
         return None, metadata
 
+    # Extract session entity names from prior turns for recall boosting
+    session_entity_names = (db_session_memory or {}).get("recalled_entity_names")
+
     if pre_built_memory_context is not None:
         memory_context = pre_built_memory_context
     else:
         try:
-            memory_context = build_memory_context_with_git(db, tenant_id, message)
+            memory_context = build_memory_context_with_git(
+                db, tenant_id, message,
+                session_entity_names=session_entity_names,
+            )
         except Exception as exc:
             logger.warning("Memory recall failed for tenant %s: %s", tenant_id, exc)
             memory_context = {}
@@ -423,6 +442,11 @@ def run_agent_session(
             memory_context["world_model"] = world_model
     except Exception as exc:
         logger.debug("World model injection failed for %s: %s", agent_slug, exc)
+
+    # Thread recalled entity names into metadata for session memory persistence
+    recalled_names = memory_context.get("recalled_entity_names", [])
+    if recalled_names:
+        metadata["recalled_entity_names"] = recalled_names
 
     tenant_name = str(tenant_id)
     user_name = sender_phone or str(user_id)

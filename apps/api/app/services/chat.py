@@ -251,12 +251,28 @@ def _generate_agentic_response(
         db_session_memory=session.memory_context,
     )
 
-    # Save Claude CLI session ID for continuity across messages
+    # Save CLI session ID and recalled entity names for cross-turn continuity
     if context and isinstance(context, dict):
+        _mem_dirty = False
+        _mem = dict(session.memory_context or {})
+
         cli_session_id = context.get("claude_session_id") or context.get("claude_cli_session_id")
         if cli_session_id:
-            _mem = dict(session.memory_context or {})
-            _mem["claude_cli_session_id"] = cli_session_id
+            # Key matches what cli_session_manager reads: f"{platform}_cli_session_id"
+            platform_key = context.get("platform", "claude_code")
+            _mem[f"{platform_key}_cli_session_id"] = cli_session_id
+            _mem_dirty = True
+
+        # Persist recalled entity names so the next turn can boost them
+        recalled_entity_names = context.get("recalled_entity_names")
+        if recalled_entity_names:
+            # Merge with existing session entities, keeping last 50 unique names
+            existing = _mem.get("recalled_entity_names", [])
+            merged = list(dict.fromkeys(existing + recalled_entity_names))[:50]
+            _mem["recalled_entity_names"] = merged
+            _mem_dirty = True
+
+        if _mem_dirty:
             session.memory_context = _mem
             flag_modified(session, "memory_context")
             db.commit()
@@ -324,5 +340,40 @@ def _generate_agentic_response(
         threading.Thread(target=_extract_knowledge, daemon=True).start()
     except Exception:
         pass  # Never block response delivery for extraction
+
+    # Recall feedback: track which recalled entities were actually used in the response
+    try:
+        import threading
+
+        def _recall_feedback():
+            from app.db.session import SessionLocal as _SL
+            from app.models.memory_activity import MemoryActivity
+
+            recalled_entities = (context or {}).get("recalled_entity_names", [])
+            if not recalled_entities or not response_text:
+                return
+
+            response_lower = response_text.lower()
+            edb = _SL()
+            try:
+                for name in recalled_entities:
+                    used = name.lower() in response_lower
+                    activity = MemoryActivity(
+                        tenant_id=session.tenant_id,
+                        event_type="recall_feedback",
+                        description=f"Entity '{name}' recalled and {'used' if used else 'unused'} in response",
+                        source="chat",
+                        event_metadata={"entity_name": name, "used": used},
+                    )
+                    edb.add(activity)
+                edb.commit()
+            except Exception:
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_recall_feedback, daemon=True).start()
+    except Exception:
+        pass  # Never block response delivery for recall feedback
 
     return assistant_msg

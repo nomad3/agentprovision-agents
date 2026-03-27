@@ -6,7 +6,7 @@ Falls back to ILIKE keyword matching when the embedding model is unavailable.
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import uuid
 
 from sqlalchemy.orm import Session
@@ -239,6 +239,7 @@ def build_memory_context(
     db: Session,
     tenant_id: uuid.UUID,
     user_message: str,
+    session_entity_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build a memory context payload for Luna's automatic recall.
 
@@ -274,6 +275,20 @@ def build_memory_context(
         db, tenant_id, query_embedding, limit=15
     )
 
+    # --- Step 2b: Apply time-based decay to memory similarity scores ---
+    now = datetime.utcnow()
+    for mem in semantic_memories:
+        days_since_access = 0
+        if mem.get("last_accessed_at"):
+            try:
+                last = datetime.fromisoformat(str(mem["last_accessed_at"]))
+                days_since_access = (now - last).days
+            except Exception:
+                pass
+        decay_rate = mem.get("decay_rate", 0.01)  # default 1% per day
+        decay_factor = max(0.1, 1.0 - (decay_rate * days_since_access))
+        mem["similarity"] = mem["similarity"] * decay_factor
+
     # --- Step 3: Keyword boost ---
     # Entities whose name exactly matches a word in the query get +0.3 similarity
     query_words_lower = set(re.findall(r'[\w]+', user_message.lower()))
@@ -281,6 +296,13 @@ def build_memory_context(
         entity_name_words = set(re.findall(r'[\w]+', ent["name"].lower()))
         if entity_name_words & query_words_lower:
             ent["similarity"] = min(ent["similarity"] + 0.3, 1.0)
+
+    # Session entity boost: entities mentioned earlier in this conversation get +0.2
+    if session_entity_names:
+        session_names_lower = {n.lower() for n in session_entity_names}
+        for ent in semantic_entities:
+            if ent["name"].lower() in session_names_lower:
+                ent["similarity"] = min(ent["similarity"] + 0.2, 1.0)
 
     # --- Step 4: Sort by final score ---
     semantic_entities.sort(key=lambda x: x["similarity"], reverse=True)
@@ -334,7 +356,9 @@ def build_memory_context(
             entity_map[eid] = ename
 
     # --- Step 7: Build context ---
+    recalled_entity_names = [e["name"] for e in top_entities]
     context: Dict[str, Any] = {
+        "recalled_entity_names": recalled_entity_names,
         "relevant_entities": [
             {
                 "name": e["name"],
@@ -704,13 +728,14 @@ def build_memory_context_with_git(
     db: Session,
     tenant_id: uuid.UUID,
     user_message: str,
+    session_entity_names: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Extended memory context that includes git history when relevant.
 
     Calls build_memory_context() first, then appends git context if the
     message appears code-related.
     """
-    context = build_memory_context(db, tenant_id, user_message)
+    context = build_memory_context(db, tenant_id, user_message, session_entity_names=session_entity_names)
 
     if _is_code_related(user_message):
         git_context = get_recent_git_context(db, tenant_id, user_message, limit=5)
