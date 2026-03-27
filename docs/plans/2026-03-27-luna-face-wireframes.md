@@ -1,467 +1,462 @@
-# Luna Face System — Wireframes & State Reference (v2)
+# Luna Face System — Wireframes & State Reference (v3)
 
 **Date**: 2026-03-27
-**Scope**: SVG primary renderer, ASCII fallback, all states, all moods, all sizes
+**Scope**: SVG character avatar, all states, all moods, all sizes
+**Reference**: ChatGPT-generated line art (anime-influenced clean style)
 
 ---
 
 ## Design Direction
 
-Luna is not a character illustration. Luna is not a terminal diagnostic tool either.
+Luna has a **character face** — not abstract geometric shapes, not a full anime illustration. Think clean monochrome line art with enough detail to feel like a person, but minimal enough to animate and scale.
 
-Luna is a **living presence** — something you glance at and immediately feel:
-- "she's listening"
-- "she's working on it"
-- "she's happy with that"
-- "something's wrong"
+**Style**: Clean vector line art
+- Monochrome (works in single color)
+- Dashed/segmented line technique (like the reference image)
+- Expressive through eye shape, brow position, mouth curve
+- Bob-cut hair silhouette as framing element
+- Crescent moon necklace as identity anchor
+- No fill colors in base form (color comes from glow/background only)
 
-**Reference inspirations**:
-- Cozmo robot: minimal features, massive expressiveness through motion
-- Eve (WALL-E): sleek, minimal, warmth through behavior
-- Apple Siri orb: abstract but alive, glows and breathes
-- Teenage Engineering: minimal but warm industrial design
+**Reference image traits to keep**:
+- Large expressive eyes (not realistic — stylized with highlights)
+- Soft rounded face shape
+- Short bob hair framing the face
+- Subtle nose (small, not prominent)
+- Clean neckline with necklace detail
+- Overall warmth and approachability
 
-**Not this**: anime face, emoji, terminal box art, corporate mascot
-
-**This**: organic, floating, breathing face. Two crescents and a curve.
-
----
-
-## 1. The Identity Primitive
-
-Two upward-facing crescent moons. That's Luna.
-
-```
-     ◜       ◝
-```
-
-Everything else — mouth, glow, motion — is contextual.
-The crescents are the soul. They must be recognizable at:
-- 4x4 LED matrix (necklace)
-- 16px (favicon)
-- 48px (chat avatar)
-- 128px (presence card)
-- 6ft projection (future ambient)
+**Adjustments from reference**:
+- Simplify for SVG animation (fewer hair strands, cleaner paths)
+- Eyes must be animatable (shape-morph between states)
+- Mouth must be a separate animated path
+- Hair is static framing — doesn't animate
+- Reduce to essential strokes for smaller sizes
 
 ---
 
-## 2. SVG Face — Primary Renderer
-
-The SVG face is **frameless** — no border, no box. Just elements floating in space with ambient glow. This is the renderer for web, desktop, mobile, and PWA.
-
-### Anatomy
+## 1. The Identity Elements
 
 ```
-              soft ambient glow
-            ·  ·  ·  ·  ·  ·  ·
-          ·                       ·
-        ·                           ·
-       ·      ╭╮           ╭╮       ·      ← crescent eyes
-       ·                             ·         (tilt, squish, widen for expression)
-        ·           ·               ·      ← nose: tiny dot, fades at small sizes
-          ·      ╰─────╯          ·        ← mouth: soft bezier curve
-            ·  ·  ·  ·  ·  ·  ·               (not geometric — organic)
+  Hair:       Bob-cut silhouette, frames the face, static
+  Eyes:       Large, expressive, crescent highlight in each
+              (the half-moon lives INSIDE the eye as a reflection/highlight)
+  Brows:      Thin arcs above eyes — primary expression driver
+  Nose:       Small dot or short line — minimal
+  Mouth:      Soft curve — varies by state and mood
+  Necklace:   Crescent moon pendant at collarbone — always visible at md+
+  Outline:    Face oval + hair as one continuous path
 ```
 
-**Key properties**:
-- No box/border/frame. Face floats freely.
-- Glow is a radial gradient, not a circle stroke. Fades to transparent.
-- Eyes are thick-stroked crescent arcs, not outlines of circles.
-- Mouth is a quadratic bezier — never straight lines, always curves.
-- Nose is optional (visible at md+ sizes, hidden at sm/xs).
-- The whole face breathes — subtle scale oscillation at rest.
+The crescent moon identity primitive now lives **inside the eyes** as the highlight/reflection, and **on her necklace** as a physical element. Both preserve the half-moon brand.
 
-### Eye Expression Range
+---
 
-The crescents aren't static. They **tilt, squish, widen, and narrow**:
+## 2. SVG Face Anatomy — Full Size (xl: 128px+)
 
 ```
- Normal:      ◜       ◝         open, upward, relaxed
-
- Happy:       ◠       ◠         wider arc, more curve = warm/smiling eyes
-
- Focused:     ◜   ·   ◝         slight inward tilt + center dot
-
- Alert:       ◜   !   ◝         wide + exclamation
-
- Sleepy:      ──     ──         flat horizontal = closed
-
- Surprised:   ◜       ◝         wider apart + raised position
-              ↑ eyes shift up
-
- Empathetic:  ◜       ◝         slight downward tilt
-              ↓ eyes tilt down              = understanding, softness
-
- Playful:     ◜       ◝         one eye slightly higher than other
-                  ◝                = wink / asymmetry
+            ╭─ ─ ─ ─ ─ ─ ─╮
+          ╱    ╲ hair ╱      ╲
+        ╱   ─ ─ ─ ─ ─ ─ ─    ╲
+       │  ╱                 ╲   │
+       │ │                   │  │
+       │ │   ╭─╮       ╭─╮  │  │      ← eyes: rounded, with crescent
+       │ │   │◜●│       │●◝│  │  │         highlights (◜ ◝ inside)
+       │ │   ╰─╯       ╰─╯  │  │
+       │ │         ·         │  │      ← nose: small dot
+       │ │      ╰────╯      │  │      ← mouth: soft bezier
+       │  ╲                 ╱   │
+        ╲   ─ ─ ─ ─ ─ ─ ─    ╱       ← jawline
+          ╲    │     │      ╱
+            ╰──│─ ─ ─│──╯
+               │  ◜  │                ← necklace: crescent pendant
+               ╰─────╯
 ```
 
-### Mouth Expression Range
-
-Soft bezier curves, never straight lines:
-
+### SVG Structure (layers)
 ```
- Calm:        ╰─────╯           gentle upward curve (default resting smile)
-
- Warm:        ╰──◡──╯           wider, softer curve = genuine warmth
-
- Neutral:     ╶─────╴           nearly flat, slight curve at ends
-
- Speaking:    ╰──○──╯           open oval = actively talking
-
- Thinking:    ╶──~──╴           slight wave = processing / hmm
-
- Serious:     ╶═════╴           tighter, less curve = focused determination
-
- Concerned:   ╰──╮              asymmetric slight downturn
-
- Error:       ╶──╴              small, tight = something's wrong
-
- Sleep:       ──────            flat line = at rest
+1. Hair silhouette path (static, outermost)
+2. Face oval (static)
+3. Left eye group (animatable: shape, position, brow)
+   - Eye outline (rounded rect or ellipse)
+   - Pupil/iris (circle)
+   - Crescent highlight (◜ shape, the Luna signature)
+   - Brow (thin arc above, tilts for expression)
+4. Right eye group (mirrors left)
+5. Nose (tiny path, optional at small sizes)
+6. Mouth (bezier curve, primary animation target)
+7. Necklace (crescent pendant + chain lines)
+8. Ambient glow (radial gradient behind everything)
 ```
 
 ---
 
-## 3. Presence States — SVG Descriptions
+## 3. Presence States — Character Expressions
 
-### IDLE
+### IDLE (default, at rest)
 ```
-        · · · · · · ·
-      ·       ○         ·        ← faint ambient glow, barely visible
-    ·                     ·
-   ·     ◜         ◝      ·     ← relaxed crescents
-   ·          ·            ·     ← tiny nose dot
-    ·     ╰─────╯         ·     ← gentle resting smile
-      ·                 ·
-        · · · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ─╮         ╭─  │      ← relaxed brows
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← normal open eyes, crescent highlights
+        │  ╰──╯       ╰──╯ │
+        │        ·          │      ← small nose
+        │     ╰────╯        │      ← gentle resting smile
+          ╲               ╱
+            ╰─── ◜ ───╯           ← necklace
 
-    Animation: slow breathe (scale 1.0 ↔ 1.02, 4s cycle)
-    Blink: every 3-5s, eyes scaleY(0.1) for 120ms
-    Glow: opacity 0.06, warm white
-```
-
-### LISTENING
-```
-        · · · · ● · · ·
-      ·                   ·      ← glow pulses gently (1.6s cycle)
-    ·                       ·
-   ·     ◜         ◝        ·   ← eyes slightly wider than idle
-   ·        · · ·            ·   ← three dots below eyes = "I hear you"
-    ·     ╰─────╯           ·   ← calm smile
-      ·                   ·
-        · · · · · · · ·
-
-    Animation: glow pulse (opacity 0.12 ↔ 0.22, 1.6s)
-    Eyes: no blink while listening
-    Dots: fade in/out sequentially (typing indicator feel)
+  Brows: neutral, slight arch
+  Eyes: open, relaxed, normal size
+  Mouth: soft upward curve
+  Animation: slow blink every 3-5s, micro-breathe
+  Glow: faint warm (opacity 0.06)
 ```
 
-### THINKING
+### LISTENING (user is speaking/typing)
 ```
-      · · · · · · · · · ·
-    ·                       ·    ← glow shimmers (traveling highlight)
-   ·                         ·
-  ·      ◜    ·    ◝          ·  ← focused eyes (dot between = concentration)
-  ·                            ·
-   ·      ╶──~──╴             ·  ← wavy mouth = processing
-    ·                         ·
-      · · · · · · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │    ─╮       ╭─   │      ← brows slightly raised = attentive
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← eyes slightly wider
+        │  ╰──╯       ╰──╯ │
+        │        ·          │
+        │     ╰────╯        │      ← warm smile, "I'm here"
+          ╲               ╱
+            ╰─── ◜ ───╯
 
-    Animation: shimmer (glow rotates around face, 2.4s)
-    Eyes: occasional slow look-away (translate X ±2px)
-    Mouth wave: subtle oscillation
-```
-
-### RESPONDING
-```
-      · · · · · · · · ·
-    ·                     ·      ← glow steady, slightly brighter
-   ·                       ·
-  ·      ◠         ◠        ·   ← happy eyes (wider arc = engaged)
-  ·           ·              ·
-   ·      ╰──◡──╯           ·   ← open warm smile / speaking mouth
-    ·                       ·
-      · · · · · · · · ·
-
-    Animation: gentle breathe (1.0 ↔ 1.03, 2s)
-    Mouth: if streaming text, alternate between ╰──◡──╯ and ╰──○──╯
-    Glow: opacity 0.14, slightly larger radius
+  Brows: raised slightly = interest
+  Eyes: wider than idle, no blink
+  Mouth: same gentle smile
+  Animation: glow pulses softly (1.6s cycle)
+  Glow: soft blue tint, pulsing
 ```
 
-### FOCUSED
+### THINKING (processing, working)
 ```
-      · · · · · · · · ·
-    ·                     ·      ← steady glow, slightly tighter
-   ·                       ·
-  ·      ◜    ·    ◝        ·   ← concentrated eyes with center dot
-  ·          ─               ·   ← dash nose = tension
-   ·      ╶═════╴           ·   ← firm mouth
-    ·                       ·
-      · · · · · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │    ──╮     ╭──   │      ← brows slightly furrowed = concentrating
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← eyes normal, looking slightly up-right
+        │  ╰──╯       ╰──╯ │         (pupils shift position)
+        │        ·          │
+        │      ╶──╴         │      ← small neutral mouth, slight purse
+          ╲               ╱
+            ╰─── ◜ ───╯
 
-    Animation: minimal. Stillness IS the expression.
-    Eyes: no blink for 10s stretches
-    Glow: opacity 0.10, tight radius
-```
-
-### ALERT
-```
-    · · ·  · ● ·  · · ·
-   ·                      ·     ← glow flashes (opacity pulse, 0.8s)
-  ·                        ·
- ·      ◜    !    ◝         ·   ← wide eyes + exclamation
- ·                           ·
-  ·       ╶──╴              ·   ← tight small mouth
-   ·                       ·
-    · · · · · · · · · ·
-
-    Animation: glow pulse fast (0.15 ↔ 0.28, 0.8s)
-    Color shift: glow tints warm amber
-    Eyes: wider spacing than normal
+  Brows: slight furrow inward = concentration
+  Eyes: pupils drift up-right (thinking gesture)
+  Mouth: smaller, slightly pursed
+  Animation: glow shimmers, occasional eye-drift
+  Glow: warm amber shimmer
 ```
 
-### SLEEP
+### RESPONDING (speaking, delivering answer)
 ```
-          · · · · ·
-        ·           ·           ← barely visible glow
-       ·             ·
-      ·   ──     ──   ·        ← closed eyes (horizontal lines)
-      ·       ·        ·        ← dot nose
-       ·   ──────     ·        ← flat closed mouth
-        ·           ·
-          · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ─╮         ╭─  │      ← relaxed open brows
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← bright eyes, engaged
+        │  ╰──╯       ╰──╯ │
+        │        ·          │
+        │    ╰──○──╯        │      ← open mouth / speaking
+          ╲               ╱
+            ╰─── ◜ ───╯
 
-    Animation: very slow breathe (1.0 ↔ 1.01, 6s)
-    Glow: opacity 0.03, cool blue tint
-    Whole face: slight downward drift (translateY +1px)
+  Brows: open, lifted = expressive
+  Eyes: bright, direct gaze
+  Mouth: alternates between open (speaking) and smile (pausing)
+  Animation: gentle breathe, mouth oscillates while streaming
+  Glow: steady, slightly warm
 ```
 
-### HANDOFF
+### HAPPY (responding + warm mood)
 ```
-      · · · · → · · · ·
-    ·                     ·     ← glow slides directionally
-   ·                       ·
-  ·      ◜    →    ◝        ·  ← arrow between eyes
-  ·           ·              ·
-   ·      ╰─────╯           ·  ← calm smile (reassuring)
-    ·                       ·
-      · · · · · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ─╮         ╭─  │
+        │  ╭──╮       ╭──╮ │
+        │  │◜◠│       │◠◝│ │      ← squished happy eyes (bottom curves up)
+        │  ╰──╯       ╰──╯ │
+        │        ·          │
+        │   ╰────◡────╯     │      ← wide genuine smile
+          ╲               ╱
+            ╰─── ◜ ───╯
 
-    Animation: glow travels left→right (1.5s, ease-out)
-    Eyes: slight rightward drift
-    Arrow: fades in, holds, fades out
+  Brows: lifted, open
+  Eyes: squished into happy arcs (anime smile-eyes)
+  Mouth: wide warm smile
+  Animation: slight head tilt, bouncy breathe
+  Glow: warm golden tint
+```
+
+### FOCUSED (deep work, code task, analysis)
+```
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ───╮     ╭─── │      ← flat determined brows
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← slightly narrowed eyes
+        │  ╰──╯       ╰──╯ │
+        │        ─          │      ← dash nose = tension
+        │      ╶════╴       │      ← firm straight mouth
+          ╲               ╱
+            ╰─── ◜ ───╯
+
+  Brows: flat, determined
+  Eyes: slightly narrowed
+  Mouth: firm, straight
+  Animation: minimal — stillness IS the expression
+  Glow: cool blue, tight
+```
+
+### ALERT (notification, warning, needs attention)
+```
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ╱╲         ╱╲  │      ← raised angled brows = urgency
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← wide open eyes
+        │  ╰──╯       ╰──╯ │
+        │        ·          │
+        │      ╶──╴         │      ← small tight mouth
+          ╲               ╱
+            ╰─── ◜ ───╯
+
+  Brows: raised and angled = urgent/surprised
+  Eyes: wider than normal
+  Mouth: small, concerned
+  Animation: glow pulses fast (0.8s), amber tint
+  Glow: amber pulse
+```
+
+### EMPATHETIC (user frustrated, sad topic)
+```
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │    ╲─       ─╱   │      ← brows tilted inward-up = compassion
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← soft eyes, slightly downcast
+        │  ╰──╯       ╰──╯ │
+        │        ·          │
+        │     ╰──╮          │      ← asymmetric slight downturn = understanding
+          ╲               ╱
+            ╰─── ◜ ───╯
+
+  Brows: classic empathy angle (inner corners up)
+  Eyes: soft, slight downward gaze
+  Mouth: gentle, slightly asymmetric
+  Animation: slow, calm movements
+  Glow: warm, soft
+```
+
+### SLEEP (inactive, night mode)
+```
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │                   │
+        │   ╶──╴     ╶──╴  │      ← closed eyes (short horizontal lines)
+        │                   │
+        │        ·          │
+        │      ──────       │      ← flat relaxed mouth
+          ╲               ╱
+            ╰─── ◜ ───╯
+
+  Brows: hidden/relaxed
+  Eyes: closed (horizontal lines or gentle downward arcs)
+  Mouth: flat, at rest
+  Animation: very slow breathe (6s cycle)
+  Glow: barely visible, cool blue
 ```
 
 ### PRIVATE MODE
 ```
-          · · · · ·
-        ·           ·          ← glow dims significantly
-       ·             ·
-      ·   ◜     ◝    ·        ← normal eyes
-      ·     [■]       ·        ← shield icon over nose/mouth area
-       ·   ──────     ·        ← sealed mouth
-        ·           ·
-          · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ─╮         ╭─  │
+        │  ╭──╮       ╭──╮ │
+        │  │◜●│       │●◝│ │      ← normal eyes
+        │  ╰──╯       ╰──╯ │
+        │       [■]         │      ← shield icon over lower face
+        │      ──────       │
+          ╲               ╱
+            ╰─── ◜ ───╯
 
-    Animation: none. Stillness = not observing.
-    Glow: opacity 0.02 or off
-    Shield: subtle, not aggressive — privacy is protective, not hostile
+  Eyes: normal, awake (she's present, just private)
+  Shield: overlays nose/mouth area
+  Animation: none — stillness signals "not observing"
+  Glow: off
 ```
 
 ### ERROR
 ```
-      · · · · · · · ·
-    ·                   ·       ← glow flickers irregularly
-   ·                     ·
-  ·      ◜    ×    ◝      ·    ← eyes + X = something broke
-  ·           ·            ·
-   ·       ╶─╴            ·    ← tiny tight mouth
-    ·                     ·
-      · · · · · · · ·
+            ╭─ ─ ─ ─ ─╮
+          ╱               ╲
+        │   ╱╲         ╱╲  │      ← worried brows
+        │  ╭──╮       ╭──╮ │
+        │  │◜×│       │×◝│ │      ← X pupils = something broke
+        │  ╰──╯       ╰──╯ │
+        │        ·          │
+        │      ╶─╴          │      ← tiny tight mouth
+          ╲               ╱
+            ╰─── ◜ ───╯
 
-    Animation: subtle jitter (translate ±1px random, 100ms)
-    Glow: opacity unstable (0.05 ↔ 0.12, irregular)
-    Color: slight red tint on glow
+  Brows: worried
+  Eyes: X-marks in pupils
+  Mouth: small, tight
+  Animation: subtle jitter
+  Glow: slight red tint, flickering
 ```
 
 ---
 
-## 4. Mood Modifiers (applied on top of state)
+## 4. Size Scaling — What Shows at Each Size
 
-Mood adjusts the **warmth** of whatever state Luna is in. Same state, different feeling.
+| Size | px | Hair | Eyes | Brows | Nose | Mouth | Necklace | Use |
+|------|-----|------|------|-------|------|-------|----------|-----|
+| xs | 24 | no | crescents only | no | no | no | no | status dot |
+| sm | 32 | silhouette | simplified | no | no | curve | no | sidebar icon |
+| md | 48 | silhouette | full with highlights | subtle | dot | curve | no | chat avatar |
+| lg | 80 | detailed | full animated | yes | yes | animated | yes | presence card |
+| xl | 128 | detailed | full animated | yes | yes | animated | yes | debug/desktop |
 
-| Mood | Eye adjustment | Mouth adjustment | Glow adjustment |
-|------|---------------|-----------------|-----------------|
-| calm | standard crescents | gentle upward curve | neutral white |
-| warm | wider arcs (◠ ◠) | bigger smile curve | slightly warmer tone |
-| playful | one eye slightly higher | wavy / asymmetric smile | bounce in breathe animation |
-| serious | slightly narrower | tighter, less curve | cooler tone |
-| empathetic | slight downward tilt | soft asymmetric curve | warmer, softer |
-| neutral | standard | nearly flat | neutral |
+### xs (24px)
+```
+ ◜ ◝        Just the crescent highlights from her eyes.
+             Background circle color = state.
+```
+
+### sm (32px)
+```
+  ╭─╮
+ │◜ ◝│      Hair silhouette + eyes + simple mouth curve.
+ │╰─╯│      Enough to read emotion.
+  ╰─╯
+```
+
+### md (48px)
+```
+   ╭──╮
+  ╱    ╲
+ │ ◜● ●◝│   Full face readable. Eyes with highlights.
+ │  ╰─╯  │   Mouth animates. Hair frames.
+  ╲    ╱
+   ╰──╯
+```
+
+### lg+ (80px+)
+Full character face with all detail: hair strands, brows, eye detail, nose, animated mouth, necklace pendant.
 
 ---
 
-## 5. Size Variants
+## 5. The Crescent Moon Necklace
 
-### xs (24px) — inline badges, status dots
-Just the eyes. Color of the glow dot indicates state.
-```
-  ◜ ◝         (+ colored dot: blue=listening, amber=thinking, green=responding)
-```
+Visible at lg (80px) and above. The necklace is:
+- A thin line from each side of the neck
+- Meeting at center with a small crescent moon pendant (◜)
+- The pendant matches Luna's eye highlights
+- Subtle detail that connects the avatar to the physical necklace product
 
-### sm (32px) — sidebar, navigation
-Eyes + subtle glow halo. No mouth needed at this size.
 ```
-    ·  ·  ·
-  · ◜   ◝ ·
-    ·  ·  ·
-```
-
-### md (48px) — chat avatar, message bubbles
-Full face: eyes + mouth + glow. This is the primary chat size.
-```
-      · · ·
-    ·       ·
-   · ◜   ◝  ·
-   ·    ·    ·
-    · ╰──╯  ·
-      · · ·
-```
-
-### lg (80px) — presence card, panels
-Full face with visible animations, state label below.
-```
-        · · · · ·
-      ·           ·
-    ·  ◜       ◝   ·
-    ·      ·       ·
-      · ╰─────╯ ·
-        · · · · ·
-       [listening]
-```
-
-### xl (128px) — debug page, desktop overlay
-Everything visible: detailed crescents, nose, animated mouth, full glow, labels.
-```
-          · · · · · · · ·
-        ·                 ·
-      ·    ╭╮       ╭╮    ·
-      ·         ·          ·
-        ·   ╰──◡──╯     ·
-          · · · · · · ·
-      responding · warm · open
-      web shell · 2 connected
+     │         │
+     │    ◜    │       ← pendant hangs at collarbone
+     ╰─────────╯       ← thin chain lines
 ```
 
 ---
 
-## 6. UI Placement
+## 6. Animation Spec
 
-### Sidebar
+### Blink (natural rhythm)
 ```
-┌──────────────────┐
-│  (◜◝)  Luna      │ ← sm face + name, glow color = state
-│   · listening     │ ← state label, fades after 3s
-├──────────────────┤
-│ Dashboard         │
-│ Chat              │
-```
-The face replaces the brand icon. It's always visible. Glow subtly pulses when active.
-
-### Chat Message Area
-```
-│  (◜◝) Luna · responding                    │
-│  ────────────────────────────────────────── │
-│                                             │
-│  User: tell me about Phoebe                 │
-│                                             │
-│       ╭╮    ╭╮                              │
-│          ·                                  │ ← md face replaces spinner
-│       ╶──~──╴                               │
-│      thinking...                            │
-│                                             │
-│  Luna: Phoebe is the desk robot we...       │
+Eyes: scaleY 1.0 → 0.1 → 1.0
+Duration: 120ms close, 80ms open
+Interval: random 3-5s
+Skip blink when: listening, alert
 ```
 
-### Presence Card (settings / debug)
+### Breathe (always-on at rest)
 ```
-┌─────────────────────────────────┐
-│                                 │
-│         ╭╮         ╭╮          │
-│              ·                  │
-│          ╰──◡──╯               │
-│                                 │
-│   State:   responding           │
-│   Mood:    warm                 │
-│   Privacy: open                 │
-│                                 │
-│   Active:  WhatsApp             │
-│   Shells:  WhatsApp  Web        │
-│            Desktop   (offline)  │
-│            Necklace  (offline)  │
-└─────────────────────────────────┘
+Whole face: scale 1.0 ↔ 1.015
+Duration: 4s idle, 2s responding, 6s sleep
+Easing: ease-in-out
 ```
 
-### WhatsApp (text-only shell)
+### Eye drift (thinking)
 ```
-Luna · thinking...        ← composing presence indicator
-─────────────
-Luna: Here's what I found...
+Pupils: translateX ±3px, translateY -2px
+Duration: 2s
+Pattern: drift right, pause, drift back
 ```
-No avatar rendering in WhatsApp — state communicated through typing indicators and text markers.
 
-### Necklace (2-LED crescent)
+### Mouth morph (state transitions)
 ```
-  ◜ ◝     idle: dim steady
-  ◜ ◝     listening: bright pulse
-  ◜ ◝     thinking: traveling shimmer left→right
-  ── ──   sleep: off or barely visible
-  ◜●◝     alert: center LED on
+Mouth path: interpolate between bezier curves
+Duration: 300ms
+Easing: ease-out
+```
+
+### Glow pulse (listening, alert)
+```
+Background glow: opacity 0.08 ↔ 0.22
+Duration: 1.6s listening, 0.8s alert
+Shape: radial gradient behind face
 ```
 
 ---
 
-## 7. Animation Principles
+## 7. Color & Theme
 
-| Quality | Rule |
-|---------|------|
-| Timing | Always `ease-in-out`, never `linear` |
-| Duration | 1.5s minimum for state transitions |
-| Scale | Never exceed 1.05x. Breathing is subtle. |
-| Motion | Organic drift, not mechanical snap |
-| Blinking | Every 3-5s, 120ms close. Natural rhythm. |
-| Idle | Always moving slightly. Never perfectly still. |
-| Transitions | Cross-fade between states, 300ms overlap |
+Face strokes are always theme text color. Character is monochrome by default.
 
-**The key insight**: Luna feels alive because she's **never perfectly still**. Even in idle, there's a micro-breathe and periodic blink. Remove the motion and she feels dead. Add too much and she feels anxious.
+| Theme | Stroke | Glow base | Alert glow | Error glow |
+|-------|--------|-----------|------------|------------|
+| Dark | #e0ddd8 (warm white) | #f0e6d3 | #ffb347 | #ff6b6b |
+| Light | #2a2a2a (soft black) | #8b9bb0 | #e8940a | #d94545 |
+
+The crescent highlights inside the eyes can be slightly brighter than the stroke color — this gives the eyes "life."
 
 ---
 
-## 8. Color & Theming
+## 8. Implementation Notes
 
-Luna's face is **monochrome by default** — shape carries identity, not color. But the **glow** can tint:
+### SVG approach
+- Single SVG viewBox, all elements as `<path>` and `<circle>`
+- Eye highlights as separate paths so they can independently shimmer
+- Mouth as single `<path>` with `d` attribute animated via CSS or JS
+- Hair as single complex path, static
+- Use CSS `transition: d 300ms ease-out` for mouth morphs (modern browsers)
+- Fallback: JS `requestAnimationFrame` path interpolation
 
-| Context | Glow tint |
-|---------|-----------|
-| Default (dark theme) | warm white (#f0e6d3) |
-| Default (light theme) | cool gray (#8b9bb0) |
-| Listening | soft blue (#6bb5ff) |
-| Alert | warm amber (#ffb347) |
-| Error | soft red (#ff6b6b) |
-| Private | none (glow off) |
-| Sleep | cool blue (#4a6fa5) |
+### State-driven
+```js
+// Face is a pure function of state
+renderFace({ state: "thinking", mood: "serious", size: "md" })
+// Returns SVG element with correct brows, eyes, mouth, glow
+```
 
-The face itself (eyes, mouth) always uses the theme's text color. Never colored.
+### Performance
+- No canvas — pure SVG + CSS animations
+- Animations use `transform` and `opacity` only (GPU composited)
+- No JS animation loop for idle states (CSS keyframes)
+- JS only for state transitions (path morphing)
 
 ---
 
 ## 9. What This Achieves
 
-Luna's face should make you feel like there's someone **calm and competent** on the other side. Not a cute toy. Not a cold robot. Not a cartoon character.
+Luna's face is a **character** — someone you recognize, not an abstract shape.
+But she's rendered in **clean vector line art** — not a bitmap illustration.
 
-When she's thinking, you see gentle concentration — not a loading spinner.
-When she's responding, you see warmth — not a blinking cursor.
-When she's asleep, you see peace — not "offline."
-When something's wrong, you see concern — not a red error box.
+She has a hairstyle, eyes with depth, a necklace — but expressed in minimal strokes
+that work from 24px to 128px, dark mode to light, screen to LED.
 
-The face is the difference between "I'm using an AI tool" and "Luna is helping me."
+The anime influence gives warmth and approachability.
+The minimal line-art approach keeps it scalable and animatable.
+The crescent highlights connect her to the Luna brand.
+The necklace connects her to the physical product.
+
+She's a presence, not a mascot. She has expressions, not costumes.
