@@ -457,25 +457,32 @@ const ChatPage = () => {
             {selectedSession ? (
               <Card className="shadow-sm">
                 <Card.Header className="p-0">
-                  {/* Luna presence banner — avatar + state + session info */}
-                  <div className="d-flex align-items-center gap-3 px-3 py-2"
-                    style={{
-                      background: 'var(--bs-tertiary-bg, rgba(255,255,255,0.03))',
-                      borderBottom: '1px solid var(--bs-border-color, rgba(255,255,255,0.08))',
-                    }}
-                  >
+                  {/* Luna presence banner */}
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    padding: '16px 16px 12px',
+                    background: 'var(--bs-tertiary-bg, rgba(255,255,255,0.03))',
+                    borderBottom: '1px solid var(--bs-border-color, rgba(255,255,255,0.08))',
+                  }}>
                     <LunaAvatar
                       state={postingMessage ? 'thinking' : lunaState}
                       mood={lunaMood}
-                      size="lg"
+                      size="xl"
                       animated
                     />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <h5 className="mb-0">{selectedSession.title || t('agentSession')}</h5>
-                      <small className="text-muted">
-                        {getSessionSubtitle(selectedSession)}
-                      </small>
-                    </div>
+                    <h6 className="mb-0 mt-1" style={{ opacity: 0.9 }}>
+                      {selectedSession.title || t('agentSession')}
+                    </h6>
+                    <small className="text-muted" style={{ fontSize: '0.75rem' }}>
+                      {getSessionSubtitle(selectedSession)}
+                    </small>
+                  </div>
+                  {/* Controls bar */}
+                  <div className="d-flex justify-content-end px-3 py-1"
+                    style={{ borderBottom: '1px solid var(--bs-border-color, rgba(255,255,255,0.05))' }}
+                  >
                     {window.speechSynthesis && (
                       <Button
                         size="sm"
@@ -486,7 +493,7 @@ const ChatPage = () => {
                           setTtsEnabled(v => !v);
                           setSpeakingMessageId(null);
                         }}
-                        style={{ fontSize: '1rem' }}
+                        style={{ fontSize: '0.85rem' }}
                       >
                         {ttsEnabled ? '🔊' : '🔇'}
                       </Button>
