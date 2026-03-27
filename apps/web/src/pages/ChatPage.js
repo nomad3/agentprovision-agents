@@ -414,9 +414,9 @@ const ChatPage = () => {
 
   return (
     <Layout>
-      <Container fluid>
+      <Container fluid className="chat-page-container">
         <Row className="g-4">
-          <Col lg={4} xl={3}>
+          <Col lg={4} xl={3} className="chat-sessions-col">
             <div className="d-flex justify-content-between align-items-center mb-3">
               <h3 className="mb-0">{t('sessions')}</h3>
               <Button size="sm" variant="outline-primary" onClick={handleCreateSessionModal}>
@@ -452,7 +452,7 @@ const ChatPage = () => {
             )}
           </Col>
 
-          <Col lg={8} xl={9}>
+          <Col lg={8} xl={9} className="chat-main-col">
             {globalError && <Alert variant="danger">{globalError}</Alert>}
             {selectedSession ? (
               <Card className="shadow-sm">
@@ -467,8 +467,8 @@ const ChatPage = () => {
                     flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    padding: '20px 16px 12px',
-                    minHeight: 200,
+                    padding: '24px 16px 16px',
+                    minHeight: 280,
                     background: 'radial-gradient(ellipse at 50% 60%, var(--bs-tertiary-bg, rgba(30,45,65,0.6)) 0%, transparent 70%)',
                     borderBottom: '1px solid var(--bs-border-color, rgba(255,255,255,0.08))',
                     position: 'relative',
@@ -486,7 +486,7 @@ const ChatPage = () => {
                       position: 'absolute',
                       top: '50%', left: '50%',
                       transform: 'translate(-50%, -50%)',
-                      width: 280, height: 280,
+                      width: 340, height: 340,
                       borderRadius: '50%',
                       background: `radial-gradient(circle, ${g.color} 0%, transparent 70%)`,
                       opacity: g.active ? 1 : 0,
@@ -497,7 +497,7 @@ const ChatPage = () => {
                   <LunaAvatar
                     state={postingMessage ? 'thinking' : lunaState}
                     mood={lunaMood}
-                    size="xl"
+                    size="xxl"
                     animated
                   />
                   <div style={{ marginTop: 4, textAlign: 'center', zIndex: 1 }}>
@@ -530,7 +530,7 @@ const ChatPage = () => {
                   )}
                 </div>
                 {/* ═══ Chat messages below ═══ */}
-                <Card.Body style={{ height: '45vh', display: 'flex', flexDirection: 'column' }}>
+                <Card.Body style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                   <div style={{ flex: 1, overflowY: 'auto' }}>
                     {loadingMessages ? (
                       <div className="d-flex align-items-center gap-2 text-muted">
