@@ -177,6 +177,22 @@ async def _score_and_log(
     if not consensus.passed:
         logger.info("Consensus FAILED for agent=%s — issues: %s", agent_slug, "; ".join(consensus.all_issues[:3]))
 
+    # ── Determine scorer confidence weight based on reward source ──
+    # Single Qwen run (auto_quality) is less reliable than multi-reviewer
+    # consensus. Human reviews and explicit ratings are ground truth.
+    # Confidence weights: admin_review/explicit_rating=1.0,
+    # auto_quality_consensus=0.7, auto_quality=0.5, backfill=0.1.
+    reward_source = "auto_quality_consensus" if consensus.total_reviewers > 1 else "auto_quality"
+    _SCORER_CONFIDENCE = {
+        "admin_review": 1.0,
+        "explicit_rating": 1.0,
+        "auto_quality_consensus": 0.7,
+        "auto_quality": 0.5,
+        "auto_quality_backfill": 0.1,
+        "response_quality_backfill": 0.1,
+    }
+    scorer_confidence = _SCORER_CONFIDENCE.get(reward_source, 0.5)
+
     # ── Log as RL experience with rubric + consensus breakdown ──
     try:
         from app.db.session import SessionLocal
@@ -239,8 +255,11 @@ async def _score_and_log(
                     "consensus_suggestions": consensus.all_suggestions[:6],
                     "consensus_penalty": consensus_penalty,
                     "consensus_fragile": consensus.fragile,
+                    # Scorer reliability weight (0.0-1.0) — used by dream
+                    # system and RL policy engine to discount low-confidence scores
+                    "scorer_confidence": scorer_confidence,
                 },
-                reward_source="auto_quality_consensus",
+                reward_source=reward_source,
             )
             logger.info(
                 "Auto-quality RL saved: id=%s score=%d→%d consensus=%s/%s platform=%s",
@@ -270,6 +289,7 @@ async def _score_and_log(
                         UPDATE rl_experiences
                         SET reward = :reward,
                             reward_source = 'response_quality_backfill',
+                            reward_components = COALESCE(reward_components, '{}'::jsonb) || '{"scorer_confidence": 0.1}'::jsonb,
                             rewarded_at = NOW()
                         WHERE tenant_id = CAST(:tid AS uuid)
                           AND trajectory_id = CAST(:traj AS uuid)

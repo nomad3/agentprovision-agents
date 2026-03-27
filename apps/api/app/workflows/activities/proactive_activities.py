@@ -196,7 +196,7 @@ async def send_proactive_notifications(tenant_id: str) -> dict:
         for action in pending:
             # Create a notification
             notification = Notification(
-                tenant_id=tenant_id,
+                tenant_id=tenant_uuid,
                 source="proactive_agent",
                 title=_action_title(action.action_type, action.trigger_type),
                 body=action.content,

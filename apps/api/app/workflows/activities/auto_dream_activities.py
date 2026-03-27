@@ -98,6 +98,7 @@ async def scan_unconsolidated_experiences(tenant_id: str) -> Dict[str, Any]:
         grouped: Dict[str, List[Dict]] = defaultdict(list)
         for exp in experiences:
             action = exp.action or {}
+            rc = exp.reward_components or {}
             grouped[exp.decision_point].append({
                 "id": str(exp.id),
                 "decision_point": exp.decision_point,
@@ -105,6 +106,8 @@ async def scan_unconsolidated_experiences(tenant_id: str) -> Dict[str, Any]:
                 "action": action,
                 "state": exp.state or {},
                 "reward": exp.reward,
+                "reward_source": exp.reward_source,
+                "scorer_confidence": rc.get("scorer_confidence"),
                 "created_at": exp.created_at.isoformat() if exp.created_at else None,
             })
 
@@ -144,20 +147,46 @@ async def extract_decision_patterns(
     """
     patterns: Dict[str, List[Dict]] = {}
 
+    # Confidence weights by reward_source — used when scorer_confidence
+    # is not explicitly stored in reward_components.
+    _SOURCE_CONFIDENCE = {
+        "admin_review": 1.0,
+        "explicit_rating": 1.0,
+        "auto_quality_consensus": 0.7,
+        "auto_quality": 0.5,
+        "auto_quality_backfill": 0.1,
+        "response_quality_backfill": 0.1,
+    }
+
     for dp, exps in grouped_json.items():
-        # Bucket by action_key
-        buckets: Dict[str, List[float]] = defaultdict(list)
+        # Bucket by action_key — store (reward, confidence) tuples
+        buckets: Dict[str, List[tuple]] = defaultdict(list)
         for exp in exps:
             key = exp.get("action_key") or _extract_action_key(exp.get("action", {}))
             reward = exp.get("reward")
             if reward is not None:
-                buckets[key].append(float(reward))
+                # Prefer explicit scorer_confidence from reward_components;
+                # fall back to reward_source lookup, then default 0.5.
+                confidence = exp.get("scorer_confidence")
+                if confidence is None:
+                    source = exp.get("reward_source") or ""
+                    confidence = _SOURCE_CONFIDENCE.get(source, 0.5)
+                buckets[key].append((float(reward), float(confidence)))
 
         dp_patterns = []
-        for action_key, rewards in buckets.items():
-            if len(rewards) < _MIN_PATTERN_COUNT:
+        for action_key, entries in buckets.items():
+            if len(entries) < _MIN_PATTERN_COUNT:
                 continue
-            avg = sum(rewards) / len(rewards)
+
+            rewards = [r for r, _ in entries]
+            # Weighted average: weight each reward by scorer_confidence.
+            # Falls back to simple average if all weights are zero.
+            total_weight = sum(w for _, w in entries)
+            if total_weight > 0:
+                avg = sum(r * w for r, w in entries) / total_weight
+            else:
+                avg = sum(rewards) / len(rewards)
+
             # Classify insight type
             if avg >= 0.5:
                 insight_type = "opportunity"
@@ -172,6 +201,7 @@ async def extract_decision_patterns(
                 "count": len(rewards),
                 "min_reward": round(min(rewards), 4),
                 "max_reward": round(max(rewards), 4),
+                "avg_confidence": round(total_weight / len(entries), 4) if entries else 0.5,
                 "insight_type": insight_type,
             })
 

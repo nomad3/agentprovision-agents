@@ -377,16 +377,25 @@ async def apply_feedback_to_cycle(tenant_id: str) -> dict:
                 elif intent == "exploration_direction":
                     dp = _extract_decision_point(content_lower)
                     if dp:
-                        db.execute(text("""
-                            INSERT INTO decision_point_config
-                                (tenant_id, decision_point, exploration_rate, exploration_mode)
-                            VALUES (CAST(:tid AS uuid), :dp, 0.20, 'targeted')
-                            ON CONFLICT (tenant_id, decision_point) DO UPDATE
-                              SET exploration_rate = LEAST(
-                                      decision_point_config.exploration_rate + 0.05, 0.30),
-                                  exploration_mode = 'targeted',
-                                  updated_at = NOW()
-                        """), {"tid": tenant_id, "dp": dp})
+                        existing_dpc = db.execute(text("""
+                            SELECT id FROM decision_point_config
+                            WHERE tenant_id = CAST(:tid AS uuid) AND decision_point = :dp
+                            LIMIT 1
+                        """), {"tid": tenant_id, "dp": dp}).fetchone()
+                        if existing_dpc:
+                            db.execute(text("""
+                                UPDATE decision_point_config
+                                SET exploration_rate = LEAST(exploration_rate + 0.05, 0.30),
+                                    exploration_mode = 'targeted',
+                                    updated_at = NOW()
+                                WHERE tenant_id = CAST(:tid AS uuid) AND decision_point = :dp
+                            """), {"tid": tenant_id, "dp": dp})
+                        else:
+                            db.execute(text("""
+                                INSERT INTO decision_point_config
+                                    (id, tenant_id, decision_point, exploration_rate, exploration_mode, updated_at)
+                                VALUES (gen_random_uuid(), CAST(:tid AS uuid), :dp, 0.20, 'targeted', NOW())
+                            """), {"tid": tenant_id, "dp": dp})
                         logger.info("Boosted exploration for dp=%s tenant=%s", dp, tenant_id[:8])
 
                 record.applied = True
@@ -439,28 +448,46 @@ async def adjust_exploration_rates(tenant_id: str, metrics: dict) -> dict:
             dp = row.decision_point
             if dp in performing_dps:
                 continue
-            db.execute(text("""
-                INSERT INTO decision_point_config
-                    (tenant_id, decision_point, exploration_rate, exploration_mode)
-                VALUES (CAST(:tid AS uuid), :dp, 0.20, 'targeted')
-                ON CONFLICT (tenant_id, decision_point) DO UPDATE
-                  SET exploration_rate = LEAST(
-                          decision_point_config.exploration_rate + 0.05, 0.25),
-                      exploration_mode = 'targeted',
-                      updated_at = NOW()
-            """), {"tid": tenant_id, "dp": dp})
+            existing_dpc = db.execute(text("""
+                SELECT id FROM decision_point_config
+                WHERE tenant_id = CAST(:tid AS uuid) AND decision_point = :dp
+                LIMIT 1
+            """), {"tid": tenant_id, "dp": dp}).fetchone()
+            if existing_dpc:
+                db.execute(text("""
+                    UPDATE decision_point_config
+                    SET exploration_rate = LEAST(exploration_rate + 0.05, 0.25),
+                        exploration_mode = 'targeted',
+                        updated_at = NOW()
+                    WHERE tenant_id = CAST(:tid AS uuid) AND decision_point = :dp
+                """), {"tid": tenant_id, "dp": dp})
+            else:
+                db.execute(text("""
+                    INSERT INTO decision_point_config
+                        (id, tenant_id, decision_point, exploration_rate, exploration_mode, updated_at)
+                    VALUES (gen_random_uuid(), CAST(:tid AS uuid), :dp, 0.20, 'targeted', NOW())
+                """), {"tid": tenant_id, "dp": dp})
             stalled_boosted += 1
 
         for dp in performing_dps:
-            db.execute(text("""
-                INSERT INTO decision_point_config
-                    (tenant_id, decision_point, exploration_rate, exploration_mode)
-                VALUES (CAST(:tid AS uuid), :dp, 0.05, 'balanced')
-                ON CONFLICT (tenant_id, decision_point) DO UPDATE
-                  SET exploration_rate = GREATEST(
-                          decision_point_config.exploration_rate - 0.02, 0.05),
-                      updated_at = NOW()
-            """), {"tid": tenant_id, "dp": dp})
+            existing_dpc = db.execute(text("""
+                SELECT id FROM decision_point_config
+                WHERE tenant_id = CAST(:tid AS uuid) AND decision_point = :dp
+                LIMIT 1
+            """), {"tid": tenant_id, "dp": dp}).fetchone()
+            if existing_dpc:
+                db.execute(text("""
+                    UPDATE decision_point_config
+                    SET exploration_rate = GREATEST(exploration_rate - 0.02, 0.05),
+                        updated_at = NOW()
+                    WHERE tenant_id = CAST(:tid AS uuid) AND decision_point = :dp
+                """), {"tid": tenant_id, "dp": dp})
+            else:
+                db.execute(text("""
+                    INSERT INTO decision_point_config
+                        (id, tenant_id, decision_point, exploration_rate, exploration_mode, updated_at)
+                    VALUES (gen_random_uuid(), CAST(:tid AS uuid), :dp, 0.05, 'balanced', NOW())
+                """), {"tid": tenant_id, "dp": dp})
 
         db.commit()
         logger.info(

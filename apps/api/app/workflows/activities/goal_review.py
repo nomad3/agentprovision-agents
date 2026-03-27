@@ -1,6 +1,7 @@
 """Activities for the GoalReviewWorkflow."""
 
 import logging
+import uuid as _uuid
 from datetime import datetime, timedelta
 from typing import Dict, List
 
@@ -235,7 +236,7 @@ async def create_review_notifications(
             if existing:
                 continue
             notification = Notification(
-                tenant_id=tenant_id,
+                tenant_id=_uuid.UUID(tenant_id) if isinstance(tenant_id, str) else tenant_id,
                 source="goal_review",
                 title=item["title"],
                 body=item["message"],
