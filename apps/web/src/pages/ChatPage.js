@@ -456,9 +456,21 @@ const ChatPage = () => {
             {globalError && <Alert variant="danger">{globalError}</Alert>}
             {selectedSession ? (
               <Card className="shadow-sm">
-                <Card.Header>
-                  <div className="d-flex justify-content-between align-items-center">
-                    <div>
+                <Card.Header className="p-0">
+                  {/* Luna presence banner — avatar + state + session info */}
+                  <div className="d-flex align-items-center gap-3 px-3 py-2"
+                    style={{
+                      background: 'var(--bs-tertiary-bg, rgba(255,255,255,0.03))',
+                      borderBottom: '1px solid var(--bs-border-color, rgba(255,255,255,0.08))',
+                    }}
+                  >
+                    <LunaAvatar
+                      state={postingMessage ? 'thinking' : lunaState}
+                      mood={lunaMood}
+                      size="lg"
+                      animated
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <h5 className="mb-0">{selectedSession.title || t('agentSession')}</h5>
                       <small className="text-muted">
                         {getSessionSubtitle(selectedSession)}
