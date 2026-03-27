@@ -990,7 +990,7 @@ def _execute_claude_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliR
         "claude", "-p", task_input.message,
         "--output-format", "json",
         "--model", CLAUDE_CODE_MODEL,
-        "--allowedTools", "mcp__servicetsunami__*,Bash,Read,Edit,Write",
+        "--allowedTools", "mcp__servicetsunami__*,Bash,Read,Edit,Write,WebFetch,WebSearch",
         "--add-dir", session_dir,
     ]
     if os.path.isdir(WORKSPACE):
