@@ -18,7 +18,7 @@ const EMOTES = {
 };
 
 const LunaAvatar = ({ state = 'idle', mood = 'calm', size = 'md', animated = true, onClick }) => {
-  const sizeMap = { xs: 24, sm: 32, md: 48, lg: 80, xl: 128 };
+  const sizeMap = { xs: 24, sm: 32, md: 48, lg: 80, xl: 128, xxl: 200 };
   const px = sizeMap[size] || 48;
   const showEmote = size !== 'xs' && size !== 'sm';
   const emote = EMOTES[state] || EMOTES.idle;
