@@ -125,8 +125,13 @@ def route_and_execute(
 
     # Pin to Claude Code when the session has an active --resume session ID.
     # Switching to Codex (one-shot) mid-conversation breaks context continuity.
+    # This overrides the tenant default if a Claude session already exists.
     _has_claude_session = (db_session_memory or {}).get("claude_code_cli_session_id")
-    _pin_to_claude = bool(_has_claude_session and platform == "claude_code")
+    if _has_claude_session:
+        platform = "claude_code"
+        _pin_to_claude = True
+    else:
+        _pin_to_claude = False
 
     trust_profile = safety_trust.get_agent_trust_profile(
         db,
@@ -214,7 +219,7 @@ def route_and_execute(
         if rollout:
             apply_policy, is_treatment = policy_rollout_service.should_apply_rollout(rollout)
             rollout_experiment_id = rollout["experiment_id"]
-            if is_treatment and apply_policy:
+            if is_treatment and apply_policy and not _pin_to_claude:
                 routing_source = "rollout_treatment"
                 proposed = rollout.get("proposed_policy", {})
                 if "platform" in proposed:

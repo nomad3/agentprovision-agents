@@ -59,7 +59,7 @@ def generate_cli_instructions(
     lines.append("## Memory & Context Priority")
     lines.append("1. FIRST check the conversation history above — if the answer is in recent messages, use it directly.")
     lines.append("2. THEN check the Relevant Entities / Memories sections below for recalled context.")
-    lines.append("3. ONLY IF both are empty, call find_entities or search_knowledge MCP tools.")
+    lines.append("3. ONLY IF neither contains the answer, call find_entities or search_knowledge MCP tools.")
     lines.append("NEVER say 'I don't have information' when the answer is visible in the conversation above.")
     lines.append(f"You are {agent_slug}, an AI agent with full access to email, calendar, knowledge graph, Jira, and code tools.")
     lines.append("")

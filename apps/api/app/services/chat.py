@@ -310,30 +310,46 @@ def _generate_agentic_response(
         pass  # Never block response delivery for scoring
 
     # ── Post-response memory writes ──
-    # Capture ALL primitives before any background work — ORM objects are
+    # Capture ALL primitives before spawning threads — ORM objects are
     # not safe to dereference after the request session commits.
     _tenant_id = session.tenant_id  # uuid, not ORM lazy
-    _session_id = session.id
     _user_message = user_message
     _response_text = response_text
     _recalled_names = (context or {}).get("recalled_entity_names", [])
 
-    # 1. Synchronous write-through for salient named entities from the turn.
-    #    This guarantees that proper nouns Luna just discussed are immediately
-    #    persisted — no daemon-thread race, no silent no-op.
+    # 1. Knowledge extraction — runs in a daemon thread with its own
+    #    SessionLocal. Uses only captured primitives, never the request
+    #    session. extract_from_content manages its own commits internally.
     try:
-        from app.services.knowledge_extraction import KnowledgeExtractionService
-        extraction_service = KnowledgeExtractionService()
-        conversation_text = f"User: {_user_message}\n\nAssistant: {_response_text}"
-        extraction_service.extract_from_content(
-            db,
-            tenant_id=_tenant_id,
-            content=conversation_text,
-            content_type="chat_transcript",
-        )
-        db.commit()
+        import threading
+
+        def _extract_knowledge():
+            import logging as _log
+            from app.db.session import SessionLocal as _SL
+            from app.services.knowledge_extraction import KnowledgeExtractionService
+
+            edb = _SL()
+            try:
+                extraction_service = KnowledgeExtractionService()
+                conversation_text = f"User: {_user_message}\n\nAssistant: {_response_text}"
+                extraction_service.extract_from_content(
+                    edb,
+                    tenant_id=_tenant_id,
+                    content=conversation_text,
+                    content_type="chat_transcript",
+                )
+            except Exception:
+                _log.getLogger(__name__).warning(
+                    "Post-response knowledge extraction failed for tenant %s",
+                    str(_tenant_id)[:8], exc_info=True,
+                )
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_extract_knowledge, daemon=True).start()
     except Exception:
-        db.rollback()  # don't let extraction failure poison the session
+        pass
 
     # 2. Recall feedback — lightweight, safe in a thread since we only
     #    use captured primitives.
