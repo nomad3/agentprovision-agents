@@ -214,7 +214,6 @@ async def generate_dream_insights(
         luna_agent = (
             db.query(Agent)
             .filter(Agent.tenant_id == tid)
-            .order_by(Agent.created_at)
             .first()
         )
         agent_id = luna_agent.id if luna_agent else None
