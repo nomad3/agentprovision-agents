@@ -91,6 +91,92 @@ async def startup_whatsapp():
     await whatsapp_service.restore_connections()
 
 
+@app.on_event("startup")
+async def startup_proactive_workflows():
+    """Auto-start long-running Temporal workflows for all active tenants.
+
+    Launches per-tenant instances of:
+      - AutonomousLearningWorkflow (nightly dream/RL cycle + morning report)
+      - InboxMonitorWorkflow (Gmail/Calendar monitoring every 15 min)
+      - CompetitorMonitorWorkflow (competitor intelligence, daily)
+
+    Uses workflow_id_reuse_policy to skip tenants that already have a
+    running instance (idempotent on restart).
+    """
+    import asyncio
+    import logging as _logging
+    from app.db.session import SessionLocal as _SL
+
+    logger = _logging.getLogger(__name__)
+
+    async def _launch():
+        # Give Temporal a few seconds to be ready
+        await asyncio.sleep(5)
+        try:
+            from temporalio.client import Client
+            from temporalio.common import WorkflowIDReusePolicy
+            from app.workflows.autonomous_learning import AutonomousLearningWorkflow
+            from app.workflows.inbox_monitor import InboxMonitorWorkflow
+            from app.workflows.competitor_monitor import CompetitorMonitorWorkflow
+
+            client = await Client.connect("temporal:7233")
+            db = _SL()
+            try:
+                from sqlalchemy import text
+                tenants = db.execute(text(
+                    "SELECT id::text FROM tenants"
+                )).fetchall()
+            finally:
+                db.close()
+
+            launched = 0
+            for (tid,) in tenants:
+                # Autonomous learning (nightly)
+                try:
+                    await client.start_workflow(
+                        AutonomousLearningWorkflow.run,
+                        tid,
+                        id=f"autonomous-learning-{tid}",
+                        task_queue="servicetsunami-orchestration",
+                        id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                    )
+                    launched += 1
+                except Exception:
+                    pass  # already running
+
+                # Inbox monitor (every 15 min)
+                try:
+                    await client.start_workflow(
+                        InboxMonitorWorkflow.run,
+                        tid,
+                        id=f"inbox-monitor-{tid}",
+                        task_queue="servicetsunami-orchestration",
+                        id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                    )
+                    launched += 1
+                except Exception:
+                    pass
+
+                # Competitor monitor (daily)
+                try:
+                    await client.start_workflow(
+                        CompetitorMonitorWorkflow.run,
+                        tid,
+                        id=f"competitor-monitor-{tid}",
+                        task_queue="servicetsunami-orchestration",
+                        id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                    )
+                    launched += 1
+                except Exception:
+                    pass
+
+            logger.info("Proactive workflows: launched %d new instances for %d tenants", launched, len(tenants))
+        except Exception as e:
+            logger.warning("Proactive workflow auto-start failed (Temporal may not be ready): %s", e)
+
+    asyncio.ensure_future(_launch())
+
+
 @app.on_event("shutdown")
 async def shutdown_whatsapp():
     """Gracefully disconnect all neonize clients."""
