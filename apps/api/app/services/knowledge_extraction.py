@@ -490,9 +490,6 @@ class KnowledgeExtractionService:
         if result.rejected_entities:
             logger.warning("Rejected %d entities", len(result.rejected_entities))
 
-        # Resolve source_channel from content_type (fix: was defined but never used)
-        source_channel = _SOURCE_CHANNEL_MAP.get(content_type, "chat")
-
         # Batch-load existing entities by name to avoid N+1 queries during contradiction check
         all_names = [
             item.get("name", "").strip().lower()
@@ -546,7 +543,7 @@ class KnowledgeExtractionService:
                         value_json={"type": entity_type, "source": content_type},
                         previous_value_json={"type": existing.entity_type},
                         confidence=0.5,
-                        source_type="extraction_conflict",
+                        source_type=_SOURCE_CHANNEL_MAP.get(content_type, "chat"),
                         status="disputed",
                         dispute_reason=f"Existing: {existing.entity_type}, New extraction: {entity_type}",
                     )
