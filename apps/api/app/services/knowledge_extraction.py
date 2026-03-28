@@ -588,6 +588,25 @@ class KnowledgeExtractionService:
 
         if created:
             db.commit()
+            # Create observations from entity descriptions with source attribution
+            source_ref = f"{source_channel} {datetime.utcnow().strftime('%b %d')}"
+            for entity in created:
+                if entity.description:
+                    try:
+                        from app.services.knowledge import create_observation
+                        create_observation(
+                            db, tenant_id,
+                            observation_text=entity.description,
+                            observation_type="extracted",
+                            source_type=content_type or "conversation",
+                            entity_id=entity.id,
+                            confidence=entity.confidence or 0.8,
+                            source_channel=source_channel,
+                            source_ref=source_ref,
+                        )
+                    except Exception:
+                        logger.debug("Failed to create observation for entity %s", entity.name)
+            db.commit()
 
         if blocked_count:
             logger.info("Blocked %d noise entities via blocklist", blocked_count)
