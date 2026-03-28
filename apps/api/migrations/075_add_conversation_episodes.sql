@@ -14,4 +14,4 @@ CREATE TABLE IF NOT EXISTS conversation_episodes (
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_tenant ON conversation_episodes(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_episodes_session ON conversation_episodes(session_id);
-CREATE INDEX IF NOT EXISTS idx_episodes_embedding ON conversation_episodes USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);
+CREATE INDEX IF NOT EXISTS idx_episodes_embedding ON conversation_episodes USING hnsw (embedding vector_cosine_ops);
