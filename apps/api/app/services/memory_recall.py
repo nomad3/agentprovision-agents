@@ -242,6 +242,30 @@ def _fetch_top_observations_semantic(
     ]
 
 
+def _fetch_user_entity(db: Session, tenant_id: uuid.UUID) -> Optional[Dict]:
+    """Return the user/owner entity for this tenant, if one exists."""
+    entity = (
+        db.query(KnowledgeEntity)
+        .filter(
+            KnowledgeEntity.tenant_id == tenant_id,
+            KnowledgeEntity.category == "user",
+        )
+        .order_by(KnowledgeEntity.created_at.desc())
+        .first()
+    )
+    if entity is None:
+        return None
+    return {
+        "id": str(entity.id),
+        "name": entity.name,
+        "entity_type": entity.entity_type,
+        "category": entity.category,
+        "description": entity.description or "",
+        "similarity": 1.0,  # pinned — always relevant
+        "pinned": True,
+    }
+
+
 def build_memory_context(
     db: Session,
     tenant_id: uuid.UUID,
@@ -261,9 +285,25 @@ def build_memory_context(
     8. Log RL experience for the memory_recall decision point
 
     Falls back to ILIKE keyword matching when embedding model is unavailable.
+
+    The user/owner entity (category="user") is always injected at the top of
+    relevant_entities regardless of query — so questions like "who am I?" always
+    get answered from the knowledge graph.
     """
+    # Always fetch the user/owner entity — pinned into context regardless of query
+    user_entity = _fetch_user_entity(db, tenant_id)
+
     keywords = extract_keywords(user_message)
     if not keywords:
+        # No searchable keywords — return minimal context with just the user profile
+        if user_entity:
+            return {
+                "recalled_entity_names": [user_entity["name"]],
+                "relevant_entities": [user_entity],
+                "relevant_memories": [],
+                "relevant_relations": [],
+                "entity_observations": {},
+            }
         return {}
 
     # --- Step 1: Embed user message ---
@@ -307,6 +347,12 @@ def build_memory_context(
     # --- Step 5: Take top N ---
     top_entities = semantic_entities[:10]
     top_memories = semantic_memories[:5]
+
+    # Always pin user entity at the top (deduplicate if already recalled)
+    if user_entity:
+        already_in = any(e["id"] == user_entity["id"] for e in top_entities)
+        if not already_in:
+            top_entities = [user_entity] + top_entities[:9]
 
     if not top_entities and not top_memories:
         return {}
@@ -408,6 +454,38 @@ def build_memory_context(
                 ]
         except Exception:
             logger.debug("Failed to fetch disputed assertions", exc_info=True)
+
+    # --- Step 7b: Recall recent episodes ---
+    try:
+        from app.models.conversation_episode import ConversationEpisode
+        from sqlalchemy import text as sa_text
+
+        vector_literal = "[" + ",".join(str(v) for v in query_embedding) + "]"
+        episode_sql = sa_text(f"""
+            SELECT id, summary, key_topics, key_entities, mood, source_channel, created_at,
+                   1 - (embedding <=> CAST('{vector_literal}' AS vector)) AS similarity
+            FROM conversation_episodes
+            WHERE tenant_id = CAST(:tid AS uuid)
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST('{vector_literal}' AS vector)
+            LIMIT 5
+        """)
+        episode_rows = db.execute(episode_sql, {"tid": str(tenant_id)}).mappings().all()
+        episodes = [
+            {
+                "summary": r["summary"],
+                "mood": r["mood"],
+                "source": r["source_channel"],
+                "date": r["created_at"].strftime("%b %d") if r["created_at"] else "",
+                "similarity": round(float(r["similarity"]), 4),
+            }
+            for r in episode_rows
+            if float(r["similarity"]) > 0.3
+        ]
+        if episodes:
+            context["recent_episodes"] = episodes[:3]
+    except Exception:
+        logger.debug("Episode recall failed", exc_info=True)
 
     # --- Step 8: Update recall counters on recalled entities ---
     if entity_ids:
