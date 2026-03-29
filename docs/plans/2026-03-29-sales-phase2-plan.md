@@ -5,6 +5,22 @@
 **Date**: 2026-03-29
 **Context**: Phase 1 delivered tool scaffolding (qualify_lead, draft_outreach, update_pipeline_stage, generate_proposal, schedule_followup) and Temporal workflow infrastructure. All 5 ProspectingPipelineWorkflow activities are stubs. No inbound lead capture. No actual message sending from the sales flow.
 
+## Code Review Corrections (2026-03-29)
+
+Issues found by reviewing the actual codebase before implementation:
+
+1. **Activity file location**: Stubs live in `prospecting_pipeline.py` directly, not a separate `activities/prospecting.py`. Implementation should happen in-place, then extract to `activities/prospecting.py` as a follow-up refactor — updating the import in `orchestration_worker.py` accordingly.
+
+2. **Bug in `execute_followup_action`**: The `remind` action creates `KnowledgeObservation` without setting `entity_id` — observation is unlinked. Fix this before building Module 3 on top of it.
+
+3. **LinkedIn scraping blocked**: Module 1.2 originally called for Playwright scraping of LinkedIn — violates ToS and gets IP-blocked. Replace with: Apollo.io free API, Hunter.io email finder, or Google News + company website scraping only.
+
+4. **`prospect_score` duplicates `qualify_lead`**: Both do BANT scoring. `prospect_score` activity should call `qualify_lead` via internal API (`POST /api/v1/knowledge/leads/{id}/qualify`) rather than re-implementing scoring logic.
+
+5. **Daily briefing needs a trigger**: Module 6.1 ("every morning") has no mechanism. Use `scheduler_worker.py` cron system with a `0 8 * * *` pipeline, or a dedicated Temporal schedule — not the InboxMonitorWorkflow (fires every 15 min).
+
+6. **Inbound webhook needs rate limiting**: `POST /api/v1/sales/inbound` must be public — add slowapi IP rate limiting (10 req/min) + optional API key header to prevent spam.
+
 ---
 
 ## What Needs to Happen
@@ -43,11 +59,12 @@ Create a structured `ideal_customer_profile` entity in the KG with:
 Luna auto-references this when scoring new leads.
 
 **1.2 — Implement `prospect_research` activity**
-Replace stub with real logic:
-- Web search (Playwright scraper) for target companies by vertical + location
-- Extract: company name, website, founder/CEO name, LinkedIn, email guess
+Replace stub in `prospecting_pipeline.py` with real logic:
+- Apollo.io free API or Hunter.io for contact discovery (not LinkedIn scraping — ToS violation)
+- Google News + company website scraping via existing Playwright BrowserService
+- Extract: company name, website, founder/CEO name, email, pain signals from about/blog pages
 - Store as KG entity with `category=lead`, `pipeline_stage=prospect`
-- Target sources: LinkedIn company search, Google "site:linkedin.com/company", ProductHunt, YC directory, local business directories
+- Target sources: ProductHunt, YC directory, Google Maps (local businesses), news searches
 
 **1.3 — MCP tool: `source_leads`**
 New tool that triggers batch prospecting:
@@ -56,7 +73,7 @@ source_leads(vertical, location, count=20)
 → runs research for N companies → returns created entity IDs
 ```
 
-**Files**: `apps/mcp-server/src/mcp_tools/sales.py`, `apps/api/app/workflows/activities/prospecting.py`
+**Files**: `apps/mcp-server/src/mcp_tools/sales.py`, `apps/api/app/workflows/prospecting_pipeline.py` → extract to `apps/api/app/workflows/activities/prospecting.py`
 
 ---
 
@@ -69,12 +86,10 @@ source_leads(vertical, location, count=20)
 **Tasks**:
 
 **2.1 — Implement `prospect_score` activity**
-Replace stub. For each lead entity:
-- Scrape company website → extract team size signals, tech stack, product description
-- Search news for recent funding, hiring, expansions (buying signals)
-- Check LinkedIn for decision-maker title and connections
-- Score against ICP rubric (0–100): industry fit, size fit, pain signals, buying signals, reachability
-- Write score + breakdown back to entity properties
+Replace stub in `prospecting_pipeline.py`. Call existing `qualify_lead` via internal API rather than re-implementing BANT scoring. For each lead entity:
+- Call `POST /api/v1/knowledge/leads/{id}/qualify` (reuses qualify_lead MCP tool logic)
+- Supplement with: website scrape for tech stack / team size signals, news search for buying signals (funding, hiring, expansions)
+- Write enriched score + breakdown back to entity properties
 
 **2.2 — Configurable scoring rubric**
 Store rubric in KG as a `scoring_rubric` entity per tenant. Luna reads it before scoring.
@@ -91,7 +106,7 @@ In `ProspectingPipelineWorkflow`:
 - Score 40–69 → flag for Simon's review, notify
 - Score < 40 → mark `disqualified`, log reason
 
-**Files**: `apps/api/app/workflows/activities/prospecting.py`
+**Files**: `apps/api/app/workflows/prospecting_pipeline.py`
 
 ---
 
@@ -191,7 +206,7 @@ In the InboxMonitorWorkflow, add a `classify_as_lead` step:
 Unknown WhatsApp number with sales-intent message → auto-create lead entity + start qualification flow
 
 **5.3 — Web form webhook**
-`POST /api/v1/sales/inbound` — accepts a JSON payload (name, email, company, message) and creates a lead entity. Usable from any landing page via a simple fetch call.
+`POST /api/v1/sales/inbound` — accepts a JSON payload (name, email, company, message) and creates a lead entity. Usable from any landing page via a simple fetch call. Must include: slowapi IP rate limiting (10 req/min) + optional `X-Inbound-Key` header to prevent spam.
 
 **5.4 — Workshop attendee import**
 One-off: import the 4 workshop attendees from today as leads with stage = `prospect`, source = `workshop_2026_03_29`.
@@ -207,7 +222,7 @@ One-off: import the 4 workshop attendees from today as leads with stage = `prosp
 **Tasks**:
 
 **6.1 — Daily sales briefing**
-Every morning Luna sends Simon a WhatsApp summary:
+Every morning (8am) Luna sends Simon a WhatsApp summary. Triggered via `scheduler_worker.py` cron pipeline (`0 8 * * *`) — NOT InboxMonitorWorkflow (fires every 15 min):
 - Deals that haven't moved in 7+ days
 - Follow-ups due today
 - Leads that scored high but haven't been contacted
@@ -249,8 +264,8 @@ If pipeline has < 5 qualified leads → Luna proactively runs `source_leads` and
 | File | Change |
 |------|--------|
 | `apps/mcp-server/src/mcp_tools/sales.py` | source_leads, send_outreach, fix draft_outreach LLM call |
-| `apps/api/app/workflows/activities/prospecting.py` | Implement prospect_research, prospect_score stubs |
-| `apps/api/app/workflows/activities/follow_up.py` | Add send_email action type |
+| `apps/api/app/workflows/prospecting_pipeline.py` | Implement prospect_research, prospect_score stubs; extract to activities/prospecting.py |
+| `apps/api/app/workflows/activities/follow_up.py` | Fix remind bug (missing entity_id); add send_email action type |
 | `apps/api/app/api/v1/sales.py` | New router: pipeline, leads CRUD, inbound webhook |
 | `apps/api/app/api/v1/routes.py` | Mount sales router |
 | `apps/api/app/workers/orchestration_worker.py` | Email-to-lead in InboxMonitor |
