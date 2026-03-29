@@ -2,14 +2,16 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import LunaAvatar from './luna/LunaAvatar';
+import MemoryPanel from './MemoryPanel';
 import { useLunaStream } from '../hooks/useLunaStream';
 import { apiJson } from '../api';
 
-export default function ChatInterface({ handoff }) {
+export default function ChatInterface({ handoff, requestAction }) {
   const [sessions, setSessions] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [emotion, setEmotion] = useState(null);
   const emotionTimer = useRef(null);
   const messagesEnd = useRef(null);
@@ -47,6 +49,14 @@ export default function ChatInterface({ handoff }) {
 
   const handleScreenshot = async () => {
     if (!activeSession) return;
+    // Gate through trust approval if supervised
+    if (requestAction) {
+      const approved = await requestAction({
+        type: 'screenshot',
+        description: 'Capture a screenshot of your screen and send it to Luna for analysis.',
+      });
+      if (!approved) return;
+    }
     const targetSession = activeSession;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
@@ -147,6 +157,13 @@ export default function ChatInterface({ handoff }) {
         <div className="luna-header">
           <LunaAvatar state={effectiveState} mood="calm" size="lg" animated />
           <span className="luna-status">{effectiveState === 'thinking' ? 'Thinking...' : 'Luna'}</span>
+          <button
+            className="luna-btn luna-btn-sm memory-toggle"
+            onClick={() => setMemoryOpen(!memoryOpen)}
+            title="Memory"
+          >
+            {'\uD83E\uDDE0'}
+          </button>
         </div>
 
         {/* Handoff banner */}
@@ -179,6 +196,9 @@ export default function ChatInterface({ handoff }) {
           )}
           <div ref={messagesEnd} />
         </div>
+
+        {/* Memory panel */}
+        <MemoryPanel visible={memoryOpen} onClose={() => setMemoryOpen(false)} />
 
         {/* Input */}
         <form className="chat-input-form" onSubmit={e => { e.preventDefault(); handleSend(); }}>
