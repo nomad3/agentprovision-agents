@@ -294,12 +294,14 @@ pub fn run() {
             });
 
             // Stop clipboard watcher + activity tracker on app exit
-            app.on_window_event(move |_window, event| {
-                if let tauri::WindowEvent::Destroyed = event {
-                    clip_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                    activity_running.store(false, std::sync::atomic::Ordering::Relaxed);
-                }
-            });
+            if let Some(window) = app.get_webview_window("main") {
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Destroyed = event {
+                        clip_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                        activity_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                });
+            }
 
             Ok(())
         })
