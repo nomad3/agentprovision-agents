@@ -705,6 +705,116 @@
   border: 1px solid var(--color-border);
 }
 
+/* Command Palette */
+.palette-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 120px;
+  z-index: 300;
+}
+
+.palette-container {
+  width: 520px;
+  max-width: 90vw;
+  background: var(--surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: 0 16px 50px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+
+.palette-input {
+  width: 100%;
+  padding: 16px 20px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 18px;
+  outline: none;
+}
+
+.palette-input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.palette-status {
+  padding: 10px 20px;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  border-top: 1px solid var(--color-border);
+}
+
+.palette-result {
+  padding: 12px 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  border-top: 1px solid var(--color-border);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.palette-hint {
+  padding: 8px 20px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border);
+  text-align: center;
+}
+
+/* Clipboard toast */
+.clipboard-toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 280px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  z-index: 250;
+  animation: toastSlideIn 0.2s ease;
+}
+
+@keyframes toastSlideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.clipboard-toast-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.clipboard-toast-category {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-accent);
+  background: rgba(94,197,176,0.12);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.clipboard-toast-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.clipboard-toast-desc {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
 /* Responsive */
 @media (max-width: 640px) {
   .chat-sidebar {

@@ -43,6 +43,43 @@ async fn capture_screenshot() -> Result<String, String> {
     Ok(encoded)
 }
 
+#[tauri::command]
+async fn get_active_app() -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let app_output = Command::new("osascript")
+        .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
+        .output()
+        .map_err(|e| format!("Failed: {}", e))?;
+    let app_name = String::from_utf8_lossy(&app_output.stdout).trim().to_string();
+
+    let title_output = Command::new("osascript")
+        .args(["-e", &format!(
+            "tell application \"System Events\" to get name of front window of application process \"{}\"",
+            app_name
+        )])
+        .output();
+
+    let window_title = match title_output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => String::new(),
+    };
+
+    Ok(serde_json::json!({
+        "app": app_name,
+        "title": window_title,
+    }))
+}
+
+#[tauri::command]
+async fn read_clipboard() -> Result<String, String> {
+    use std::process::Command;
+    let output = Command::new("pbpaste")
+        .output()
+        .map_err(|e| format!("Clipboard read failed: {}", e))?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::with_capacity(data.len() * 4 / 3 + 4);
@@ -109,10 +146,11 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 
     app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            // Emit to frontend — React handles showing the command palette
+            let _ = tauri::Emitter::emit(app, "toggle-palette", ());
+            // Also ensure window is visible
             if let Some(window) = app.get_webview_window("main") {
-                if window.is_visible().unwrap_or(false) {
-                    let _ = window.hide();
-                } else {
+                if !window.is_visible().unwrap_or(true) {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -175,9 +213,25 @@ pub fn run() {
                 }
             });
 
+            // Clipboard watcher — emits 'clipboard-changed' when clipboard text changes
+            let clip_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut last_content = String::new();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Ok(output) = std::process::Command::new("pbpaste").output() {
+                        let current = String::from_utf8_lossy(&output.stdout).to_string();
+                        if current != last_content && !current.is_empty() {
+                            last_content = current.clone();
+                            let _ = tauri::Emitter::emit(&clip_handle, "clipboard-changed", &current);
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_platform, get_arch, capture_screenshot])
+        .invoke_handler(tauri::generate_handler![get_platform, get_arch, capture_screenshot, get_active_app, read_clipboard])
         .run(tauri::generate_context!())
         .expect("error while running Luna");
 }
