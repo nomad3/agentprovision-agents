@@ -7,6 +7,11 @@ export default function ClipboardToast() {
 
   const handleClipboard = useCallback(async (text) => {
     if (!text || text.length < 3 || text.length > 200) return;
+    // Skip sentences (>4 words) — only trigger on short entity-like strings
+    const words = text.trim().split(/\s+/);
+    if (words.length > 4) return;
+    // Skip if it looks like code, a URL, or a path
+    if (/[{}<>\/\\=;]/.test(text) || text.startsWith('http')) return;
 
     // Search knowledge graph for the clipboard content
     try {

@@ -53,10 +53,11 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
         .map_err(|e| format!("Failed: {}", e))?;
     let app_name = String::from_utf8_lossy(&app_output.stdout).trim().to_string();
 
+    let safe_name = app_name.replace('\\', "\\\\").replace('"', "\\\"");
     let title_output = Command::new("osascript")
         .args(["-e", &format!(
             "tell application \"System Events\" to get name of front window of application process \"{}\"",
-            app_name
+            safe_name
         )])
         .output();
 
@@ -214,10 +215,13 @@ pub fn run() {
             });
 
             // Clipboard watcher — emits 'clipboard-changed' when clipboard text changes
+            // Uses AtomicBool so the thread can be signalled to stop on app exit.
+            let clip_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let clip_flag = clip_running.clone();
             let clip_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last_content = String::new();
-                loop {
+                while clip_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     if let Ok(output) = std::process::Command::new("pbpaste").output() {
                         let current = String::from_utf8_lossy(&output.stdout).to_string();
@@ -226,6 +230,12 @@ pub fn run() {
                             let _ = tauri::Emitter::emit(&clip_handle, "clipboard-changed", &current);
                         }
                     }
+                }
+            });
+            // Stop clipboard watcher on app exit
+            app.on_window_event(move |_window, event| {
+                if let tauri::WindowEvent::Destroyed = event {
+                    clip_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             });
 

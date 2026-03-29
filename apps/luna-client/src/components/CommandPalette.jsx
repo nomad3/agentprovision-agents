@@ -43,7 +43,10 @@ export default function CommandPalette({ visible, onClose, onSend }) {
     if (onSend) {
       onSend(appContext + query.trim());
       setQuery('');
+      setLoading(false);
       onClose();
+    } else {
+      setLoading(false);
     }
   };
 

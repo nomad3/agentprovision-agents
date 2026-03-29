@@ -72,23 +72,23 @@ function AuthenticatedApp() {
     return () => { unlisten?.(); };
   }, []);
 
+  const quickSessionRef = React.useRef(null);
   const handlePaletteSend = useCallback(async (text) => {
     try {
-      // Get or create a "Luna Quick" session
-      const sessions = await apiJson('/api/v1/chat/sessions');
-      let sessionId;
-      const quickSession = sessions.find(s => s.title === 'Luna Quick');
-      if (quickSession) {
-        sessionId = quickSession.id;
-      } else {
-        const newSession = await apiJson('/api/v1/chat/sessions', {
-          method: 'POST',
-          body: JSON.stringify({ title: 'Luna Quick' }),
-        });
-        sessionId = newSession.id;
+      if (!quickSessionRef.current) {
+        const sessions = await apiJson('/api/v1/chat/sessions');
+        const existing = sessions.find(s => s.title === 'Luna Quick');
+        if (existing) {
+          quickSessionRef.current = existing.id;
+        } else {
+          const created = await apiJson('/api/v1/chat/sessions', {
+            method: 'POST',
+            body: JSON.stringify({ title: 'Luna Quick' }),
+          });
+          quickSessionRef.current = created.id;
+        }
       }
-      // Send message (non-blocking — palette closes immediately)
-      apiJson(`/api/v1/chat/sessions/${sessionId}/messages`, {
+      apiJson(`/api/v1/chat/sessions/${quickSessionRef.current}/messages`, {
         method: 'POST',
         body: JSON.stringify({ content: text }),
       }).catch(() => {});
