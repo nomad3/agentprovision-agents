@@ -58,10 +58,39 @@ export default function ChatInterface() {
   };
 
   const handleScreenshot = async () => {
+    if (!activeSession) return;
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const base64 = await invoke('capture_screenshot');
-      setInput('[Screenshot captured]');
+
+      // Convert base64 to blob and upload via file upload endpoint
+      const byteChars = atob(base64);
+      const byteArray = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([byteArray], { type: 'image/png' });
+
+      const formData = new FormData();
+      formData.append('file', blob, `screenshot-${Date.now()}.png`);
+      formData.append('content', input.trim() || 'What do you see in this screenshot?');
+
+      const token = localStorage.getItem('luna_token');
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+      const tempId = `temp-${Date.now()}`;
+      setMessages(prev => [...prev, { id: tempId, role: 'user', content: '[Screenshot sent]' }]);
+      setInput('');
+
+      const res = await fetch(`${API_BASE}/api/v1/chat/sessions/${activeSession}/messages/upload`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+      const data = await res.json();
+      setMessages(prev => [
+        ...prev.map(m => m.id === tempId ? data.user_message : m),
+        data.assistant_message,
+      ]);
+      applyEmotion(data.assistant_message?.emotion || data.assistant_message?.context?.emotion);
     } catch (err) {
       console.error('Screenshot failed:', err);
     }

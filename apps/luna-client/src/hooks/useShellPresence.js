@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { apiFetch } from '../api';
 
-const SHELL_NAME = 'desktop';
+const SHELL_TYPE = 'desktop';
 const HEARTBEAT_INTERVAL = 10000; // 10s
 const CAPABILITIES = {
   can_listen: true,
@@ -12,16 +12,27 @@ const CAPABILITIES = {
   can_run_local_actions: true,
 };
 
+// Unique per browser/app instance, persists across page reloads
+function getShellId() {
+  let id = sessionStorage.getItem('luna_shell_id');
+  if (!id) {
+    id = `${SHELL_TYPE}-${Date.now().toString(36)}`;
+    sessionStorage.setItem('luna_shell_id', id);
+  }
+  return id;
+}
+
 export function useShellPresence() {
   const registered = useRef(false);
   const intervalRef = useRef(null);
+  const shellId = useRef(getShellId());
 
   const register = useCallback(async () => {
     try {
       await apiFetch('/api/v1/presence/shell/register', {
         method: 'POST',
         body: JSON.stringify({
-          shell: SHELL_NAME,
+          shell: shellId.current,
           capabilities: CAPABILITIES,
         }),
       });
@@ -36,7 +47,7 @@ export function useShellPresence() {
     try {
       await apiFetch('/api/v1/presence/shell/deregister', {
         method: 'POST',
-        body: JSON.stringify({ shell: SHELL_NAME }),
+        body: JSON.stringify({ shell: shellId.current }),
       });
     } catch {
       // best-effort on teardown
@@ -50,7 +61,7 @@ export function useShellPresence() {
       await apiFetch('/api/v1/presence/', {
         method: 'PUT',
         body: JSON.stringify({
-          active_shell: SHELL_NAME,
+          active_shell: shellId.current,
         }),
       });
     } catch {

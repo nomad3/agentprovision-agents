@@ -7,19 +7,21 @@ export function useNotifications() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const intervalRef = useRef(null);
+  const unreadRef = useRef(0);
 
   const fetchCount = useCallback(async () => {
     try {
       const data = await apiJson('/api/v1/notifications/count');
       const newCount = data.unread || 0;
 
-      // If count increased, show native notification for the latest
-      if (newCount > unreadCount && unreadCount > 0) {
-        showNativeNotification(newCount - unreadCount);
+      // If count increased, show native notification
+      if (newCount > unreadRef.current && unreadRef.current > 0) {
+        showNativeNotification(newCount - unreadRef.current);
       }
+      unreadRef.current = newCount;
       setUnreadCount(newCount);
     } catch {}
-  }, [unreadCount]);
+  }, []);
 
   const fetchAll = useCallback(async () => {
     try {

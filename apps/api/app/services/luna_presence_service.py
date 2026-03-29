@@ -58,7 +58,7 @@ def get_presence(tenant_id) -> dict:
         snap["connected_shells"] = list(snap.get("connected_shells", []))
 
     # Staleness: if last real update is old and state is active, force idle
-    # After 30 min of idle, transition to sleep
+    # Handoff clears after 10s. After 30 min of idle, transition to sleep.
     updated_at = snap.get("updated_at")
     if updated_at:
         try:
@@ -69,6 +69,8 @@ def get_presence(tenant_id) -> dict:
             elif age > _STALENESS_SECONDS and snap["state"] in _ACTIVE_STATES:
                 snap["state"] = "idle"
                 snap["tool_status"] = "idle"
+            elif age > 10 and snap["state"] == "handoff":
+                snap["state"] = "idle"
         except (ValueError, TypeError):
             pass
 
@@ -101,21 +103,28 @@ def update_state(tenant_id, state: Optional[str] = None, mood: Optional[str] = N
                 # Another session is still active — don't clobber
                 return dict(p)
 
+        changed = False
         if state and state in VALID_STATES:
             p["state"] = state
+            changed = True
         if mood and mood in VALID_MOODS:
             p["mood"] = mood
+            changed = True
         if privacy and privacy in VALID_PRIVACY:
             p["privacy"] = privacy
+            changed = True
         if active_shell is not None:
             p["active_shell"] = active_shell
         if tool_status and tool_status in VALID_TOOL_STATUS:
             p["tool_status"] = tool_status
+            changed = True
         if attention_target is not None:
             p["attention_target"] = attention_target
         if session_id is not None:
             p["session_id"] = session_id
-        p["updated_at"] = now
+        # Only refresh updated_at on real state changes, not heartbeats
+        if changed:
+            p["updated_at"] = now
         return dict(p)
 
 
