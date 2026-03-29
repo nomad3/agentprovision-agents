@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 from app.api.v1 import (
+    activities,
     auth,
     channels,
     data_sources,
@@ -120,3 +121,4 @@ router.include_router(learning_dashboard.router, prefix="/learning/dashboard", t
 router.include_router(unsupervised_learning.router, prefix="/unsupervised", tags=["unsupervised-learning"])
 router.include_router(branding_domain.router, tags=["domain-branding"])
 router.include_router(presence.router, tags=["presence"])
+router.include_router(activities.router, tags=["activities"])

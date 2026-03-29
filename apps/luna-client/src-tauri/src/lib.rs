@@ -232,10 +232,46 @@ pub fn run() {
                     }
                 }
             });
-            // Stop clipboard watcher on app exit
+            // Activity tracker — monitors app switches for workflow pattern detection
+            let activity_handle = app.handle().clone();
+            let activity_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let activity_flag = activity_running.clone();
+            std::thread::spawn(move || {
+                let mut last_app = String::new();
+                let mut last_switch = std::time::Instant::now();
+                while activity_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if let Ok(output) = std::process::Command::new("osascript")
+                        .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
+                        .output()
+                    {
+                        let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if !current.is_empty() && current != last_app {
+                            let duration_secs = last_switch.elapsed().as_secs();
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs();
+                            let event = serde_json::json!({
+                                "type": "app_switch",
+                                "from_app": last_app,
+                                "to_app": current,
+                                "duration_secs": duration_secs,
+                                "timestamp": timestamp,
+                            });
+                            let _ = tauri::Emitter::emit(&activity_handle, "activity-event", &event);
+                            last_app = current;
+                            last_switch = std::time::Instant::now();
+                        }
+                    }
+                }
+            });
+
+            // Stop clipboard watcher + activity tracker on app exit
             app.on_window_event(move |_window, event| {
                 if let tauri::WindowEvent::Destroyed = event {
                     clip_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    activity_running.store(false, std::sync::atomic::Ordering::Relaxed);
                 }
             });
 

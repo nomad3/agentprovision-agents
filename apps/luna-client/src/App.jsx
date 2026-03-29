@@ -7,8 +7,10 @@ import TrustBadge from './components/TrustBadge';
 import ActionApproval from './components/ActionApproval';
 import CommandPalette from './components/CommandPalette';
 import ClipboardToast from './components/ClipboardToast';
+import WorkflowSuggestions from './components/WorkflowSuggestions';
 import { useShellPresence } from './hooks/useShellPresence';
 import { useTrustProfile } from './hooks/useTrustProfile';
+import { useActivityTracker } from './hooks/useActivityTracker';
 import { apiJson } from './api';
 import './App.css';
 
@@ -57,6 +59,9 @@ function AuthenticatedApp() {
   const [pendingAction, setPendingAction] = useState(null);
   const pendingResolve = React.useRef(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+
+  useActivityTracker();
 
   // Listen for toggle-palette event from Tauri global shortcut
   useEffect(() => {
@@ -122,6 +127,9 @@ function AuthenticatedApp() {
             {theme === 'dark' ? '\u2600' : '\u263E'}
           </button>
           <TrustBadge trust={trust} />
+          <button className="theme-toggle" onClick={() => setSuggestionsOpen(!suggestionsOpen)} title="Workflow suggestions">
+            {'\u26A1'}
+          </button>
           <NotificationBell />
           <button className="luna-btn luna-btn-sm" onClick={logout}>Logout</button>
         </div>
@@ -146,6 +154,7 @@ function AuthenticatedApp() {
         onSend={handlePaletteSend}
       />
       <ClipboardToast />
+      <WorkflowSuggestions visible={suggestionsOpen} onClose={() => setSuggestionsOpen(false)} />
     </div>
   );
 }
