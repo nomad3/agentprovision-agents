@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ChatInterface from './components/ChatInterface';
 import LoginForm from './components/LoginForm';
 import NotificationBell from './components/NotificationBell';
 import TrustBadge from './components/TrustBadge';
+import ActionApproval from './components/ActionApproval';
 import { useShellPresence } from './hooks/useShellPresence';
 import { useTrustProfile } from './hooks/useTrustProfile';
 import './App.css';
@@ -11,7 +12,27 @@ import './App.css';
 function AuthenticatedApp() {
   const { logout } = useAuth();
   const { handoff } = useShellPresence();
-  const { trust } = useTrustProfile();
+  const { trust, needsConfirmation } = useTrustProfile();
+  const [pendingAction, setPendingAction] = useState(null);
+  const pendingResolve = React.useRef(null);
+
+  const requestAction = useCallback(async (action) => {
+    if (!needsConfirmation) return true;
+    return new Promise((resolve) => {
+      pendingResolve.current = resolve;
+      setPendingAction(action);
+    });
+  }, [needsConfirmation]);
+
+  const handleApprove = useCallback(() => {
+    pendingResolve.current?.(true);
+    setPendingAction(null);
+  }, []);
+
+  const handleDeny = useCallback(() => {
+    pendingResolve.current?.(false);
+    setPendingAction(null);
+  }, []);
 
   return (
     <div className="luna-app">
@@ -23,7 +44,13 @@ function AuthenticatedApp() {
           <button className="luna-btn luna-btn-sm" onClick={logout}>Logout</button>
         </div>
       </nav>
-      <ChatInterface handoff={handoff} />
+      <ChatInterface handoff={handoff} requestAction={requestAction} />
+      <ActionApproval
+        action={pendingAction}
+        onApprove={handleApprove}
+        onDeny={handleDeny}
+        onDismiss={handleDeny}
+      />
     </div>
   );
 }
