@@ -18,11 +18,8 @@ router = APIRouter(prefix="/activities", tags=["activities"])
 
 # ── Schemas ──
 
-VALID_EVENT_TYPES = ("app_switch", "clipboard_copy", "file_open", "url_visit", "screenshot")
-
-
 class ActivityTrackRequest(BaseModel):
-    type: str = Field(..., max_length=50)
+    type: Literal["app_switch", "clipboard_copy", "file_open", "url_visit", "screenshot"] = Field(...)
     source_shell: Optional[str] = Field(None, max_length=100)
     from_app: Optional[str] = Field(None, max_length=255)
     to_app: Optional[str] = Field(None, max_length=255)
@@ -35,7 +32,7 @@ class ActivityTrackRequest(BaseModel):
 # ── App-to-MCP tool mapping for workflow generation ──
 
 APP_TOOL_MAP = {
-    "Slack": {"type": "mcp_tool", "tool": "search_emails", "prompt": "Check Slack for unread messages and mentions"},
+    "Slack": {"type": "agent", "agent": "luna", "prompt": "Check Slack for unread messages, mentions, and threads needing a reply"},
     "Mail": {"type": "mcp_tool", "tool": "search_emails", "prompt": "Check email inbox for new messages"},
     "Gmail": {"type": "mcp_tool", "tool": "search_emails", "prompt": "Check Gmail for unread emails"},
     "Calendar": {"type": "mcp_tool", "tool": "list_calendar_events", "prompt": "Check upcoming calendar events"},
@@ -121,10 +118,7 @@ def detect_patterns(
         UserActivity.user_id == current_user.id,
         UserActivity.event_type == "app_switch",
         UserActivity.created_at > since,
-    ).order_by(UserActivity.created_at.desc()).limit(10000).all()
-
-    # Re-sort chronologically after limit
-    activities.reverse()
+    ).order_by(UserActivity.created_at.asc()).limit(10000).all()
 
     if len(activities) < 10:
         return {"patterns": [], "suggestions": [], "message": "Not enough activity data yet"}
