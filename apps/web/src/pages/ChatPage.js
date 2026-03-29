@@ -38,6 +38,8 @@ const ChatPage = () => {
   const [globalError, setGlobalError] = useState('');
   const [attachedFile, setAttachedFile] = useState(null);
   const [streamingText, setStreamingText] = useState('');
+  const [responseEmotion, setResponseEmotion] = useState(null);
+  const responseEmotionTimerRef = useRef(null);
   const streamAbortRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
@@ -76,14 +78,30 @@ const ChatPage = () => {
     }
   }, [agentKits]);
 
-  // Abort any active stream on unmount
+  // Abort any active stream on unmount and clear emotion timer
   useEffect(() => {
     return () => {
       if (streamAbortRef.current) {
         streamAbortRef.current.abort();
       }
+      if (responseEmotionTimerRef.current) {
+        clearTimeout(responseEmotionTimerRef.current);
+      }
     };
   }, []);
+
+  // Set emotion from assistant response, auto-revert after 10s
+  const applyResponseEmotion = (emotion) => {
+    if (!emotion) return;
+    if (responseEmotionTimerRef.current) {
+      clearTimeout(responseEmotionTimerRef.current);
+    }
+    setResponseEmotion(emotion);
+    responseEmotionTimerRef.current = setTimeout(() => {
+      setResponseEmotion(null);
+      responseEmotionTimerRef.current = null;
+    }, 10000);
+  };
 
   const loadReferenceData = async () => {
     try {
@@ -241,6 +259,10 @@ const ChatPage = () => {
           const withoutTemp = prev.filter((m) => m.id !== tempUserMsg.id);
           return [...withoutTemp, response.data.user_message, response.data.assistant_message];
         });
+        // Extract emotion from file upload response
+        const assistantMsg = response.data.assistant_message;
+        const emotion = assistantMsg?.emotion || assistantMsg?.context?.emotion;
+        applyResponseEmotion(emotion);
       } catch (err) {
         console.error(err);
         const detail = err?.response?.data?.detail || err?.response?.data?.error || err?.message || '';
@@ -276,6 +298,9 @@ const ChatPage = () => {
         setStreamingText('');
         setPostingMessage(false);
         setMessages((prev) => [...prev, assistantMsg]);
+        // Extract emotion from response context for avatar reaction
+        const emotion = assistantMsg?.emotion || assistantMsg?.context?.emotion;
+        applyResponseEmotion(emotion);
       },
       // onError
       (errMsg) => {
@@ -460,7 +485,7 @@ const ChatPage = () => {
                 <div
                   role="status"
                   aria-live="polite"
-                  aria-label={`Luna is ${postingMessage ? 'thinking' : lunaState}`}
+                  aria-label={`Luna is ${responseEmotion || (postingMessage ? 'thinking' : lunaState)}`}
                   className="luna-tamagotchi-panel"
                   style={{
                     display: 'flex',
@@ -476,12 +501,19 @@ const ChatPage = () => {
                   }}
                 >
                   {/* Ambient glow layers — cross-fade via opacity (CSS can't transition gradients) */}
-                  {[
-                    { key: 'thinking', color: 'rgba(255,179,71,0.10)', active: postingMessage },
-                    { key: 'listening', color: 'rgba(107,181,255,0.10)', active: !postingMessage && lunaState === 'listening' },
-                    { key: 'responding', color: 'rgba(94,197,176,0.10)', active: !postingMessage && lunaState === 'responding' },
-                    { key: 'idle', color: 'rgba(240,230,211,0.04)', active: !postingMessage && !['listening', 'responding'].includes(lunaState) },
-                  ].map(g => (
+                  {(() => {
+                    const effectiveState = responseEmotion || (postingMessage ? 'thinking' : lunaState);
+                    return [
+                      { key: 'thinking', color: 'rgba(255,179,71,0.10)', active: effectiveState === 'thinking' },
+                      { key: 'listening', color: 'rgba(107,181,255,0.10)', active: effectiveState === 'listening' },
+                      { key: 'responding', color: 'rgba(94,197,176,0.10)', active: effectiveState === 'responding' },
+                      { key: 'happy', color: 'rgba(255,215,0,0.12)', active: effectiveState === 'happy' || effectiveState === 'playful' },
+                      { key: 'empathetic', color: 'rgba(255,105,180,0.10)', active: effectiveState === 'empathetic' },
+                      { key: 'focused', color: 'rgba(138,43,226,0.08)', active: effectiveState === 'focused' },
+                      { key: 'alert', color: 'rgba(255,69,0,0.10)', active: effectiveState === 'alert' || effectiveState === 'error' },
+                      { key: 'idle', color: 'rgba(240,230,211,0.04)', active: !['thinking', 'listening', 'responding', 'happy', 'playful', 'empathetic', 'focused', 'alert', 'error'].includes(effectiveState) },
+                    ];
+                  })().map(g => (
                     <div key={g.key} style={{
                       position: 'absolute',
                       top: '50%', left: '50%',
@@ -495,7 +527,7 @@ const ChatPage = () => {
                     }} />
                   ))}
                   <LunaAvatar
-                    state={postingMessage ? 'thinking' : lunaState}
+                    state={responseEmotion || (postingMessage ? 'thinking' : lunaState)}
                     mood={lunaMood}
                     size="xxl"
                     animated
@@ -530,7 +562,7 @@ const ChatPage = () => {
                   )}
                 </div>
                 {/* ═══ Chat messages below ═══ */}
-                <Card.Body style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                <Card.Body style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', position: 'relative' }}>
                   <div style={{ flex: 1, overflowY: 'auto' }}>
                     {loadingMessages ? (
                       <div className="d-flex align-items-center gap-2 text-muted">
@@ -599,6 +631,19 @@ const ChatPage = () => {
                       </ListGroup>
                     )}
                   </div>
+                  {/* Floating mini avatar — shows emotion reaction */}
+                  {responseEmotion && (
+                    <div style={{
+                      position: 'absolute',
+                      bottom: 80,
+                      right: 16,
+                      zIndex: 10,
+                      transition: 'all 0.3s ease',
+                      opacity: 1,
+                    }}>
+                      <LunaAvatar state={responseEmotion} mood={lunaMood} size="sm" animated />
+                    </div>
+                  )}
                   <Form onSubmit={handleMessageSubmit} className="pt-3">
                     <input
                       type="file"

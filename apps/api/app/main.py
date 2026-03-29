@@ -33,6 +33,10 @@ origins = [
     "http://127.0.0.1:3000", # For local development
     "http://localhost:8002", # Docker web service
     "http://127.0.0.1:8002", # Docker web service
+    "http://localhost:5173", # Luna Client dev (Vite)
+    "http://localhost:8009", # Luna Client Docker
+    "tauri://localhost", # Luna Client Tauri (macOS/iOS/Android)
+    "https://luna.servicetsunami.com", # Luna Client production
 ]
 
 app.add_middleware(

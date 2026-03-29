@@ -39,6 +39,7 @@ def _default_presence() -> dict:
         "privacy": "open",
         "active_shell": None,
         "connected_shells": [],
+        "shell_capabilities": {},  # {shell_name: {cap: bool, ...}}
         "tool_status": "idle",
         "attention_target": None,
         "session_id": None,
@@ -57,7 +58,7 @@ def get_presence(tenant_id) -> dict:
         snap["connected_shells"] = list(snap.get("connected_shells", []))
 
     # Staleness: if last real update is old and state is active, force idle
-    # After 30 min of idle, transition to sleep
+    # Handoff clears after 10s. After 30 min of idle, transition to sleep.
     updated_at = snap.get("updated_at")
     if updated_at:
         try:
@@ -68,6 +69,8 @@ def get_presence(tenant_id) -> dict:
             elif age > _STALENESS_SECONDS and snap["state"] in _ACTIVE_STATES:
                 snap["state"] = "idle"
                 snap["tool_status"] = "idle"
+            elif age > 10 and snap["state"] == "handoff":
+                snap["state"] = "idle"
         except (ValueError, TypeError):
             pass
 
@@ -100,25 +103,32 @@ def update_state(tenant_id, state: Optional[str] = None, mood: Optional[str] = N
                 # Another session is still active — don't clobber
                 return dict(p)
 
+        changed = False
         if state and state in VALID_STATES:
             p["state"] = state
+            changed = True
         if mood and mood in VALID_MOODS:
             p["mood"] = mood
+            changed = True
         if privacy and privacy in VALID_PRIVACY:
             p["privacy"] = privacy
+            changed = True
         if active_shell is not None:
             p["active_shell"] = active_shell
         if tool_status and tool_status in VALID_TOOL_STATUS:
             p["tool_status"] = tool_status
+            changed = True
         if attention_target is not None:
             p["attention_target"] = attention_target
         if session_id is not None:
             p["session_id"] = session_id
-        p["updated_at"] = now
+        # Only refresh updated_at on real state changes, not heartbeats
+        if changed:
+            p["updated_at"] = now
         return dict(p)
 
 
-def register_shell(tenant_id, shell_name: str) -> dict:
+def register_shell(tenant_id, shell_name: str, capabilities: Optional[dict] = None) -> dict:
     tid = str(tenant_id)
     now = datetime.now(timezone.utc).isoformat()
     with _lock:
@@ -133,8 +143,13 @@ def register_shell(tenant_id, shell_name: str) -> dict:
             shells.append(shell_name)
         _presence_store[tid]["active_shell"] = shell_name
         _presence_store[tid]["updated_at"] = now
+        # Store capabilities for this shell
+        if capabilities:
+            caps = _presence_store[tid].setdefault("shell_capabilities", {})
+            caps[shell_name] = capabilities
         snap = dict(_presence_store[tid])
         snap["connected_shells"] = list(shells)
+        snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
         return snap
 
 
@@ -149,7 +164,11 @@ def deregister_shell(tenant_id, shell_name: str) -> dict:
             shells.remove(shell_name)
         if _presence_store[tid]["active_shell"] == shell_name:
             _presence_store[tid]["active_shell"] = shells[0] if shells else None
+        # Remove capabilities for this shell
+        caps = _presence_store[tid].get("shell_capabilities", {})
+        caps.pop(shell_name, None)
         _presence_store[tid]["updated_at"] = now
         snap = dict(_presence_store[tid])
         snap["connected_shells"] = list(shells)
+        snap["shell_capabilities"] = dict(caps)
         return snap

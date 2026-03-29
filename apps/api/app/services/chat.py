@@ -114,6 +114,51 @@ def create_session(
     return session
 
 
+def _detect_emotion(text: str) -> str:
+    """Detect emotion from response text using keyword heuristics.
+
+    Returns one of: idle, thinking, happy, responding, alert, sleep, listening
+    """
+    if not text or len(text.strip()) < 20:
+        return "idle"
+
+    lower = text.lower()
+
+    # Check happy keywords
+    happy_keywords = [
+        "congratulations", "great", "awesome", "excellent", "well done",
+        "glad", "happy", "love", "perfect", "wonderful", "fantastic",
+    ]
+    if any(kw in lower for kw in happy_keywords):
+        return "happy"
+
+    # Check alert keywords
+    alert_keywords = [
+        "warning", "error", "critical", "urgent", "danger",
+        "important", "caution", "immediately", "alert", "failed",
+    ]
+    if any(kw in lower for kw in alert_keywords):
+        return "alert"
+
+    # Check thinking keywords
+    thinking_keywords = [
+        "analyzing", "investigating", "looking into", "let me think",
+        "considering", "evaluating", "researching", "hmm", "perhaps", "might",
+    ]
+    if any(kw in lower for kw in thinking_keywords):
+        return "thinking"
+
+    # Check responding keywords (normal informational responses)
+    responding_keywords = [
+        "here is", "here's", "i found", "the answer", "result",
+    ]
+    if any(kw in lower for kw in responding_keywords):
+        return "responding"
+
+    # Default to responding for any substantive response
+    return "responding"
+
+
 def _append_message(
     db: Session,
     *,
@@ -282,10 +327,19 @@ def _generate_agentic_response(
 
     if response_text is None:
         error_msg = (context or {}).get("error", "Agent failed to respond. Please try again.")
+        if context is None:
+            context = {}
+        context["emotion"] = "alert"
         return _append_message(
             db, session=session, role="assistant",
             content=error_msg, context=context,
         )
+
+    # Detect emotion from response content
+    emotion = _detect_emotion(response_text)
+    if context is None:
+        context = {}
+    context["emotion"] = emotion
 
     assistant_msg = _append_message(
         db, session=session, role="assistant",
