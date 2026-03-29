@@ -36,10 +36,9 @@ function useUpdateBanner() {
   const dismiss = useCallback(() => setUpdateVersion(null), []);
   const restart = useCallback(async () => {
     try {
-      const { relaunch } = await import('@tauri-apps/plugin-updater');
-      await relaunch();
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('plugin:updater|restart');
     } catch {
-      // Fallback: just reload
       window.location.reload();
     }
   }, []);
