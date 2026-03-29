@@ -29,7 +29,6 @@ _extra_origins = [o.strip() for o in _os.environ.get("CORS_EXTRA_ORIGINS", "").s
 origins = [
     "https://agentprovision.com",
     "https://app.agentprovision.com",
-    "https://servicetsunami.com",
     "https://www.agentprovision.com",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
