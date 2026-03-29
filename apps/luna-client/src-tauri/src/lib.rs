@@ -59,6 +59,44 @@ async fn haptic_feedback(style: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn get_active_app() -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let app_output = Command::new("osascript")
+        .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
+        .output()
+        .map_err(|e| format!("Failed: {}", e))?;
+    let app_name = String::from_utf8_lossy(&app_output.stdout).trim().to_string();
+
+    let safe_name = app_name.replace('\\', "\\\\").replace('"', "\\\"");
+    let title_output = Command::new("osascript")
+        .args(["-e", &format!(
+            "tell application \"System Events\" to get name of front window of application process \"{}\"",
+            safe_name
+        )])
+        .output();
+
+    let window_title = match title_output {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => String::new(),
+    };
+
+    Ok(serde_json::json!({
+        "app": app_name,
+        "title": window_title,
+    }))
+}
+
+#[tauri::command]
+async fn read_clipboard() -> Result<String, String> {
+    use std::process::Command;
+    let output = Command::new("pbpaste")
+        .output()
+        .map_err(|e| format!("Clipboard read failed: {}", e))?;
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::with_capacity(data.len() * 4 / 3 + 4);
@@ -127,10 +165,11 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 
     app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            // Emit to frontend — React handles showing the command palette
+            let _ = tauri::Emitter::emit(app, "toggle-palette", ());
+            // Also ensure window is visible
             if let Some(window) = app.get_webview_window("main") {
-                if window.is_visible().unwrap_or(false) {
-                    let _ = window.hide();
-                } else {
+                if !window.is_visible().unwrap_or(true) {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -201,12 +240,75 @@ pub fn run() {
                 });
             }
 
+            // Clipboard watcher — emits 'clipboard-changed' when clipboard text changes
+            // Uses AtomicBool so the thread can be signalled to stop on app exit.
+            let clip_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let clip_flag = clip_running.clone();
+            let clip_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut last_content = String::new();
+                while clip_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if let Ok(output) = std::process::Command::new("pbpaste").output() {
+                        let current = String::from_utf8_lossy(&output.stdout).to_string();
+                        if current != last_content && !current.is_empty() {
+                            last_content = current.clone();
+                            let _ = tauri::Emitter::emit(&clip_handle, "clipboard-changed", &current);
+                        }
+                    }
+                }
+            });
+            // Activity tracker — monitors app switches for workflow pattern detection
+            let activity_handle = app.handle().clone();
+            let activity_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let activity_flag = activity_running.clone();
+            std::thread::spawn(move || {
+                let mut last_app = String::new();
+                let mut last_switch = std::time::Instant::now();
+                while activity_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    if let Ok(output) = std::process::Command::new("osascript")
+                        .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
+                        .output()
+                    {
+                        let current = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if !current.is_empty() && current != last_app {
+                            let duration_secs = last_switch.elapsed().as_secs();
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs();
+                            let event = serde_json::json!({
+                                "type": "app_switch",
+                                "from_app": last_app,
+                                "to_app": current,
+                                "duration_secs": duration_secs,
+                                "timestamp": timestamp,
+                            });
+                            let _ = tauri::Emitter::emit(&activity_handle, "activity-event", &event);
+                            last_app = current;
+                            last_switch = std::time::Instant::now();
+                        }
+                    }
+                }
+            });
+
+            // Stop clipboard watcher + activity tracker on app exit
+            app.on_window_event(move |_window, event| {
+                if let tauri::WindowEvent::Destroyed = event {
+                    clip_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                    activity_running.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_platform,
             get_arch,
             capture_screenshot,
+            get_active_app,
+            read_clipboard,
             haptic_feedback,
         ])
         .run(tauri::generate_context!())
