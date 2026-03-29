@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ═══════════════════════════════════════════
+   Ocean Theme — CSS Custom Properties
+   Copied from apps/web/src/index.css
+   ═══════════════════════════════════════════ */
+
+:root {
+  --surface-page: #0f1923;
+  --surface-elevated: #162231;
+  --surface-panel: rgba(22, 34, 49, 0.95);
+  --surface-contrast: #1a2d40;
+  --surface-alt: #121e2b;
+  --gradient-hero: radial-gradient(circle at top left, rgba(61, 142, 245, 0.15), transparent 55%),
+    radial-gradient(circle at 80% 15%, rgba(109, 212, 191, 0.12), transparent 60%),
+    linear-gradient(180deg, #0f1923 0%, #121e2b 100%);
+  --color-foreground: #e2e8f0;
+  --color-text: #e2e8f0;
+  --color-text-muted: rgba(148, 170, 200, 0.72);
+  --color-soft: rgba(200, 215, 235, 0.85);
+  --color-muted: rgba(148, 170, 200, 0.72);
+  --color-primary: #3d8ef5;
+  --color-accent: #6dd4bf;
+  --color-highlight: #3d8ef5;
+  --color-border: rgba(60, 90, 130, 0.35);
+  --color-border-strong: rgba(61, 142, 245, 0.45);
+  --color-action: #3d8ef5;
+  --color-action-rgb: 61, 142, 245;
+  --color-success: #3db892;
+  --color-success-rgb: 61, 184, 146;
+  --color-warning: #f0b429;
+  --color-disabled: #5a6d80;
+  --shadow-lg: 0 35px 70px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 18px 40px rgba(0, 0, 0, 0.3);
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-pill: 999px;
+  font-size: 16px;
+  color-scheme: dark;
+}
+
+/* ═══════════════════════════════════════════
+   Base Styles
+   ═══════════════════════════════════════════ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--surface-page);
+  color: var(--color-text);
+  line-height: 1.55;
+}
