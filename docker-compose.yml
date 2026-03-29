@@ -168,6 +168,18 @@ services:
       timeout: 10s
       retries: 3
 
+  luna-client:
+    build:
+      context: ./apps/luna-client
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    ports:
+      - "${LUNA_PORT:-8009}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
   cloudflared:
     image: cloudflare/cloudflared:latest
     command: tunnel --config /etc/cloudflared/config.yml run
@@ -176,6 +188,7 @@ services:
     depends_on:
       - api
       - web
+      - luna-client
     restart: unless-stopped
 
   test-db:

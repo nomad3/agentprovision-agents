@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class ChatSessionBase(BaseModel):
@@ -43,7 +43,14 @@ class ChatMessage(ChatMessageBase):
     session_id: uuid.UUID
     role: str
     context: dict | None = None
+    emotion: str | None = None
     created_at: datetime
+
+    @model_validator(mode="after")
+    def extract_emotion_from_context(self):
+        if self.emotion is None and self.context and "emotion" in self.context:
+            self.emotion = self.context["emotion"]
+        return self
 
     class Config:
         from_attributes = True
