@@ -38,9 +38,6 @@ CURATED_SERVICE_NAMES = {
         "Cabaña Torre",
         "Cabaña Acantilado",
     },
-    "masajes": {
-        "Masaje Relajación o Descontracturante",
-    },
     "tinajas": {
         "Tina Hornopiren",
         "Tina Calbuco",
@@ -51,6 +48,11 @@ CURATED_SERVICE_NAMES = {
         "Tina Hidromasaje Villarrica",
         "Tina Hidromasaje Puyehue",
     },
+}
+
+CURATED_MASSAGE_KEYWORDS = {
+    "relajacion",
+    "descontracturante",
 }
 
 FALLBACK_SERVICES = {
@@ -171,8 +173,15 @@ def _parse_buttons(html: str) -> list[dict]:
 
 
 def _curate_services(category: str, services: Iterable[dict]) -> list[dict]:
-    allowed = CURATED_SERVICE_NAMES[category]
-    selected = [svc for svc in services if svc["nombre"] in allowed]
+    if category == "masajes":
+        selected = []
+        for svc in services:
+            normalized_name = _normalize(svc["nombre"])
+            if any(keyword in normalized_name for keyword in CURATED_MASSAGE_KEYWORDS):
+                selected.append(svc)
+    else:
+        allowed = CURATED_SERVICE_NAMES[category]
+        selected = [svc for svc in services if svc["nombre"] in allowed]
     selected.sort(key=lambda svc: svc["nombre"])
     return selected
 

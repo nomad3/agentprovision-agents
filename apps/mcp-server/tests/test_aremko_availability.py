@@ -26,16 +26,26 @@ def test_resolve_fecha_supports_relative_and_absolute_values():
 def test_curate_services_keeps_only_supported_massages_and_cabins():
     services = [
         {"id": "53", "nombre": "Masaje Relajación o Descontracturante", "precio": 40000, "tipo": "masaje"},
+        {"id": "57", "nombre": "Masaje Descontracturante", "precio": 42000, "tipo": "masaje"},
         {"id": "56", "nombre": "Masaje Deportivo", "precio": 45000, "tipo": "masaje"},
         {"id": "9", "nombre": "Cabaña Arrayan", "precio": 90000, "tipo": "cabana"},
+        {"id": "8", "nombre": "Cabaña Laurel", "precio": 90000, "tipo": "cabana"},
+        {"id": "7", "nombre": "Cabaña Tepa", "precio": 90000, "tipo": "cabana"},
+        {"id": "3", "nombre": "Cabaña Torre", "precio": 100000, "tipo": "cabana"},
+        {"id": "6", "nombre": "Cabaña Acantilado", "precio": 90000, "tipo": "cabana"},
         {"id": "26", "nombre": "Desayuno", "precio": 20000, "tipo": "otro"},
     ]
 
     assert _curate_services("masajes", services) == [
+        {"id": "57", "nombre": "Masaje Descontracturante", "precio": 42000, "tipo": "masaje"},
         {"id": "53", "nombre": "Masaje Relajación o Descontracturante", "precio": 40000, "tipo": "masaje"},
     ]
     assert _curate_services("cabanas", services) == [
+        {"id": "6", "nombre": "Cabaña Acantilado", "precio": 90000, "tipo": "cabana"},
         {"id": "9", "nombre": "Cabaña Arrayan", "precio": 90000, "tipo": "cabana"},
+        {"id": "8", "nombre": "Cabaña Laurel", "precio": 90000, "tipo": "cabana"},
+        {"id": "7", "nombre": "Cabaña Tepa", "precio": 90000, "tipo": "cabana"},
+        {"id": "3", "nombre": "Cabaña Torre", "precio": 100000, "tipo": "cabana"},
     ]
 
 
