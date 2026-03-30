@@ -129,20 +129,33 @@ fn resolve_app_context(app_name: &str, window_title: &str) -> String {
         return app_name.to_string();
     }
 
-    // Electron apps: extract real name from window title
-    if app_name == "Electron" {
-        if let Some(dash_pos) = window_title.find(" - ") {
-            return window_title[..dash_pos].trim().to_string();
-        }
-        if !window_title.is_empty() {
-            return window_title.to_string();
+    // Electron/Code editors: extract PROJECT name, not file name
+    // Window titles look like: "project-name — filename.ext" or "project-name - filename"
+    if matches!(app_name, "Electron" | "Code" | "Code - Insiders" | "Cursor") {
+        // Extract the first segment before " — " or " - " (that's the project)
+        let project = if let Some(pos) = window_title.find(" \u{2014} ") {
+            // em dash (—) separator: "servicetsunami-agents — file.md"
+            window_title[..pos].trim()
+        } else if let Some(pos) = window_title.find(" - ") {
+            window_title[..pos].trim()
+        } else {
+            window_title.trim()
+        };
+        if !project.is_empty() {
+            return project.to_string();
         }
     }
 
-    // Chrome/Safari: include page title for context
+    // Chrome/Safari: extract just the domain or short title
     if matches!(app_name, "Google Chrome" | "Safari" | "Firefox" | "Arc") {
         if !window_title.is_empty() {
-            return format!("{} ({})", app_name, truncate_str(&window_title, 60));
+            // Truncate to just the meaningful part
+            let short = if let Some(pos) = window_title.find(" - ") {
+                &window_title[..pos]
+            } else {
+                truncate_str(&window_title, 40)
+            };
+            return format!("{} ({})", app_name, short.trim());
         }
     }
 
@@ -426,6 +439,8 @@ pub fn run() {
                             .as_secs();
                         // Get subprocess context for deeper insight
                         let subprocess = get_subprocess_context();
+
+                        // Emit the main app switch event
                         let event = serde_json::json!({
                             "type": "app_switch",
                             "from_app": last_context.split(':').next().unwrap_or(""),
@@ -436,6 +451,41 @@ pub fn run() {
                             "timestamp": timestamp,
                         });
                         let _ = tauri::Emitter::emit(&activity_handle, "activity-event", &event);
+
+                        // For editors: also emit events for detected CLI tools
+                        // so the pattern detector sees "Claude Code", "Docker CLI", etc.
+                        if let Some(procs) = subprocess.get("active_processes").and_then(|v| v.as_array()) {
+                            for proc in procs {
+                                let cmd = proc.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                                let project = proc.get("project").and_then(|v| v.as_str()).unwrap_or("");
+                                let tool_name = match cmd {
+                                    c if c.contains("claude") => "Claude Code",
+                                    c if c.contains("codex") => "Codex CLI",
+                                    c if c.contains("docker") => "Docker",
+                                    c if c.contains("cargo") => "Cargo",
+                                    c if c.contains("npm") || c.contains("node") => "Node.js",
+                                    c if c.contains("python") || c.contains("uvicorn") => "Python",
+                                    c if c.contains("kubectl") => "kubectl",
+                                    c if c.contains("vite") => "Vite",
+                                    _ => continue,
+                                };
+                                let tool_label = if project.is_empty() {
+                                    tool_name.to_string()
+                                } else {
+                                    format!("{} ({})", tool_name, project)
+                                };
+                                let tool_event = serde_json::json!({
+                                    "type": "app_switch",
+                                    "from_app": &resolved_app,
+                                    "to_app": tool_label,
+                                    "window_title": proc.get("args").and_then(|v| v.as_str()).unwrap_or(""),
+                                    "duration_secs": 0,
+                                    "timestamp": timestamp,
+                                });
+                                let _ = tauri::Emitter::emit(&activity_handle, "activity-event", &tool_event);
+                            }
+                        }
+
                         last_context = context_key;
                         last_switch = std::time::Instant::now();
                     }
