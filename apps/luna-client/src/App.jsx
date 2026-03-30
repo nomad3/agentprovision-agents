@@ -40,12 +40,9 @@ function useUpdateBanner() {
   }, []);
   const dismiss = useCallback(() => setUpdateVersion(null), []);
   const restart = useCallback(async () => {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('plugin:updater|restart');
-    } catch {
-      window.location.reload();
-    }
+    // Open the GitHub Release page to download the latest DMG
+    // (full auto-install requires Apple Developer code signing)
+    window.open('https://github.com/nomad3/servicetsunami-agents/releases/latest', '_blank');
   }, []);
   return { updateVersion, dismiss, restart };
 }
@@ -137,7 +134,7 @@ function AuthenticatedApp() {
       {updateVersion && (
         <div className="update-banner">
           <span>Luna {updateVersion} is available</span>
-          <button className="luna-btn luna-btn-sm" onClick={restartForUpdate}>Restart to update</button>
+          <button className="luna-btn luna-btn-sm" onClick={restartForUpdate}>Download update</button>
           <button className="update-dismiss" onClick={dismissUpdate}>&times;</button>
         </div>
       )}

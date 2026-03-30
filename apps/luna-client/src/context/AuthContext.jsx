@@ -28,12 +28,16 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const body = new URLSearchParams({ username: email, password });
+    console.log('[Luna] Login to:', import.meta.env.VITE_API_BASE_URL || '(relative)');
     const res = await apiFetch('/api/v1/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
+      body: body.toString(),
     });
     const data = await res.json();
+    if (!data.access_token) {
+      throw new Error(data.detail || JSON.stringify(data));
+    }
     localStorage.setItem('luna_token', data.access_token);
     const me = await apiJson('/api/v1/users/me');
     setUser(me);

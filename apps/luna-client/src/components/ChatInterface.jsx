@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import LunaAvatar from './luna/LunaAvatar';
 import MemoryPanel from './MemoryPanel';
 import { useLunaStream } from '../hooks/useLunaStream';
 import { apiJson } from '../api';
@@ -155,7 +154,6 @@ export default function ChatInterface({ handoff, requestAction }) {
       <main className="chat-main">
         {/* Luna header */}
         <div className="luna-header">
-          <LunaAvatar state={effectiveState} mood="calm" size="lg" animated />
           <span className="luna-status">{effectiveState === 'thinking' ? 'Thinking...' : 'Luna'}</span>
           <button
             className="luna-btn luna-btn-sm memory-toggle"
