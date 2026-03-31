@@ -25,7 +25,7 @@ from app.models.agent import Agent
 from app.models.agent_kit import AgentKit
 from app.models.mcp_server_connector import MCPServerConnector
 from app.core.security import get_password_hash
-from app.models.chat import Chat
+from app.models.chat import ChatSession
 from app.services.users import seed_shared_cli_credentials_for_tenant
 
 
@@ -149,10 +149,9 @@ def seed():
         print(f"Created MCP connector: {connector.name} → {connector.server_url}")
 
         # --- Welcome Chat Session ---
-        chat = Chat(
+        chat = ChatSession(
             id=uuid.uuid4(),
             tenant_id=tenant.id,
-            user_id=user.id,
             title="Chat with Luna",
             agent_kit_id=kit.id,
         )

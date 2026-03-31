@@ -316,13 +316,17 @@ def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -
                     "type": transport_map.get(conn.transport, "http"),
                     "url": conn.server_url,
                 }
-                # Add auth headers if configured
+                # Add auth headers — mirror the connector service's auth behavior
                 headers = {}
                 if conn.auth_type == "bearer" and conn.auth_token:
-                    headers["Authorization"] = f"Bearer {conn.auth_token}"
+                    header_name = conn.auth_header or "Authorization"
+                    headers[header_name] = f"Bearer {conn.auth_token}"
                 elif conn.auth_type == "api_key" and conn.auth_token:
                     header_name = conn.auth_header or "X-API-Key"
                     headers[header_name] = conn.auth_token
+                elif conn.auth_type == "basic" and conn.auth_token:
+                    header_name = conn.auth_header or "Authorization"
+                    headers[header_name] = f"Basic {conn.auth_token}"
                 if conn.custom_headers:
                     headers.update(conn.custom_headers)
                 if headers:
