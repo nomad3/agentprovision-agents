@@ -85,9 +85,9 @@ You have access to Integral's SRE MCP tools via the `integral-sre` MCP server:
 - [ ] **Step 2: Verify skill loads**
 
 Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents && python -c "
-from apps.api.app.services.skill_manager import SkillManager
-sm = SkillManager()
-skill = sm._parse_skill_md_from_path('apps/api/app/skills/native/integral-sre')
+from pathlib import Path
+from apps.api.app.services.skill_manager import _parse_skill_md
+skill = _parse_skill_md(Path('apps/api/app/skills/native/integral-sre'), tier='native')
 print(f'Loaded: {skill.name}' if skill else 'FAILED')
 "`
 
@@ -353,9 +353,17 @@ def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -
                 )
                 .all()
             )
+            # Map connector transport to CLI config type
+            transport_map = {"streamable-http": "http", "sse": "sse"}
+
             for conn in connectors:
+                # Skip stdio connectors — they need command config, not URL
+                if conn.transport == "stdio":
+                    logger.warning("Skipping stdio connector '%s' — not supported in CLI MCP config", conn.name)
+                    continue
+
                 server_entry = {
-                    "type": "http",
+                    "type": transport_map.get(conn.transport, "http"),
                     "url": conn.server_url,
                 }
                 # Add auth headers if configured
@@ -433,8 +441,7 @@ import uuid
 # Add project root to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from app.core.database import SessionLocal, engine
-from app.models.base_class import Base
+from app.db.session import SessionLocal
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.tenant_features import TenantFeatures
