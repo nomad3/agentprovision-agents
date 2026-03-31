@@ -25,6 +25,8 @@ from app.models.agent import Agent
 from app.models.agent_kit import AgentKit
 from app.models.mcp_server_connector import MCPServerConnector
 from app.core.security import get_password_hash
+from app.models.chat import Chat
+from app.services.users import seed_shared_cli_credentials_for_tenant
 
 
 def seed():
@@ -64,6 +66,7 @@ def seed():
         features = TenantFeatures(
             id=uuid.uuid4(),
             tenant_id=tenant.id,
+            cli_orchestrator_enabled=True,
             default_cli_platform="claude_code",
             rl_enabled=True,
         )
@@ -110,6 +113,7 @@ def seed():
             description="Luna supervises SRE, DevOps, and Business Support agents for Integral's FX infrastructure",
             tenant_id=tenant.id,
             kit_type="hierarchy",
+            config={"skill_slug": "luna"},
             default_agents=[
                 {"id": str(sre_agent.id), "name": sre_agent.name, "role": "specialist"},
                 {"id": str(devops_agent.id), "name": devops_agent.name, "role": "specialist"},
@@ -144,7 +148,25 @@ def seed():
         db.flush()
         print(f"Created MCP connector: {connector.name} → {connector.server_url}")
 
+        # --- Welcome Chat Session ---
+        chat = Chat(
+            id=uuid.uuid4(),
+            tenant_id=tenant.id,
+            user_id=user.id,
+            title="Chat with Luna",
+            agent_kit_id=kit.id,
+        )
+        db.add(chat)
+        db.flush()
+        print(f"Created welcome chat session")
+
+        # --- Shared CLI Credentials ---
+        seed_shared_cli_credentials_for_tenant(db, tenant.id)
+        print("Seeded shared CLI credentials")
+
         db.commit()
+        if admin_password == "changeme":
+            print("\n⚠ WARNING: Using default password 'changeme' — change it before production use!")
         print("\nSeed complete. Integral tenant is ready.")
         print(f"  Tenant ID: {tenant.id}")
         print(f"  Admin: {admin_email}")

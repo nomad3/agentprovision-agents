@@ -333,7 +333,7 @@ def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -
                 config["mcpServers"][server_key] = server_entry
                 logger.info("Injected external MCP server '%s' (%s) for tenant %s", conn.name, conn.server_url, str(tenant_id)[:8])
         except Exception as e:
-            logger.warning("Failed to load tenant MCP connectors: %s", e)
+            logger.warning("Failed to load tenant MCP connectors: %s", e, exc_info=True)
 
     return config
 
