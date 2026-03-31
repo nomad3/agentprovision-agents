@@ -199,7 +199,7 @@ All Jenkins tools accept a `region` parameter (NY4, LD4, SG, TY3, UAT) that reso
      - For Integral's case (`auth_type: "none"`, internal network), no auth headers needed
    - The SRE MCP server appears as an additional MCP server entry alongside the built-in one. The CLI can then call SRE tools directly (lower latency than proxying through `call_mcp_tool`).
    - **Observability trade-off:** Direct injection bypasses `MCPServerConnector.call_tool()` logging. Accept this for Phase 1; can add CLI-side telemetry later if needed.
-   - Callers of `generate_mcp_config()` (in `cli_session_manager.py` and `code-worker`) must pass the new params.
+   - Callers of `generate_mcp_config()` in `cli_session_manager.py` must pass the new params. The code-worker receives the serialized config as workflow input — no changes needed there.
 
 3. **One-time seed script** — `apps/api/scripts/seed_integral_tenant.py` — creates tenant, admin user, AgentKit, MCPServerConnector, integration credentials. Run once and discard.
 
