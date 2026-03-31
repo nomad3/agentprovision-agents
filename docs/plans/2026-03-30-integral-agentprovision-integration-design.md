@@ -72,8 +72,7 @@ All agents are **skill definitions** (skill.md files), not hardcoded logic. The 
 
 #### 1. integral-sre (Technical Support)
 
-**File:** `apps/api/app/skills/native/agents/integral-sre/skill.md`
-**Platform affinity:** `claude_code` (fallback: `gemini_cli`)
+**File:** `apps/api/app/skills/native/integral-sre/skill.md` (top-level under `native/` — required by `SkillManager.scan()` which only iterates one level deep)
 **MCP tools:** All 65 SRE tools via remote connector
 **Role:** Infrastructure monitoring, alert investigation, incident triage, SSH operations, runbook execution
 **Personality:** Technical, concise, SRE vocabulary
@@ -81,8 +80,7 @@ All agents are **skill definitions** (skill.md files), not hardcoded logic. The 
 
 #### 2. integral-devops (Release Operations)
 
-**File:** `apps/api/app/skills/native/agents/integral-devops/skill.md`
-**Platform affinity:** `claude_code`
+**File:** `apps/api/app/skills/native/integral-devops/skill.md`
 **MCP tools:** Jenkins + Nexus tools (subset of 65 SRE tools via remote connector)
 **Role:** CI/CD pipeline management, build triggering, deployment orchestration, artifact management, release checklists
 **Personality:** Process-oriented, safety-conscious, confirms before destructive actions
@@ -90,12 +88,13 @@ All agents are **skill definitions** (skill.md files), not hardcoded logic. The 
 
 #### 3. integral-business-support (Operations Intelligence)
 
-**File:** `apps/api/app/skills/native/agents/integral-business-support/skill.md`
-**Platform affinity:** `claude_code` (fallback: `codex_cli`)
+**File:** `apps/api/app/skills/native/integral-business-support/skill.md`
 **MCP tools:** All 65 SRE tools via remote connector (full read access)
 **Role:** Transaction tracing, alert translation, system health for non-technical users, self-service troubleshooting
 **Personality:** Business-friendly, forex domain language, translates technical data into business impact, no jargon
 **Autonomy:** Full (all read-only)
+
+**Note on platform selection:** Platform affinity is NOT set per-skill (the `FileSkill` schema does not parse it). Platform is controlled by `TenantFeatures.default_cli_platform` at the tenant level. Integral's tenant will default to `claude_code`.
 
 **Special capability — Forex Transaction Trace:**
 
@@ -112,16 +111,24 @@ At each step, the agent translates findings into business language:
 
 ### Agent Routing
 
-Additions to `agent_router.py` keyword detection:
+**Current routing flow:** The agent slug is resolved from the chat session's AgentKit config (`chat.py`). If not set, defaults to "luna" via `CHANNEL_AGENT_MAP`. The existing `_TASK_TYPE_KEYWORDS` maps keywords to task types for RL context only — it does NOT influence agent selection.
 
-| Intent keywords | Routes to |
-|---|---|
-| `build`, `deploy`, `release`, `pipeline`, `jenkins`, `nexus`, `artifact`, `promote` | integral-devops |
-| `server`, `ssh`, `prometheus`, `alert triage`, `runbook`, `haproxy`, `infrastructure` | integral-sre |
-| `transaction`, `failed trade`, `delayed`, `FIX session`, `LP`, `trace`, `business impact`, `health check`, `client`, `settlement` | integral-business-support |
-| General / unclear | Luna decides from context |
+**New behavior:** Add a **sub-agent routing** step AFTER the primary agent slug is resolved. When the resolved agent is Luna (supervisor) and the tenant has specialist agents configured, Luna's skill prompt includes instructions to delegate to the appropriate sub-agent based on the message content. This is NOT keyword routing in `agent_router.py` — it's **prompt-level delegation** within Luna's skill body.
 
-These keywords only activate when the tenant has matching agent skills configured.
+Luna's skill prompt for Integral includes:
+```
+When you receive a message, determine which specialist to delegate to:
+- Infrastructure/monitoring/alerts/SSH → use integral-sre tools
+- Build/deploy/release/Jenkins/Nexus → use integral-devops tools
+- Transaction tracing/business impact/FIX/LP → use integral-business-support tools
+- General questions → handle directly
+```
+
+This approach:
+- Requires **zero changes** to `agent_router.py` — no new routing dimension
+- Leverages the CLI's native intelligence to pick the right tool subset
+- Coexists cleanly with RL policy routing (RL picks the platform, Luna picks the sub-context)
+- All specialist "agents" share the same MCP tools (SRE server) — the differentiation is in the prompt, not the tool access
 
 ## Jenkins & Nexus MCP Tools (SRE Project)
 
@@ -181,10 +188,22 @@ All Jenkins tools accept a `region` parameter (NY4, LD4, SG, TY3, UAT) that reso
 
 ### What Changes
 
-1. **3 agent skill files** — `apps/api/app/skills/native/agents/integral-{sre,devops,business-support}/skill.md`
-2. **Agent router keywords** — `apps/api/app/services/agent_router.py` — add intent detection for devops/sre/business-support
-3. **CLI session MCP config** — `apps/api/app/services/cli_session_manager.py` — pull tenant's `MCPServerConnector` entries and inject into CLI's MCP config so the CLI can call SRE tools directly
-4. **One-time seed script** — `scripts/seed_integral_tenant.py` — creates tenant, admin user, AgentKit, MCPServerConnector, integration credentials. Run once and discard.
+1. **3 agent skill files** — `apps/api/app/skills/native/integral-{sre,devops,business-support}/skill.md` (top-level under `native/`, one level deep for scanner compatibility)
+
+2. **CLI session MCP config injection** — `apps/api/app/services/cli_session_manager.py`:
+   - `generate_mcp_config()` is currently static (only includes built-in ServiceTsunami MCP server). Must be extended to:
+     - Accept `db: Session` and `tenant_id: UUID` parameters
+     - Query `MCPServerConnector` entries for the tenant
+     - For each connected server, add an entry to the MCP config with the server's URL and transport type
+     - For auth: if `auth_type` is `bearer` or `api_key`, inject the token into the MCP config's `headers` field
+     - For Integral's case (`auth_type: "none"`, internal network), no auth headers needed
+   - The SRE MCP server appears as an additional MCP server entry alongside the built-in one. The CLI can then call SRE tools directly (lower latency than proxying through `call_mcp_tool`).
+   - **Observability trade-off:** Direct injection bypasses `MCPServerConnector.call_tool()` logging. Accept this for Phase 1; can add CLI-side telemetry later if needed.
+   - Callers of `generate_mcp_config()` (in `cli_session_manager.py` and `code-worker`) must pass the new params.
+
+3. **One-time seed script** — `apps/api/scripts/seed_integral_tenant.py` — creates tenant, admin user, AgentKit, MCPServerConnector, integration credentials. Run once and discard.
+
+4. **No changes to `agent_router.py`** — routing delegation handled in Luna's skill prompt (see Agent Routing section above).
 
 ### What Does NOT Change
 
@@ -203,12 +222,39 @@ All Jenkins tools accept a `region` parameter (NY4, LD4, SG, TY3, UAT) that reso
 - MCPServerConnector: `name: "integral-sre"`, `server_url: "http://control-plane-api:8080"`, `transport: "streamable-http"`, `auth_type: "none"` (internal network)
 - 3 Agent records with skills attached
 
+## ChromaDB Knowledge Base Integration
+
+The SRE project's ChromaDB (321K+ docs across 9 collections) is already exposed via SRE MCP tools — `search_knowledge`, `unified_search`, `lookup_server_info`, `search_ops_messages`, `search_inventory`, etc. AgentProvision agents access this data through the remote MCP connector — no separate ChromaDB integration needed. The SRE MCP server is the abstraction layer.
+
+No data sync to AgentProvision's pgvector is planned. The two knowledge stores serve different purposes:
+- **ChromaDB (SRE):** Infrastructure operational knowledge (alerts, runbooks, server configs, ops history)
+- **pgvector (AgentProvision):** Business entities, relations, observations, memory activities
+
 ## On-Premise Deployment Considerations
 
 - Replace Cloudflare Tunnel with internal DNS/reverse proxy
-- Ollama needs GPU-capable host or CPU fallback (Qwen models are small)
+- Ollama models (qwen2.5-coder:0.5b, qwen2.5-coder:1.5b, qwen3:1.7b) total ~3GB and run on CPU. GPU not required but improves scoring latency (~2s CPU vs ~200ms GPU for 1.5b model).
 - Claude Code CLI needs outbound internet for Anthropic API
 - All other traffic stays inside private network
+
+### Docker Networking
+
+The two Docker Compose stacks (AgentProvision and SRE) need a shared external Docker network:
+
+```yaml
+# In both docker-compose files:
+networks:
+  integral-internal:
+    external: true
+
+# Create once: docker network create integral-internal
+```
+
+AgentProvision's MCPServerConnector URL: `http://control-plane-api:8080` (using container name resolution on shared network).
+
+### Phase 1 Authentication
+
+Admin creates user accounts via seed script. Multiple Integral users can have individual accounts for proper audit trails. No shared/generic accounts.
 
 ### Deferred (Phase 2)
 
@@ -216,6 +262,7 @@ All Jenkins tools accept a `region` parameter (NY4, LD4, SG, TY3, UAT) that reso
 - High availability / multi-node deployment
 - Monitoring AgentProvision via Integral's existing Prometheus
 - Dynamic Workflows for complex release orchestration (multi-agent)
+- CLI-side telemetry for MCP tool call observability (bypassed by direct injection)
 
 ## Implementation Scope
 
@@ -226,7 +273,6 @@ All Jenkins tools accept a `region` parameter (NY4, LD4, SG, TY3, UAT) that reso
 - Environment variable additions
 
 ### AgentProvision Project (`servicetsunami-agents`)
-- 3 skill.md files
-- Agent router keyword updates
-- CLI session manager MCP config injection
-- One-time seed script
+- 3 skill.md files (under `apps/api/app/skills/native/`)
+- CLI session manager: extend `generate_mcp_config()` to inject tenant's MCPServerConnector entries
+- One-time seed script (`apps/api/scripts/seed_integral_tenant.py`)
