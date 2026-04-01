@@ -150,6 +150,50 @@ def get_call_logs(
 
 
 # ---------------------------------------------------------------------------
+# SSE session helper
+# ---------------------------------------------------------------------------
+
+def _get_sse_messages_url(base_url: str, headers: Dict[str, str], timeout: float = 10) -> str:
+    """Connect to an SSE endpoint and retrieve the session-specific messages URL.
+
+    MCP SSE protocol:
+    1. GET /mcp/sse → SSE stream
+    2. Server sends event: endpoint with data: /mcp/messages?session_id=xxx
+    3. Client POSTs JSON-RPC to that session URL
+    """
+    import urllib.parse
+
+    with httpx.Client(timeout=timeout) as client:
+        with client.stream("GET", base_url, headers={k: v for k, v in headers.items() if k != "Content-Type"}) as resp:
+            resp.raise_for_status()
+            for line in resp.iter_lines():
+                if line.startswith("data: "):
+                    endpoint_path = line[6:].strip()
+                    # Resolve relative path against base URL
+                    if endpoint_path.startswith("/"):
+                        parsed = urllib.parse.urlparse(base_url)
+                        return f"{parsed.scheme}://{parsed.netloc}{endpoint_path}"
+                    elif endpoint_path.startswith("http"):
+                        return endpoint_path
+                    else:
+                        base = base_url.rsplit("/", 1)[0]
+                        return f"{base}/{endpoint_path}"
+    raise RuntimeError(f"SSE endpoint at {base_url} did not return a messages URL")
+
+
+def _resolve_post_url(connector: MCPServerConnector, headers: Dict[str, str], timeout: float = 10) -> str:
+    """Resolve the POST URL for JSON-RPC calls based on transport type."""
+    url = connector.server_url.rstrip("/")
+
+    if connector.transport == "sse":
+        # SSE requires a handshake to get the session-specific messages URL
+        return _get_sse_messages_url(url, headers, timeout)
+    else:
+        # streamable-http: POST directly to the server URL
+        return url
+
+
+# ---------------------------------------------------------------------------
 # Tool discovery (via HTTP to MCP server)
 # ---------------------------------------------------------------------------
 
@@ -185,15 +229,9 @@ def discover_tools(db: Session, connector: MCPServerConnector, timeout: int = 15
         "params": {},
     }
 
-    # Determine URL — for SSE transport, POST to the base URL
-    url = connector.server_url.rstrip("/")
-    if connector.transport == "sse":
-        # SSE servers typically accept JSON-RPC POSTs at the same base URL
-        if not url.endswith("/messages"):
-            url = url.rstrip("/sse") + "/messages"
-
     start = time.time()
     try:
+        url = _resolve_post_url(connector, headers, timeout=float(timeout))
         with httpx.Client(timeout=float(timeout)) as client:
             resp = client.post(url, json=rpc_body, headers=headers)
         duration_ms = int((time.time() - start) * 1000)
@@ -301,13 +339,9 @@ def call_tool(
         },
     }
 
-    url = connector.server_url.rstrip("/")
-    if connector.transport == "sse":
-        if not url.endswith("/messages"):
-            url = url.rstrip("/sse") + "/messages"
-
     start = time.time()
     try:
+        url = _resolve_post_url(connector, headers, timeout=float(timeout))
         with httpx.Client(timeout=float(timeout)) as client:
             resp = client.post(url, json=rpc_body, headers=headers)
         duration_ms = int((time.time() - start) * 1000)
@@ -389,13 +423,9 @@ def health_check(db: Session, connector: MCPServerConnector, timeout: int = 10) 
         },
     }
 
-    url = connector.server_url.rstrip("/")
-    if connector.transport == "sse":
-        if not url.endswith("/messages"):
-            url = url.rstrip("/sse") + "/messages"
-
     start = time.time()
     try:
+        url = _resolve_post_url(connector, headers, timeout=float(timeout))
         with httpx.Client(timeout=float(timeout)) as client:
             resp = client.post(url, json=rpc_body, headers=headers)
         duration_ms = int((time.time() - start) * 1000)
