@@ -157,6 +157,26 @@ class SessionManager:
                 await self._kill_session(tenant_id)
                 return {"success": False, "error": str(e)}
 
+    @staticmethod
+    def _build_allowed_tools(config: SessionConfig) -> str:
+        """Build --allowedTools string from MCP config.
+
+        Derives wildcard patterns from MCP server keys so the CLI
+        auto-approves tool calls for all connected MCP servers.
+        """
+        import json as _json
+        base_tools = ["Read"]
+        try:
+            mcp = _json.loads(config.mcp_config) if config.mcp_config else {}
+            for server_key in mcp.get("mcpServers", {}):
+                # Convert server key to MCP tool prefix pattern
+                tool_prefix = f"mcp__{server_key}__*"
+                base_tools.append(tool_prefix)
+        except Exception:
+            # Fallback to just servicetsunami
+            base_tools.append("mcp__servicetsunami__*")
+        return ",".join(base_tools)
+
     async def _create_session(self, tenant_id: str, config: SessionConfig) -> Optional[ActiveSession]:
         """Create a new persistent Claude session."""
         # Enforce max sessions
@@ -186,7 +206,7 @@ class SessionManager:
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--session-id", session_id,
-            "--allowedTools", "mcp__servicetsunami__*,Read",
+            "--allowedTools", self._build_allowed_tools(config),
             "--verbose",
         ]
 

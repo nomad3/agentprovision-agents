@@ -17,6 +17,27 @@ from temporalio.common import RetryPolicy
 
 logger = logging.getLogger(__name__)
 
+
+def _build_allowed_tools_from_mcp(mcp_config_json: str = "", extra: str = "") -> str:
+    """Derive --allowedTools from MCP config JSON.
+
+    Creates wildcard patterns for each MCP server key so the CLI
+    auto-approves tool calls for all connected servers.
+    """
+    tools = []
+    if extra:
+        tools.extend(extra.split(","))
+    try:
+        mcp = json.loads(mcp_config_json) if mcp_config_json else {}
+        for key in mcp.get("mcpServers", {}):
+            tools.append(f"mcp__{key}__*")
+    except Exception:
+        tools.append("mcp__servicetsunami__*")
+    if not any("mcp__" in t for t in tools):
+        tools.append("mcp__servicetsunami__*")
+    return ",".join(tools)
+
+
 WORKSPACE = "/workspace"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 API_INTERNAL_KEY = os.environ.get("API_INTERNAL_KEY", "").strip()
@@ -990,7 +1011,7 @@ def _execute_claude_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliR
         "claude", "-p", task_input.message,
         "--output-format", "json",
         "--model", CLAUDE_CODE_MODEL,
-        "--allowedTools", "mcp__servicetsunami__*,Bash,Read,Edit,Write,WebFetch,WebSearch",
+        "--allowedTools", _build_allowed_tools_from_mcp(task_input.mcp_config, extra="Bash,Read,Edit,Write,WebFetch,WebSearch"),
         "--add-dir", session_dir,
     ]
     if os.path.isdir(WORKSPACE):
