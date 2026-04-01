@@ -153,53 +153,102 @@ def get_call_logs(
 # SSE session helper
 # ---------------------------------------------------------------------------
 
-def _get_sse_messages_url(base_url: str, headers: Dict[str, str], timeout: float = 10) -> str:
-    """Connect to an SSE endpoint and retrieve the session-specific messages URL.
+def _sse_jsonrpc_call(
+    base_url: str, headers: Dict[str, str], rpc_body: dict, timeout: float = 15
+) -> dict:
+    """Execute a JSON-RPC call over MCP SSE transport.
 
-    MCP SSE protocol:
-    1. GET /mcp/sse → SSE stream
+    MCP SSE protocol is asynchronous:
+    1. GET /mcp/sse → SSE stream (must stay open)
     2. Server sends event: endpoint with data: /mcp/messages?session_id=xxx
-    3. Client POSTs JSON-RPC to that session URL
+    3. Client POSTs JSON-RPC to that session URL → 202 Accepted
+    4. Server sends the JSON-RPC response as an SSE event: message
+    5. Client reads response from the SSE stream, then closes
     """
     import urllib.parse
+    import threading
+    import json as _json
 
     clean_headers = {k: v for k, v in headers.items() if k != "Content-Type"}
     clean_headers["Accept"] = "text/event-stream"
 
-    with httpx.Client(timeout=httpx.Timeout(timeout, read=timeout)) as client:
-        with client.stream("GET", base_url, headers=clean_headers) as resp:
-            resp.raise_for_status()
-            # Read byte-by-byte to avoid blocking on small SSE chunks.
-            # The endpoint event is typically <100 bytes but iter_bytes(1024)
-            # would block waiting to fill the buffer on a keep-alive stream.
-            buffer = ""
-            for chunk in resp.iter_raw():
-                buffer += chunk.decode("utf-8", errors="replace")
-                # Check for complete SSE data line
-                for line in buffer.split("\n"):
-                    if line.startswith("data: "):
-                        endpoint_path = line[6:].strip()
-                        if endpoint_path.startswith("/"):
-                            parsed = urllib.parse.urlparse(base_url)
-                            return f"{parsed.scheme}://{parsed.netloc}{endpoint_path}"
-                        elif endpoint_path.startswith("http"):
-                            return endpoint_path
-                        else:
-                            base = base_url.rsplit("/", 1)[0]
-                            return f"{base}/{endpoint_path}"
-    raise RuntimeError(f"SSE endpoint at {base_url} did not return a messages URL")
+    messages_url = None
+    response_data = {}
+    error_holder = [None]
+    rpc_id = str(rpc_body.get("id", 1))
 
+    def _run_sse():
+        nonlocal messages_url, response_data
+        try:
+            with httpx.Client(timeout=httpx.Timeout(timeout, read=timeout)) as client:
+                with client.stream("GET", base_url, headers=clean_headers) as resp:
+                    resp.raise_for_status()
+                    buffer = ""
+                    current_event = ""
+                    for chunk in resp.iter_raw():
+                        buffer += chunk.decode("utf-8", errors="replace")
+                        # Process complete lines
+                        while "\n" in buffer:
+                            line, buffer = buffer.split("\n", 1)
+                            line = line.rstrip("\r")
+                            if line.startswith("event: "):
+                                current_event = line[7:].strip()
+                            elif line.startswith("data: "):
+                                data_str = line[6:].strip()
+                                if current_event == "endpoint":
+                                    # Resolve the messages URL
+                                    if data_str.startswith("/"):
+                                        parsed = urllib.parse.urlparse(base_url)
+                                        messages_url = f"{parsed.scheme}://{parsed.netloc}{data_str}"
+                                    elif data_str.startswith("http"):
+                                        messages_url = data_str
+                                    else:
+                                        b = base_url.rsplit("/", 1)[0]
+                                        messages_url = f"{b}/{data_str}"
+                                elif current_event == "message":
+                                    # JSON-RPC response
+                                    try:
+                                        response_data.update(_json.loads(data_str))
+                                    except _json.JSONDecodeError:
+                                        pass
+                                    return  # Got our response, done
+                            elif line == "":
+                                current_event = ""
+                        # Exit if we got the response
+                        if response_data:
+                            return
+        except Exception as e:
+            error_holder[0] = e
 
-def _resolve_post_url(connector: MCPServerConnector, headers: Dict[str, str], timeout: float = 10) -> str:
-    """Resolve the POST URL for JSON-RPC calls based on transport type."""
-    url = connector.server_url.rstrip("/")
+    # Run SSE in background thread
+    sse_thread = threading.Thread(target=_run_sse, daemon=True)
+    sse_thread.start()
 
-    if connector.transport == "sse":
-        # SSE requires a handshake to get the session-specific messages URL
-        return _get_sse_messages_url(url, headers, timeout)
-    else:
-        # streamable-http: POST directly to the server URL
-        return url
+    # Wait for session URL
+    deadline = time.time() + timeout
+    while not messages_url and time.time() < deadline:
+        time.sleep(0.05)
+        if error_holder[0]:
+            raise error_holder[0]
+
+    if not messages_url:
+        raise RuntimeError(f"SSE endpoint at {base_url} did not return a messages URL within {timeout}s")
+
+    # POST the JSON-RPC request
+    with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+        resp = client.post(messages_url, json=rpc_body, headers=headers)
+        # 202 Accepted is the expected SSE response — result comes via stream
+        if resp.status_code not in (200, 202):
+            raise RuntimeError(f"MCP POST failed: HTTP {resp.status_code}: {resp.text[:200]}")
+
+    # Wait for SSE response
+    sse_thread.join(timeout=timeout)
+    if error_holder[0]:
+        raise error_holder[0]
+    if not response_data:
+        raise RuntimeError("No JSON-RPC response received from SSE stream")
+
+    return response_data
 
 
 # ---------------------------------------------------------------------------
@@ -240,14 +289,17 @@ def discover_tools(db: Session, connector: MCPServerConnector, timeout: int = 15
 
     start = time.time()
     try:
-        url = _resolve_post_url(connector, headers, timeout=float(timeout))
-        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
-            resp = client.post(url, json=rpc_body, headers=headers)
+        if connector.transport == "sse":
+            data = _sse_jsonrpc_call(connector.server_url.rstrip("/"), headers, rpc_body, timeout=float(timeout))
+        else:
+            url = connector.server_url.rstrip("/")
+            with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+                resp = client.post(url, json=rpc_body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
         duration_ms = int((time.time() - start) * 1000)
 
-        if 200 <= resp.status_code < 300:
-            data = resp.json()
-            tools = data.get("result", {}).get("tools", [])
+        tools = data.get("result", {}).get("tools", [])
             # Cache discovered tools
             tool_list = [
                 {
@@ -350,16 +402,19 @@ def call_tool(
 
     start = time.time()
     try:
-        url = _resolve_post_url(connector, headers, timeout=float(timeout))
-        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
-            resp = client.post(url, json=rpc_body, headers=headers)
+        if connector.transport == "sse":
+            data = _sse_jsonrpc_call(connector.server_url.rstrip("/"), headers, rpc_body, timeout=float(timeout))
+        else:
+            url = connector.server_url.rstrip("/")
+            with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+                resp = client.post(url, json=rpc_body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
         duration_ms = int((time.time() - start) * 1000)
 
-        if 200 <= resp.status_code < 300:
-            data = resp.json()
-            result = data.get("result", {})
-            # Extract text content from MCP response
-            content = result.get("content", [])
+        result = data.get("result", {})
+        # Extract text content from MCP response
+        content = result.get("content", [])
             result_data = {}
             if content:
                 for item in content:
@@ -434,14 +489,17 @@ def health_check(db: Session, connector: MCPServerConnector, timeout: int = 10) 
 
     start = time.time()
     try:
-        url = _resolve_post_url(connector, headers, timeout=float(timeout))
-        with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
-            resp = client.post(url, json=rpc_body, headers=headers)
+        if connector.transport == "sse":
+            data = _sse_jsonrpc_call(connector.server_url.rstrip("/"), headers, rpc_body, timeout=float(timeout))
+        else:
+            url = connector.server_url.rstrip("/")
+            with httpx.Client(timeout=float(timeout), follow_redirects=True) as client:
+                resp = client.post(url, json=rpc_body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
         duration_ms = int((time.time() - start) * 1000)
 
-        if 200 <= resp.status_code < 300:
-            data = resp.json()
-            server_info = data.get("result", {}).get("serverInfo", {})
+        server_info = data.get("result", {}).get("serverInfo", {})
             connector.status = "connected"
             connector.last_health_check = datetime.utcnow()
             connector.last_error = None
