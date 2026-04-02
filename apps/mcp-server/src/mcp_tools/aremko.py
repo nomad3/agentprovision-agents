@@ -310,7 +310,6 @@ async def create_aremko_reservation(
     resolved_region_id = region_id or DEFAULT_REGION_ID
     resolved_comuna_id = comuna_id or DEFAULT_COMUNA_ID
     used_default_location = region_id is None or comuna_id is None
-
     idempotency_key = f"luna-{uuid.uuid4().hex[:12]}-{int(time.time())}"
 
     payload = {
