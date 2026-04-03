@@ -1,5 +1,9 @@
 """
-Temporal worker for orchestration engine task execution workflows
+Temporal worker for orchestration engine task execution workflows.
+
+All static workflow classes have been removed. The DynamicWorkflowExecutor
+interprets JSON workflow definitions at runtime, replacing all per-workflow
+Python classes. Activity registrations are kept so the executor can dispatch them.
 """
 
 import asyncio
@@ -7,7 +11,6 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from app.core.config import settings
-from app.workflows.task_execution import TaskExecutionWorkflow
 from app.workflows.dynamic_executor import DynamicWorkflowExecutor
 from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
@@ -17,30 +20,24 @@ from app.workflows.activities.task_execution import (
     persist_entities,
     evaluate_task,
 )
-from app.workflows.channel_health import ChannelHealthMonitorWorkflow
 from app.workflows.activities.channel_health import (
     check_channel_health,
     reconnect_channel,
     update_channel_health_status,
 )
-from app.workflows.follow_up import FollowUpWorkflow
 from app.workflows.activities.follow_up import execute_followup_action
-from app.workflows.monthly_billing import MonthlyBillingWorkflow
 from app.workflows.activities.monthly_billing import (
     aggregate_billing_visits,
     generate_billing_invoices,
     send_billing_invoices,
     schedule_billing_followups,
 )
-from app.workflows.remedia_order import RemediaOrderWorkflow
 from app.workflows.activities.remedia import (
     create_remedia_order,
     send_remedia_notification,
     monitor_remedia_payment,
     track_remedia_delivery,
 )
-from app.workflows.auto_action import AutoActionWorkflow
-from app.workflows.deal_pipeline import DealPipelineWorkflow
 from app.workflows.activities.hca_activities import (
     hca_discover_prospects,
     hca_score_prospects,
@@ -49,7 +46,6 @@ from app.workflows.activities.hca_activities import (
     hca_advance_pipeline,
     hca_sync_knowledge_graph,
 )
-from app.workflows.inbox_monitor import InboxMonitorWorkflow
 from app.workflows.activities.inbox_monitor import (
     fetch_new_emails,
     fetch_upcoming_events,
@@ -59,7 +55,6 @@ from app.workflows.activities.inbox_monitor import (
     check_proactive_triggers,
     log_monitor_cycle,
 )
-from app.workflows.memory_consolidation_workflow import MemoryConsolidationWorkflow
 from app.workflows.activities.memory_consolidation import (
     find_duplicate_entities,
     auto_merge_duplicates,
@@ -68,8 +63,6 @@ from app.workflows.activities.memory_consolidation import (
     sync_memories_and_entities,
     log_consolidation_results,
 )
-from app.workflows.competitor_monitor import CompetitorMonitorWorkflow
-from app.workflows.aremko_monitor import AremkoMonitorWorkflow
 from app.workflows.activities.aremko_monitor import (
     fetch_aremko_snapshot,
     detect_aremko_changes,
@@ -83,21 +76,18 @@ from app.workflows.activities.competitor_monitor import (
     store_competitor_observations,
     create_competitor_notifications,
 )
-from app.workflows.prospecting_pipeline import (
-    ProspectingPipelineWorkflow,
+from app.workflows.activities.prospecting import (
     prospect_research,
     prospect_score,
     prospect_qualify,
     prospect_outreach,
     prospect_notify,
 )
-from app.workflows.goal_review import GoalReviewWorkflow
 from app.workflows.activities.goal_review import (
     review_goals,
     review_commitments,
     create_review_notifications,
 )
-from app.workflows.autonomous_learning import AutonomousLearningWorkflow
 from app.workflows.activities.autonomous_learning import (
     collect_learning_metrics,
     generate_and_evaluate_candidates,
@@ -145,7 +135,6 @@ from app.workflows.activities.git_history import (
     extract_git_history,
     poll_pr_outcomes,
 )
-from app.workflows.rl_policy_update_workflow import RLPolicyUpdateWorkflow
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -155,13 +144,11 @@ TASK_QUEUE = "servicetsunami-orchestration"
 
 async def run_orchestration_worker():
     """
-    Start Temporal worker for orchestration engine workflows
+    Start Temporal worker for orchestration engine workflows.
 
     This worker processes:
-    - TaskExecutionWorkflow (dispatch, recall, execute, persist_entities, evaluate)
-    - ChannelHealthMonitorWorkflow (WhatsApp connection health monitoring)
-    - FollowUpWorkflow (scheduled sales follow-up actions)
-    - AutoActionWorkflow (memory-triggered automated actions via Luna)
+    - DynamicWorkflowExecutor (JSON-defined workflows interpreted at runtime)
+    - All activities previously registered by static workflow classes
 
     Task queue: servicetsunami-orchestration
     """
@@ -185,22 +172,7 @@ async def run_orchestration_worker():
         client,
         task_queue=TASK_QUEUE,
         workflows=[
-            TaskExecutionWorkflow,
-            ChannelHealthMonitorWorkflow,
-            FollowUpWorkflow,
-            MonthlyBillingWorkflow,
-            RemediaOrderWorkflow,
-            DealPipelineWorkflow,
-            AutoActionWorkflow,
-            InboxMonitorWorkflow,
-            CompetitorMonitorWorkflow,
-            AremkoMonitorWorkflow,
-            ProspectingPipelineWorkflow,
-            RLPolicyUpdateWorkflow,
-            MemoryConsolidationWorkflow,
             DynamicWorkflowExecutor,
-            AutonomousLearningWorkflow,
-            GoalReviewWorkflow,
         ],
         activities=[
             dispatch_task,

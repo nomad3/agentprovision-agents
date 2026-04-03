@@ -1,5 +1,9 @@
 """
-Temporal worker for Databricks synchronization workflows
+Temporal worker for Databricks synchronization workflows.
+
+All static workflow classes have been removed. The DynamicWorkflowExecutor
+interprets JSON workflow definitions at runtime. Activity registrations are
+kept so the executor can dispatch them.
 """
 
 import asyncio
@@ -7,9 +11,8 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from app.core.config import settings
-from app.workflows.dataset_sync import DatasetSyncWorkflow
-from app.workflows.knowledge_extraction import KnowledgeExtractionWorkflow
-from app.workflows.data_source_sync import DataSourceSyncWorkflow, ScheduledSyncWorkflow
+from app.workflows.dynamic_executor import DynamicWorkflowExecutor
+from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.databricks_sync import (
     sync_to_bronze,
     transform_to_silver,
@@ -22,7 +25,6 @@ from app.workflows.activities.connectors.extract import (
     load_to_silver,
     update_sync_metadata
 )
-from app.workflows.embedding_backfill_workflow import EmbeddingBackfillWorkflow
 from app.workflows.activities.embedding_backfill import (
     backfill_entity_embeddings,
     backfill_memory_embeddings,
@@ -35,14 +37,11 @@ logger = get_logger(__name__)
 
 async def run_databricks_worker():
     """
-    Start Temporal worker for Databricks workflows
+    Start Temporal worker for Databricks workflows.
 
     This worker processes:
-    - DatasetSyncWorkflow
-    - KnowledgeExtractionWorkflow
-    - DataSourceSyncWorkflow (generic connector sync)
-    - ScheduledSyncWorkflow
-    - Related activities
+    - DynamicWorkflowExecutor (JSON-defined workflows interpreted at runtime)
+    - All activities previously registered by static workflow classes
 
     Task queue: servicetsunami-databricks
     """
@@ -58,14 +57,10 @@ async def run_databricks_worker():
         client,
         task_queue="servicetsunami-databricks",
         workflows=[
-            DatasetSyncWorkflow,
-            KnowledgeExtractionWorkflow,
-            DataSourceSyncWorkflow,
-            ScheduledSyncWorkflow,
-            EmbeddingBackfillWorkflow,
+            DynamicWorkflowExecutor,
         ],
         activities=[
-            # Existing activities
+            # Databricks sync activities
             sync_to_bronze,
             transform_to_silver,
             update_dataset_metadata,
@@ -79,6 +74,9 @@ async def run_databricks_worker():
             backfill_entity_embeddings,
             backfill_memory_embeddings,
             backfill_observation_embeddings,
+            # Dynamic workflow step executor
+            execute_dynamic_step,
+            finalize_workflow_run,
         ]
     )
 
