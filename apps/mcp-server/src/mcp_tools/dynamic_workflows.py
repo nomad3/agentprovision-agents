@@ -68,7 +68,7 @@ async def create_dynamic_workflow(
     if trigger_schedule:
         trigger_config["schedule"] = trigger_schedule
 
-    result = await _api_call("post", "", tid, {
+    result = await _api_call("post", "/internal/create", tid, {
         "name": name,
         "description": description,
         "definition": definition,
@@ -100,7 +100,9 @@ async def list_dynamic_workflows(
         tenant_id: Tenant UUID
     """
     tid = resolve_tenant_id(ctx) or tenant_id
-    path = f"?status={status}" if status else ""
+    path = "/internal/list"
+    if status:
+        path += f"?status={status}"
     result = await _api_call("get", path, tid)
 
     if isinstance(result, list):
@@ -135,7 +137,7 @@ async def run_dynamic_workflow(
         tenant_id: Tenant UUID
     """
     tid = resolve_tenant_id(ctx) or tenant_id
-    result = await _api_call("post", f"/{workflow_id}/run", tid, {
+    result = await _api_call("post", f"/internal/{workflow_id}/run", tid, {
         "input_data": input_data or {},
     })
 
@@ -161,7 +163,7 @@ async def get_workflow_run_status(
         tenant_id: Tenant UUID
     """
     tid = resolve_tenant_id(ctx) or tenant_id
-    result = await _api_call("get", f"/runs/{run_id}", tid)
+    result = await _api_call("get", f"/internal/runs/{run_id}", tid)
 
     if "error" not in result and "run" in result:
         run = result["run"]
@@ -197,7 +199,7 @@ async def activate_dynamic_workflow(
         tenant_id: Tenant UUID
     """
     tid = resolve_tenant_id(ctx) or tenant_id
-    return await _api_call("post", f"/{workflow_id}/activate", tid)
+    return await _api_call("post", f"/internal/{workflow_id}/activate", tid)
 
 
 @mcp.tool()
@@ -213,7 +215,7 @@ async def install_workflow_template(
         tenant_id: Tenant UUID
     """
     tid = resolve_tenant_id(ctx) or tenant_id
-    result = await _api_call("post", f"/templates/{template_id}/install", tid)
+    result = await _api_call("post", f"/internal/templates/{template_id}/install", tid)
 
     if "error" not in result:
         return {

@@ -4,10 +4,11 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.core.config import settings
 from app.models.dynamic_workflow import DynamicWorkflow, WorkflowRun, WorkflowStepLog
 from app.schemas.dynamic_workflow import (
     DynamicWorkflowCreate,
@@ -19,6 +20,280 @@ from app.schemas.dynamic_workflow import (
 )
 
 router = APIRouter()
+
+
+# ── Internal auth dependency (MCP / service-to-service) ──────────
+
+def verify_internal_key(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+    x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-Id"),
+    db: Session = Depends(deps.get_db),
+):
+    """Validate X-Internal-Key header and return tenant_id as UUID."""
+    if x_internal_key not in (settings.API_INTERNAL_KEY, settings.MCP_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid internal key")
+    if not x_tenant_id:
+        raise HTTPException(status_code=400, detail="X-Tenant-Id required")
+    return uuid.UUID(x_tenant_id)
+
+
+# ── Internal Endpoints (MCP Server) ─────────────────────────────
+# These MUST be defined before /{workflow_id} so FastAPI doesn't
+# parse "internal" as a UUID path parameter.
+
+@router.post("/internal/create", response_model=DynamicWorkflowInDB, status_code=201)
+def create_workflow_internal(
+    payload: DynamicWorkflowCreate,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Create a new dynamic workflow (internal, no JWT required)."""
+    wf = DynamicWorkflow(
+        tenant_id=tenant_id,
+        name=payload.name,
+        description=payload.description,
+        definition=payload.definition.model_dump(by_alias=True),
+        trigger_config=payload.trigger_config.model_dump() if payload.trigger_config else None,
+        tags=payload.tags,
+    )
+    db.add(wf)
+    db.commit()
+    db.refresh(wf)
+    return wf
+
+
+@router.get("/internal/list", response_model=list[DynamicWorkflowInDB])
+def list_workflows_internal(
+    status: Optional[str] = None,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """List tenant's dynamic workflows (internal, no JWT required)."""
+    q = db.query(DynamicWorkflow).filter(DynamicWorkflow.tenant_id == tenant_id)
+    if status:
+        q = q.filter(DynamicWorkflow.status == status)
+    return q.order_by(DynamicWorkflow.updated_at.desc()).all()
+
+
+@router.put("/internal/{workflow_id}", response_model=DynamicWorkflowInDB)
+def update_workflow_internal(
+    workflow_id: uuid.UUID,
+    payload: DynamicWorkflowUpdate,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Update a workflow (internal, no JWT required)."""
+    wf = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == workflow_id,
+        DynamicWorkflow.tenant_id == tenant_id,
+    ).first()
+    if not wf:
+        raise HTTPException(404, "Workflow not found")
+
+    if payload.name is not None:
+        wf.name = payload.name
+    if payload.description is not None:
+        wf.description = payload.description
+    if payload.definition is not None:
+        wf.definition = payload.definition.model_dump(by_alias=True)
+        wf.version += 1
+    if payload.trigger_config is not None:
+        wf.trigger_config = payload.trigger_config.model_dump()
+    if payload.tags is not None:
+        wf.tags = payload.tags
+    if payload.status is not None:
+        wf.status = payload.status
+
+    wf.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(wf)
+    return wf
+
+
+@router.delete("/internal/{workflow_id}", status_code=204)
+def delete_workflow_internal(
+    workflow_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Delete a workflow and all its runs (internal, no JWT required)."""
+    wf = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == workflow_id,
+        DynamicWorkflow.tenant_id == tenant_id,
+    ).first()
+    if not wf:
+        raise HTTPException(404, "Workflow not found")
+    db.delete(wf)
+    db.commit()
+
+
+@router.post("/internal/{workflow_id}/run", response_model=WorkflowRunInDB)
+async def run_workflow_internal(
+    workflow_id: uuid.UUID,
+    payload: WorkflowRunRequest = WorkflowRunRequest(),
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Trigger a manual workflow run via Temporal (internal, no JWT required)."""
+    wf = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == workflow_id,
+        DynamicWorkflow.tenant_id == tenant_id,
+    ).first()
+    if not wf:
+        raise HTTPException(404, "Workflow not found")
+
+    run = WorkflowRun(
+        tenant_id=tenant_id,
+        workflow_id=wf.id,
+        workflow_version=wf.version,
+        trigger_type="manual",
+        status="running",
+        input_data=payload.input_data,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+    from temporalio.client import Client
+    from app.workflows.dynamic_executor import DynamicWorkflowExecutor, DynamicWorkflowInput
+
+    try:
+        client = await Client.connect(settings.TEMPORAL_ADDRESS)
+        temporal_wf_id = f"dynamic-{wf.id}-{run.id}"
+
+        await client.start_workflow(
+            DynamicWorkflowExecutor.run,
+            DynamicWorkflowInput(
+                workflow_id=str(wf.id),
+                run_id=str(run.id),
+                tenant_id=str(tenant_id),
+                definition=wf.definition,
+                input_data=payload.input_data or {},
+            ),
+            id=temporal_wf_id,
+            task_queue="servicetsunami-orchestration",
+        )
+
+        run.temporal_workflow_id = temporal_wf_id
+        db.commit()
+    except Exception as e:
+        run.status = "failed"
+        run.error = str(e)
+        db.commit()
+        raise HTTPException(500, f"Failed to start workflow: {e}")
+
+    return run
+
+
+@router.post("/internal/{workflow_id}/activate")
+def activate_workflow_internal(
+    workflow_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Activate a workflow (internal, no JWT required)."""
+    wf = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == workflow_id,
+        DynamicWorkflow.tenant_id == tenant_id,
+    ).first()
+    if not wf:
+        raise HTTPException(404, "Workflow not found")
+    wf.status = "active"
+    wf.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "active", "id": str(wf.id)}
+
+
+@router.post("/internal/{workflow_id}/pause")
+def pause_workflow_internal(
+    workflow_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Pause a workflow (internal, no JWT required)."""
+    wf = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == workflow_id,
+        DynamicWorkflow.tenant_id == tenant_id,
+    ).first()
+    if not wf:
+        raise HTTPException(404, "Workflow not found")
+    wf.status = "paused"
+    wf.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "paused", "id": str(wf.id)}
+
+
+@router.get("/internal/{workflow_id}/runs", response_model=list[WorkflowRunInDB])
+def list_runs_internal(
+    workflow_id: uuid.UUID,
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """List runs for a workflow (internal, no JWT required)."""
+    return (
+        db.query(WorkflowRun)
+        .filter(WorkflowRun.workflow_id == workflow_id, WorkflowRun.tenant_id == tenant_id)
+        .order_by(WorkflowRun.started_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+@router.get("/internal/runs/{run_id}")
+def get_run_internal(
+    run_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Get run details with step logs (internal, no JWT required)."""
+    run = db.query(WorkflowRun).filter(
+        WorkflowRun.id == run_id,
+        WorkflowRun.tenant_id == tenant_id,
+    ).first()
+    if not run:
+        raise HTTPException(404, "Run not found")
+
+    steps = (
+        db.query(WorkflowStepLog)
+        .filter(WorkflowStepLog.run_id == run_id)
+        .order_by(WorkflowStepLog.started_at)
+        .all()
+    )
+
+    return {
+        "run": WorkflowRunInDB.model_validate(run),
+        "steps": [WorkflowStepLogInDB.model_validate(s) for s in steps],
+    }
+
+
+@router.post("/internal/templates/{template_id}/install", response_model=DynamicWorkflowInDB)
+def install_template_internal(
+    template_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Install a template (internal, no JWT required)."""
+    template = db.query(DynamicWorkflow).filter(DynamicWorkflow.id == template_id).first()
+    if not template:
+        raise HTTPException(404, "Template not found")
+
+    copy = DynamicWorkflow(
+        tenant_id=tenant_id,
+        name=template.name,
+        description=template.description,
+        definition=template.definition,
+        trigger_config=template.trigger_config,
+        tags=template.tags,
+        tier="custom",
+        source_template_id=template.id,
+    )
+    db.add(copy)
+
+    template.installs = (template.installs or 0) + 1
+    db.commit()
+    db.refresh(copy)
+    return copy
 
 
 # ── CRUD ──────────────────────────────────────────────────────────
