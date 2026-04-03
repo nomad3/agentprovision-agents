@@ -755,6 +755,500 @@ NATIVE_TEMPLATES = [
             ],
         },
     },
+    # ── Tier 3 continue_as_new workflow migrations ─────────────────────
+    {
+        "name": "Competitor Monitor",
+        "description": "Long-running monitor: list competitor entities, scrape each for website/news/ad changes, analyze vs previous observations, store observations and notify on notable changes. Restarts every 24h.",
+        "tier": "native",
+        "public": True,
+        "tags": ["competitors", "monitoring", "marketing", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "list_competitors",
+                    "type": "mcp_tool",
+                    "tool": "list_competitors",
+                    "params": {},
+                    "output": "competitors",
+                },
+                {
+                    "id": "process_competitors",
+                    "type": "for_each",
+                    "collection": "{{competitors}}",
+                    "as": "competitor",
+                    "steps": [
+                        {
+                            "id": "scrape",
+                            "type": "mcp_tool",
+                            "tool": "call_mcp_tool",
+                            "params": {
+                                "server": "scraper",
+                                "tool": "scrape_website",
+                                "url": "{{competitor.website}}",
+                            },
+                            "output": "scrape_result",
+                        },
+                        {
+                            "id": "analyze",
+                            "type": "agent",
+                            "agent": "luna",
+                            "prompt": (
+                                "Analyze competitor activity for {{competitor.name}}.\n\n"
+                                "Scraped data:\n{{scrape_result}}\n\n"
+                                "Previous summary:\n{{input.last_run_summary}}\n\n"
+                                "Identify notable changes in products, pricing, marketing, "
+                                "or public ad activity. Be concise."
+                            ),
+                            "output": "analysis",
+                        },
+                    ],
+                },
+                {
+                    "id": "store_observations",
+                    "type": "mcp_tool",
+                    "tool": "record_observation",
+                    "params": {
+                        "entity_ids": "{{competitors | map(attribute='id') | list}}",
+                        "observation": "Competitor monitor cycle complete. {{process_competitors | length}} competitors analyzed.",
+                    },
+                    "output": "observations_stored",
+                },
+                {
+                    "id": "notify",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Summarize the competitor monitoring cycle results.\n\n"
+                        "Competitors analyzed: {{competitors | length}}\n"
+                        "Create a brief notification only if notable changes were detected."
+                    ),
+                    "output": "notification",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 86400,
+                },
+            ],
+        },
+    },
+    {
+        "name": "Aremko Availability Monitor",
+        "description": "Long-running monitor for Aremko Spa: fetch availability snapshot across all services, compare with previous snapshot, detect meaningful changes (bookings filling up, new slots), create notifications. Restarts every 60min.",
+        "tier": "native",
+        "public": True,
+        "tags": ["aremko", "bookings", "monitoring", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "fetch_snapshot",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/aremko/snapshot",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "days_ahead": "{{input.days_ahead | default(3)}}",
+                    },
+                    "output": "new_snapshot",
+                },
+                {
+                    "id": "detect_changes",
+                    "type": "condition",
+                    "if": "{{input.previous_snapshot}} is not none",
+                    "then": "compare_snapshots",
+                    "else": "restart",
+                },
+                {
+                    "id": "compare_snapshots",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Compare Aremko Spa availability snapshots.\n\n"
+                        "Previous:\n{{input.previous_snapshot}}\n\n"
+                        "Current:\n{{new_snapshot}}\n\n"
+                        "Detect meaningful changes: services filling up, new slots opening, "
+                        "fully booked services. Return a list of changes."
+                    ),
+                    "output": "changes",
+                },
+                {
+                    "id": "notify_changes",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Create notifications for Aremko availability changes.\n\n"
+                        "Changes detected:\n{{changes}}\n\n"
+                        "Only notify for significant changes (fully booked, new openings)."
+                    ),
+                    "output": "notification",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 3600,
+                },
+            ],
+        },
+    },
+    {
+        "name": "Inbox Monitor",
+        "description": "Long-running Gmail + Calendar monitor: fetch new emails and upcoming events, triage with LLM + memory context, create notifications, extract knowledge entities from important emails, check proactive triggers. Restarts every 15min.",
+        "tier": "native",
+        "public": True,
+        "tags": ["inbox", "gmail", "calendar", "monitoring", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "fetch_emails",
+                    "type": "mcp_tool",
+                    "tool": "search_emails",
+                    "params": {
+                        "query": "is:unread newer_than:1h",
+                        "max_results": 50,
+                    },
+                    "output": "emails",
+                },
+                {
+                    "id": "fetch_events",
+                    "type": "mcp_tool",
+                    "tool": "list_calendar_events",
+                    "params": {"days_ahead": 1},
+                    "output": "events",
+                },
+                {
+                    "id": "triage",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Triage these inbox items with memory context.\n\n"
+                        "Emails:\n{{emails}}\n\n"
+                        "Events:\n{{events}}\n\n"
+                        "For each item: classify priority (high/medium/low), "
+                        "suggest action, and flag items needing immediate attention."
+                    ),
+                    "output": "triaged_items",
+                },
+                {
+                    "id": "create_notifications",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/notifications/batch",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "items": "{{triaged_items}}",
+                    },
+                    "output": "notifications",
+                },
+                {
+                    "id": "extract_knowledge",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Extract knowledge entities from important emails.\n\n"
+                        "Emails:\n{{emails}}\n"
+                        "Triage results:\n{{triaged_items}}\n\n"
+                        "For high-priority emails: extract people, companies, dates, "
+                        "action items, and relationships. Store them in the knowledge graph."
+                    ),
+                    "output": "extraction_result",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 900,
+                },
+            ],
+        },
+    },
+    {
+        "name": "Channel Health Monitor",
+        "description": "Long-running WhatsApp channel health monitor: check all channel connections, reconnect any disconnected accounts, update health status in DB. Restarts every 60s.",
+        "tier": "native",
+        "public": True,
+        "tags": ["whatsapp", "channels", "health", "monitoring", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "check_channels",
+                    "type": "internal_api",
+                    "method": "GET",
+                    "path": "/api/v1/channels/health",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "status_report",
+                },
+                {
+                    "id": "reconnect_loop",
+                    "type": "for_each",
+                    "collection": "{{status_report.disconnected}}",
+                    "as": "account_id",
+                    "steps": [
+                        {
+                            "id": "reconnect",
+                            "type": "internal_api",
+                            "method": "POST",
+                            "path": "/api/v1/channels/{{account_id}}/reconnect",
+                            "body": {"tenant_id": "{{input.tenant_id}}"},
+                            "output": "reconnect_result",
+                        },
+                    ],
+                },
+                {
+                    "id": "update_status",
+                    "type": "internal_api",
+                    "method": "PATCH",
+                    "path": "/api/v1/channels/health",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "status_report": "{{status_report}}",
+                    },
+                    "output": "status_updated",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 60,
+                },
+            ],
+        },
+    },
+    {
+        "name": "Goal Review",
+        "description": "Long-running goal and commitment reviewer: review active goals for stalled/blocked/contradictory states, check overdue commitments, create notifications for flagged items. Restarts every 6h.",
+        "tier": "native",
+        "public": True,
+        "tags": ["goals", "commitments", "review", "monitoring", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "review_goals",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/goals/review",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "review_result",
+                },
+                {
+                    "id": "review_commitments",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/commitments/review",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "overdue_result",
+                },
+                {
+                    "id": "create_notifications",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/notifications/batch",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "review": "{{review_result}}",
+                        "overdue": "{{overdue_result}}",
+                    },
+                    "output": "notifications",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 21600,
+                },
+            ],
+        },
+    },
+    {
+        "name": "Memory Consolidation",
+        "description": "Long-running memory maintenance: find duplicate entities, auto-merge duplicates, apply memory decay, promote entity lifecycle stages, sync memories with entities, log results. Restarts every 24h.",
+        "tier": "native",
+        "public": True,
+        "tags": ["memory", "knowledge", "consolidation", "maintenance", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "find_duplicates",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/duplicates/find",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "duplicate_clusters",
+                },
+                {
+                    "id": "merge_duplicates",
+                    "type": "condition",
+                    "if": "{{duplicate_clusters.clusters | length}} > 0",
+                    "then": "auto_merge",
+                    "else": "apply_decay",
+                },
+                {
+                    "id": "auto_merge",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/duplicates/merge",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "clusters": "{{duplicate_clusters.clusters}}",
+                    },
+                    "output": "merge_result",
+                },
+                {
+                    "id": "apply_decay",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/memory-decay",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "decay_result",
+                },
+                {
+                    "id": "promote_entities",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/promote",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "promote_result",
+                },
+                {
+                    "id": "sync_memories",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/sync-memories",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "sync_result",
+                },
+                {
+                    "id": "log_results",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/consolidation/log",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "duplicates": "{{duplicate_clusters}}",
+                        "merge": "{{merge_result}}",
+                        "decay": "{{decay_result}}",
+                        "promotions": "{{promote_result}}",
+                        "sync": "{{sync_result}}",
+                    },
+                    "output": "log_result",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 86400,
+                },
+            ],
+        },
+    },
+    {
+        "name": "Autonomous Learning",
+        "description": "Nightly self-improvement cycle: collect learning metrics, generate/evaluate improvement candidates, manage rollouts, run self-simulation, process feedback, auto-dream RL consolidation, prune stale knowledge, learn user preferences, generate morning report. Restarts every 24h.",
+        "tier": "native",
+        "public": True,
+        "tags": ["learning", "rl", "self-improvement", "simulation", "long-running"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "collect_metrics",
+                    "type": "internal_api",
+                    "method": "GET",
+                    "path": "/api/v1/rl/metrics",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "metrics",
+                },
+                {
+                    "id": "generate_candidates",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/rl/candidates/generate",
+                    "body": {
+                        "tenant_id": "{{input.tenant_id}}",
+                        "metrics": "{{metrics}}",
+                    },
+                    "output": "candidates",
+                },
+                {
+                    "id": "manage_rollouts",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/rl/rollouts/manage",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "rollout_result",
+                },
+                {
+                    "id": "self_simulation",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Run self-simulation cycle.\n\n"
+                        "Metrics:\n{{metrics}}\n"
+                        "Candidates:\n{{candidates}}\n\n"
+                        "Select personas, generate scenarios, execute simulations, "
+                        "classify failures, and detect skill gaps."
+                    ),
+                    "output": "simulation_result",
+                },
+                {
+                    "id": "process_feedback",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/rl/feedback/process",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "feedback_result",
+                },
+                {
+                    "id": "auto_dream",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/rl/dream/consolidate",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "dream_result",
+                },
+                {
+                    "id": "prune_knowledge",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/knowledge/prune",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "prune_result",
+                },
+                {
+                    "id": "learn_preferences",
+                    "type": "internal_api",
+                    "method": "POST",
+                    "path": "/api/v1/rl/preferences/learn",
+                    "body": {"tenant_id": "{{input.tenant_id}}"},
+                    "output": "preference_result",
+                },
+                {
+                    "id": "morning_report",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Generate the morning self-improvement report.\n\n"
+                        "Metrics: {{metrics}}\n"
+                        "Candidates: {{candidates.generated}} generated, {{candidates.evaluated}} evaluated\n"
+                        "Rollouts: {{rollout_result.managed}} managed\n"
+                        "Simulation: {{simulation_result}}\n"
+                        "Feedback: {{feedback_result}}\n"
+                        "Dream consolidation: {{dream_result}}\n"
+                        "Knowledge pruned: {{prune_result}}\n"
+                        "Preferences: {{preference_result}}\n\n"
+                        "Summarize key improvements, regressions, and recommendations."
+                    ),
+                    "output": "report",
+                },
+                {
+                    "id": "restart",
+                    "type": "continue_as_new",
+                    "interval_seconds": 86400,
+                },
+            ],
+        },
+    },
 ]
 
 
