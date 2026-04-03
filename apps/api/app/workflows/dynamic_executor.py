@@ -126,8 +126,39 @@ class DynamicWorkflowExecutor:
                     result = {"waited": step.get("duration"), "seconds": duration_s}
                 elif step_type == "cli_execute":
                     # Dispatch to code-worker queue via child workflow
+                    import os as _os
                     params = step.get("params", {})
-                    result = {"delegated_to": "servicetsunami-code", "task": params.get("task", step.get("task", ""))}
+                    task_desc = params.get("task", step.get("task", ""))
+                    # Resolve simple {{var}} references from context
+                    import re as _re
+                    def _resolve(m):
+                        path = m.group(1).strip()
+                        val = context
+                        for k in path.split('.'):
+                            if isinstance(val, dict):
+                                val = val.get(k, m.group(0))
+                            else:
+                                return m.group(0)
+                        return str(val)
+                    task_desc = _re.sub(r'\{\{(.+?)\}\}', _resolve, task_desc)
+
+                    from temporalio.client import Client as _TClient
+                    _tc = await _TClient.connect(
+                        _os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
+                    )
+                    code_handle = await _tc.start_workflow(
+                        "CodeTaskWorkflow",
+                        {
+                            "task_description": task_desc,
+                            "tenant_id": input.tenant_id,
+                            "context": params.get("context", ""),
+                        },
+                        id=f"dyn-cli-{workflow.info().workflow_id}-{step.get('id', '')}",
+                        task_queue="servicetsunami-code",
+                        execution_timeout=timedelta(minutes=60),
+                    )
+                    code_result = await code_handle.result()
+                    result = code_result if isinstance(code_result, dict) else {"output": str(code_result)}
                 elif step_type == "continue_as_new":
                     # Handled after the loop, skip as a step
                     result = {"type": "continue_as_new", "interval_seconds": step.get("interval_seconds", 900)}

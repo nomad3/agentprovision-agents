@@ -132,6 +132,8 @@ class WorkflowStepLogInDB(BaseModel):
     started_at: Optional[datetime]
     completed_at: Optional[datetime]
     duration_ms: Optional[int]
+    input_data: Optional[Dict[str, Any]] = None
+    output_data: Optional[Dict[str, Any]] = None
     error: Optional[str]
     tokens_used: Optional[int] = 0
     cost_usd: Optional[float] = 0.0

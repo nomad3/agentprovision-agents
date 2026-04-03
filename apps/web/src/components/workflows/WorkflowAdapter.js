@@ -82,7 +82,33 @@ export function definitionToFlow(definition, triggerConfig) {
         style: { stroke: '#64748b' },
       });
 
-      if (step.type === 'for_each' && step.steps?.length) {
+      if (step.type === 'condition') {
+        // Create edges from condition to then/else targets using handle IDs
+        // The then/else fields reference step IDs in the same flat list
+        if (step.then) {
+          edges.push({
+            id: `e-${nodeId}-then-${step.then}`,
+            source: nodeId,
+            sourceHandle: 'then',
+            target: step.then,
+            style: { stroke: '#4ade80' },
+            label: 'then',
+          });
+        }
+        if (step.else && step.else !== 'skip') {
+          edges.push({
+            id: `e-${nodeId}-else-${step.else}`,
+            source: nodeId,
+            sourceHandle: 'else',
+            target: step.else,
+            style: { stroke: '#f87171', strokeDasharray: '5,5' },
+            label: 'else',
+          });
+        }
+        // Don't advance currentPrev — condition branches are non-linear
+        // Next sequential step will connect from wherever the branches converge
+        currentPrev = nodeId;
+      } else if (step.type === 'for_each' && step.steps?.length) {
         const lastChild = processSteps(step.steps, nodeId);
         currentPrev = lastChild || nodeId;
       } else if (step.type === 'parallel' && step.steps?.length) {
@@ -141,7 +167,14 @@ export function flowToDefinition(nodes, edges) {
   const children = {};
   edges.forEach((e) => {
     if (!children[e.source]) children[e.source] = [];
-    children[e.source].push(e.target);
+    children[e.source].push(e);
+  });
+
+  // Build simple child ID map for non-condition lookups
+  const childIds = {};
+  edges.forEach((e) => {
+    if (!childIds[e.source]) childIds[e.source] = [];
+    childIds[e.source].push(e.target);
   });
 
   const visited = new Set();
@@ -159,23 +192,39 @@ export function flowToDefinition(nodes, edges) {
       if (!node || node.id.startsWith('merge-')) break;
       if (node.type === 'triggerNode') {
         // Skip trigger, follow its child
-        const nextIds = children[currentId] || [];
-        currentId = nextIds[0] || null;
+        const nextList = childIds[currentId] || [];
+        currentId = nextList[0] || null;
         continue;
       }
 
       const step = { ...(node.data?.step || {}), id: node.id };
+
+      // For conditions: serialize then/else from edge handles
+      if (step.type === 'condition') {
+        const outEdges = children[currentId] || [];
+        outEdges.forEach((edge) => {
+          if (edge.sourceHandle === 'then') {
+            step.then = edge.target;
+          } else if (edge.sourceHandle === 'else') {
+            step.else = edge.target;
+          }
+        });
+        steps.push(step);
+        // Condition branches are non-linear — don't follow chain from here
+        // The then/else targets are referenced by ID, not nested
+        currentId = null;
+        break;
+      }
 
       // For for_each/parallel: children are sub-steps, not sequential successors
       if (step.type === 'for_each') {
         step.steps = walkChain(currentId + '-child-start');
         // If no special child-start, use direct children as sub-steps
         if (step.steps.length === 0) {
-          const subIds = children[currentId] || [];
-          // For for_each created by definitionToFlow, children ARE the sub-steps in sequence
-          visited.delete(currentId); // allow revisit for sub-step collection
+          const subNodeIds = childIds[currentId] || [];
+          visited.delete(currentId);
           const subSteps = [];
-          subIds.forEach((subId) => {
+          subNodeIds.forEach((subId) => {
             if (!visited.has(subId)) {
               const chain = walkChain(subId);
               subSteps.push(...chain);
@@ -184,8 +233,8 @@ export function flowToDefinition(nodes, edges) {
           step.steps = subSteps;
         }
       } else if (step.type === 'parallel') {
-        const subIds = children[currentId] || [];
-        step.steps = subIds
+        const subNodeIds = childIds[currentId] || [];
+        step.steps = subNodeIds
           .filter((id) => !id.startsWith('merge-'))
           .map((subId) => {
             const subNode = nodes.find((n) => n.id === subId);
@@ -196,8 +245,8 @@ export function flowToDefinition(nodes, edges) {
           .filter(Boolean);
         // Find merge node to continue after
         const mergeId = `merge-${currentId}`;
-        const mergeChildren = children[mergeId] || [];
-        currentId = mergeChildren[0] || null;
+        const mergeNext = childIds[mergeId] || [];
+        currentId = mergeNext[0] || null;
         steps.push(step);
         continue;
       }
@@ -205,13 +254,13 @@ export function flowToDefinition(nodes, edges) {
       steps.push(step);
 
       // Follow the chain: next sequential node
-      const nextIds = children[currentId] || [];
+      const nextList = childIds[currentId] || [];
       // For non-container nodes, follow the first (only) child
-      currentId = nextIds.length === 1 ? nextIds[0] : null;
+      currentId = nextList.length === 1 ? nextList[0] : null;
 
-      // If multiple children and not parallel/for_each, just take first (linear)
-      if (nextIds.length > 1 && !['for_each', 'parallel', 'condition'].includes(step.type)) {
-        currentId = nextIds[0];
+      // If multiple children and not parallel/for_each/condition, just take first (linear)
+      if (nextList.length > 1 && !['for_each', 'parallel', 'condition'].includes(step.type)) {
+        currentId = nextList[0];
       }
     }
 
