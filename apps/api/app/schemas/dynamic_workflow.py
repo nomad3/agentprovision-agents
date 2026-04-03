@@ -136,3 +136,4 @@ class WorkflowStepLogInDB(BaseModel):
 
 class WorkflowRunRequest(BaseModel):
     input_data: Optional[Dict[str, Any]] = None
+    dry_run: Optional[bool] = False

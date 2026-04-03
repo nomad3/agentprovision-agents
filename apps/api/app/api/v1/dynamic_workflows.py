@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.api import deps
 from app.core.config import settings
 from app.models.dynamic_workflow import DynamicWorkflow, WorkflowRun, WorkflowStepLog
+from app.services.integration_status import check_workflow_integrations
 from app.schemas.dynamic_workflow import (
     DynamicWorkflowCreate,
     DynamicWorkflowInDB,
@@ -127,20 +128,31 @@ def delete_workflow_internal(
     db.commit()
 
 
-@router.post("/internal/{workflow_id}/run", response_model=WorkflowRunInDB)
+@router.post("/internal/{workflow_id}/run")
 async def run_workflow_internal(
     workflow_id: uuid.UUID,
     payload: WorkflowRunRequest = WorkflowRunRequest(),
     db: Session = Depends(deps.get_db),
     tenant_id: uuid.UUID = Depends(verify_internal_key),
 ):
-    """Trigger a manual workflow run via Temporal (internal, no JWT required)."""
+    """Trigger a manual workflow run via Temporal (internal, no JWT required).
+
+    If payload.dry_run is True, validates the workflow definition and returns
+    a plan without executing anything.
+    """
     wf = db.query(DynamicWorkflow).filter(
         DynamicWorkflow.id == workflow_id,
         DynamicWorkflow.tenant_id == tenant_id,
     ).first()
     if not wf:
         raise HTTPException(404, "Workflow not found")
+
+    # ── Dry-run: validate only, no execution ──
+    if payload.dry_run:
+        from app.services.dynamic_workflows import validate_workflow_definition
+
+        result = validate_workflow_definition(wf.definition, payload.input_data)
+        return {"dry_run": True, "workflow_id": str(wf.id), **result}
 
     run = WorkflowRun(
         tenant_id=tenant_id,
@@ -198,6 +210,16 @@ def activate_workflow_internal(
     ).first()
     if not wf:
         raise HTTPException(404, "Workflow not found")
+
+    # Gate: check that all required integrations are connected
+    missing = check_workflow_integrations(db, tenant_id, wf.definition)
+    if missing:
+        names = ", ".join(m["name"] for m in missing)
+        raise HTTPException(
+            400,
+            detail=f"Cannot activate workflow: the following integrations must be connected first: {names}",
+        )
+
     wf.status = "active"
     wf.updated_at = datetime.utcnow()
     db.commit()
@@ -416,6 +438,16 @@ def activate_workflow(
     ).first()
     if not wf:
         raise HTTPException(404, "Workflow not found")
+
+    # Gate: check that all required integrations are connected
+    missing = check_workflow_integrations(db, current_user.tenant_id, wf.definition)
+    if missing:
+        names = ", ".join(m["name"] for m in missing)
+        raise HTTPException(
+            400,
+            detail=f"Cannot activate workflow: the following integrations must be connected first: {names}",
+        )
+
     wf.status = "active"
     wf.updated_at = datetime.utcnow()
     db.commit()
@@ -443,20 +475,31 @@ def pause_workflow(
 
 # ── Execution ─────────────────────────────────────────────────────
 
-@router.post("/{workflow_id}/run", response_model=WorkflowRunInDB)
+@router.post("/{workflow_id}/run")
 async def run_workflow(
     workflow_id: uuid.UUID,
     payload: WorkflowRunRequest = WorkflowRunRequest(),
     db: Session = Depends(deps.get_db),
     current_user=Depends(deps.get_current_active_user),
 ):
-    """Trigger a manual workflow run via Temporal."""
+    """Trigger a manual workflow run via Temporal.
+
+    If payload.dry_run is True, validates the workflow definition and returns
+    a plan without executing anything.
+    """
     wf = db.query(DynamicWorkflow).filter(
         DynamicWorkflow.id == workflow_id,
         DynamicWorkflow.tenant_id == current_user.tenant_id,
     ).first()
     if not wf:
         raise HTTPException(404, "Workflow not found")
+
+    # ── Dry-run: validate only, no execution ──
+    if payload.dry_run:
+        from app.services.dynamic_workflows import validate_workflow_definition
+
+        result = validate_workflow_definition(wf.definition, payload.input_data)
+        return {"dry_run": True, "workflow_id": str(wf.id), **result}
 
     # Create run record
     run = WorkflowRun(
