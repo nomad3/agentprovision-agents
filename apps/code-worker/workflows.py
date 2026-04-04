@@ -1436,97 +1436,114 @@ def _prepare_gemini_home(session_dir: str, auth_payload: dict, mcp_config_json: 
 
 OPENCODE_OLLAMA_URL = os.environ.get("OPENCODE_OLLAMA_URL", "http://host.docker.internal:11434/v1")
 OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "gemma4")
+OPENCODE_PORT = int(os.environ.get("OPENCODE_PORT", "8200"))
+
+# Per-tenant OpenCode session cache (tenant_id → session_id)
+_opencode_sessions: dict[str, str] = {}
 
 
 def _execute_opencode_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliResult:
-    """Execute a chat turn via OpenCode CLI with local Gemma 4 model."""
+    """Execute a chat turn via the persistent OpenCode server (local Gemma 4).
 
-    # Write opencode.json config for this session
-    opencode_config = {
-        "$schema": "https://opencode.ai/config.json",
-        "provider": {
-            "ollama": {
-                "npm": "@ai-sdk/openai-compatible",
-                "name": "Ollama",
-                "options": {
-                    "baseURL": OPENCODE_OLLAMA_URL,
-                },
-                "models": {
-                    OPENCODE_MODEL: {"name": OPENCODE_MODEL},
-                },
-            },
-        },
-        "model": f"ollama/{OPENCODE_MODEL}",
-    }
+    Uses the in-process OpenCode server started by entrypoint.sh on OPENCODE_PORT.
+    Creates one session per tenant for context continuity. Falls back to `opencode run`
+    if the server is unreachable.
+    """
+    import httpx
 
-    # Add MCP servers from the task config
-    if task_input.mcp_config:
-        try:
-            mcp_data = json.loads(task_input.mcp_config)
-            mcp_servers = {}
-            for name, server_cfg in mcp_data.get("mcpServers", {}).items():
-                url = server_cfg.get("url", "")
-                headers = server_cfg.get("headers", {})
-                if url:
-                    mcp_servers[name] = {
-                        "type": "remote",
-                        "url": url,
-                        "headers": headers,
-                    }
-            if mcp_servers:
-                opencode_config["mcp"] = mcp_servers
-        except json.JSONDecodeError:
-            pass
+    base_url = f"http://127.0.0.1:{OPENCODE_PORT}"
 
-    config_path = os.path.join(session_dir, "opencode.json")
-    with open(config_path, "w") as f:
-        json.dump(opencode_config, f, indent=2)
+    # Get or create a session for this tenant
+    tenant = task_input.tenant_id
+    session_id = _opencode_sessions.get(tenant)
 
-    # Write AGENTS.md with Luna persona + tenant context
-    agents_md = session_dir + "/AGENTS.md"
-    with open(agents_md, "w") as f:
-        f.write("# Luna Assistant\n\n")
+    try:
+        if not session_id:
+            resp = httpx.post(f"{base_url}/session", timeout=10)
+            resp.raise_for_status()
+            session_id = resp.json()["id"]
+            _opencode_sessions[tenant] = session_id
+
+        # Prepend tenant context to the message so Gemma knows the tenant_id
+        prompt = task_input.message
         if task_input.instruction_md_content:
-            f.write(task_input.instruction_md_content[:10000])
-        f.write("\n\n## Required: Always pass tenant_id in ALL tool calls\n")
-        f.write(f"tenant_id: \"{task_input.tenant_id}\"\n")
+            # First message in session: include persona + tenant context
+            context_prefix = (
+                f"[Context: tenant_id={tenant}. "
+                f"Always pass tenant_id in ALL MCP tool calls.]\n\n"
+            )
+            prompt = context_prefix + prompt
 
-    prompt = task_input.message
-    cmd = ["opencode", "run", prompt]
+        # Send message to OpenCode server
+        resp = httpx.post(
+            f"{base_url}/session/{session_id}/message",
+            json={"parts": [{"type": "text", "text": prompt}]},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-    env = os.environ.copy()
-    env["HOME"] = session_dir
+        # Extract response text from parts
+        info = data.get("info", {})
+        parts = data.get("parts", [])
+        texts = []
+        for p in parts:
+            ptype = p.get("type", "")
+            if ptype == "text":
+                texts.append(p.get("text", ""))
+        response_text = "\n".join(texts).strip()
 
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=300,
-        env=env,
-        cwd=session_dir,
-    )
-
-    raw = result.stdout.strip()
-    if result.returncode != 0 and not raw:
-        err = (result.stderr or "")[:1000]
+        tokens = info.get("tokens", {})
         return ChatCliResult(
-            response_text="",
-            success=False,
-            error=f"OpenCode exit {result.returncode}: {err}",
+            response_text=response_text or "(no response from Gemma 4)",
+            success=bool(response_text),
+            metadata={
+                "platform": "opencode",
+                "model": OPENCODE_MODEL,
+                "cost_usd": 0,
+                "input_tokens": tokens.get("input", 0),
+                "output_tokens": tokens.get("output", 0),
+            },
         )
 
-    # OpenCode outputs the response text directly (not JSON)
-    return ChatCliResult(
-        response_text=raw or "(no response)",
-        success=bool(raw),
-        metadata={
-            "platform": "opencode",
-            "model": OPENCODE_MODEL,
-            "cost_usd": 0,
-            "input_tokens": 0,
-            "output_tokens": 0,
-        },
-    )
+    except Exception as e:
+        # Server not ready or failed — fall back to opencode run (slow but works)
+        logger.warning("OpenCode server call failed (%s), falling back to opencode run", e)
+        _opencode_sessions.pop(tenant, None)  # Clear stale session
+
+        cmd = ["opencode", "run", task_input.message]
+        env = os.environ.copy()
+        env["HOME"] = session_dir
+
+        # Write config for CLI fallback
+        config_path = os.path.join(session_dir, "opencode.json")
+        if not os.path.exists(config_path):
+            opencode_config = {
+                "$schema": "https://opencode.ai/config.json",
+                "provider": {
+                    "ollama": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "Ollama",
+                        "options": {"baseURL": OPENCODE_OLLAMA_URL},
+                        "models": {OPENCODE_MODEL: {"name": OPENCODE_MODEL}},
+                    },
+                },
+                "model": f"ollama/{OPENCODE_MODEL}",
+            }
+            with open(config_path, "w") as f:
+                json.dump(opencode_config, f, indent=2)
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300,
+            env=env, cwd=session_dir,
+        )
+        raw = result.stdout.strip()
+        return ChatCliResult(
+            response_text=raw or "(no response)",
+            success=bool(raw),
+            error=None if raw else f"OpenCode run exit {result.returncode}",
+            metadata={"platform": "opencode", "model": OPENCODE_MODEL, "cost_usd": 0},
+        )
 
 
 @workflow.defn

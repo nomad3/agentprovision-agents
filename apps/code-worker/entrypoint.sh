@@ -30,6 +30,39 @@ git config user.name "ServiceTsunami Code Worker"
 # Configure gh CLI
 echo -n "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
 
+# Start OpenCode server in background (local Gemma 4 via host Ollama)
+# Keeps warm so _execute_opencode_chat() gets ~3s responses instead of ~90s cold starts
+OPENCODE_PORT="${OPENCODE_PORT:-8200}"
+echo "[code-worker] Starting OpenCode server on port ${OPENCODE_PORT}..."
+
+# Write opencode config for the server
+mkdir -p /home/codeworker/.config/opencode
+cat > /home/codeworker/opencode.json <<OCEOF
+{
+  "\$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama",
+      "options": {
+        "baseURL": "${OPENCODE_OLLAMA_URL:-http://host.docker.internal:11434/v1}"
+      },
+      "models": {
+        "${OPENCODE_MODEL:-gemma4}": {
+          "name": "${OPENCODE_MODEL:-gemma4}"
+        }
+      }
+    }
+  },
+  "model": "ollama/${OPENCODE_MODEL:-gemma4}"
+}
+OCEOF
+
+cd /home/codeworker
+opencode serve -p "${OPENCODE_PORT}" 2>/tmp/opencode-server.log &
+OPENCODE_PID=$!
+echo "[code-worker] OpenCode server PID: ${OPENCODE_PID}"
+
 echo "[code-worker] Starting Temporal worker..."
 cd /app
 exec python -m worker
