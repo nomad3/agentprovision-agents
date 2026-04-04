@@ -1,6 +1,7 @@
 import React from 'react';
 import { Badge } from 'react-bootstrap';
 import { FiX, FiClock, FiDollarSign, FiCpu, FiRefreshCw } from 'react-icons/fi';
+import { useTranslation } from 'react-i18next';
 
 const STATUS_COLORS = {
   pending: 'secondary', running: 'primary', completed: 'success',
@@ -8,6 +9,8 @@ const STATUS_COLORS = {
 };
 
 export default function RunStepDetail({ step, onClose }) {
+  const { t } = useTranslation('workflows');
+
   if (!step) return null;
 
   return (
@@ -70,7 +73,7 @@ export default function RunStepDetail({ step, onClose }) {
 
       {step.error && (
         <div>
-          <h6 className="error-title">Error</h6>
+          <h6 className="error-title">{t('runs.error')}</h6>
           <pre className="error">
             {step.error}
           </pre>

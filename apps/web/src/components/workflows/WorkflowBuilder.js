@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Button, Badge, Spinner } from 'react-bootstrap';
 import { useNodesState, useEdgesState } from 'reactflow';
 import { FiSave, FiPlay, FiPower, FiCode, FiArrowLeft } from 'react-icons/fi';
+import { useTranslation } from 'react-i18next';
 import './WorkflowBuilder.css';
 
 import WorkflowCanvas from './WorkflowCanvas';
@@ -21,6 +22,7 @@ const STEP_TYPE_MAP = {
 export default function WorkflowBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation('workflows');
 
   const [workflow, setWorkflow] = useState(null);
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -32,7 +34,7 @@ export default function WorkflowBuilder() {
   const [saving, setSaving] = useState(false);
   const [integrationStatus, setIntegrationStatus] = useState({});
   const [toolMapping, setToolMapping] = useState({});
-  const [workflowName, setWorkflowName] = useState('Untitled Workflow');
+  const [workflowName, setWorkflowName] = useState(t('builder.untitled'));
 
   useEffect(() => {
     async function load() {
@@ -47,7 +49,7 @@ export default function WorkflowBuilder() {
         if (id) {
           const wf = await dynamicWorkflowService.get(id);
           setWorkflow(wf);
-          setWorkflowName(wf.name || 'Untitled Workflow');
+          setWorkflowName(wf.name || t('builder.untitled'));
           const { nodes: n, edges: e } = definitionToFlow(wf.definition, wf.trigger_config);
           setNodes(n);
           setEdges(e);
@@ -190,7 +192,7 @@ export default function WorkflowBuilder() {
       <div className="builder-toolbar">
         <Button variant="link" size="sm" className="btn-back"
           onClick={() => navigate('/workflows')}>
-          <FiArrowLeft /> Back
+          <FiArrowLeft /> {t('builder.back')}
         </Button>
         <input
           className="workflow-name-input"
@@ -202,23 +204,23 @@ export default function WorkflowBuilder() {
         </Badge>
         {pill.total > 0 && (
           <Badge bg={pill.connected === pill.total ? 'success' : 'warning'}>
-            Integrations: {pill.connected}/{pill.total}
+            {t('builder.integrations')}: {pill.connected}/{pill.total}
           </Badge>
         )}
 
         <div className="builder-toolbar-actions">
           <Button variant="outline-secondary" size="sm" onClick={() => setShowJson(!showJson)}>
-            <FiCode /> JSON
+            <FiCode /> {t('builder.json')}
           </Button>
           <Button variant="outline-info" size="sm" onClick={handleTest} disabled={!id}>
-            <FiPlay /> Test
+            <FiPlay /> {t('builder.test')}
           </Button>
           <Button variant="primary" size="sm" onClick={handleSave} disabled={saving}>
-            {saving ? <Spinner size="sm" /> : <><FiSave /> Save</>}
+            {saving ? <Spinner size="sm" /> : <><FiSave /> {t('builder.save')}</>}
           </Button>
           <Button variant="success" size="sm" onClick={handleActivate}
             disabled={!id || workflow?.status === 'active' || pill.connected < pill.total}>
-            <FiPower /> Activate
+            <FiPower /> {t('builder.activate')}
           </Button>
         </div>
       </div>

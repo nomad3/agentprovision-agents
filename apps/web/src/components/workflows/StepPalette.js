@@ -1,5 +1,6 @@
 import React from 'react';
 import { Accordion } from 'react-bootstrap';
+import { useTranslation } from 'react-i18next';
 import {
   FiClock, FiTool, FiCpu, FiGitBranch, FiRepeat,
   FiPause, FiCheckSquare, FiLayers, FiGlobe, FiZap, FiPlay,
@@ -8,7 +9,7 @@ import {
 const PALETTE_CATEGORIES = [
   {
     key: 'triggers',
-    label: 'Triggers',
+    labelKey: 'builder.palette.triggers',
     items: [
       { type: 'trigger', subtype: 'cron', label: 'Scheduled (Cron)', icon: FiClock },
       { type: 'trigger', subtype: 'webhook', label: 'Webhook', icon: FiGlobe },
@@ -18,12 +19,12 @@ const PALETTE_CATEGORIES = [
   },
   {
     key: 'tools',
-    label: 'MCP Tools',
+    labelKey: 'builder.palette.tools',
     items: [],
   },
   {
     key: 'agents',
-    label: 'Agents',
+    labelKey: 'builder.palette.agents',
     items: [
       { type: 'agent', subtype: 'luna', label: 'Luna', icon: FiCpu },
       { type: 'agent', subtype: 'code', label: 'Code Agent', icon: FiCpu },
@@ -32,7 +33,7 @@ const PALETTE_CATEGORIES = [
   },
   {
     key: 'logic',
-    label: 'Logic',
+    labelKey: 'builder.palette.logic',
     items: [
       { type: 'condition', label: 'Condition (If/Else)', icon: FiGitBranch },
       { type: 'for_each', label: 'For Each Loop', icon: FiRepeat },
@@ -41,7 +42,7 @@ const PALETTE_CATEGORIES = [
   },
   {
     key: 'flow',
-    label: 'Flow Control',
+    labelKey: 'builder.palette.flow',
     items: [
       { type: 'wait', label: 'Wait / Delay', icon: FiPause },
       { type: 'human_approval', label: 'Human Approval', icon: FiCheckSquare },
@@ -50,6 +51,8 @@ const PALETTE_CATEGORIES = [
 ];
 
 export default function StepPalette({ mcpTools = [] }) {
+  const { t } = useTranslation('workflows');
+
   const categories = PALETTE_CATEGORIES.map((cat) => {
     if (cat.key === 'tools' && mcpTools.length > 0) {
       return {
@@ -72,11 +75,11 @@ export default function StepPalette({ mcpTools = [] }) {
 
   return (
     <div className="step-palette">
-      <h6 className="step-palette-title">Steps</h6>
+      <h6 className="step-palette-title">{t('builder.palette.title')}</h6>
       <Accordion defaultActiveKey={['triggers', 'logic']} alwaysOpen>
         {categories.map((cat) => (
           <Accordion.Item key={cat.key} eventKey={cat.key}>
-            <Accordion.Header>{cat.label}</Accordion.Header>
+            <Accordion.Header>{t(cat.labelKey)}</Accordion.Header>
             <Accordion.Body>
               {cat.items.map((item, i) => {
                 const Icon = item.icon;
@@ -92,7 +95,7 @@ export default function StepPalette({ mcpTools = [] }) {
                 );
               })}
               {cat.items.length === 0 && (
-                <span className="palette-empty">Loading tools...</span>
+                <span className="palette-empty">{t('builder.palette.loadingTools')}</span>
               )}
             </Accordion.Body>
           </Accordion.Item>

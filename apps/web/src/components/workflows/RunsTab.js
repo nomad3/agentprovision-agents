@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Badge, Button, Form, Spinner } from 'react-bootstrap';
 import { FiRefreshCw, FiPlay } from 'react-icons/fi';
+import { useTranslation } from 'react-i18next';
 import dynamicWorkflowService from '../../services/dynamicWorkflowService';
 
 const STATUS_COLORS = {
@@ -13,6 +14,7 @@ export default function RunsTab({ workflows = [] }) {
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedRunId, setSelectedRunId] = useState(null);
   const [runDetail, setRunDetail] = useState(null);
+  const { t } = useTranslation('workflows');
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
@@ -36,7 +38,6 @@ export default function RunsTab({ workflows = [] }) {
     setSelectedRunId(runId);
     try {
       const resp = await dynamicWorkflowService.getRun(runId);
-      // API returns {run: {...}, steps: [...]}
       setRunDetail({ ...resp.run, step_logs: resp.steps });
     } catch (err) {
       console.error('Failed to load run detail:', err);
@@ -52,23 +53,29 @@ export default function RunsTab({ workflows = [] }) {
       <div>
         <Button variant="link" size="sm" onClick={() => { setSelectedRunId(null); setRunDetail(null); }}
           className="runs-back-btn">
-          Back to Runs
+          {t('runs.backToRuns')}
         </Button>
         <div className="runs-detail-panel">
           <div className="d-flex align-items-center gap-2 mb-3">
             <Badge bg={STATUS_COLORS[runDetail.status]}>{runDetail.status}</Badge>
             <span className="stat-label">
-              {runDetail.duration_ms ? `${(runDetail.duration_ms / 1000).toFixed(1)}s` : 'Running...'}
+              {runDetail.duration_ms ? `${(runDetail.duration_ms / 1000).toFixed(1)}s` : `${t('runs.running')}...`}
             </span>
             {runDetail.total_cost_usd > 0 && (
               <span className="stat-label">${runDetail.total_cost_usd.toFixed(4)}</span>
             )}
           </div>
 
-          <h6 className="step-logs-title">Step Logs</h6>
+          <h6 className="step-logs-title">{t('runs.stepLogs')}</h6>
           <Table size="sm" className="runs-table">
             <thead>
-              <tr><th>Step</th><th>Type</th><th>Status</th><th>Duration</th><th>Tokens</th></tr>
+              <tr>
+                <th>{t('runs.table.step')}</th>
+                <th>{t('runs.table.type')}</th>
+                <th>{t('runs.table.status')}</th>
+                <th>{t('runs.table.duration')}</th>
+                <th>{t('runs.table.tokens')}</th>
+              </tr>
             </thead>
             <tbody>
               {(runDetail.step_logs || []).map((log, i) => (
@@ -85,7 +92,7 @@ export default function RunsTab({ workflows = [] }) {
 
           {runDetail.error && (
             <div style={{ marginTop: 12 }}>
-              <h6 className="error-title">Error</h6>
+              <h6 className="error-title">{t('runs.error')}</h6>
               <pre>{runDetail.error}</pre>
             </div>
           )}
@@ -99,13 +106,13 @@ export default function RunsTab({ workflows = [] }) {
       <div className="d-flex gap-2 mb-3">
         <Form.Select size="sm" style={{ width: 150 }} value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}>
-          <option value="all">All Status</option>
-          <option value="running">Running</option>
-          <option value="completed">Completed</option>
-          <option value="failed">Failed</option>
+          <option value="all">{t('runs.allStatus')}</option>
+          <option value="running">{t('runs.running')}</option>
+          <option value="completed">{t('runs.completed')}</option>
+          <option value="failed">{t('runs.failed')}</option>
         </Form.Select>
         <Button variant="outline-secondary" size="sm" onClick={loadRuns}>
-          <FiRefreshCw size={12} /> Refresh
+          <FiRefreshCw size={12} /> {t('runs.refresh')}
         </Button>
       </div>
 
@@ -113,14 +120,19 @@ export default function RunsTab({ workflows = [] }) {
         <div className="text-center p-4"><Spinner /></div>
       ) : runs.length === 0 ? (
         <div className="text-center p-5 runs-empty">
-          <p>No workflow runs yet. Activate a workflow or trigger a manual run.</p>
+          <p>{t('runs.noRuns')}</p>
         </div>
       ) : (
         <Table hover size="sm" className="runs-table">
           <thead>
             <tr>
-              <th>Workflow</th><th>Status</th><th>Trigger</th>
-              <th>Duration</th><th>Cost</th><th>Started</th><th></th>
+              <th>{t('runs.table.workflow')}</th>
+              <th>{t('runs.table.status')}</th>
+              <th>{t('runs.table.trigger')}</th>
+              <th>{t('runs.table.duration')}</th>
+              <th>{t('runs.table.cost')}</th>
+              <th>{t('runs.table.started')}</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>

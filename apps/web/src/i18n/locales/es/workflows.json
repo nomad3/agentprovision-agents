@@ -1,9 +1,89 @@
 {
   "title": "Workflows",
   "subtitle": "Arquitectura de workflows y auditoría de ejecución",
+  "builder": {
+    "back": "Volver",
+    "save": "Guardar",
+    "test": "Probar",
+    "activate": "Activar",
+    "json": "JSON",
+    "untitled": "Workflow sin título",
+    "integrations": "Integraciones",
+    "palette": {
+      "title": "Pasos",
+      "triggers": "Disparadores",
+      "tools": "Herramientas MCP",
+      "agents": "Agentes",
+      "logic": "Lógica",
+      "flow": "Control de Flujo",
+      "loadingTools": "Cargando herramientas..."
+    },
+    "inspector": {
+      "triggerConfig": "Configuración del Disparador",
+      "stepConfig": "Paso",
+      "type": "Tipo",
+      "stepId": "ID del Paso",
+      "tool": "Herramienta",
+      "params": "Parámetros (JSON)",
+      "agent": "Agente",
+      "prompt": "Prompt",
+      "expression": "Expresión",
+      "collection": "Colección",
+      "itemVariable": "Variable de Elemento",
+      "duration": "Duración",
+      "outputVariable": "Variable de Salida",
+      "requires": "Requiere",
+      "connected": "Conectado",
+      "notConnected": "No conectado",
+      "cronExpression": "Expresión Cron",
+      "intervalMinutes": "Intervalo (minutos)",
+      "eventType": "Tipo de Evento"
+    },
+    "testConsole": {
+      "title": "Consola de Pruebas",
+      "running": "Ejecutando validación...",
+      "valid": "Válido",
+      "errorsFound": "Errores Encontrados",
+      "executionPlan": "Plan de Ejecución",
+      "steps": "{{count}} pasos",
+      "requiredIntegrations": "Integraciones Requeridas"
+    }
+  },
   "tabs": {
+    "workflows": "Mis Workflows",
+    "templates": "Plantillas",
+    "runs": "Ejecuciones",
     "designs": "Diseños",
     "executions": "Ejecuciones"
+  },
+  "templates": {
+    "noTemplates": "No hay plantillas disponibles",
+    "noTemplatesDesc": "Las plantillas aparecerán aquí cuando se agreguen workflows nativos, comunitarios y compartidos.",
+    "install": "Instalar",
+    "preview": "Vista Previa",
+    "steps": "{{count}} pasos"
+  },
+  "runs": {
+    "allStatus": "Todos los Estados",
+    "running": "En Ejecución",
+    "completed": "Completado",
+    "failed": "Fallido",
+    "refresh": "Actualizar",
+    "noRuns": "No hay ejecuciones de workflows aún. Activa un workflow o lanza una ejecución manual.",
+    "backToRuns": "Volver a Ejecuciones",
+    "stepLogs": "Registros de Pasos",
+    "error": "Error",
+    "table": {
+      "workflow": "Workflow",
+      "status": "Estado",
+      "trigger": "Disparador",
+      "duration": "Duración",
+      "cost": "Costo",
+      "started": "Inicio",
+      "step": "Paso",
+      "type": "Tipo",
+      "tokens": "Tokens"
+    }
   },
   "designs": {
     "description": "Estructura visual de todos los workflows de Temporal. Haz clic en un workflow para expandir su diagrama paso a paso.",

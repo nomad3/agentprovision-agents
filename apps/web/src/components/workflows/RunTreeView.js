@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Badge, ProgressBar } from 'react-bootstrap';
 import { FiArrowLeft, FiClock, FiDollarSign } from 'react-icons/fi';
+import { useTranslation } from 'react-i18next';
 import { useNodesState, useEdgesState } from 'reactflow';
 
 import WorkflowCanvas from './WorkflowCanvas';
@@ -22,6 +23,7 @@ const STATUS_GLOW = {
 };
 
 export default function RunTreeView({ run, onBack }) {
+  const { t } = useTranslation('workflows');
   const [runDetail, setRunDetail] = useState(run);
   const [nodes, setNodes] = useNodesState([]);
   const [edges, setEdges] = useEdgesState([]);
@@ -110,7 +112,7 @@ export default function RunTreeView({ run, onBack }) {
       {/* Summary bar */}
       <div className="run-summary-bar">
         <Button variant="link" size="sm" onClick={onBack} className="btn-back">
-          <FiArrowLeft /> Back
+          <FiArrowLeft /> {t('builder.back')}
         </Button>
         <Badge bg={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'danger' : 'primary'}>
           {runDetail?.status || run.status}

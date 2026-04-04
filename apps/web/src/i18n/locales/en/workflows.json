@@ -1,9 +1,89 @@
 {
   "title": "Workflows",
   "subtitle": "Workflow architecture and execution audit",
+  "builder": {
+    "back": "Back",
+    "save": "Save",
+    "test": "Test",
+    "activate": "Activate",
+    "json": "JSON",
+    "untitled": "Untitled Workflow",
+    "integrations": "Integrations",
+    "palette": {
+      "title": "Steps",
+      "triggers": "Triggers",
+      "tools": "MCP Tools",
+      "agents": "Agents",
+      "logic": "Logic",
+      "flow": "Flow Control",
+      "loadingTools": "Loading tools..."
+    },
+    "inspector": {
+      "triggerConfig": "Trigger Configuration",
+      "stepConfig": "Step",
+      "type": "Type",
+      "stepId": "Step ID",
+      "tool": "Tool",
+      "params": "Parameters (JSON)",
+      "agent": "Agent",
+      "prompt": "Prompt",
+      "expression": "Expression",
+      "collection": "Collection",
+      "itemVariable": "Item Variable",
+      "duration": "Duration",
+      "outputVariable": "Output Variable",
+      "requires": "Requires",
+      "connected": "Connected",
+      "notConnected": "Not connected",
+      "cronExpression": "Cron Expression",
+      "intervalMinutes": "Interval (minutes)",
+      "eventType": "Event Type"
+    },
+    "testConsole": {
+      "title": "Test Console",
+      "running": "Running validation...",
+      "valid": "Valid",
+      "errorsFound": "Errors Found",
+      "executionPlan": "Execution Plan",
+      "steps": "{{count}} steps",
+      "requiredIntegrations": "Required Integrations"
+    }
+  },
   "tabs": {
+    "workflows": "My Workflows",
+    "templates": "Templates",
+    "runs": "Runs",
     "designs": "Designs",
     "executions": "Executions"
+  },
+  "templates": {
+    "noTemplates": "No templates available",
+    "noTemplatesDesc": "Templates will appear here as native, community, and shared workflows are added.",
+    "install": "Install",
+    "preview": "Preview",
+    "steps": "{{count}} steps"
+  },
+  "runs": {
+    "allStatus": "All Status",
+    "running": "Running",
+    "completed": "Completed",
+    "failed": "Failed",
+    "refresh": "Refresh",
+    "noRuns": "No workflow runs yet. Activate a workflow or trigger a manual run.",
+    "backToRuns": "Back to Runs",
+    "stepLogs": "Step Logs",
+    "error": "Error",
+    "table": {
+      "workflow": "Workflow",
+      "status": "Status",
+      "trigger": "Trigger",
+      "duration": "Duration",
+      "cost": "Cost",
+      "started": "Started",
+      "step": "Step",
+      "type": "Type",
+      "tokens": "Tokens"
+    }
   },
   "designs": {
     "description": "Visual structure of all Temporal workflows. Click a workflow to expand its step-by-step flowchart.",

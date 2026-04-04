@@ -1,17 +1,20 @@
 import React from 'react';
 import { Badge, Alert, ListGroup, Spinner } from 'react-bootstrap';
 import { FiX, FiCheckCircle, FiAlertCircle } from 'react-icons/fi';
+import { useTranslation } from 'react-i18next';
 
 export default function TestConsole({ results, onClose }) {
+  const { t } = useTranslation('workflows');
+
   if (!results) {
     return (
       <div className="test-console">
         <div className="test-console-header">
-          <span style={{ fontWeight: 600 }}>Test Console</span>
+          <span style={{ fontWeight: 600 }}>{t('builder.testConsole.title')}</span>
           <FiX onClick={onClose} style={{ cursor: 'pointer' }} />
         </div>
         <div className="test-console-loading">
-          <Spinner size="sm" /> Running validation...
+          <Spinner size="sm" /> {t('builder.testConsole.running')}
         </div>
       </div>
     );
@@ -22,9 +25,9 @@ export default function TestConsole({ results, onClose }) {
   return (
     <div className="test-console">
       <div className="test-console-header">
-        <span style={{ fontWeight: 600 }}>Test Console</span>
+        <span style={{ fontWeight: 600 }}>{t('builder.testConsole.title')}</span>
         <Badge bg={hasErrors ? 'danger' : 'success'}>
-          {hasErrors ? 'Errors Found' : 'Valid'}
+          {hasErrors ? t('builder.testConsole.errorsFound') : t('builder.testConsole.valid')}
         </Badge>
         <FiX onClick={onClose} style={{ cursor: 'pointer', marginLeft: 'auto' }} />
       </div>
@@ -38,7 +41,7 @@ export default function TestConsole({ results, onClose }) {
         )}
 
         <h6 className="test-console-plan-title">
-          Execution Plan ({results.step_count || 0} steps)
+          {t('builder.testConsole.executionPlan')} ({t('builder.testConsole.steps', { count: results.step_count || 0 })})
         </h6>
         <ListGroup variant="flush">
           {(results.steps_planned || []).map((step, i) => (
@@ -52,7 +55,7 @@ export default function TestConsole({ results, onClose }) {
 
         {results.integrations_required?.length > 0 && (
           <div className="test-console-integrations">
-            <h6>Required Integrations</h6>
+            <h6>{t('builder.testConsole.requiredIntegrations')}</h6>
             {results.integrations_required.map((int, i) => (
               <Badge key={i} bg="outline-secondary" className="badge">
                 {int}
