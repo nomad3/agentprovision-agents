@@ -299,6 +299,10 @@ def _generate_agentic_response(
         },
     )
 
+    # Extract tier metadata from router trace for downstream RL logging
+    agent_tier = context.get("agent_tier", "full") if context else "full"
+    tool_groups = context.get("tool_groups", []) if context else []
+
     # Save CLI session ID and recalled entity names for cross-turn continuity
     if context and isinstance(context, dict):
         _mem_dirty = False
@@ -402,6 +406,8 @@ def _generate_agentic_response(
             rollout_experiment_id=meta.get("rollout_experiment_id"),
             rollout_arm=meta.get("rollout_arm"),
             routing_trajectory_id=meta.get("routing_trajectory_id"),
+            agent_tier=agent_tier,
+            tool_groups=tool_groups,
         )
     except Exception:
         pass  # Never block response delivery for scoring
