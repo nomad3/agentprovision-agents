@@ -59,9 +59,17 @@ cat > /home/codeworker/opencode.json <<OCEOF
 OCEOF
 
 cd /home/codeworker
-opencode serve -p "${OPENCODE_PORT}" 2>/tmp/opencode-server.log &
+# Try to start OpenCode server — non-fatal if it fails
+(opencode serve --port "${OPENCODE_PORT}" >>/tmp/opencode-server.log 2>&1) &
 OPENCODE_PID=$!
 echo "[code-worker] OpenCode server PID: ${OPENCODE_PID}"
+# Give it a moment to start
+sleep 3
+if kill -0 "${OPENCODE_PID}" 2>/dev/null; then
+    echo "[code-worker] OpenCode server started successfully"
+else
+    echo "[code-worker] WARNING: OpenCode server failed to start (will use fallback)"
+fi
 
 echo "[code-worker] Starting Temporal worker..."
 cd /app
