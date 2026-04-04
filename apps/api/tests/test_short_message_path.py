@@ -181,3 +181,59 @@ def test_expand_intents_two_languages(mock_gen):
         result = _expand_intents_with_translations()
 
     assert len(result) == len(INTENT_DEFINITIONS) * 2
+
+
+# ---------------------------------------------------------------------------
+# Task 4: E2E smoke tests
+# ---------------------------------------------------------------------------
+
+@patch("app.services.agent_router.match_intent", return_value=None)
+@patch("app.services.agent_router.generate_agent_response_sync", return_value="Bonjour!")
+@patch("app.services.agent_router.rl_experience_service.log_experience")
+@patch("app.services.agent_router.build_memory_context_with_git", return_value={
+    "relevant_entities": [{"name": "Alice", "entity_type": "person", "description": "VIP contact"}]
+})
+@patch("app.services.agent_router.safety_trust.get_agent_trust_profile", return_value=None)
+def test_short_message_includes_memory_context(
+    mock_trust, mock_memory, mock_rl, mock_gen, mock_intent
+):
+    """Memory context is formatted and injected into the local inference call."""
+    from app.services.agent_router import route_and_execute
+
+    response, metadata = route_and_execute(
+        db=_make_db_mock(),
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        message="bonjour",
+    )
+
+    assert response == "Bonjour!"
+    # generate_agent_response_sync must have received a non-empty conversation_summary containing entity name
+    call_kwargs = mock_gen.call_args
+    if call_kwargs.kwargs:
+        conversation_summary_arg = call_kwargs.kwargs.get("conversation_summary", "")
+    else:
+        conversation_summary_arg = call_kwargs.args[1] if len(call_kwargs.args) > 1 else ""
+    assert "Alice" in conversation_summary_arg
+
+
+@patch("app.services.agent_router.match_intent", return_value=None)
+@patch("app.services.agent_router.generate_agent_response_sync", return_value=None)
+@patch("app.services.agent_router.run_agent_session", return_value=("CLI fallback", {}))
+@patch("app.services.agent_router.build_memory_context_with_git", return_value={})
+@patch("app.services.agent_router.safety_trust.get_agent_trust_profile", return_value=None)
+def test_local_inference_failure_falls_through_to_cli(
+    mock_trust, mock_memory, mock_run, mock_gen_none, mock_intent
+):
+    """If local inference returns None (Ollama down), fall through to full CLI."""
+    from app.services.agent_router import route_and_execute
+
+    response, metadata = route_and_execute(
+        db=_make_db_mock(),
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        message="hi",
+    )
+
+    assert mock_run.called
+    assert response == "CLI fallback"
