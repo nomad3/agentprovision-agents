@@ -288,10 +288,10 @@ def route_and_execute(
         logger.debug("Policy rollout check failed: %s", e)
 
     # ── Platform override for light tier: use OpenCode (local Gemma 4, $0) ──
-    # This runs AFTER RL exploration/rollout so RL can still explore other platforms
-    # when in exploration mode, but the default for light tier is always opencode.
+    # Light tier ALWAYS routes to opencode regardless of RL exploration.
+    # RL explores model quality within tiers, not across tiers.
     from app.services.tool_groups import LIGHT_TIER_PLATFORM
-    if agent_tier == "light" and not _pin_to_claude and routing_source == "default":
+    if agent_tier == "light" and not _pin_to_claude:
         platform = LIGHT_TIER_PLATFORM
         logger.info("Light tier: routing to %s (Gemma 4 local)", platform)
 
