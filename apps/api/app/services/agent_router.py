@@ -406,7 +406,7 @@ def route_and_execute(
     )
 
     # Execute on the selected platform
-    if platform in ("claude_code", "gemini_cli", "codex"):
+    if platform in ("claude_code", "gemini_cli", "codex", "opencode"):
         # Presence session scoping: use chat session ID so concurrent
         # requests don't clobber each other's state.
         _presence_sid = str((db_session_memory or {}).get("chat_session_id", ""))
