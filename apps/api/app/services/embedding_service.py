@@ -58,7 +58,7 @@ INTENT_DEFINITIONS = [
 ]
 
 # In-memory intent embedding cache (populated at startup)
-_intent_cache: list = None
+_intent_cache: list | None = None
 
 _model_loading = False
 _model_load_failures = 0

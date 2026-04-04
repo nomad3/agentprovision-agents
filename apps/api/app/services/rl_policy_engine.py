@@ -250,7 +250,7 @@ def select_action(
     state_text = generate_state_text(decision_point, state)
     scored = score_candidates(db, tenant_id, decision_point, state, candidates, state_text)
 
-    exploration_rate = get_exploration_rate(db, tenant_id, decision_point)
+    exploration_rate = get_exploration_rate_with_decay(db, tenant_id, decision_point)
     is_exploration = random.random() < exploration_rate
 
     if is_exploration:

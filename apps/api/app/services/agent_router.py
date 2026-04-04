@@ -287,26 +287,38 @@ def route_and_execute(
     except Exception as e:
         logger.debug("Policy rollout check failed: %s", e)
 
-    # Build memory context early so recalled entities enrich routing RL state
+    # Build memory context with agent-scoped parameters.
+    # The tier limits and memory_domains from agent selection (above) drive
+    # how much context we load — a Light-tier booking agent gets 3 entities
+    # from its domains instead of 10 from everywhere.
     pre_built_memory_context = None
     session_entity_names = (db_session_memory or {}).get("recalled_entity_names")
+    limits = TIER_LIMITS.get(agent_tier, TIER_LIMITS["full"])
     if not recalled_entities:
         try:
             pre_built_memory_context = build_memory_context_with_git(
                 db, tenant_id, message,
                 session_entity_names=session_entity_names,
+                domains=agent_memory_domains,
+                max_entities=limits["entities"],
+                max_observations=limits["observations_per_entity"],
+                include_relations=limits["include_relations"],
+                include_episodes=limits["include_episodes"],
             )
             if pre_built_memory_context and pre_built_memory_context.get("relevant_entities"):
                 recalled_entities = pre_built_memory_context["relevant_entities"]
         except Exception:
             logger.debug("Early memory recall failed — routing without entity context")
     elif recalled_entities and not pre_built_memory_context:
-        # Entities were passed in externally but memory context was not pre-built.
-        # Build it now so cli_session_manager does not rebuild (double recall).
         try:
             pre_built_memory_context = build_memory_context_with_git(
                 db=db, tenant_id=tenant_id, message=message,
                 session_entity_names=session_entity_names,
+                domains=agent_memory_domains,
+                max_entities=limits["entities"],
+                max_observations=limits["observations_per_entity"],
+                include_relations=limits["include_relations"],
+                include_episodes=limits["include_episodes"],
             )
         except Exception:
             logger.debug("Memory context build for external recalled_entities failed — continuing")
@@ -399,7 +411,6 @@ def route_and_execute(
         except Exception:
             pass
         try:
-            # TODO: pass agent_tier, agent_tool_groups, agent_memory_domains once cli_session_manager supports them
             response_text, metadata = run_agent_session(
                 db,
                 tenant_id=tenant_id,
@@ -414,6 +425,9 @@ def route_and_execute(
                 image_mime=image_mime,
                 db_session_memory=db_session_memory,
                 pre_built_memory_context=pre_built_memory_context,
+                agent_tier=agent_tier,
+                agent_tool_groups=agent_tool_groups,
+                agent_memory_domains=agent_memory_domains,
             )
         except Exception:
             # CLI failure — set error state briefly, then idle
@@ -454,6 +468,10 @@ def route_and_execute(
 
         # Thread routing trajectory so scorer can backfill the reward
         metadata["routing_trajectory_id"] = str(trajectory_id)
+
+        # Expose tier routing info for downstream logging (chat service, scorer)
+        metadata["agent_tier"] = agent_tier
+        metadata["tool_groups"] = intent_tool_groups or []
 
         return response_text, metadata
 
