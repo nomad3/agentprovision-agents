@@ -126,18 +126,23 @@ class SessionJournalService(BaseService[SessionJournal]):
             if journal.key_challenges:
                 context_parts.append(f"  - Faced: {', '.join(journal.key_challenges[:2])}")
 
-        # Synthesize into a cohesive narrative using local Qwen model
+        # Synthesize into a cohesive narrative using local Qwen model (with fallback)
+        combined_context = "\n".join(context_parts)
         if len(context_parts) > 1:
-            combined_context = "\n".join(context_parts)
-            prompt_text = (
-                f"Synthesize this activity journal into a brief warm narrative about the user's "
-                f"last few days. Be personal and grounded, like a chief of staff briefing their executive.\n\n"
-                f"{combined_context}"
-            )
-            synthesis = summarize_conversation_sync(prompt_text)
-            return synthesis or journals[0].summary
-        else:
-            return journals[0].summary if journals else ""
+            try:
+                prompt_text = (
+                    f"Synthesize this activity journal into a brief warm narrative about the user's "
+                    f"last few days. Be personal and grounded, like a chief of staff briefing.\n\n"
+                    f"{combined_context}"
+                )
+                synthesis = summarize_conversation_sync(prompt_text)
+                if synthesis and len(synthesis) > 10:
+                    return synthesis
+            except Exception:
+                pass  # Fall through to simple join
+
+        # Fallback: return the concatenated context as-is
+        return combined_context if combined_context else (journals[0].summary if journals else "")
 
 
 session_journal_service = SessionJournalService()
