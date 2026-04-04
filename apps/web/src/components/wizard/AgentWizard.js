@@ -30,6 +30,9 @@ const AgentWizard = () => {
     basicInfo: { name: '', description: '', avatar: '' },
     personality: { preset: 'friendly', temperature: 0.7, max_tokens: 2000, system_prompt: '' },
     skills: {},
+    tool_groups: null,
+    default_model_tier: 'full',
+    memory_domains: null,
   });
   const [creating, setCreating] = useState(false);
   const [validationState, setValidationState] = useState({
@@ -132,6 +135,9 @@ const AgentWizard = () => {
       const agentData = {
         name: wizardData.basicInfo.name,
         description: wizardData.basicInfo.description,
+        tool_groups: wizardData.tool_groups,
+        default_model_tier: wizardData.default_model_tier,
+        memory_domains: wizardData.memory_domains,
         config: {
           model: wizardData.template?.config?.model || 'gpt-4',
           temperature: wizardData.personality.temperature,
@@ -219,6 +225,9 @@ const AgentWizard = () => {
                       acc[slug] = true;
                       return acc;
                     }, {}),
+                    tool_groups: template.config.tool_groups ?? null,
+                    default_model_tier: template.config.default_model_tier || 'full',
+                    memory_domains: template.config.memory_domains ?? null,
                   });
                   setValidationState({ ...validationState, step1: true });
                 }}
