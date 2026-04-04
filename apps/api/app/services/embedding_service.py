@@ -8,6 +8,8 @@ import logging
 import uuid
 from typing import Dict, List, Optional
 
+import numpy as np
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -22,6 +24,41 @@ _MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 _DIMENSIONS = 768
 _MAX_INPUT_CHARS = 8000
 
+# Canonical intent definitions for tier routing
+# Language-agnostic via nomic multilingual embeddings
+INTENT_DEFINITIONS = [
+    {"name": "greeting or small talk", "tier": "light", "tools": [], "mutation": False},
+    {"name": "check calendar or schedule or upcoming events", "tier": "light", "tools": ["calendar"], "mutation": False},
+    {"name": "read or search emails", "tier": "light", "tools": ["email"], "mutation": False},
+    {"name": "what do we know about a person or company", "tier": "light", "tools": ["knowledge"], "mutation": False},
+    {"name": "search files or documents in drive", "tier": "light", "tools": ["drive"], "mutation": False},
+    {"name": "check status of a workflow or task", "tier": "light", "tools": ["workflows"], "mutation": False},
+    {"name": "list or check jira issues or tickets", "tier": "light", "tools": ["jira"], "mutation": False},
+    {"name": "list or check github issues or pull requests", "tier": "light", "tools": ["github"], "mutation": False},
+    {"name": "check competitor status or report", "tier": "light", "tools": ["competitor"], "mutation": False},
+    {"name": "check ad campaign metrics or performance", "tier": "light", "tools": ["ads"], "mutation": False},
+    {"name": "show me pipeline or sales summary", "tier": "light", "tools": ["sales"], "mutation": False},
+    {"name": "book appointment or create reservation or schedule meeting", "tier": "full", "tools": ["bookings"], "mutation": True},
+    {"name": "send email or compose message", "tier": "full", "tools": ["email"], "mutation": True},
+    {"name": "create or update jira issue or ticket", "tier": "full", "tools": ["jira"], "mutation": True},
+    {"name": "process order refund or cancellation", "tier": "full", "tools": ["ecommerce"], "mutation": True},
+    {"name": "analyze data or compare metrics or generate report", "tier": "full", "tools": ["data", "reports"], "mutation": False},
+    {"name": "create or run a workflow", "tier": "full", "tools": ["workflows"], "mutation": True},
+    {"name": "write code or fix bug or create pull request", "tier": "full", "tools": ["github", "shell"], "mutation": True},
+    {"name": "manage competitors or add competitor", "tier": "full", "tools": ["competitor"], "mutation": True},
+    {"name": "pause or modify ad campaign", "tier": "full", "tools": ["ads"], "mutation": True},
+    {"name": "update deal or advance pipeline stage", "tier": "full", "tools": ["sales"], "mutation": True},
+    {"name": "create entity or record observation in knowledge graph", "tier": "full", "tools": ["knowledge"], "mutation": True},
+    {"name": "execute shell command or deploy changes", "tier": "full", "tools": ["shell"], "mutation": True},
+    {"name": "forecast revenue or predict trends", "tier": "full", "tools": ["data", "reports"], "mutation": False},
+    {"name": "generate proposal or draft outreach", "tier": "full", "tools": ["sales", "email"], "mutation": True},
+    {"name": "connect or manage mcp servers", "tier": "full", "tools": ["mcp_servers"], "mutation": True},
+    {"name": "register or manage webhooks", "tier": "full", "tools": ["webhooks"], "mutation": True},
+    {"name": "start or stop inbox or competitor monitor", "tier": "full", "tools": ["monitor"], "mutation": True},
+]
+
+# In-memory intent embedding cache (populated at startup)
+_intent_cache: list | None = None
 
 _model_loading = False
 _model_load_failures = 0
@@ -285,6 +322,62 @@ def search_entities_semantic(
         }
         for r in rows
     ]
+
+
+# ------------------------------------------------------------------
+# Intent embedding cache for tier routing classification
+# ------------------------------------------------------------------
+
+def initialize_intent_embeddings():
+    """Embed canonical intents at API startup. Call once from main.py."""
+    global _intent_cache
+    model = _get_model()
+    if not model:
+        logger.warning("Embedding model not available, intent matching disabled")
+        return
+    _intent_cache = []
+    for intent_def in INTENT_DEFINITIONS:
+        try:
+            vec = model.encode(intent_def["name"], prompt_name="search_query")
+            _intent_cache.append({**intent_def, "vector": vec})
+        except Exception as e:
+            logger.error(f"Failed to embed intent '{intent_def['name']}': {e}")
+    logger.info(f"Intent embedding cache initialized: {len(_intent_cache)} intents")
+
+
+def match_intent(message: str) -> dict:
+    """Embed message and cosine-match against cached intent vectors.
+
+    Returns best matching intent dict with 'similarity' score, or None if
+    no match above threshold (0.4) or cache not initialized.
+    """
+    if not _intent_cache:
+        return None
+    model = _get_model()
+    if not model:
+        return None
+    try:
+        msg_vec = model.encode(message, prompt_name="search_query")
+        best_match = None
+        best_score = 0.0
+        for intent in _intent_cache:
+            score = float(np.dot(msg_vec, intent["vector"]) / (
+                np.linalg.norm(msg_vec) * np.linalg.norm(intent["vector"])
+            ))
+            if score > best_score:
+                best_score = score
+                best_match = intent
+        if best_score >= 0.4 and best_match:
+            return {
+                "name": best_match["name"],
+                "tier": best_match["tier"],
+                "tools": best_match["tools"],
+                "mutation": best_match["mutation"],
+                "similarity": best_score,
+            }
+    except Exception as e:
+        logger.error(f"Intent matching failed: {e}")
+    return None
 
 
 def search_memories_semantic(

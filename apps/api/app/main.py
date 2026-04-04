@@ -88,6 +88,15 @@ async def startup_skill_manager():
             _logging.getLogger(__name__).debug("Workflow template seeding skipped: %s", e)
     threading.Thread(target=_seed_workflow_templates, daemon=True).start()
 
+    # Pre-embed canonical intents for tier routing (light vs full model)
+    def _init_intent_cache():
+        try:
+            from app.services.embedding_service import initialize_intent_embeddings
+            initialize_intent_embeddings()
+        except Exception as e:
+            _logging.getLogger(__name__).warning("Intent embedding cache init failed: %s", e)
+    threading.Thread(target=_init_intent_cache, daemon=True).start()
+
 
 @app.on_event("startup")
 async def startup_whatsapp():

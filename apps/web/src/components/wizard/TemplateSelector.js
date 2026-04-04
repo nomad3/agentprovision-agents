@@ -14,6 +14,9 @@ const TEMPLATES = [
       system_prompt: 'You are a helpful customer support agent. Answer questions from the knowledge base, look up orders and customer records from connected data sources, and handle complaints with empathy. Escalate when you cannot resolve an issue.',
       skills: ['knowledge_search', 'entity_extraction'],
       suggestDatasets: false,
+      tool_groups: ['knowledge', 'email', 'jira'],
+      default_model_tier: 'light',
+      memory_domains: ['customer', 'ticket', 'product'],
     },
   },
   {
@@ -28,6 +31,9 @@ const TEMPLATES = [
       system_prompt: 'You are a precise data analyst. Use SQL queries to extract insights and present findings with clear numbers and context. Explain technical concepts simply.',
       skills: ['sql_query', 'data_summary'],
       suggestDatasets: true,
+      tool_groups: ['data', 'reports', 'knowledge'],
+      default_model_tier: 'full',
+      memory_domains: ['dataset', 'metric', 'insight'],
     },
   },
   {
@@ -42,6 +48,9 @@ const TEMPLATES = [
       system_prompt: 'You are a sales automation specialist. Qualify leads using BANT, draft personalized outreach, manage the sales pipeline, and generate proposals. Always back recommendations with data from the knowledge graph and connected data sources.',
       skills: ['entity_extraction', 'knowledge_search', 'lead_scoring', 'calculator', 'ai_lead_rubric'],
       suggestDatasets: false,
+      tool_groups: ['sales', 'email', 'knowledge', 'reports'],
+      default_model_tier: 'full',
+      memory_domains: ['deal', 'client', 'company'],
     },
   },
   {
@@ -56,6 +65,9 @@ const TEMPLATES = [
       system_prompt: 'You are a helpful AI assistant. Be friendly, clear, and accurate. Assist with a wide range of tasks.',
       skills: ['calculator', 'data_summary'],
       suggestDatasets: false,
+      tool_groups: null,
+      default_model_tier: 'full',
+      memory_domains: null,
     },
   },
   {
@@ -70,6 +82,9 @@ const TEMPLATES = [
       system_prompt: 'You are a creative writing assistant. Use imaginative and engaging language. Help draft compelling content.',
       skills: [],
       suggestDatasets: false,
+      tool_groups: ['email', 'knowledge'],
+      default_model_tier: 'full',
+      memory_domains: null,
     },
   },
   {
@@ -84,6 +99,9 @@ const TEMPLATES = [
       system_prompt: 'You are a meticulous research agent. Extract key entities (people, organizations, concepts) from content. Identify relationships between entities and maintain a structured knowledge graph.',
       skills: ['entity_extraction', 'knowledge_search', 'data_summary', 'lead_scoring', 'ai_lead_rubric'],
       suggestDatasets: false,
+      tool_groups: ['knowledge', 'data', 'reports'],
+      default_model_tier: 'full',
+      memory_domains: ['dataset', 'metric', 'insight'],
     },
   },
   {
@@ -102,6 +120,9 @@ const TEMPLATES = [
         fields: ['name', 'email', 'company', 'role', 'interest'],
         entity_type: 'prospect',
       },
+      tool_groups: ['sales', 'email', 'knowledge', 'reports'],
+      default_model_tier: 'full',
+      memory_domains: ['deal', 'client', 'company'],
     },
   },
   {
@@ -116,6 +137,9 @@ const TEMPLATES = [
       system_prompt: 'You are a knowledge management specialist. Curate and organize the knowledge graph by verifying entities, resolving duplicates, and maintaining accurate relationships between people, organizations, and concepts.',
       skills: ['entity_extraction', 'knowledge_search', 'data_summary'],
       suggestDatasets: false,
+      tool_groups: ['knowledge', 'data', 'reports'],
+      default_model_tier: 'full',
+      memory_domains: ['dataset', 'metric', 'insight'],
     },
   },
   {
@@ -130,6 +154,9 @@ const TEMPLATES = [
       system_prompt: 'You are a deal intelligence analyst specializing in M&A advisory. Evaluate companies on sell-likelihood by analyzing ownership structures, market timing signals, and financial performance indicators. Provide structured scoring and reasoning for each assessment.',
       skills: ['entity_extraction', 'knowledge_search', 'lead_scoring', 'hca_deal_rubric'],
       suggestDatasets: false,
+      tool_groups: ['sales', 'email', 'knowledge', 'reports'],
+      default_model_tier: 'full',
+      memory_domains: ['deal', 'client', 'company'],
     },
   },
   {
@@ -144,6 +171,9 @@ const TEMPLATES = [
       system_prompt: 'You are a marketing intelligence specialist. Score and prioritize leads based on marketing engagement metrics, campaign response patterns, intent signals, and firmographic fit. Provide actionable insights for marketing and sales alignment.',
       skills: ['entity_extraction', 'knowledge_search', 'lead_scoring', 'marketing_signal_rubric'],
       suggestDatasets: false,
+      tool_groups: ['ads', 'competitor', 'reports', 'email'],
+      default_model_tier: 'full',
+      memory_domains: ['campaign', 'competitor', 'market'],
     },
   },
 ];

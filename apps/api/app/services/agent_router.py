@@ -12,11 +12,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.models.tenant_features import TenantFeatures
+from app.models.agent import Agent as AgentModel
 from app.services.cli_session_manager import run_agent_session
 from app.services import rl_experience_service
 from app.services.memory_recall import build_memory_context_with_git
 from app.services import safety_trust
 from app.services import luna_presence_service
+from app.services.embedding_service import match_intent
+from app.services.tool_groups import TIER_LIMITS
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +147,54 @@ def route_and_execute(
     # Infer task type for RL context
     inferred_type = _infer_task_type(message)
 
+    # ── Intent-based tier selection (embedding match) ──
+    try:
+        intent = match_intent(message)
+    except Exception as e:
+        logger.debug("match_intent failed: %s — defaulting to full tier", e)
+        intent = None
+
+    if intent:
+        agent_tier = intent["tier"]
+        intent_tool_groups = intent["tools"]
+        is_mutation = intent["mutation"]
+        # Mutations always go to full tier for safety
+        if is_mutation:
+            agent_tier = "full"
+    else:
+        # No match or embedding unavailable — safe default
+        agent_tier = "full"
+        intent_tool_groups = None
+        is_mutation = False
+
+    # ── Select responding agent by tool_groups overlap ──
+    responding_agent = None
+    agent_tool_groups = None
+    agent_memory_domains = None
+
+    if intent_tool_groups:
+        try:
+            tenant_agents = db.query(AgentModel).filter(
+                AgentModel.tenant_id == tenant_id,
+                AgentModel.tool_groups.isnot(None),
+            ).all()
+
+            best_overlap = 0
+            for agent_candidate in tenant_agents:
+                if agent_candidate.tool_groups:
+                    overlap = len(set(intent_tool_groups) & set(agent_candidate.tool_groups))
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        responding_agent = agent_candidate
+
+            if responding_agent and best_overlap > 0:
+                agent_slug = responding_agent.name.lower().replace(" ", "-")
+                agent_tier = responding_agent.default_model_tier or agent_tier
+                agent_tool_groups = responding_agent.tool_groups
+                agent_memory_domains = responding_agent.memory_domains
+        except Exception as e:
+            logger.warning("Agent selection by tool_groups failed: %s", e)
+
     # ── RL exploration: route to underexplored platforms for training data ──
     # Per-decision-point config overrides global env vars when available
     import random
@@ -236,26 +287,38 @@ def route_and_execute(
     except Exception as e:
         logger.debug("Policy rollout check failed: %s", e)
 
-    # Build memory context early so recalled entities enrich routing RL state
+    # Build memory context with agent-scoped parameters.
+    # The tier limits and memory_domains from agent selection (above) drive
+    # how much context we load — a Light-tier booking agent gets 3 entities
+    # from its domains instead of 10 from everywhere.
     pre_built_memory_context = None
     session_entity_names = (db_session_memory or {}).get("recalled_entity_names")
+    limits = TIER_LIMITS.get(agent_tier, TIER_LIMITS["full"])
     if not recalled_entities:
         try:
             pre_built_memory_context = build_memory_context_with_git(
                 db, tenant_id, message,
                 session_entity_names=session_entity_names,
+                domains=agent_memory_domains,
+                max_entities=limits["entities"],
+                max_observations=limits["observations_per_entity"],
+                include_relations=limits["include_relations"],
+                include_episodes=limits["include_episodes"],
             )
             if pre_built_memory_context and pre_built_memory_context.get("relevant_entities"):
                 recalled_entities = pre_built_memory_context["relevant_entities"]
         except Exception:
             logger.debug("Early memory recall failed — routing without entity context")
     elif recalled_entities and not pre_built_memory_context:
-        # Entities were passed in externally but memory context was not pre-built.
-        # Build it now so cli_session_manager does not rebuild (double recall).
         try:
             pre_built_memory_context = build_memory_context_with_git(
                 db=db, tenant_id=tenant_id, message=message,
                 session_entity_names=session_entity_names,
+                domains=agent_memory_domains,
+                max_entities=limits["entities"],
+                max_observations=limits["observations_per_entity"],
+                include_relations=limits["include_relations"],
+                include_episodes=limits["include_episodes"],
             )
         except Exception:
             logger.debug("Memory context build for external recalled_entities failed — continuing")
@@ -311,6 +374,8 @@ def route_and_execute(
                 "routing_source": routing_source,
                 "agent_trust_score": round(float(trust_profile.trust_score), 3) if trust_profile else None,
                 "agent_autonomy_tier": trust_profile.autonomy_tier if trust_profile else None,
+                "model_tier": agent_tier,
+                "tool_groups": intent_tool_groups or [],
             },
             state_text=state_text,
         )
@@ -360,6 +425,9 @@ def route_and_execute(
                 image_mime=image_mime,
                 db_session_memory=db_session_memory,
                 pre_built_memory_context=pre_built_memory_context,
+                agent_tier=agent_tier,
+                agent_tool_groups=agent_tool_groups,
+                agent_memory_domains=agent_memory_domains,
             )
         except Exception:
             # CLI failure — set error state briefly, then idle
@@ -400,6 +468,10 @@ def route_and_execute(
 
         # Thread routing trajectory so scorer can backfill the reward
         metadata["routing_trajectory_id"] = str(trajectory_id)
+
+        # Expose tier routing info for downstream logging (chat service, scorer)
+        metadata["agent_tier"] = agent_tier
+        metadata["tool_groups"] = intent_tool_groups or []
 
         return response_text, metadata
 
