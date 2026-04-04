@@ -1834,7 +1834,7 @@ async def review_with_local_qwen(input: ProviderReviewInput) -> ProviderReview:
     """Review a response using local Qwen via Ollama (free, always available)."""
     import httpx as _httpx
 
-    OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://ollama:11434")
+    OLLAMA_URL = os.environ.get("OLLAMA_HOST", "http://host.docker.internal:11434")
     MODEL = os.environ.get("LOCAL_TOOL_MODEL", "qwen3:1.7b")
 
     prompt = PROVIDER_REVIEW_PROMPT.format(
