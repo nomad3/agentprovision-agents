@@ -4,3 +4,130 @@ from app.services.rl_experience_service import DECISION_POINTS
 def test_tier_selection_in_decision_points():
     """tier_selection must appear in the known decision points."""
     assert "tier_selection" in DECISION_POINTS
+
+
+from app.services.agent_router import _should_use_local_path, _format_memory_for_local
+
+
+def test_should_use_local_path_no_intent_short():
+    """Short message + no intent match → local path."""
+    assert _should_use_local_path(intent=None, message="hola", pin_to_cli=False) is True
+
+
+def test_should_use_local_path_no_intent_long():
+    """Long message (>100 chars) with no intent match → do NOT use local path."""
+    assert _should_use_local_path(intent=None, message="x" * 101, pin_to_cli=False) is False
+
+
+def test_should_use_local_path_with_intent():
+    """Message with matched intent → do NOT intercept; let tier routing handle it."""
+    mock_intent = {"name": "greeting", "tier": "light", "tools": [], "mutation": False}
+    assert _should_use_local_path(intent=mock_intent, message="hello", pin_to_cli=False) is False
+
+
+def test_should_use_local_path_pin_overrides():
+    """Session pinned to CLI → always CLI, never local path."""
+    assert _should_use_local_path(intent=None, message="hola", pin_to_cli=True) is False
+
+
+def test_format_memory_for_local_empty():
+    """None/empty context returns empty string."""
+    assert _format_memory_for_local(None) == ""
+    assert _format_memory_for_local({}) == ""
+
+
+def test_format_memory_for_local_with_entities():
+    """Entities are formatted as brief context lines."""
+    ctx = {
+        "relevant_entities": [
+            {"name": "Acme Corp", "entity_type": "company", "description": "Key client"},
+            {"name": "John Doe", "entity_type": "person", "description": "CEO"},
+        ]
+    }
+    result = _format_memory_for_local(ctx)
+    assert "Acme Corp" in result
+    assert "John Doe" in result
+
+
+import uuid
+from unittest.mock import MagicMock, patch
+
+
+def _make_db_mock():
+    """Build a DB mock that simulates TenantFeatures with default platform."""
+    db = MagicMock()
+    features = MagicMock()
+    features.default_cli_platform = "claude_code"
+    db.query.return_value.filter.return_value.first.return_value = features
+    db.execute.return_value.fetchall.return_value = []
+    db.execute.return_value.first.return_value = None  # decision_point_config lookup
+    return db
+
+
+@patch("app.services.agent_router.match_intent", return_value=None)
+@patch("app.services.agent_router.generate_agent_response_sync", return_value="¡Hola!")
+@patch("app.services.agent_router.rl_experience_service.log_experience")
+@patch("app.services.agent_router.build_memory_context_with_git", return_value={})
+@patch("app.services.agent_router.safety_trust.get_agent_trust_profile", return_value=None)
+def test_short_spanish_routes_to_local(
+    mock_trust, mock_memory, mock_rl, mock_gen, mock_intent
+):
+    """Short Spanish message with no intent match must use local inference path."""
+    from app.services.agent_router import route_and_execute
+
+    response, metadata = route_and_execute(
+        db=_make_db_mock(),
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        message="hola",
+    )
+
+    assert response == "¡Hola!"
+    assert metadata.get("platform") == "local_inference"
+    assert metadata.get("agent_tier") == "local"
+    assert mock_gen.called
+
+
+@patch("app.services.agent_router.match_intent", return_value=None)
+@patch("app.services.agent_router.run_agent_session", return_value=("Hello!", {}))
+@patch("app.services.agent_router.build_memory_context_with_git", return_value={})
+@patch("app.services.agent_router.safety_trust.get_agent_trust_profile", return_value=None)
+def test_long_message_bypasses_local_path(
+    mock_trust, mock_memory, mock_run, mock_intent
+):
+    """Long message (>100 chars) with no intent must NOT use local path — goes to CLI."""
+    from app.services.agent_router import route_and_execute
+
+    long_message = "Please analyze our Q1 sales data, compare it with last quarter, " \
+                   "identify the top performing products and create a detailed report with charts."
+
+    response, metadata = route_and_execute(
+        db=_make_db_mock(),
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        message=long_message,
+    )
+
+    assert mock_run.called
+    assert metadata.get("platform") != "local_inference"
+
+
+@patch("app.services.agent_router.match_intent", return_value=None)
+@patch("app.services.agent_router.run_agent_session", return_value=("Resuming...", {}))
+@patch("app.services.agent_router.build_memory_context_with_git", return_value={})
+@patch("app.services.agent_router.safety_trust.get_agent_trust_profile", return_value=None)
+def test_pinned_cli_session_bypasses_local_path(
+    mock_trust, mock_memory, mock_run, mock_intent
+):
+    """Active CLI session (pinned) must NEVER use local path even for short messages."""
+    from app.services.agent_router import route_and_execute
+
+    response, metadata = route_and_execute(
+        db=_make_db_mock(),
+        tenant_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        message="ok",
+        db_session_memory={"claude_code_cli_session_id": "session-abc"},
+    )
+
+    assert mock_run.called

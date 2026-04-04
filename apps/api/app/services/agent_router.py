@@ -19,6 +19,7 @@ from app.services.memory_recall import build_memory_context_with_git
 from app.services import safety_trust
 from app.services import luna_presence_service
 from app.services.embedding_service import match_intent
+from app.services.local_inference import generate_agent_response_sync
 from app.services.tool_groups import TIER_LIMITS
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,53 @@ def _infer_task_type(message: str) -> str:
         if any(kw in msg_lower for kw in keywords):
             return task_type
     return "general"
+
+
+# Short-message local path threshold (chars ≈ 20 tokens)
+_LOCAL_PATH_MAX_CHARS = 100
+
+
+def _should_use_local_path(intent: dict | None, message: str, pin_to_cli: bool) -> bool:
+    """Return True when a message should be handled by local Ollama (no CLI spin-up).
+
+    Conditions:
+    - No intent match (intent is None) — semantic routing found nothing above threshold
+    - Short message (≤ _LOCAL_PATH_MAX_CHARS chars) — heuristic for conversational/simple
+    - Session is NOT pinned to an active CLI session (context continuity takes priority)
+
+    The message-length heuristic is language-agnostic: a short message in any language
+    gets the fast path. RL learns the optimal threshold from quality scores over time.
+    """
+    if pin_to_cli:
+        return False
+    if intent is not None:
+        return False
+    return len(message) <= _LOCAL_PATH_MAX_CHARS
+
+
+def _format_memory_for_local(memory_context: dict | None) -> str:
+    """Format memory context dict as a brief string for local inference context injection.
+
+    Extracts up to 3 relevant entities from the pre-built memory context and returns
+    a compact text block suitable for the conversation_summary parameter of
+    generate_agent_response_sync().
+    """
+    if not memory_context:
+        return ""
+    entities = memory_context.get("relevant_entities") or []
+    if not entities:
+        return ""
+    lines = ["Relevant context:"]
+    for ent in entities[:3]:
+        name = ent.get("name", "") if isinstance(ent, dict) else getattr(ent, "name", "")
+        etype = ent.get("entity_type", "") if isinstance(ent, dict) else getattr(ent, "entity_type", "")
+        desc = ent.get("description", "") if isinstance(ent, dict) else getattr(ent, "description", "")
+        if name:
+            line = f"- {name} ({etype})"
+            if desc:
+                line += f": {desc[:80]}"
+            lines.append(line)
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def get_platform_performance(db: Session, tenant_id: uuid.UUID) -> List[Dict[str, Any]]:
@@ -330,6 +378,64 @@ def route_and_execute(
             )
         except Exception:
             logger.debug("Memory context build for external recalled_entities failed — continuing")
+
+    # ── Short-message local path ──
+    # When semantic intent matching fails for short messages (e.g. non-English
+    # greetings like "hola", "bonjour"), avoid spinning up a full CLI session.
+    # Use local Ollama inference directly — 2-5s instead of 65-75s.
+    # RL learns the quality of this tier decision via tier_selection experiences.
+    if _should_use_local_path(intent, message, _pin_to_claude):
+        _memory_summary = _format_memory_for_local(pre_built_memory_context)
+        _local_response = generate_agent_response_sync(
+            message=message,
+            conversation_summary=(_memory_summary + "\n\n" + conversation_summary).strip(),
+            agent_slug=agent_slug,
+        )
+        if _local_response:
+            # Log tier_selection RL experience so the policy engine can learn
+            _tier_trajectory_id = uuid.uuid4()
+            try:
+                rl_experience_service.log_experience(
+                    db,
+                    tenant_id=tenant_id,
+                    trajectory_id=_tier_trajectory_id,
+                    step_index=0,
+                    decision_point="tier_selection",
+                    state={
+                        "user_message": message[:200],
+                        "channel": channel,
+                        "message_len": len(message),
+                        "intent_matched": False,
+                        "task_type": inferred_type,
+                    },
+                    action={
+                        "tier": "local",
+                        "platform": "local_inference",
+                        "reason": "short_no_intent",
+                    },
+                    state_text=f"task_type: {inferred_type}, channel: {channel}, "
+                               f"message_len: {len(message)}, intent_matched: false",
+                )
+            except Exception:
+                logger.debug("Failed to log tier_selection RL experience — continuing")
+
+            _local_meta = {
+                "platform": "local_inference",
+                "agent_tier": "local",
+                "tool_groups": [],
+                "routing_trajectory_id": str(_tier_trajectory_id),
+            }
+            if trust_profile:
+                _local_meta["agent_trust_score"] = round(float(trust_profile.trust_score), 3)
+                _local_meta["agent_autonomy_tier"] = trust_profile.autonomy_tier
+
+            logger.info(
+                "Local path: tenant=%s message_len=%d response_len=%d",
+                str(tenant_id)[:8], len(message), len(_local_response),
+            )
+            return _local_response, _local_meta
+        # If local inference fails (Ollama down), fall through to full CLI
+        logger.warning("Local inference failed for short message — falling through to CLI")
 
     # Build enriched state_text for RL logging
     state_parts = [f"task_type: {inferred_type}, channel: {channel}"]
