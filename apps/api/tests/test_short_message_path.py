@@ -131,3 +131,45 @@ def test_pinned_cli_session_bypasses_local_path(
     )
 
     assert mock_run.called
+
+
+def test_expand_intents_no_env_returns_empty():
+    """Without INTENT_EXPANSION_LANGUAGES set, expansion returns empty list."""
+    import os
+    from app.services.embedding_service import _expand_intents_with_translations
+
+    env_without_key = {k: v for k, v in os.environ.items() if k != "INTENT_EXPANSION_LANGUAGES"}
+    with patch.dict(os.environ, env_without_key, clear=True):
+        result = _expand_intents_with_translations()
+    assert result == []
+
+
+@patch("app.services.local_inference.generate_sync", return_value="Saludo o charla")
+def test_expand_intents_with_single_language(mock_gen):
+    """With one language configured, each intent gets one translation."""
+    import os
+    from app.services.embedding_service import INTENT_DEFINITIONS, _expand_intents_with_translations
+
+    with patch.dict(os.environ, {"INTENT_EXPANSION_LANGUAGES": "Spanish"}):
+        result = _expand_intents_with_translations()
+
+    assert len(result) == len(INTENT_DEFINITIONS)
+    # Translated intents preserve tier/tools/mutation from the source
+    for orig, translated in zip(INTENT_DEFINITIONS, result):
+        assert translated["tier"] == orig["tier"]
+        assert translated["tools"] == orig["tools"]
+        assert translated["mutation"] == orig["mutation"]
+    # Translation text comes from the mocked Ollama response
+    assert result[0]["name"] == "Saludo o charla"
+
+
+@patch("app.services.local_inference.generate_sync", return_value="translation")
+def test_expand_intents_two_languages(mock_gen):
+    """Two languages → 2 × len(INTENT_DEFINITIONS) expansions."""
+    import os
+    from app.services.embedding_service import INTENT_DEFINITIONS, _expand_intents_with_translations
+
+    with patch.dict(os.environ, {"INTENT_EXPANSION_LANGUAGES": "Spanish,Portuguese"}):
+        result = _expand_intents_with_translations()
+
+    assert len(result) == len(INTENT_DEFINITIONS) * 2

@@ -65,6 +65,59 @@ _model_load_failures = 0
 _MAX_LOAD_RETRIES = 3
 
 
+def _expand_intents_with_translations() -> list:
+    """Use local Ollama to translate intent definitions for multilingual matching.
+
+    Reads INTENT_EXPANSION_LANGUAGES env var (comma-separated language names,
+    e.g. "Spanish,Portuguese,French,German"). For each language, generates a
+    translation of each intent definition name via local Qwen inference.
+    All translations share the same tier/tools/mutation as their source intent.
+
+    Returns list of additional intent dicts (empty if env var not set or Ollama unavailable).
+    Set at startup — no runtime overhead on the hot path.
+    """
+    import os
+    from app.services.local_inference import generate_sync
+
+    languages_str = os.environ.get("INTENT_EXPANSION_LANGUAGES", "").strip()
+    if not languages_str:
+        return []
+
+    languages = [lang.strip() for lang in languages_str.split(",") if lang.strip()]
+    if not languages:
+        return []
+
+    logger.info("Expanding intent embeddings for languages: %s", languages)
+    additional: list = []
+
+    for intent_def in INTENT_DEFINITIONS:
+        for language in languages:
+            try:
+                translation = generate_sync(
+                    prompt=(
+                        f'Translate this phrase to {language}: "{intent_def["name"]}"\n'
+                        f"Return ONLY the translated phrase, nothing else."
+                    ),
+                    temperature=0.1,
+                    max_tokens=60,
+                    timeout=8.0,
+                )
+                if translation and translation.strip():
+                    cleaned = translation.strip().strip('"').strip("'")
+                    additional.append({**intent_def, "name": cleaned})
+            except Exception as exc:
+                logger.debug(
+                    "Translation failed for '%s' → %s: %s",
+                    intent_def["name"], language, exc,
+                )
+
+    logger.info(
+        "Intent expansion: %d translations (%d intents × %d languages)",
+        len(additional), len(INTENT_DEFINITIONS), len(languages),
+    )
+    return additional
+
+
 def _get_model():
     """Lazy-init the sentence-transformers model with retry and timeout protection."""
     global _model, _model_loading, _model_load_failures
@@ -329,21 +382,42 @@ def search_entities_semantic(
 # ------------------------------------------------------------------
 
 def initialize_intent_embeddings():
-    """Embed canonical intents at API startup. Call once from main.py."""
+    """Embed canonical intents at API startup. Call once from main.py.
+
+    Builds the in-memory _intent_cache with embedded vectors for each intent.
+    If INTENT_EXPANSION_LANGUAGES is set, also embeds Ollama-translated variants
+    for multilingual matching — same quality, no hardcoded phrases.
+    """
     global _intent_cache
     model = _get_model()
     if not model:
         logger.warning("Embedding model not available, intent matching disabled")
         return
+
+    # Start with canonical English intents
+    all_intents = list(INTENT_DEFINITIONS)
+
+    # Optionally expand with translated variants
+    try:
+        additional = _expand_intents_with_translations()
+        if additional:
+            all_intents.extend(additional)
+    except Exception as e:
+        logger.warning("Intent expansion failed: %s — using English only", e)
+
     _intent_cache = []
-    for intent_def in INTENT_DEFINITIONS:
+    for intent_def in all_intents:
         try:
             prefixed = f"search_query: {intent_def['name']}"
             vec = model.encode(prefixed, normalize_embeddings=True)
             _intent_cache.append({**intent_def, "vector": vec})
         except Exception as e:
-            logger.error(f"Failed to embed intent '{intent_def['name']}': {e}")
-    logger.info(f"Intent embedding cache initialized: {len(_intent_cache)} intents")
+            logger.error("Failed to embed intent '%s': %s", intent_def["name"], e)
+
+    logger.info(
+        "Intent embedding cache: %d intents (%d English + %d translated)",
+        len(_intent_cache), len(INTENT_DEFINITIONS), len(_intent_cache) - len(INTENT_DEFINITIONS),
+    )
 
 
 def match_intent(message: str) -> dict:
