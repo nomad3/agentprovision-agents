@@ -19,7 +19,7 @@ from app.services.tool_groups import TIER_LIMITS, TIER_MODEL_MAP, format_allowed
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_CLI_PLATFORMS = {"claude_code", "codex", "gemini_cli"}
+SUPPORTED_CLI_PLATFORMS = {"claude_code", "codex", "gemini_cli", "opencode"}
 
 
 def generate_cli_instructions(
