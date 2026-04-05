@@ -106,24 +106,7 @@ services:
       - MCP_SERVER_URL=http://mcp-server:8000
     restart: unless-stopped
 
-  mcp-server:
-    build:
-      context: ./apps/mcp-server
-      dockerfile: Dockerfile
-    ports:
-      - "${MCP_PORT:-8086}:8000"
-    environment:
-      - API_BASE_URL=http://api:8000
-      - API_INTERNAL_KEY=${API_INTERNAL_KEY:-internal-service-key}
-      - DATABRICKS_HOST=${DATABRICKS_HOST}
-      - DATABRICKS_TOKEN=${DATABRICKS_TOKEN}
-      - DATABRICKS_WAREHOUSE_ID=${DATABRICKS_WAREHOUSE_ID}
-      - MCP_PORT=8000
-      - FASTMCP_HOST=0.0.0.0
-      - FASTMCP_PORT=8000
-    depends_on:
-      - db
-    restart: unless-stopped
+  # mcp-server removed — Databricks/scraping not used, saves 12GB disk
 
   mcp-tools:
     build:
