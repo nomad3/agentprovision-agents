@@ -345,15 +345,21 @@ def _generate_agentic_response(
                 elif part.get("text"):
                     cli_message += f"\n\n{part['text']}"
 
-    response_text, context = route_and_execute(
-        db,
-        tenant_id=session.tenant_id,
-        user_id=user_id,
-        message=cli_message,
-        channel="whatsapp" if sender_phone else "web",
-        sender_phone=sender_phone,
-        agent_slug=agent_slug,
-        conversation_summary=summary,
+    # Use a fresh DB session for routing to prevent poisoned transaction cascades.
+    # If any query inside route_and_execute fails, only the routing session is affected,
+    # not the main request session used for saving the response.
+    from app.db.session import SessionLocal
+    routing_db = SessionLocal()
+    try:
+        response_text, context = route_and_execute(
+            routing_db,
+            tenant_id=session.tenant_id,
+            user_id=user_id,
+            message=cli_message,
+            channel="whatsapp" if sender_phone else "web",
+            sender_phone=sender_phone,
+            agent_slug=agent_slug,
+            conversation_summary=summary,
         image_b64=image_b64,
         image_mime=image_mime,
         db_session_memory={
@@ -361,6 +367,11 @@ def _generate_agentic_response(
             "chat_session_id": str(session.id),
         },
     )
+    finally:
+        try:
+            routing_db.close()
+        except Exception:
+            pass
 
     # Gap 4: Score confidence and apply hedging when uncertain.
     # Gate on full-tier only — light/local tiers are already constrained by design.
