@@ -110,9 +110,7 @@ def _build_anticipatory_context(
     except Exception:
         logger.debug("Failed to fetch upcoming events for anticipatory context", exc_info=True)
 
-    anticipatory_context: Dict[str, Any] = {}
-    if time_context:
-        anticipatory_context["time_context"] = time_context
+    anticipatory_context: Dict[str, Any] = {"time_context": time_context}
     if upcoming_events_list:
         anticipatory_context["upcoming_events"] = upcoming_events_list
     return anticipatory_context
