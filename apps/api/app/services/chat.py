@@ -280,6 +280,11 @@ def _generate_agentic_response(
     media_parts: list | None = None,
 ) -> ChatMessage:
     """Route user message through the CLI orchestrator (Claude Code CLI)."""
+    # Ensure clean DB session — previous requests may have left a poisoned transaction
+    try:
+        db.rollback()
+    except Exception:
+        pass
     from app.services.agent_router import route_and_execute
     from app.services.skill_manager import skill_manager
 
