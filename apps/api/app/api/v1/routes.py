@@ -36,6 +36,7 @@ from app.api.v1 import (
     webhooks,
     mcp_server_connectors,
     oauth,
+    claude_auth,
     codex_auth,
     notifications,
     reports,
@@ -103,6 +104,7 @@ router.include_router(webhook_connectors.router, prefix="/webhook-connectors", t
 router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
 router.include_router(mcp_server_connectors.router, prefix="/mcp-servers", tags=["mcp-servers"])
 router.include_router(oauth.router, prefix="/oauth", tags=["oauth"])
+router.include_router(claude_auth.router, prefix="/claude-auth", tags=["claude-auth"])
 router.include_router(codex_auth.router, prefix="/codex-auth", tags=["codex-auth"])
 router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 router.include_router(reports.router, prefix="/reports", tags=["reports"])

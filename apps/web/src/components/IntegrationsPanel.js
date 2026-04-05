@@ -95,6 +95,7 @@ const IntegrationsPanel = () => {
   const [credentialStatuses, setCredentialStatuses] = useState({});
   const [connectingProvider, setConnectingProvider] = useState(null);
   const [codexAuthState, setCodexAuthState] = useState({ status: 'idle', connected: false });
+  const [claudeAuthState, setClaudeAuthState] = useState({ status: 'idle', connected: false });
   const [monitorRunning, setMonitorRunning] = useState(false);
 
   const fetchData = useCallback(async () => {
@@ -202,6 +203,33 @@ const IntegrationsPanel = () => {
     return () => clearInterval(interval);
   }, [codexAuthState?.status, fetchData]);
 
+  // Poll Claude auth status while login is pending
+  useEffect(() => {
+    if (!['starting', 'pending'].includes(claudeAuthState?.status)) return undefined;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await integrationConfigService.claudeAuthStatus();
+        const nextState = res.data || { status: 'idle', connected: false };
+        setClaudeAuthState(nextState);
+
+        if (nextState.status === 'connected') {
+          setSuccess('Connected Claude Code via Anthropic');
+          setTimeout(() => setSuccess(null), 4000);
+          fetchData();
+        } else if (nextState.status === 'failed') {
+          setError(nextState.error || 'Claude login failed');
+          setTimeout(() => setError(null), 6000);
+        }
+      } catch {
+        setError('Failed to check Claude login status');
+        setTimeout(() => setError(null), 6000);
+      }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [claudeAuthState?.status, fetchData]);
+
   // Listen for OAuth popup messages
   useEffect(() => {
     const handleMessage = (event) => {
@@ -293,6 +321,40 @@ const IntegrationsPanel = () => {
       setCodexAuthState(res.data || { status: 'cancelled', connected: false });
     } catch (err) {
       const detail = err.response?.data?.detail || 'Failed to cancel Codex login';
+      setError(detail);
+      setTimeout(() => setError(null), 5000);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // ── Claude Code OAuth login (same pattern as Codex device auth) ──
+  const handleClaudeConnect = async () => {
+    try {
+      setConnectingProvider('claude_code');
+      const res = await integrationConfigService.claudeAuthStart();
+      const nextState = res.data || { status: 'idle', connected: false };
+      setClaudeAuthState(nextState);
+
+      if (nextState.verification_url) {
+        window.open(nextState.verification_url, 'claude-oauth', 'width=700,height=820,scrollbars=yes');
+      }
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Claude login not available';
+      setError(detail);
+      setTimeout(() => setError(null), 6000);
+    } finally {
+      setConnectingProvider(null);
+    }
+  };
+
+  const handleClaudeCancel = async () => {
+    try {
+      setSaving('claude-cancel');
+      const res = await integrationConfigService.claudeAuthCancel();
+      setClaudeAuthState(res.data || { status: 'cancelled', connected: false });
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to cancel Claude login';
       setError(detail);
       setTimeout(() => setError(null), 5000);
     } finally {
@@ -745,6 +807,7 @@ const IntegrationsPanel = () => {
     const isExpanded = expandedSkill === skill.integration_name;
     const isOAuth = skill.auth_type === 'oauth';
     const isDeviceAuth = skill.auth_type === 'device_auth';
+    const isBrowserAuth = skill.auth_type === 'browser_auth';
     const providerStatus = isOAuth
       ? (oauthStatuses[skill.oauth_provider] || { connected: false, accounts: [] })
       : { connected: false, accounts: [] };
@@ -754,10 +817,12 @@ const IntegrationsPanel = () => {
       ? providerStatus.connected
       : isDeviceAuth
         ? (skill.integration_name === 'codex' ? (codexAuthState.connected || hasStoredCredentials) : hasStoredCredentials)
+        : isBrowserAuth
+        ? (skill.integration_name === 'claude_code' ? (claudeAuthState.connected || hasStoredCredentials) : hasStoredCredentials)
         : !!config;
     const isEnabled = isOAuth
       ? providerStatus.connected
-      : isDeviceAuth
+      : (isDeviceAuth || isBrowserAuth)
         ? (config?.enabled ?? isConfigured)
         : (config?.enabled ?? false);
     const accountCount = isOAuth ? providerStatus.accounts.length : 0;
@@ -878,8 +943,33 @@ const IntegrationsPanel = () => {
 
               {isDeviceAuth && skill.integration_name === 'codex' && renderCodexExpanded(skill)}
 
+              {/* Claude Code browser auth */}
+              {isBrowserAuth && skill.integration_name === 'claude_code' && (
+                <div className="p-3">
+                  {claudeAuthState.status === 'pending' && (
+                    <Alert variant="info" className="mb-2">
+                      <small>Sign in with your Anthropic account in the browser window. Waiting for authentication...</small>
+                    </Alert>
+                  )}
+                  {claudeAuthState.status === 'failed' && claudeAuthState.error && (
+                    <Alert variant="danger" className="mb-2"><small>{claudeAuthState.error}</small></Alert>
+                  )}
+                  {claudeAuthState.connected && (
+                    <Alert variant="success" className="mb-2"><small>Connected to Claude Code</small></Alert>
+                  )}
+                  <Button
+                    size="sm"
+                    variant={claudeAuthState.connected ? 'outline-success' : 'primary'}
+                    onClick={['starting', 'pending'].includes(claudeAuthState.status) ? handleClaudeCancel : handleClaudeConnect}
+                    disabled={connectingProvider === 'claude_code'}
+                  >
+                    {['starting', 'pending'].includes(claudeAuthState.status) ? 'Cancel' : claudeAuthState.connected ? 'Reconnect' : 'Connect with Anthropic'}
+                  </Button>
+                </div>
+              )}
+
               {/* Non-OAuth skills: manual credential flow */}
-              {!isOAuth && !isDeviceAuth && (
+              {!isOAuth && !isDeviceAuth && !isBrowserAuth && (
                 <>
                   {/* Enable/Disable Toggle */}
                   <div className="d-flex align-items-center justify-content-between mb-3">
