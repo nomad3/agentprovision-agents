@@ -8,6 +8,7 @@ import glob
 import json
 import logging
 import os
+import shutil
 import re
 import subprocess
 import tempfile
@@ -25,6 +26,7 @@ from app.api import deps
 from app.db.session import SessionLocal
 from app.models.integration_config import IntegrationConfig
 from app.models.integration_credential import IntegrationCredential
+from app.models.user import User
 from app.services.orchestration.credential_vault import store_credential
 
 logger = logging.getLogger(__name__)
@@ -300,22 +302,7 @@ class ClaudeAuthManager:
                 credential_type="oauth_token",
             )
 
-            # Revoke old manual tokens
-            legacy = (
-                db.query(IntegrationCredential)
-                .filter(
-                    IntegrationCredential.integration_config_id == config.id,
-                    IntegrationCredential.tenant_id == tid,
-                    IntegrationCredential.credential_key == "session_token",
-                    IntegrationCredential.status == "active",
-                )
-                .all()
-            )
-            # Keep only the newest
-            if len(legacy) > 1:
-                for old in legacy[1:]:
-                    old.status = "revoked"
-                db.commit()
+            # store_credential() already handles revoking previous active credentials
 
         finally:
             db.close()
@@ -323,7 +310,6 @@ class ClaudeAuthManager:
     def _cleanup(self, state: ClaudeLoginState) -> None:
         if state.claude_home and os.path.isdir(state.claude_home):
             try:
-                import shutil
                 shutil.rmtree(state.claude_home, ignore_errors=True)
             except Exception:
                 pass
@@ -344,57 +330,76 @@ _manager = ClaudeAuthManager()
 
 # ── API Routes ──────────────────────────────────────────────────────────────
 
+def _tenant_has_claude_credential(db: Session, tenant_id) -> bool:
+    """Check if tenant has a stored Claude Code credential in the vault."""
+    tid = uuid.UUID(str(tenant_id)) if not isinstance(tenant_id, uuid.UUID) else tenant_id
+    config = (
+        db.query(IntegrationConfig)
+        .filter(IntegrationConfig.tenant_id == tid, IntegrationConfig.integration_name == "claude_code")
+        .first()
+    )
+    if not config:
+        return False
+    cred = (
+        db.query(IntegrationCredential)
+        .filter(
+            IntegrationCredential.integration_config_id == config.id,
+            IntegrationCredential.credential_key == "session_token",
+            IntegrationCredential.status == "active",
+        )
+        .first()
+    )
+    return cred is not None
+
+
+def _serialize_state(state: ClaudeLoginState, connected: bool = False) -> dict:
+    return {
+        "login_id": state.login_id if state else None,
+        "status": state.status if state else "idle",
+        "verification_url": state.verification_url if state else None,
+        "connected": connected or (state.connected if state else False),
+        "error": state.error if state else None,
+    }
+
+
 @router.post("/start")
-async def claude_auth_start(
-    current_user: dict = Depends(deps.get_current_user),
+def claude_auth_start(
+    current_user: User = Depends(deps.get_current_active_user),
     db: Session = Depends(deps.get_db),
 ):
     """Start Claude Code OAuth login flow. Returns verification URL for browser."""
     tenant_id = str(current_user.tenant_id)
     state = _manager.start_login(tenant_id)
 
-    # Wait briefly for URL to appear
+    # Wait briefly for URL to appear (sync handler — runs in thread pool)
     for _ in range(10):
         if state.verification_url or state.status in {"failed", "cancelled"}:
             break
         time.sleep(0.5)
 
-    return {
-        "login_id": state.login_id,
-        "status": state.status,
-        "verification_url": state.verification_url,
-        "connected": state.connected,
-        "error": state.error,
-    }
+    connected = _tenant_has_claude_credential(db, current_user.tenant_id)
+    return _serialize_state(state, connected=connected)
 
 
 @router.get("/status")
-async def claude_auth_status(
-    current_user: dict = Depends(deps.get_current_user),
+def claude_auth_status(
+    current_user: User = Depends(deps.get_current_active_user),
+    db: Session = Depends(deps.get_db),
 ):
     """Check Claude Code login flow status."""
     state = _manager.get_state(str(current_user.tenant_id))
+    connected = _tenant_has_claude_credential(db, current_user.tenant_id)
     if not state:
-        return {"status": "idle", "connected": False}
-    return {
-        "login_id": state.login_id,
-        "status": state.status,
-        "verification_url": state.verification_url,
-        "connected": state.connected,
-        "error": state.error,
-    }
+        return {"status": "idle", "connected": connected}
+    return _serialize_state(state, connected=connected)
 
 
 @router.post("/cancel")
-async def claude_auth_cancel(
-    current_user: dict = Depends(deps.get_current_user),
+def claude_auth_cancel(
+    current_user: User = Depends(deps.get_current_active_user),
 ):
     """Cancel an in-progress Claude Code login flow."""
     state = _manager.cancel_login(str(current_user.tenant_id))
     if not state:
         return {"status": "idle", "connected": False}
-    return {
-        "status": state.status,
-        "connected": state.connected,
-        "error": state.error,
-    }
+    return _serialize_state(state)
