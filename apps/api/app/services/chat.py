@@ -350,6 +350,22 @@ def _generate_agentic_response(
         },
     )
 
+    # Gap 4: Score confidence and apply hedging when uncertain.
+    # Only runs on full-tier responses (light/local tiers are already hedged by design).
+    try:
+        from app.services.confidence_scorer import score_and_maybe_hedge
+        _tool_calls_made = bool(context and context.get("tool_calls_made"))
+        response_text, _confidence = score_and_maybe_hedge(
+            response_text=response_text,
+            user_message=user_message,
+            tool_calls_made=_tool_calls_made,
+        )
+        if context is None:
+            context = {}
+        context["confidence_score"] = _confidence
+    except Exception:
+        pass  # Never block response delivery for confidence scoring
+
     # Extract tier metadata from router trace for downstream RL logging
     agent_tier = context.get("agent_tier", "full") if context else "full"
     tool_groups = context.get("tool_groups", []) if context else []
