@@ -395,6 +395,11 @@ def route_and_execute(
             # Log tier_selection RL experience so the policy engine can learn
             _tier_trajectory_id = None
             try:
+                # Clear any poisoned DB session state before RL logging
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
                 _tier_trajectory_id = uuid.uuid4()
                 rl_experience_service.log_experience(
                     db,
@@ -471,6 +476,11 @@ def route_and_execute(
     # Log RL experience for agent_routing decision
     trajectory_id = uuid.uuid4()
     try:
+        # Clear any poisoned DB session state
+        try:
+            db.rollback()
+        except Exception:
+            pass
         rl_experience_service.log_experience(
             db,
             tenant_id=tenant_id,
