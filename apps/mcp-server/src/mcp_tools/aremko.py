@@ -371,3 +371,73 @@ async def create_aremko_reservation(
                 "error": str(e),
                 "fallback": f"Contactar directamente: WhatsApp {CONTACT_WHATSAPP}",
             }
+
+
+@mcp.tool()
+async def add_services_to_aremko_reservation(
+    reserva_id: int,
+    servicios: list,
+    tenant_id: Optional[str] = None,
+    ctx: Context = None,
+) -> dict:
+    """Append additional services to an existing Aremko reservation.
+
+    Use this when the client wants to add more services after a reservation
+    has already been created (e.g., "agrega masajes a mi reserva RES-5403").
+    Discounts are automatically recalculated — a pack discount may now apply.
+
+    IMPORTANT: Always call validate_aremko_reservation first to confirm the
+    new services are available before calling this.
+
+    Args:
+        reserva_id: Numeric reservation ID (e.g. 5403 for RES-5403). Required.
+        servicios: List of service dicts to add, each with:
+            - servicio_id (int): Service ID
+            - fecha (str): Date in YYYY-MM-DD format
+            - hora (str): Time in HH:MM format (24h)
+            - cantidad_personas (int): Number of people
+          Example: [{"servicio_id": 53, "fecha": "2026-04-30", "hora": "15:30", "cantidad_personas": 2}]
+        tenant_id: Resolved automatically.
+        ctx: MCP context (injected automatically).
+
+    Returns:
+        Dict with success, servicios_agregados, nuevo_total, saldo_pendiente,
+        and any new discounts applied.
+    """
+    resolve_tenant_id(ctx) or tenant_id
+
+    if not servicios:
+        return {"success": False, "error": "servicios list is required"}
+
+    # Validate availability first
+    validation = await validate_aremko_reservation(
+        servicios=servicios,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+    availability = validation.get("disponibilidad") or []
+    has_unavailable = any(not item.get("disponible", False) for item in availability)
+    if not validation.get("success") or has_unavailable:
+        return {
+            "success": False,
+            "error": "No se puede agregar el servicio: disponibilidad no confirmada.",
+            "validation": validation,
+            "fallback": f"Contactar directamente: WhatsApp {CONTACT_WHATSAPP}",
+        }
+
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        try:
+            resp = await client.post(
+                f"{LUNA_API_BASE}/reservas/{reserva_id}/servicios/",
+                headers=LUNA_HEADERS,
+                json={"servicios": servicios},
+            )
+            data = resp.json()
+            return data
+        except Exception as e:
+            logger.error("add_services_to_aremko_reservation error: %s", e)
+            return {
+                "success": False,
+                "error": str(e),
+                "fallback": f"Contactar directamente: WhatsApp {CONTACT_WHATSAPP}",
+            }
