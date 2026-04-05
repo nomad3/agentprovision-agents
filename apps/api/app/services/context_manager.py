@@ -156,15 +156,15 @@ class ContextManager:
             for msg in messages
         ])
 
-        # ── Try local Qwen model first (zero token cost) ──
+        # ── Try local Gemma 4 model first (zero token cost) ──
         try:
-            from app.services.local_inference import summarize_conversation_sync as _qwen_summarize
-            qwen_summary = _qwen_summarize(conversation_text)
-            if qwen_summary:
-                logger.debug("_generate_summary: used local Qwen (saved Anthropic tokens)")
-                return qwen_summary
+            from app.services.local_inference import summarize_conversation_sync as _gemma_summarize
+            gemma_summary = _gemma_summarize(conversation_text)
+            if gemma_summary:
+                logger.debug("_generate_summary: used local Gemma 4 (saved Anthropic tokens)")
+                return gemma_summary
         except Exception as e:
-            logger.debug("Qwen summarization failed (%s) — falling back to Anthropic", e)
+            logger.debug("Gemma 4 summarization failed (%s) — falling back to Anthropic", e)
 
         # ── Fall back to Anthropic ──
         if not self.client:
@@ -324,6 +324,82 @@ class ContextManager:
         )
 
         return system_prompt + summary_section
+
+    def inject_morning_briefing_into_system_prompt(
+        self,
+        system_prompt: str,
+        briefing: str,
+    ) -> str:
+        """
+        Inject morning briefing (continuity context) into system prompt.
+
+        This adds context about the user's recent activity, accomplishments,
+        and challenges to help Luna feel like a true continuous partner.
+        Gap 1 (Continuity) feature.
+
+        Args:
+            system_prompt: Original system prompt
+            briefing: Morning briefing text (synthesized from session journals)
+
+        Returns:
+            Enhanced system prompt with morning briefing
+        """
+        if not briefing:
+            return system_prompt
+
+        briefing_section = (
+            f"\n\n## Your Activity Context (Last 7 Days)\n\n"
+            f"{briefing}\n\n"
+            f"Remember this context and reference it naturally in conversation. "
+            f"You're a continuous partner in their journey, not a stateless chatbot."
+        )
+
+        return system_prompt + briefing_section
+
+    def inject_learning_context_into_system_prompt(
+        self,
+        system_prompt: str,
+        learning_context: str,
+    ) -> str:
+        """
+        Inject behavioral learning context into system prompt.
+
+        Tells Luna which suggestion types resonate with the user based on
+        actual acted_on signal data. Gap 2 (Learning) feature.
+        """
+        if not learning_context:
+            return system_prompt
+
+        return system_prompt + f"\n\n{learning_context}\n"
+
+    def inject_stakes_context_into_system_prompt(
+        self,
+        system_prompt: str,
+        stakes_context: str,
+    ) -> str:
+        """
+        Inject open commitments into system prompt so Luna always knows what she owes.
+        Gap 3 (Stakes) feature.
+        """
+        if not stakes_context:
+            return system_prompt
+        return system_prompt + f"\n\n{stakes_context}\n"
+
+    def inject_temporal_context_into_system_prompt(
+        self,
+        system_prompt: str,
+        temporal_context: str,
+    ) -> str:
+        """
+        Inject temporal awareness context into system prompt.
+
+        Tells Luna the user's local time, typical active hours, and last
+        seen duration so she can calibrate greetings and suggestion timing.
+        Gap 5 (Temporal) feature.
+        """
+        if not temporal_context:
+            return system_prompt
+        return system_prompt + f"\n\n{temporal_context}\n"
 
 
 # Singleton instance

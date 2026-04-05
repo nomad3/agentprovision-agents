@@ -19,7 +19,7 @@ from app.services.tool_groups import TIER_LIMITS, TIER_MODEL_MAP, format_allowed
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_CLI_PLATFORMS = {"claude_code", "codex", "gemini_cli"}
+SUPPORTED_CLI_PLATFORMS = {"claude_code", "codex", "gemini_cli", "opencode"}
 
 
 def _build_today_briefing(memory_context: Dict[str, Any], include_goals: bool, include_commitments: bool) -> list[str]:
@@ -112,8 +112,22 @@ def generate_cli_instructions(
     lines.append("2. THEN check the Relevant Entities / Memories sections below for recalled context.")
     lines.append("3. ONLY IF neither contains the answer, call find_entities or search_knowledge MCP tools.")
     lines.append("NEVER say 'I don't have information' when the answer is visible in the conversation above.")
+    lines.append("")
+    lines.append("## Uncertainty Signaling (Gap 4)")
+    lines.append("Apply calibrated confidence in every response:")
+    lines.append("- If you KNOW something from tools/data: state it directly.")
+    lines.append("- If you're INFERRING or GUESSING: say 'I think...', 'This might be...', or 'Worth verifying, but...'")
+    lines.append("- If something is TIME-SENSITIVE (prices, availability, live data): always flag it as potentially stale.")
+    lines.append("- NEVER present a guess as a fact. One clear hedge is enough — don't over-qualify every sentence.")
     lines.append(f"You are {agent_slug}, an AI agent with full access to email, calendar, knowledge graph, Jira, and code tools.")
     lines.append("")
+
+    # Gap 5: Temporal awareness (local time, active hours, last seen)
+    temporal_ctx = memory_context.get("temporal_context", "")
+    if temporal_ctx:
+        lines.append(temporal_ctx)
+        lines.append("")
+
 
     lines.append("# Agent Instructions")
     lines.append("")
@@ -281,6 +295,49 @@ def generate_cli_instructions(
             due = f" (due: {c['due_at'][:10]})" if c.get("due_at") else ""
             lines.append(f"- **{c.get('title', '')}**{due}")
         lines.append("")
+
+    # ── Brain Gap context blocks (Gap 1/2/3) ──────────────────────────────────
+    # Full tier only — Gap 1 calls Ollama/Gemma4 (~10-15s) which kills light-tier latency.
+    # Gap 2/3 are DB-only (~50ms) but still unnecessary for greetings/simple chat.
+    if limits.get("include_goals", True):  # proxy for "full tier"
+        try:
+            import uuid as _uuid
+            _tid = _uuid.UUID(tenant_name) if len(tenant_name) > 30 else None
+            if _tid:
+                from app.db.session import SessionLocal as _SL
+                _gdb = _SL()
+                try:
+                    # Gap 1: Morning briefing (session journal continuity)
+                    # NOTE: calls summarize_conversation_sync() → Ollama/Gemma4
+                    from app.services.session_journals import session_journal_service
+                    briefing = session_journal_service.synthesize_morning_context(
+                        db=_gdb, tenant_id=_tid, days_lookback=7
+                    )
+                    if briefing:
+                        lines.append("## Your Recent Activity (Last 7 Days)")
+                        lines.append("")
+                        lines.append(briefing)
+                        lines.append("")
+
+                    # Gap 2: Behavioral learning context (suggestion performance)
+                    from app.services.behavioral_signals import build_learning_context
+                    learning = build_learning_context(_gdb, _tid)
+                    if learning:
+                        lines.append(learning)
+                        lines.append("")
+
+                    # Gap 3: Live stakes context (open + overdue commitments)
+                    from app.services.commitment_extractor import build_stakes_context
+                    stakes = build_stakes_context(_gdb, _tid)
+                    if stakes:
+                        lines.append(stakes)
+                        lines.append("")
+                except Exception:
+                    pass
+                finally:
+                    _gdb.close()
+        except Exception:
+            pass
 
     # World model context: current state, unstable assumptions, causal patterns
     world_model = memory_context.get("world_model", {})
@@ -459,16 +516,24 @@ def run_agent_session(
 
     skill_body = skill.description or ""
 
-    credentials = _get_cli_platform_credentials(db, tenant_id, platform)
+    # OpenCode uses local Gemma 4 — no credentials needed
+    if platform == "opencode":
+        credentials = {}
+        subscription_missing = False
+    else:
+        credentials = _get_cli_platform_credentials(db, tenant_id, platform)
     session_token = credentials.get("session_token")
     auth_json = credentials.get("auth_json")
 
     oauth_token = credentials.get("oauth_token")
-    subscription_missing = (
-        (platform == "claude_code" and not session_token)
-        or (platform == "codex" and not (session_token or auth_json))
-        or (platform == "gemini_cli" and not (oauth_token or session_token))
-    )
+    if platform != "opencode":
+        subscription_missing = (
+            (platform == "claude_code" and not session_token)
+            or (platform == "codex" and not (session_token or auth_json))
+            or (platform == "gemini_cli" and not (oauth_token or session_token))
+        )
+    else:
+        subscription_missing = False
     if subscription_missing:
         logger.warning(
             "No %s credential for tenant %s — falling back to local agent",
@@ -506,7 +571,7 @@ def run_agent_session(
             agent_slug=agent_slug,
         )
         if local_response:
-            metadata["platform"] = "local_qwen"
+            metadata["platform"] = "local_gemma"
             metadata["fallback"] = True
             return local_response, metadata
 
@@ -633,6 +698,15 @@ def run_agent_session(
     recalled_names = memory_context.get("recalled_entity_names", [])
     if recalled_names:
         metadata["recalled_entity_names"] = recalled_names
+
+    # Gap 5: Inject temporal awareness context (user's local time, active hours, last seen)
+    try:
+        from app.services.temporal_awareness import build_temporal_system_context
+        temporal_ctx = build_temporal_system_context(db, tenant_id=tenant_id, user_id=user_id)
+        if temporal_ctx:
+            memory_context["temporal_context"] = temporal_ctx
+    except Exception as exc:
+        logger.debug("Temporal context injection failed: %s", exc)
 
     tenant_name = str(tenant_id)
     user_name = sender_phone or str(user_id)

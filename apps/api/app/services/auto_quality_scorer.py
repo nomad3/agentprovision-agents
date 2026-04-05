@@ -121,7 +121,7 @@ async def _score_and_log(
     rubric_raw, consensus = await asyncio.gather(
         generate(
             prompt=prompt,
-            model=os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b"),
+            model=os.environ.get("QUALITY_MODEL", "gemma4"),
             system=rubric["system_prompt"],
             temperature=0.1,
             max_tokens=300,
@@ -207,7 +207,7 @@ async def _score_and_log(
         logger.info("Consensus FAILED for agent=%s — issues: %s", agent_slug, "; ".join(consensus.all_issues[:3]))
 
     # ── Determine scorer confidence weight based on reward source ──
-    # Single Qwen run (auto_quality) is less reliable than multi-reviewer
+    # Single Gemma 4 run (auto_quality) is less reliable than multi-reviewer
     # consensus. Human reviews and explicit ratings are ground truth.
     # Confidence weights: admin_review/explicit_rating=1.0,
     # auto_quality_consensus=0.7, auto_quality=0.5, backfill=0.1.
@@ -275,7 +275,7 @@ async def _score_and_log(
                     "breakdown": breakdown,
                     "cost_efficiency": cost_efficiency,
                     "reasoning": reasoning,
-                    "model": os.environ.get("QUALITY_MODEL", "qwen2.5-coder:1.5b"),
+                    "model": os.environ.get("QUALITY_MODEL", "gemma4"),
                     "platform": platform,
                     "tokens_used": tokens_used,
                     "cost_usd": cost_usd,
@@ -326,7 +326,7 @@ async def _score_and_log(
                             rewarded_at = NOW()
                         WHERE tenant_id = CAST(:tid AS uuid)
                           AND trajectory_id = CAST(:traj AS uuid)
-                          AND decision_point = 'agent_routing'
+                          AND decision_point IN ('agent_routing', 'tier_selection')
                           AND reward IS NULL
                     """), {
                         "reward": reward,
@@ -334,9 +334,9 @@ async def _score_and_log(
                         "traj": routing_trajectory_id,
                     })
                     db.commit()
-                    logger.debug("Backfilled agent_routing reward=%.3f for trajectory %s", reward, routing_trajectory_id[:8])
+                    logger.debug("Backfilled routing reward=%.3f for trajectory %s", reward, routing_trajectory_id[:8])
                 except Exception as e:
-                    logger.debug("agent_routing reward backfill failed: %s", e)
+                    logger.debug("routing reward backfill failed: %s", e)
 
             # ── Decision gate: trigger provider council for high-value cases ──
             _maybe_trigger_provider_council(

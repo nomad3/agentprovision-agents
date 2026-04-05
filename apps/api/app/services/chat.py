@@ -204,6 +204,57 @@ def post_user_message(
     media_parts: list | None = None,
     attachment_meta: dict | None = None,
 ) -> Tuple[ChatMessage, ChatMessage]:
+    # Gap 2: Detect if user is acting on a previous suggestion (non-blocking).
+    # Capture primitives before thread — ORM objects are not safe to access
+    # across thread boundaries after the request session may have closed.
+    try:
+        import threading
+        _sig_tenant_id = session.tenant_id
+        _sig_session_id = session.id
+
+        def _detect_signals():
+            from app.db.session import SessionLocal as _SL
+            from app.services.behavioral_signals import detect_acted_on_signals
+            edb = _SL()
+            try:
+                detect_acted_on_signals(
+                    db=edb,
+                    tenant_id=_sig_tenant_id,
+                    user_message=content,
+                    session_id=_sig_session_id,
+                )
+            except Exception:
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_detect_signals, daemon=True).start()
+    except Exception:
+        pass
+
+    # Gap 3: Detect if user is resolving an open commitment ("done", "sent it", etc.)
+    try:
+        _comm_tenant_id = session.tenant_id
+
+        def _resolve_commitments():
+            from app.db.session import SessionLocal as _SL
+            from app.services.commitment_extractor import resolve_commitment_from_message
+            edb = _SL()
+            try:
+                resolve_commitment_from_message(
+                    db=edb,
+                    tenant_id=_comm_tenant_id,
+                    user_message=content,
+                )
+            except Exception:
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_resolve_commitments, daemon=True).start()
+    except Exception:
+        pass
+
     user_context = {"attachment": attachment_meta} if attachment_meta else None
     user_message = _append_message(
         db, session=session, role="user", content=content, context=user_context,
@@ -298,6 +349,24 @@ def _generate_agentic_response(
             "chat_session_id": str(session.id),
         },
     )
+
+    # Gap 4: Score confidence and apply hedging when uncertain.
+    # Gate on full-tier only — light/local tiers are already constrained by design.
+    _agent_tier_early = context.get("agent_tier", "full") if context else "full"
+    if _agent_tier_early == "full":
+        try:
+            from app.services.confidence_scorer import score_and_maybe_hedge
+            _tool_calls_made = bool(context and context.get("tool_calls_made"))
+            response_text, _confidence = score_and_maybe_hedge(
+                response_text=response_text,
+                user_message=user_message,
+                tool_calls_made=_tool_calls_made,
+            )
+            if context is None:
+                context = {}
+            context["confidence_score"] = _confidence
+        except Exception:
+            pass  # Never block response delivery for confidence scoring
 
     # Extract tier metadata from router trace for downstream RL logging
     agent_tier = context.get("agent_tier", "full") if context else "full"
@@ -538,7 +607,7 @@ def _generate_agentic_response(
                     for m in new_msgs
                 )
 
-                # Summarize using local Qwen (background priority — does NOT
+                # Summarize using local Gemma 4 (background priority — does NOT
                 # set _foreground_active, so auto-scorer is not starved)
                 import asyncio as _aio
                 from app.services.local_inference import generate
@@ -550,7 +619,7 @@ def _generate_agentic_response(
                 )
 
                 summary = _aio.run(generate(
-                    prompt, model="qwen2.5-coder:1.5b", max_tokens=200,
+                    prompt, model="gemma4", max_tokens=200,
                     timeout=45, priority="background",
                 ))
                 if not summary or len(summary) < 10:
@@ -610,6 +679,73 @@ def _generate_agentic_response(
                 edb.close()
 
         threading.Thread(target=_maybe_create_episode, daemon=True).start()
+    except Exception:
+        pass
+
+    # 4. Behavioral signal extraction — parse Luna's response for actionable
+    #    suggestions and store as pending signals for Gap 2 (Learning).
+    try:
+        _assistant_msg_id = assistant_msg.id
+
+        def _extract_behavioral_signals():
+            from app.db.session import SessionLocal as _SL
+            from app.services.behavioral_signals import extract_suggestions_from_response
+
+            edb = _SL()
+            try:
+                extract_suggestions_from_response(
+                    db=edb,
+                    tenant_id=_tenant_id,
+                    response_text=_response_text,
+                    message_id=_assistant_msg_id,
+                    session_id=_session_id,
+                )
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).debug("Behavioral signal extraction failed", exc_info=True)
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_extract_behavioral_signals, daemon=True).start()
+    except Exception:
+        pass
+
+    # 5. Commitment extraction — parse Luna's response for explicit promises/predictions
+    #    and store as CommitmentRecord rows for Gap 3 (Stakes).
+    try:
+        def _extract_commitments():
+            from app.db.session import SessionLocal as _SL
+            from app.services.commitment_extractor import extract_commitments_from_response
+
+            edb = _SL()
+            try:
+                extract_commitments_from_response(
+                    db=edb,
+                    tenant_id=_tenant_id,
+                    response_text=_response_text,
+                    message_id=_assistant_msg_id,
+                    session_id=_session_id,
+                )
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).debug("Commitment extraction failed", exc_info=True)
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_extract_commitments, daemon=True).start()
+    except Exception:
+        pass
+
+    # 6. Confidence scoring — score the response for uncertainty level and
+    #    store in execution trace context for RL and observability (Gap 4).
+    try:
+        from app.services.confidence_scorer import score_response_confidence
+        confidence = score_response_confidence(_response_text, question=_user_message)
+        if context and isinstance(context, dict):
+            context["response_confidence"] = round(confidence, 3)
+        logger.debug(f"Response confidence: {confidence:.2f} for tenant {str(_tenant_id)[:8]}")
     except Exception:
         pass
 

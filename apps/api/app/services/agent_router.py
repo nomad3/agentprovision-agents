@@ -19,6 +19,7 @@ from app.services.memory_recall import build_memory_context_with_git
 from app.services import safety_trust
 from app.services import luna_presence_service
 from app.services.embedding_service import match_intent
+from app.services.local_inference import generate_agent_response_sync
 from app.services.tool_groups import TIER_LIMITS
 
 logger = logging.getLogger(__name__)
@@ -41,13 +42,60 @@ _TASK_TYPE_KEYWORDS = {
 
 
 def _infer_task_type(message: str) -> str:
-    """Infer task type from message keywords. Qwen classification runs async post-routing."""
+    """Infer task type from message keywords. Gemma 4 classification runs async post-routing."""
     # Keyword matching only — never block the hot path with Ollama calls
     msg_lower = message.lower()
     for task_type, keywords in _TASK_TYPE_KEYWORDS.items():
         if any(kw in msg_lower for kw in keywords):
             return task_type
     return "general"
+
+
+# Short-message local path threshold (chars ≈ 20 tokens)
+_LOCAL_PATH_MAX_CHARS = 100
+
+
+def _should_use_local_path(intent: dict | None, message: str, pin_to_cli: bool) -> bool:
+    """Return True when a message should be handled by local Ollama (no CLI spin-up).
+
+    Conditions:
+    - No intent match (intent is None) — semantic routing found nothing above threshold
+    - Short message (≤ _LOCAL_PATH_MAX_CHARS chars) — heuristic for conversational/simple
+    - Session is NOT pinned to an active CLI session (context continuity takes priority)
+
+    The message-length heuristic is language-agnostic: a short message in any language
+    gets the fast path. RL learns the optimal threshold from quality scores over time.
+    """
+    if pin_to_cli:
+        return False
+    if intent is not None:
+        return False
+    return len(message) <= _LOCAL_PATH_MAX_CHARS
+
+
+def _format_memory_for_local(memory_context: dict | None) -> str:
+    """Format memory context dict as a brief string for local inference context injection.
+
+    Extracts up to 3 relevant entities from the pre-built memory context and returns
+    a compact text block suitable for the conversation_summary parameter of
+    generate_agent_response_sync().
+    """
+    if not memory_context:
+        return ""
+    entities = memory_context.get("relevant_entities") or []
+    if not entities:
+        return ""
+    lines = ["Relevant context:"]
+    for ent in entities[:3]:
+        name = ent.get("name", "") if isinstance(ent, dict) else getattr(ent, "name", "")
+        etype = ent.get("entity_type", "") if isinstance(ent, dict) else getattr(ent, "entity_type", "")
+        desc = ent.get("description", "") if isinstance(ent, dict) else getattr(ent, "description", "")
+        if name:
+            line = f"- {name} ({etype})"
+            if desc:
+                line += f": {desc[:80]}"
+            lines.append(line)
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def get_platform_performance(db: Session, tenant_id: uuid.UUID) -> List[Dict[str, Any]]:
@@ -225,16 +273,19 @@ def route_and_execute(
             platform = "codex"
             routing_source = "exploration_codex"
         elif exploration_mode == "balanced":
-            # Pick the platform with fewest scored experiences
+            # Pick the CLI platform with fewest scored experiences
+            # Only explore real CLI platforms, not fallback paths
+            _VALID_EXPLORE = {"claude_code", "codex", "gemini_cli"}
             try:
                 from app.services.rl_routing import get_best_platform
                 rec = get_best_platform(db, tenant_id, inferred_type)
                 if rec.alternatives:
-                    # Find platform with lowest total
-                    least = min(rec.alternatives, key=lambda a: a["total"])
-                    platform = least["platform"]
-                    routing_source = "exploration_balanced"
-                    logger.info("RL exploration: routing to %s (least data: %d experiences)", platform, least["total"])
+                    valid = [a for a in rec.alternatives if a["platform"] in _VALID_EXPLORE]
+                    if valid:
+                        least = min(valid, key=lambda a: a["total"])
+                        platform = least["platform"]
+                        routing_source = "exploration_balanced"
+                        logger.info("RL exploration: routing to %s (least data: %d experiences)", platform, least["total"])
             except Exception:
                 pass
     elif not _pin_to_claude:
@@ -247,7 +298,8 @@ def route_and_execute(
                 current_platform=platform,
                 current_agent=agent_slug,
             )
-            if rl_rec.platform and rl_rec.platform_confidence >= 0.4:
+            _VALID_CLI = {"claude_code", "codex", "gemini_cli"}
+            if rl_rec.platform and rl_rec.platform in _VALID_CLI and rl_rec.platform_confidence >= 0.4:
                 if rl_rec.platform != platform:
                     logger.info(
                         "RL routing override: platform %s→%s (confidence=%.2f, %s)",
@@ -287,6 +339,10 @@ def route_and_execute(
     except Exception as e:
         logger.debug("Policy rollout check failed: %s", e)
 
+    # ── Light tier uses Haiku via Claude CLI (fast + tools), not OpenCode ──
+    # OpenCode/Gemma4 is fallback-only (when Claude+Codex are out of credits).
+    # The --model haiku flag on Claude CLI gives us speed without losing tool quality.
+
     # Build memory context with agent-scoped parameters.
     # The tier limits and memory_domains from agent selection (above) drive
     # how much context we load — a Light-tier booking agent gets 3 entities
@@ -322,6 +378,66 @@ def route_and_execute(
             )
         except Exception:
             logger.debug("Memory context build for external recalled_entities failed — continuing")
+
+    # ── Short-message local path ──
+    # When semantic intent matching fails for short messages (e.g. non-English
+    # greetings like "hola", "bonjour"), avoid spinning up a full CLI session.
+    # Use local Ollama inference directly — 2-5s instead of 65-75s.
+    # RL learns the quality of this tier decision via tier_selection experiences.
+    if _should_use_local_path(intent, message, _pin_to_claude):
+        _memory_summary = _format_memory_for_local(pre_built_memory_context)
+        _local_response = generate_agent_response_sync(
+            message=message,
+            conversation_summary=(_memory_summary + "\n\n" + conversation_summary).strip(),
+            agent_slug=agent_slug,
+        )
+        if _local_response:
+            # Log tier_selection RL experience so the policy engine can learn
+            _tier_trajectory_id = None
+            try:
+                _tier_trajectory_id = uuid.uuid4()
+                rl_experience_service.log_experience(
+                    db,
+                    tenant_id=tenant_id,
+                    trajectory_id=_tier_trajectory_id,
+                    step_index=0,
+                    decision_point="tier_selection",
+                    state={
+                        "user_message": message[:200],
+                        "channel": channel,
+                        "message_len": len(message),
+                        "intent_matched": False,
+                        "task_type": inferred_type,
+                    },
+                    action={
+                        "tier": "local",
+                        "platform": "local_inference",
+                        "reason": "short_no_intent",
+                    },
+                    state_text=f"task_type: {inferred_type}, channel: {channel}, "
+                               f"message_len: {len(message)}, intent_matched: false",
+                )
+            except Exception:
+                logger.debug("Failed to log tier_selection RL experience — continuing")
+                _tier_trajectory_id = None  # ensure no orphaned reference
+
+            _local_meta = {
+                "platform": "local_inference",
+                "agent_tier": "local",
+                "tool_groups": [],
+                "routing_trajectory_id": str(_tier_trajectory_id) if _tier_trajectory_id else None,
+            }
+            if trust_profile:
+                _local_meta["agent_trust_score"] = round(float(trust_profile.trust_score), 3)
+                _local_meta["agent_autonomy_tier"] = trust_profile.autonomy_tier
+
+            logger.info(
+                "Local path: tenant=%s message_len=%d response_len=%d",
+                str(tenant_id)[:8], len(message), len(_local_response),
+            )
+            return _local_response, _local_meta
+        # If local inference fails (Ollama down), fall through to full CLI
+        logger.warning("Local inference failed for short message — falling through to CLI")
 
     # Build enriched state_text for RL logging
     state_parts = [f"task_type: {inferred_type}, channel: {channel}"]
@@ -398,7 +514,7 @@ def route_and_execute(
     )
 
     # Execute on the selected platform
-    if platform in ("claude_code", "gemini_cli", "codex"):
+    if platform in ("claude_code", "gemini_cli", "codex", "opencode"):
         # Presence session scoping: use chat session ID so concurrent
         # requests don't clobber each other's state.
         _presence_sid = str((db_session_memory or {}).get("chat_session_id", ""))

@@ -109,11 +109,12 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
     },
     "claude_code": {
         "display_name": "Claude Code",
-        "description": "Connect your Claude Code Pro/Max subscription for coding agent and AI chat",
+        "description": "Connect your Claude Pro/Max subscription for coding agent and AI chat",
         "icon": "FaTerminal",
+        "auth_type": "browser_auth",
         "credentials": [
-            {"key": "session_token", "label": "OAuth Token", "type": "password", "required": True,
-             "help": "Run 'claude setup-token' in your terminal and paste the token (valid 1 year)"},
+            {"key": "session_token", "label": "OAuth Token", "type": "password", "required": False,
+             "help": "Click 'Connect' to sign in with your Anthropic account, or paste a token manually."},
         ],
     },
     "codex": {
