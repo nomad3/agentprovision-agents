@@ -70,7 +70,7 @@ _HEDGE_PREFIXES = [
     "Take this with a grain of salt — ",
 ]
 
-_hedge_index = 0  # round-robin across prefixes
+import random as _random  # used for hedge prefix selection (thread-safe)
 
 
 def score_response_confidence(
@@ -121,8 +121,6 @@ def apply_hedging(response_text: str, confidence: float) -> str:
     If confidence < HEDGE_THRESHOLD, prepend a hedging phrase.
     Returns the original text unchanged if confidence is sufficient.
     """
-    global _hedge_index
-
     if confidence >= HEDGE_THRESHOLD:
         return response_text
 
@@ -130,19 +128,19 @@ def apply_hedging(response_text: str, confidence: float) -> str:
     if len(response_text.split()) < 12:
         return response_text
 
-    # Don't double-hedge if text already starts with an uncertainty phrase
-    lower_start = response_text[:80].lower()
+    # Don't double-hedge — check first 100 chars for existing uncertainty language
+    lower_start = response_text[:100].lower()
     already_hedged = any(
         re.search(p, lower_start)
-        for p, _ in _LOW_CONFIDENCE_SIGNALS[:4]  # Check the strongest signals
+        for p, _ in _LOW_CONFIDENCE_SIGNALS[:4]
     )
     if already_hedged:
         return response_text
 
-    prefix = _HEDGE_PREFIXES[_hedge_index % len(_HEDGE_PREFIXES)]
-    _hedge_index += 1
+    # random.choice is thread-safe (uses the C-level random state with the GIL)
+    prefix = _random.choice(_HEDGE_PREFIXES)
 
-    # Lower-case the first char of response if appending mid-sentence
+    # Lower-case the first char of response if it reads as mid-sentence continuation
     if response_text and response_text[0].isupper() and not response_text.startswith("I "):
         hedged = prefix + response_text[0].lower() + response_text[1:]
     else:
