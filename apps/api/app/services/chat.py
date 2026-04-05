@@ -232,6 +232,29 @@ def post_user_message(
     except Exception:
         pass
 
+    # Gap 3: Detect if user is resolving an open commitment ("done", "sent it", etc.)
+    try:
+        _comm_tenant_id = session.tenant_id
+
+        def _resolve_commitments():
+            from app.db.session import SessionLocal as _SL
+            from app.services.commitment_extractor import resolve_commitment_from_message
+            edb = _SL()
+            try:
+                resolve_commitment_from_message(
+                    db=edb,
+                    tenant_id=_comm_tenant_id,
+                    user_message=content,
+                )
+            except Exception:
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_resolve_commitments, daemon=True).start()
+    except Exception:
+        pass
+
     user_context = {"attachment": attachment_meta} if attachment_meta else None
     user_message = _append_message(
         db, session=session, role="user", content=content, context=user_context,
@@ -667,6 +690,33 @@ def _generate_agentic_response(
                 edb.close()
 
         threading.Thread(target=_extract_behavioral_signals, daemon=True).start()
+    except Exception:
+        pass
+
+    # 5. Commitment extraction — parse Luna's response for explicit promises/predictions
+    #    and store as CommitmentRecord rows for Gap 3 (Stakes).
+    try:
+        def _extract_commitments():
+            from app.db.session import SessionLocal as _SL
+            from app.services.commitment_extractor import extract_commitments_from_response
+
+            edb = _SL()
+            try:
+                extract_commitments_from_response(
+                    db=edb,
+                    tenant_id=_tenant_id,
+                    response_text=_response_text,
+                    message_id=_assistant_msg_id,
+                    session_id=_session_id,
+                )
+            except Exception:
+                import logging as _log
+                _log.getLogger(__name__).debug("Commitment extraction failed", exc_info=True)
+                edb.rollback()
+            finally:
+                edb.close()
+
+        threading.Thread(target=_extract_commitments, daemon=True).start()
     except Exception:
         pass
 
