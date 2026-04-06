@@ -709,7 +709,15 @@ def run_agent_session(
         logger.debug("Temporal context injection failed: %s", exc)
 
     tenant_name = str(tenant_id)
-    user_name = sender_phone or str(user_id)
+    # Resolve actual user name from DB instead of passing a UUID
+    user_name = sender_phone
+    if not user_name:
+        try:
+            from app.models.user import User
+            user_obj = db.query(User).filter(User.id == user_id).first()
+            user_name = (user_obj.full_name if user_obj and user_obj.full_name else None) or str(user_id)
+        except Exception:
+            user_name = str(user_id)
     instruction_md_content = generate_cli_instructions(
         skill_body=skill_body,
         tenant_name=tenant_name,
