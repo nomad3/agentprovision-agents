@@ -96,7 +96,7 @@ def extract_commitments_from_response(
             commitment_type=ctype,
             state="open",
             priority="normal",
-            source_type="chat",
+            source_type="chat",  # CommitmentSourceType.CHAT
             source_ref={"message_id": str(message_id), "session_id": str(session_id)},
             due_at=due_at,
         )
@@ -181,6 +181,54 @@ def _parse_commitments(text: str) -> List[Tuple[str, str, Optional[int]]]:
                 break
 
     return results
+
+
+def maybe_resolve_commitments(
+    db: Session,
+    tenant_id: uuid.UUID,
+    user_message: str,
+) -> int:
+    """
+    Scan open commitments — if user message implies resolution, mark fulfilled.
+    Returns count of resolved commitments.
+
+    Heuristic: looks for explicit confirmation language ("done", "sent it",
+    "followed up", "created", etc.) near the commitment keyword.
+    """
+    _RESOLVED_TOKENS = {
+        "done", "sent", "sent it", "sent that", "followed up", "created",
+        "scheduled", "set up", "finished", "complete", "completed", "fixed",
+        "resolved", "closed", "shipped", "deployed", "written", "drafted",
+        "just did", "just sent", "just created", "just scheduled",
+    }
+    lower_msg = user_message.lower()
+    if not any(tok in lower_msg for tok in _RESOLVED_TOKENS):
+        return 0
+
+    open_records = db.query(CommitmentRecord).filter(
+        CommitmentRecord.tenant_id == tenant_id,
+        CommitmentRecord.state == "open",
+        CommitmentRecord.commitment_type != "prediction",
+    ).order_by(CommitmentRecord.created_at.desc()).limit(10).all()
+
+    if not open_records:
+        return 0
+
+    count = 0
+    for record in open_records:
+        # Check if any key word from the commitment title appears in the user message
+        title_words = set(record.title.lower().split())
+        significant = {w for w in title_words if len(w) > 4}
+        if significant and significant & set(lower_msg.split()):
+            record.state = "fulfilled"
+            record.fulfilled_at = datetime.utcnow()
+            count += 1
+
+    if count:
+        db.commit()
+        logger.info("Resolved %d commitment(s) for tenant %s", count, str(tenant_id)[:8])
+
+    return count
 
 
 def _make_title(text: str) -> str:
