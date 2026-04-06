@@ -506,6 +506,21 @@ async def extract_from_emails(tenant_id: str, emails: List[Dict], triaged_items:
                 total_triggers += len(triggers)
                 _dispatch_email_action_triggers(db, tid, triggers, tenant_id)
 
+            # Sales lead capture: detect inbound sales intent
+            try:
+                from app.workflows.activities.inbound_lead_capture import classify_email_as_lead
+                lead_result = await classify_email_as_lead(
+                    tenant_id=tenant_id,
+                    email_from=email.get("from", ""),
+                    email_subject=email.get("subject", ""),
+                    email_body=email.get("body", "")[:2000],
+                )
+                if lead_result.get("is_lead"):
+                    total_triggers += 1
+                    logger.info("Email-to-lead created: %s", lead_result.get("entity_id"))
+            except Exception as e:
+                logger.debug("Email lead classification skipped: %s", e)
+
         return {
             "entities": total_entities,
             "relations": total_relations,

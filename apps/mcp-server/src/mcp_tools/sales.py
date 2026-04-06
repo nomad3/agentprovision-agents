@@ -247,6 +247,58 @@ async def draft_outreach(
 
     context = "\n".join(context_parts)
 
+    # Build channel-specific prompt for LLM personalization
+    if channel == "email":
+        prompt = (
+            f"Write a short, personalized cold outreach email ({tone} tone) to {name}.\n"
+            f"Context about them:\n{context}\n\n"
+            f"Requirements: under 120 words, one clear CTA, no generic opener like 'I hope this finds you well'.\n"
+            f"Return JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
+        )
+    elif channel == "whatsapp":
+        prompt = (
+            f"Write a short WhatsApp outreach message ({tone} tone) to {name}.\n"
+            f"Context: {context}\n\n"
+            f"Requirements: under 60 words, conversational, one question at the end.\n"
+            f"Return JSON: {{\"body\": \"...\"}}"
+        )
+    else:
+        prompt = (
+            f"Write a {channel} outreach message ({tone} tone) to {name}.\n"
+            f"Context: {context}\n\nReturn JSON: {{\"body\": \"...\"}}"
+        )
+
+    # Call LLM via internal API
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{_get_api_base_url()}/api/v1/local-ml/generate",
+                headers={"X-Internal-Key": _get_internal_key()},
+                json={"prompt": prompt, "tenant_id": tid, "max_tokens": 300},
+            )
+            if resp.status_code == 200:
+                import json as _json
+                raw = resp.json().get("text", "")
+                # Try to parse JSON from LLM output
+                try:
+                    start = raw.find("{")
+                    end = raw.rfind("}") + 1
+                    parsed = _json.loads(raw[start:end]) if start >= 0 else {}
+                except Exception:
+                    parsed = {}
+
+                return {
+                    "status": "success",
+                    "channel": channel,
+                    "subject": parsed.get("subject", f"Quick question for {name}"),
+                    "body": parsed.get("body", raw.strip()),
+                    "entity_name": name,
+                    "context": context,
+                }
+    except Exception as e:
+        logger.warning("LLM draft_outreach failed (%s), returning template", e)
+
+    # Fallback to template if LLM call fails
     if channel == "email":
         return {
             "status": "success",
@@ -255,22 +307,13 @@ async def draft_outreach(
             "body": f"Hi {name},\n\n[Personalize based on: {context}]\n\nBest regards",
             "entity_name": name,
             "context": context,
-            "note": "Draft template — personalize the body using the provided context.",
-        }
-    elif channel == "whatsapp":
-        return {
-            "status": "success",
-            "channel": "whatsapp",
-            "body": f"Hi {name}! [Personalize based on: {context}]",
-            "entity_name": name,
-            "context": context,
-            "note": "Short, conversational format for WhatsApp.",
+            "note": "Template fallback — LLM personalization unavailable.",
         }
     else:
         return {
             "status": "success",
             "channel": channel,
-            "body": f"Hi {name}, [Personalize based on: {context}]",
+            "body": f"Hi {name}! [Context: {context}]",
             "entity_name": name,
             "context": context,
         }
@@ -345,8 +388,7 @@ async def get_pipeline_summary(
 ) -> dict:
     """Get aggregate pipeline metrics across all leads for a tenant.
 
-    Queries knowledge entities to count leads at each pipeline stage
-    and calculate basic conversion metrics.
+    Uses SQL for accurate counts and total deal value per stage.
 
     Args:
         tenant_id: Tenant UUID (resolved from session if omitted).
@@ -354,34 +396,28 @@ async def get_pipeline_summary(
         ctx: MCP request context (injected automatically).
 
     Returns:
-        Dict with stages breakdown, total_leads, and stage counts.
+        Dict with stages breakdown, total_leads, total_value, and stage counts.
     """
     tid = resolve_tenant_id(ctx) or tenant_id
     if not tid:
         return {"error": "tenant_id is required."}
 
-    entities = await _search_entities(tid, query=category, limit=500)
+    api_base_url = _get_api_base_url()
+    internal_key = _get_internal_key()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{api_base_url}/api/v1/sales/internal/pipeline-summary",
+                headers={"X-Internal-Key": internal_key},
+                params={"tenant_id": tid, "category": category},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning("pipeline-summary returned %s: %s", resp.status_code, resp.text[:200])
+    except Exception:
+        logger.exception("get_pipeline_summary failed")
 
-    stage_counts: dict = {}
-    total = 0
-    for entity in entities:
-        if entity.get("category") != category:
-            continue
-        total += 1
-        stage = entity.get("properties", {}).get("pipeline_stage", "unassigned")
-        stage_counts[stage] = stage_counts.get(stage, 0) + 1
-
-    stages = [
-        {"stage": stage, "count": count}
-        for stage, count in sorted(stage_counts.items(), key=lambda x: -x[1])
-    ]
-
-    return {
-        "status": "success",
-        "total_leads": total,
-        "stages": stages,
-        "category": category,
-    }
+    return {"error": "Failed to fetch pipeline summary"}
 
 
 @mcp.tool()
