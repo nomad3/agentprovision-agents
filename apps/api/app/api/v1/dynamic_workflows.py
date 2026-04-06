@@ -161,7 +161,7 @@ def delete_workflow_internal(
     db.commit()
 
 
-@router.post("/internal/{workflow_id}/run")
+@router.post("/internal/{workflow_id}/run", response_model=WorkflowRunInDB)
 async def run_workflow_internal(
     workflow_id: uuid.UUID,
     payload: WorkflowRunRequest = WorkflowRunRequest(),
@@ -547,7 +547,7 @@ def pause_workflow(
 
 # ── Execution ─────────────────────────────────────────────────────
 
-@router.post("/{workflow_id}/run")
+@router.post("/{workflow_id}/run", response_model=WorkflowRunInDB)
 async def run_workflow(
     workflow_id: uuid.UUID,
     payload: WorkflowRunRequest = WorkflowRunRequest(),
