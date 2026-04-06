@@ -7,7 +7,18 @@ from app.db.init_db import init_db
 
 init_db(db=SessionLocal())
 
-app = FastAPI()
+app = FastAPI(redirect_slashes=False)
+
+
+class TrailingSlashMiddleware(BaseHTTPMiddleware):
+    """Strip trailing slashes before routing to avoid 307 redirects that lose POST bodies."""
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path != "/" and request.url.path.endswith("/"):
+            scope = request.scope
+            scope["path"] = scope["path"].rstrip("/")
+            if scope.get("raw_path"):
+                scope["raw_path"] = scope["raw_path"].rstrip(b"/")
+        return await call_next(request)
 
 
 class ForceHTTPSRedirectMiddleware(BaseHTTPMiddleware):
@@ -21,6 +32,7 @@ class ForceHTTPSRedirectMiddleware(BaseHTTPMiddleware):
         return response
 
 
+app.add_middleware(TrailingSlashMiddleware)
 app.add_middleware(ForceHTTPSRedirectMiddleware)
 
 # Set up CORS middleware

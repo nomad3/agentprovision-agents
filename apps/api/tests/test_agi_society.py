@@ -191,7 +191,7 @@ class TestCollaborationPatterns:
             )
 
         assert result["completed"] is True
-        assert result["consensus"] == "yes"
+        assert result["consensus_reached"] == "yes"
         assert session.status == "completed"
         assert session.consensus_reached == "yes"
         assert session.outcome == "Accepted revised plan"

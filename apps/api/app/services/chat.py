@@ -239,28 +239,7 @@ def post_user_message(
     except Exception:
         pass
 
-    # Gap 3: Detect if user is resolving an open commitment ("done", "sent it", etc.)
-    try:
-        _comm_tenant_id = session.tenant_id
-
-        def _resolve_commitments():
-            from app.db.session import SessionLocal as _SL
-            from app.services.commitment_extractor import resolve_commitment_from_message
-            edb = _SL()
-            try:
-                resolve_commitment_from_message(
-                    db=edb,
-                    tenant_id=_comm_tenant_id,
-                    user_message=content,
-                )
-            except Exception:
-                edb.rollback()
-            finally:
-                edb.close()
-
-        threading.Thread(target=_resolve_commitments, daemon=True).start()
-    except Exception:
-        pass
+    # Gap 3: Commitment resolution already runs inside _detect_signals_and_resolve above
 
     user_context = {"attachment": attachment_meta} if attachment_meta else None
     user_message = _append_message(
@@ -314,13 +293,13 @@ def _generate_agentic_response(
         db.query(ChatMessage)
         .filter(ChatMessage.session_id == session.id)
         .order_by(ChatMessage.created_at.desc())
-        .limit(6)  # Last 6 messages (3 turns) — just for immediate context
-        .all()  # Full history available via MCP tools (search_knowledge, find_entities)
+        .limit(20)  # Last 20 messages (10 turns) for conversation continuity
+        .all()
     )
     history_lines = []
     for m in reversed(recent_msgs):
         role = "User" if m.role == "user" else "Assistant"
-        content = m.content[:300]
+        content = m.content[:800]
         history_lines.append(f"[{role}]: {content}")
         # Note if message had an attachment
         if m.context and isinstance(m.context, dict):
