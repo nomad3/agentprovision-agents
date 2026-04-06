@@ -145,6 +145,10 @@ from app.workflows.activities.journal_synthesis import (
     synthesize_daily_journal,
     synthesize_weekly_journal,
 )
+from app.workflows.activities.inbound_lead_capture import (
+    classify_email_as_lead,
+    classify_whatsapp_as_lead,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -291,6 +295,9 @@ async def run_orchestration_worker():
             # Auto-journal synthesis from conversations (Gap 1: auto-population)
             synthesize_daily_journal,
             synthesize_weekly_journal,
+            # Inbound lead capture activities (Sales Phase 2: Module 5)
+            classify_email_as_lead,
+            classify_whatsapp_as_lead,
         ],
     )
 

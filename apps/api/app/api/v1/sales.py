@@ -3,8 +3,10 @@ import uuid
 from typing import Optional, List
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
 from pydantic import BaseModel, EmailStr
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -12,6 +14,9 @@ from app.models import KnowledgeEntity, User
 from app.services.knowledge import knowledge_service
 
 router = APIRouter(prefix="/sales", tags=["sales"])
+
+# Rate limiting: 10 requests per minute per IP for web forms
+limiter = Limiter(key_func=get_remote_address)
 
 
 # ── Request/Response Models ──
@@ -58,7 +63,9 @@ def _classify_lead_source(source: Optional[str], email: Optional[str]) -> str:
 
 
 @router.post("/inbound", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("10/minute")
 def capture_inbound_lead(
+    request: Request,
     req: InboundLeadCreate,
     db: Session = Depends(deps.get_db),
     current_user: Optional[User] = Depends(deps.get_current_user),
