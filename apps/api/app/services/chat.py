@@ -293,13 +293,13 @@ def _generate_agentic_response(
         db.query(ChatMessage)
         .filter(ChatMessage.session_id == session.id)
         .order_by(ChatMessage.created_at.desc())
-        .limit(6)  # Last 6 messages (3 turns) — just for immediate context
-        .all()  # Full history available via MCP tools (search_knowledge, find_entities)
+        .limit(20)  # Last 20 messages (10 turns) for conversation continuity
+        .all()
     )
     history_lines = []
     for m in reversed(recent_msgs):
         role = "User" if m.role == "user" else "Assistant"
-        content = m.content[:300]
+        content = m.content[:800]
         history_lines.append(f"[{role}]: {content}")
         # Note if message had an attachment
         if m.context and isinstance(m.context, dict):
