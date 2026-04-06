@@ -247,6 +247,58 @@ async def draft_outreach(
 
     context = "\n".join(context_parts)
 
+    # Build channel-specific prompt for LLM personalization
+    if channel == "email":
+        prompt = (
+            f"Write a short, personalized cold outreach email ({tone} tone) to {name}.\n"
+            f"Context about them:\n{context}\n\n"
+            f"Requirements: under 120 words, one clear CTA, no generic opener like 'I hope this finds you well'.\n"
+            f"Return JSON: {{\"subject\": \"...\", \"body\": \"...\"}}"
+        )
+    elif channel == "whatsapp":
+        prompt = (
+            f"Write a short WhatsApp outreach message ({tone} tone) to {name}.\n"
+            f"Context: {context}\n\n"
+            f"Requirements: under 60 words, conversational, one question at the end.\n"
+            f"Return JSON: {{\"body\": \"...\"}}"
+        )
+    else:
+        prompt = (
+            f"Write a {channel} outreach message ({tone} tone) to {name}.\n"
+            f"Context: {context}\n\nReturn JSON: {{\"body\": \"...\"}}"
+        )
+
+    # Call LLM via internal API
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{_get_api_base_url()}/api/v1/local-ml/generate",
+                headers={"X-Internal-Key": _get_internal_key()},
+                json={"prompt": prompt, "tenant_id": tid, "max_tokens": 300},
+            )
+            if resp.status_code == 200:
+                import json as _json
+                raw = resp.json().get("text", "")
+                # Try to parse JSON from LLM output
+                try:
+                    start = raw.find("{")
+                    end = raw.rfind("}") + 1
+                    parsed = _json.loads(raw[start:end]) if start >= 0 else {}
+                except Exception:
+                    parsed = {}
+
+                return {
+                    "status": "success",
+                    "channel": channel,
+                    "subject": parsed.get("subject", f"Quick question for {name}"),
+                    "body": parsed.get("body", raw.strip()),
+                    "entity_name": name,
+                    "context": context,
+                }
+    except Exception as e:
+        logger.warning("LLM draft_outreach failed (%s), returning template", e)
+
+    # Fallback to template if LLM call fails
     if channel == "email":
         return {
             "status": "success",
@@ -255,22 +307,13 @@ async def draft_outreach(
             "body": f"Hi {name},\n\n[Personalize based on: {context}]\n\nBest regards",
             "entity_name": name,
             "context": context,
-            "note": "Draft template — personalize the body using the provided context.",
-        }
-    elif channel == "whatsapp":
-        return {
-            "status": "success",
-            "channel": "whatsapp",
-            "body": f"Hi {name}! [Personalize based on: {context}]",
-            "entity_name": name,
-            "context": context,
-            "note": "Short, conversational format for WhatsApp.",
+            "note": "Template fallback — LLM personalization unavailable.",
         }
     else:
         return {
             "status": "success",
             "channel": channel,
-            "body": f"Hi {name}, [Personalize based on: {context}]",
+            "body": f"Hi {name}! [Context: {context}]",
             "entity_name": name,
             "context": context,
         }
@@ -345,8 +388,7 @@ async def get_pipeline_summary(
 ) -> dict:
     """Get aggregate pipeline metrics across all leads for a tenant.
 
-    Queries knowledge entities to count leads at each pipeline stage
-    and calculate basic conversion metrics.
+    Uses SQL for accurate counts and total deal value per stage.
 
     Args:
         tenant_id: Tenant UUID (resolved from session if omitted).
@@ -354,34 +396,28 @@ async def get_pipeline_summary(
         ctx: MCP request context (injected automatically).
 
     Returns:
-        Dict with stages breakdown, total_leads, and stage counts.
+        Dict with stages breakdown, total_leads, total_value, and stage counts.
     """
     tid = resolve_tenant_id(ctx) or tenant_id
     if not tid:
         return {"error": "tenant_id is required."}
 
-    entities = await _search_entities(tid, query=category, limit=500)
+    api_base_url = _get_api_base_url()
+    internal_key = _get_internal_key()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{api_base_url}/api/v1/sales/internal/pipeline-summary",
+                headers={"X-Internal-Key": internal_key},
+                params={"tenant_id": tid, "category": category},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            logger.warning("pipeline-summary returned %s: %s", resp.status_code, resp.text[:200])
+    except Exception:
+        logger.exception("get_pipeline_summary failed")
 
-    stage_counts: dict = {}
-    total = 0
-    for entity in entities:
-        if entity.get("category") != category:
-            continue
-        total += 1
-        stage = entity.get("properties", {}).get("pipeline_stage", "unassigned")
-        stage_counts[stage] = stage_counts.get(stage, 0) + 1
-
-    stages = [
-        {"stage": stage, "count": count}
-        for stage, count in sorted(stage_counts.items(), key=lambda x: -x[1])
-    ]
-
-    return {
-        "status": "success",
-        "total_leads": total,
-        "stages": stages,
-        "category": category,
-    }
+    return {"error": "Failed to fetch pipeline summary"}
 
 
 @mcp.tool()
@@ -513,3 +549,166 @@ async def schedule_followup(
             "delay_hours": delay_hours,
             "note": f"Temporal scheduling failed ({e}), follow up manually.",
         }
+
+
+@mcp.tool()
+async def source_leads(
+    vertical: str,
+    location: str = "",
+    count: int = 10,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Source new prospect leads from web research for a given vertical and location.
+
+    Triggers the prospect_research pipeline via the internal API. Searches
+    Google News, company directories, and public sources (NOT LinkedIn scraping).
+
+    Args:
+        vertical: Industry vertical to target, e.g. "vet clinics", "SaaS startups", "law offices".
+        location: Geographic focus, e.g. "Santiago, Chile" or "Miami, FL". Optional.
+        count: Number of prospects to source (default: 10, max: 50).
+        tenant_id: Tenant UUID (resolved from session if omitted).
+        ctx: MCP request context (injected automatically).
+
+    Returns:
+        Dict with sourced count, entity IDs, and pipeline status.
+    """
+    tid = resolve_tenant_id(ctx) or tenant_id
+    if not tid:
+        return {"error": "tenant_id is required."}
+    if not vertical:
+        return {"error": "vertical is required."}
+
+    count = min(count, 50)
+    api_base_url = _get_api_base_url()
+    internal_key = _get_internal_key()
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{api_base_url}/api/v1/sales/internal/source-leads",
+                headers={"X-Internal-Key": internal_key, "X-Tenant-Id": tid},
+                json={"vertical": vertical, "location": location, "count": count},
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            return {"error": f"Source leads failed: {resp.status_code} {resp.text[:200]}"}
+    except Exception as e:
+        logger.error("source_leads failed: %s", e)
+        return {"error": str(e)}
+
+
+@mcp.tool()
+async def send_outreach(
+    lead_entity_id: str,
+    channel: str = "email",
+    approved: bool = False,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Send a pre-drafted outreach message to a lead (Module 3.4).
+
+    Fetches the outreach draft stored as an observation on the lead entity,
+    then sends it via the specified channel. Requires approved=True to prevent
+    accidental sends.
+
+    Args:
+        lead_entity_id: UUID of the lead entity to contact.
+        channel: "email" or "whatsapp" (default: "email").
+        approved: Must be True to actually send. Safety gate. Required.
+        tenant_id: Tenant UUID (resolved from session if omitted).
+        ctx: MCP request context (injected automatically).
+
+    Returns:
+        Dict with status, channel, and sent timestamp.
+    """
+    tid = resolve_tenant_id(ctx) or tenant_id
+    if not tid:
+        return {"error": "tenant_id is required."}
+    if not lead_entity_id:
+        return {"error": "lead_entity_id is required."}
+    if not approved:
+        return {
+            "status": "pending_approval",
+            "message": "Set approved=True to confirm sending this outreach.",
+            "lead_entity_id": lead_entity_id,
+            "channel": channel,
+        }
+
+    api_base_url = _get_api_base_url()
+    internal_key = _get_internal_key()
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Fetch lead entity to get draft observation and contact info
+            entity_resp = await client.get(
+                f"{api_base_url}/api/v1/knowledge/entities/{lead_entity_id}",
+                headers={"X-Internal-Key": internal_key, "X-Tenant-Id": tid},
+            )
+            if entity_resp.status_code != 200:
+                return {"error": f"Lead not found: {entity_resp.status_code}"}
+
+            entity = entity_resp.json()
+            props = entity.get("properties") or {}
+            name = entity.get("name", "Prospect")
+            email = props.get("email")
+            phone = props.get("phone") or props.get("whatsapp")
+
+            # Fetch latest outreach draft from observations
+            obs_resp = await client.get(
+                f"{api_base_url}/api/v1/knowledge/entities/{lead_entity_id}/observations",
+                headers={"X-Internal-Key": internal_key, "X-Tenant-Id": tid},
+            )
+            draft_body = None
+            draft_subject = f"Quick note for {name}"
+            if obs_resp.status_code == 200:
+                observations = obs_resp.json()
+                for obs in reversed(observations):
+                    if "outreach" in (obs.get("observation_type") or "").lower() or \
+                       "draft" in (obs.get("content") or "").lower():
+                        draft_body = obs.get("content")
+                        break
+
+            if not draft_body:
+                return {"error": "No outreach draft found. Run draft_outreach first."}
+
+            # Send via appropriate channel
+            sent = False
+            if channel == "email" and email:
+                send_resp = await client.post(
+                    f"{api_base_url}/api/v1/internal/send-email",
+                    headers={"X-Internal-Key": internal_key, "X-Tenant-Id": tid},
+                    json={"to": email, "subject": draft_subject, "body": draft_body},
+                )
+                sent = send_resp.status_code in (200, 201)
+            elif channel == "whatsapp" and phone:
+                send_resp = await client.post(
+                    f"{api_base_url}/api/v1/internal/send-whatsapp",
+                    headers={"X-Internal-Key": internal_key, "X-Tenant-Id": tid},
+                    json={"phone": phone, "message": draft_body},
+                )
+                sent = send_resp.status_code in (200, 201)
+            else:
+                return {"error": f"No {channel} contact info found for this lead."}
+
+            if sent:
+                # Update last_contact_date on entity
+                from datetime import datetime
+                updated_props = {**props, "last_contact_date": datetime.utcnow().isoformat(), "outreach_sent": True}
+                await client.patch(
+                    f"{api_base_url}/api/v1/knowledge/entities/{lead_entity_id}",
+                    headers={"X-Internal-Key": internal_key, "X-Tenant-Id": tid},
+                    json={"properties": updated_props},
+                )
+                return {
+                    "status": "sent",
+                    "channel": channel,
+                    "lead": name,
+                    "contact": email if channel == "email" else phone,
+                }
+            return {"error": "Send failed — check channel credentials."}
+
+    except Exception as e:
+        logger.error("send_outreach failed: %s", e)
+        return {"error": str(e)}

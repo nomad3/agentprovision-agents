@@ -62,10 +62,11 @@ async def execute_followup_action(input) -> dict:
             }
 
         elif action == "remind":
-            from app.models.knowledge_entity import KnowledgeObservation
+            from app.models.knowledge_observation import KnowledgeObservation
             obs = KnowledgeObservation(
                 id=uuid.uuid4(),
                 tenant_id=uuid.UUID(tenant_id),
+                entity_id=entity.id,  # Bug fix: was missing, observation was unlinked
                 observation_text=f"Follow-up reminder: {message or entity.name}",
                 observation_type="follow_up_reminder",
                 source_type="temporal_workflow",
@@ -73,6 +74,28 @@ async def execute_followup_action(input) -> dict:
             db.add(obs)
             db.commit()
             return {"status": "reminded", "action": action, "entity_name": entity.name}
+
+        elif action == "send_email":
+            # Email is sent via MCP layer — create a high-priority notification
+            # so Luna picks it up on next active session and sends it.
+            email = (entity.properties or {}).get("email")
+            from app.models.notification import Notification
+            notif = Notification(
+                tenant_id=uuid.UUID(tenant_id),
+                title=f"Send follow-up email to {entity.name}",
+                body=message or f"Time to follow up with {entity.name}" + (f" at {email}" if email else ""),
+                source="workflow",
+                priority="high",
+                event_metadata={
+                    "action": "send_email",
+                    "entity_id": str(entity.id),
+                    "entity_name": entity.name,
+                    "email": email,
+                },
+            )
+            db.add(notif)
+            db.commit()
+            return {"status": "queued", "action": action, "notification_id": str(notif.id), "entity_name": entity.name}
 
         else:
             return {"status": "error", "error": f"Unknown action: {action}"}
