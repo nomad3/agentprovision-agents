@@ -1,20 +1,23 @@
 """
-Commitment extraction and stakes context — Gap 3 (Learning: Stakes).
+Commitment extractor — auto-extract predictions/promises from Luna responses (Gap 3: Stakes).
 
-Automatically extracts commitments/predictions from Luna's responses:
-- "I'll send you a draft by tomorrow"
-- "This should solve the problem"
-- "Let me follow up with John this week"
-
-Stores as CommitmentRecord → tracks whether Luna follows through.
-Feeds back into system prompt: "You made 5 commitments, 4 fulfilled, 1 broken"
+Flow:
+  1. After Luna response: extract_commitments_from_response()
+     → identifies prediction/promise sentences
+     → creates CommitmentRecord with type="prediction", state="open"
+  2. Nightly: check_commitment_resolution()
+     → for due commitments, ask "Did this work?"
+     → user feedback → fulfilled_at or broken_at
+  3. On morning briefing: build_stakes_context()
+     → "You have 3 open commitments, 1 overdue"
+     → increases accountability/awareness
 """
 
 import re
 import uuid
 import logging
 from datetime import datetime, timedelta
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.commitment_record import CommitmentRecord
@@ -23,22 +26,22 @@ logger = logging.getLogger(__name__)
 
 # Patterns that indicate Luna is making a commitment/prediction
 _COMMITMENT_PATTERNS = [
-    # Explicit promises
-    (r"i'll (?:send|draft|write|schedule|create|follow up|reach out)", "follow_up_action"),
-    (r"i will (?:send|draft|schedule|create|follow up|reach out)", "follow_up_action"),
-    (r"let me (?:send|draft|schedule|create|follow up)", "follow_up_action"),
-    (r"(?:i|we) should (?:follow up|check in|reconnect)", "follow_up_action"),
-
-    # Predictions/claims about impact
-    (r"this (?:should|will|might) (?:solve|fix|help|improve|address|resolve)", "prediction"),
-    (r"that (?:should|will|might) (?:work|help|improve)", "prediction"),
-    (r"this is likely to (?:help|improve|work)", "prediction"),
-    (r"(?:you|they) (?:should|will|might) see (?:improvement|results|change)", "prediction"),
-
-    # Specific timeframes (stakes)
-    (r"(?:by|in|within|before|after) (?:tomorrow|today|next|this (?:week|month|friday))", "timed_commitment"),
-    (r"(?:in|within) \d+ (?:hours?|days?|weeks?)", "timed_commitment"),
+    (r"(?:i'll|i will|should|we'll|we will) (?:help|fix|solve|improve|increase|decrease|ensure)", "promise"),
+    (r"this (?:will|should|can|might) (?:help|work|improve|resolve|fix|increase)", "prediction"),
+    (r"(?:expect|predict|think|believe) (?:this|that|it) (?:will|should|might) (?:work|help|improve)", "prediction"),
+    (r"(?:next step|action item|follow.?up|todo) (?:is|are|should be|would be)", "action_item"),
+    (r"(?:i promise|i commit|we commit) to (?:send|reach|follow|schedule|create)", "promise"),
+    (r"(?:let me|let's) (?:follow up|check in|review|reconnect) (?:soon|next|tomorrow|in \d+ (?:days|hours))", "promise"),
+    (r"(?:by|before) (?:tomorrow|next week|end of day|eow|end of week)", "time_bound"),
 ]
+
+# Confidence scores for different pattern types
+_CONFIDENCE_SCORES = {
+    "promise": 0.95,
+    "prediction": 0.75,
+    "action_item": 0.85,
+    "time_bound": 0.90,
+}
 
 
 def extract_commitments_from_response(
@@ -46,168 +49,177 @@ def extract_commitments_from_response(
     tenant_id: uuid.UUID,
     response_text: str,
     message_id: Optional[uuid.UUID] = None,
-    agent_slug: str = "luna",
+    session_id: Optional[uuid.UUID] = None,
 ) -> List[CommitmentRecord]:
-    """Parse Luna's response for commitments/predictions and store as CommitmentRecord."""
+    """
+    Parse Luna's response for commitments/predictions and create CommitmentRecord entries.
+    Returns list of created commitment records.
+    """
     commitments = _parse_commitments(response_text)
     if not commitments:
         return []
 
     records = []
-    for text, ctype in commitments:
+    for text, ctype, confidence in commitments:
+        # Estimate due date from text if present
         due_at = _extract_due_date(text)
 
         commitment = CommitmentRecord(
             tenant_id=tenant_id,
-            owner_agent_slug=agent_slug,
-            title=_make_title(text),
+            owner_agent_slug="luna",
+            title=text[:200],
             description=text,
-            commitment_type=ctype,
+            commitment_type="prediction",  # All auto-extracted are predictions
             state="open",
             priority="normal",
-            source_type="chat_response",
-            source_ref={"message_id": str(message_id)} if message_id else {},
+            source_type="auto_extract",
+            source_ref={"pattern": ctype, "confidence": confidence},
             due_at=due_at,
         )
         db.add(commitment)
         db.flush()
+
         records.append(commitment)
 
-    db.commit()
-    logger.info(f"Extracted {len(records)} commitments for tenant {tenant_id}")
+    if records:
+        db.commit()
+        logger.info(f"Extracted {len(records)} commitments for tenant {tenant_id}")
+
     return records
 
 
-def build_stakes_context(db: Session, tenant_id: uuid.UUID) -> str:
-    """Build stakes context for system prompt."""
-    cutoff = datetime.utcnow() - timedelta(days=30)
+def build_stakes_context(
+    db: Session,
+    tenant_id: uuid.UUID,
+) -> str:
+    """
+    Build a text block for Luna's system prompt showing open commitments.
+    Gap 3: Increases accountability by making Luna aware of her promises.
+    """
+    # Get open and overdue commitments
+    now = datetime.utcnow()
 
-    open_count = db.query(CommitmentRecord).filter(
+    open_commitments = db.query(CommitmentRecord).filter(
         CommitmentRecord.tenant_id == tenant_id,
         CommitmentRecord.state == "open",
-    ).count()
+    ).all()
 
-    fulfilled_count = db.query(CommitmentRecord).filter(
-        CommitmentRecord.tenant_id == tenant_id,
-        CommitmentRecord.state == "fulfilled",
-        CommitmentRecord.fulfilled_at >= cutoff,
-    ).count()
+    overdue = [c for c in open_commitments if c.due_at and c.due_at < now]
 
-    broken_count = db.query(CommitmentRecord).filter(
-        CommitmentRecord.tenant_id == tenant_id,
-        CommitmentRecord.state == "broken",
-        CommitmentRecord.broken_at >= cutoff,
-    ).count()
-
-    overdue_count = db.query(CommitmentRecord).filter(
-        CommitmentRecord.tenant_id == tenant_id,
-        CommitmentRecord.state == "open",
-        CommitmentRecord.due_at < datetime.utcnow(),
-    ).count()
-
-    if open_count == 0 and fulfilled_count == 0 and broken_count == 0:
+    if not open_commitments:
         return ""
 
-    lines = ["## Your Commitments & Stakes"]
+    lines = [f"## Your Open Commitments ({len(open_commitments)} total)"]
 
-    if open_count > 0:
-        lines.append(f"**{open_count} open** commitment{'s' if open_count != 1 else ''}")
-        if overdue_count > 0:
-            lines.append(f"  ⚠️ {overdue_count} overdue — address these first")
+    if overdue:
+        lines.append(f"⚠️ **{len(overdue)} OVERDUE**")
+        for c in overdue[:3]:
+            days_overdue = (now - c.due_at).days
+            lines.append(f"  - {c.title[:50]}... (due {days_overdue}d ago)")
 
-    if fulfilled_count > 0 or broken_count > 0:
-        total_resolved = fulfilled_count + broken_count
-        rate = round(100 * fulfilled_count / total_resolved) if total_resolved else 0
-        lines.append(f"**{rate}% follow-through** ({fulfilled_count} fulfilled, {broken_count} broken in last 30d)")
+    upcoming = [c for c in open_commitments if c.due_at and c.due_at >= now]
+    if upcoming:
+        lines.append(f"\n📌 **{len(upcoming)} Upcoming**")
+        for c in upcoming[:3]:
+            days_until = (c.due_at - now).days
+            lines.append(f"  - {c.title[:50]}... (due in {days_until}d)")
 
-    if broken_count > 0:
-        lines.append(f"  ⚠️ {broken_count} broken → be more cautious with future commitments")
-
-    lines.append("\nMention upcoming commitments naturally in conversation. Check back when due.")
+    lines.append("\nRemember these commitments as you respond. Accountability matters.")
 
     return "\n".join(lines)
 
 
-def get_open_commitments(
+def get_commitment_stats(
     db: Session,
     tenant_id: uuid.UUID,
-    agent_slug: str = "luna",
-    limit: int = 10,
-) -> List[CommitmentRecord]:
-    """Get open commitments for Luna's morning briefing."""
-    return db.query(CommitmentRecord).filter(
-        CommitmentRecord.tenant_id == tenant_id,
-        CommitmentRecord.owner_agent_slug == agent_slug,
-        CommitmentRecord.state == "open",
-    ).order_by(CommitmentRecord.due_at).limit(limit).all()
+    days: int = 30,
+) -> dict:
+    """
+    Return fulfillment stats over last N days for system prompt injection.
+    Shows Luna how often she follows through.
+    """
+    cutoff = datetime.utcnow() - timedelta(days=days)
 
-
-def get_overdue_commitments(
-    db: Session,
-    tenant_id: uuid.UUID,
-    agent_slug: str = "luna",
-) -> List[CommitmentRecord]:
-    """Get overdue commitments that need urgent attention."""
-    return db.query(CommitmentRecord).filter(
+    all_commitments = db.query(CommitmentRecord).filter(
         CommitmentRecord.tenant_id == tenant_id,
-        CommitmentRecord.owner_agent_slug == agent_slug,
-        CommitmentRecord.state == "open",
-        CommitmentRecord.due_at < datetime.utcnow(),
+        CommitmentRecord.created_at >= cutoff,
     ).all()
+
+    if not all_commitments:
+        return {}
+
+    fulfilled = len([c for c in all_commitments if c.state == "fulfilled"])
+    broken = len([c for c in all_commitments if c.state == "broken"])
+    open_count = len([c for c in all_commitments if c.state == "open"])
+
+    total = fulfilled + broken + open_count
+    if total == 0:
+        return {}
+
+    return {
+        "total": total,
+        "fulfilled": fulfilled,
+        "broken": broken,
+        "open": open_count,
+        "fulfillment_rate": round(fulfilled / (fulfilled + broken), 2) if (fulfilled + broken) > 0 else 0,
+    }
 
 
 # --- Helpers ---
 
-def _parse_commitments(text: str) -> List[Tuple[str, str]]:
-    """Extract commitment sentences from response text."""
+def _parse_commitments(text: str) -> List[Tuple[str, str, float]]:
+    """Extract commitment/prediction sentences. Returns (text, type, confidence)."""
     sentences = re.split(r'(?<=[.!?])\s+', text)
     results = []
     seen = set()
 
     for sentence in sentences:
         sentence = sentence.strip()
-        if len(sentence) < 10 or len(sentence) > 300:
+        if len(sentence) < 15 or len(sentence) > 300:
             continue
 
         lower = sentence.lower()
         for pattern, ctype in _COMMITMENT_PATTERNS:
             if re.search(pattern, lower):
-                key = sentence[:80]
+                key = sentence[:60]
                 if key not in seen:
                     seen.add(key)
-                    results.append((sentence, ctype))
+                    confidence = _CONFIDENCE_SCORES.get(ctype, 0.7)
+                    results.append((sentence, ctype, confidence))
                 break
 
     return results
 
 
 def _extract_due_date(text: str) -> Optional[datetime]:
-    """Try to extract a due date from commitment text."""
+    """Extract due date from commitment text if present."""
+    now = datetime.utcnow()
     lower = text.lower()
-    
-    # Simple pattern matching for common time expressions
+
+    # tomorrow
     if "tomorrow" in lower:
-        return (datetime.utcnow() + timedelta(days=1)).replace(hour=17, minute=0, second=0)
-    if "today" in lower:
-        return datetime.utcnow().replace(hour=17, minute=0, second=0)
+        return now + timedelta(days=1)
+
+    # "in N days/hours"
+    match = re.search(r"in (\d+)\s*(days?|hours?)", lower)
+    if match:
+        count = int(match.group(1))
+        unit = match.group(2).lower()
+        if unit.startswith("day"):
+            return now + timedelta(days=count)
+        elif unit.startswith("hour"):
+            return now + timedelta(hours=count)
+
+    # "next week"
+    if "next week" in lower:
+        return now + timedelta(days=7)
+
+    # "end of day / eod"
+    if "end of day" in lower or "eod" in lower:
+        return now + timedelta(days=1)  # EOD today treated as EOD tomorrow for intent
+
+    # "this week"
     if "this week" in lower:
-        days_left = 7 - datetime.utcnow().weekday()
-        return (datetime.utcnow() + timedelta(days=days_left)).replace(hour=17, minute=0, second=0)
-    
-    # Parse "in N hours/days"
-    match = re.search(r'in (\d+) hours?', lower)
-    if match:
-        return datetime.utcnow() + timedelta(hours=int(match.group(1)))
-    
-    match = re.search(r'in (\d+) days?', lower)
-    if match:
-        return datetime.utcnow() + timedelta(days=int(match.group(1)))
+        return now + timedelta(days=5)
 
     return None
-
-
-def _make_title(text: str) -> str:
-    """Create a short title from commitment text."""
-    words = text.split()[:10]
-    title = " ".join(words).rstrip(".?!,")
-    return title[:100]
