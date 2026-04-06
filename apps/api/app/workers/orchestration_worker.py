@@ -12,6 +12,7 @@ from temporalio.worker import Worker
 
 from app.core.config import settings
 from app.workflows.dynamic_executor import DynamicWorkflowExecutor
+from app.workflows.gap1_journal_synthesis import Gap1JournalSynthesis
 from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
     dispatch_task,
@@ -140,6 +141,10 @@ from app.workflows.activities.morning_briefing import (
     create_daily_journal_entry,
     create_weekly_journal_summary,
 )
+from app.workflows.activities.journal_synthesis import (
+    synthesize_daily_journal,
+    synthesize_weekly_journal,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -178,6 +183,7 @@ async def run_orchestration_worker():
         task_queue=TASK_QUEUE,
         workflows=[
             DynamicWorkflowExecutor,
+            Gap1JournalSynthesis,
         ],
         activities=[
             dispatch_task,
@@ -282,6 +288,9 @@ async def run_orchestration_worker():
             synthesize_morning_briefing,
             create_daily_journal_entry,
             create_weekly_journal_summary,
+            # Auto-journal synthesis from conversations (Gap 1: auto-population)
+            synthesize_daily_journal,
+            synthesize_weekly_journal,
         ],
     )
 
