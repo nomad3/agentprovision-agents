@@ -186,7 +186,7 @@ def run_offline_evaluation(
     db: Session,
     tenant_id: uuid.UUID,
     experiment_id: uuid.UUID,
-) -> Optional[Dict]:
+) -> Optional[LearningExperiment]:
     """Run an offline evaluation of a policy candidate against historical RL data.
 
     Only uses exploration-routed experiences (randomized baseline) to avoid

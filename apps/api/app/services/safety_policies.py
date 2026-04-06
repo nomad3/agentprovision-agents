@@ -409,6 +409,8 @@ def _get_profile(action_type: ActionType, action_name: str) -> ActionRiskProfile
                 side_effect_level=SideEffectLevel.INTERNAL_STATE,
                 reversibility=Reversibility.UNKNOWN,
             )
+        else:
+            raise ValueError(f"Unknown governed action: {action_type.value}:{action_name}")
     return profile
 
 
