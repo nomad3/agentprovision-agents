@@ -404,7 +404,7 @@ async def add_services_to_aremko_reservation(
         Dict with success, servicios_agregados, nuevo_total, saldo_pendiente,
         and any new discounts applied.
     """
-    resolve_tenant_id(ctx) or tenant_id
+    tenant_id = resolve_tenant_id(ctx) or tenant_id
 
     if not servicios:
         return {"success": False, "error": "servicios list is required"}
