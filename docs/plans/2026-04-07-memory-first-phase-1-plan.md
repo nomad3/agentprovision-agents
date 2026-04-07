@@ -392,23 +392,17 @@ calls `recall()` ONCE per chat turn before dispatching to the CLI;
 no in-prompt "recall tool" exists in this design.
 """
 from typing import Optional
-from uuid import UUID
 from sqlalchemy.orm import Session
 from app.memory.types import RecallRequest, RecallResponse
 
 
-def recall(
-    db: Session,
-    tenant_id: UUID,
-    agent_slug: str,
-    query: str,
-    *,
-    chat_session_id: Optional[UUID] = None,
-    top_k_per_type: int = 5,
-    total_token_budget: int = 8000,
-    source_filter: Optional[list[str]] = None,
-) -> RecallResponse:
-    """Pre-load memory context for a chat turn. Implementation in Task 10."""
+def recall(db: Session, request: RecallRequest) -> RecallResponse:
+    """Pre-load memory context for a chat turn.
+
+    Takes a RecallRequest dataclass (mirrors the gRPC IDL exactly) so
+    Phase 2 cutover to Rust gRPC client is a no-op for callers.
+    Implementation in Task 10.
+    """
     raise NotImplementedError("Task 10 implements this")
 ```
 
@@ -1158,6 +1152,23 @@ git commit -m "feat(memory-first): migration 088 — workflow_id column on memor
 ## Phase 1.3 — `memory.recall()`
 
 **Goal:** Move the existing `build_memory_context()` (319 lines, `apps/api/app/services/memory_recall.py:342-661`) into `memory/recall.py` as a pure function returning `RecallResponse`. Add visibility filter. Add hard timeout. Hot path will switch in Phase 1.7.
+
+**SIGNATURE NOTE (locked in by code review of PR #130, post-Phase-1.2):**
+The `recall()` function takes a `RecallRequest` dataclass, NOT positional args:
+
+```python
+def recall(db: Session, request: RecallRequest) -> RecallResponse: ...
+```
+
+All test code blocks in this section show the legacy positional form for readability — when implementing, every caller MUST construct a `RecallRequest` first:
+
+```python
+from app.memory.types import RecallRequest
+req = RecallRequest(tenant_id=t, agent_slug="luna", query="who is Ray")
+resp = recall(db, req)
+```
+
+This contract mirrors the gRPC IDL exactly so Phase 2 cutover to a Rust gRPC client is a no-op for callers. The stub at `apps/api/app/memory/recall.py` already takes the dataclass form (committed in PR #130 review fix-up).
 
 ### Task 10: Port `build_memory_context()` to `memory.recall()`
 
