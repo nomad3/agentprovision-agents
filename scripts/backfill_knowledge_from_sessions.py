@@ -325,10 +325,15 @@ def seed_to_database(entities: list, observations: list, relations: list,
             entities_created += 1
 
             # Embed entity
+            # NOTE: content_type MUST be 'entity' (not 'knowledge_entity').
+            # The active code in app/services/knowledge.py:_safe_embed_entity
+            # writes 'entity', and all readers (search_entities_semantic,
+            # memory.recall) query 'entity'. Migration 089 fixes the historic
+            # rows from when this script wrote 'knowledge_entity' by mistake.
             try:
                 embed_and_store(
                     db, tenant_id=tid,
-                    content_type='knowledge_entity',
+                    content_type='entity',
                     content_id=str(entity.id),
                     text_content=f"{e['name']} ({e['entity_type']}): {e.get('category', '')}",
                 )
@@ -351,10 +356,12 @@ def seed_to_database(entities: list, observations: list, relations: list,
             observations_created += 1
 
             # Embed observation
+            # NOTE: content_type MUST be 'observation' (not 'knowledge_observation').
+            # See note above on entity for the same reason.
             try:
                 embed_and_store(
                     db, tenant_id=tid,
-                    content_type='knowledge_observation',
+                    content_type='observation',
                     content_id=str(obs.id),
                     text_content=o['content'][:500],
                 )
