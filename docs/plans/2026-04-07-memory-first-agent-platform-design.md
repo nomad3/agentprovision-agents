@@ -41,7 +41,7 @@ The ultimate product story: **"Enterprise agentic orchestration with a memory-fi
 
 ### Non-Goals (in this design)
 
-- **No full event-sourcing rewrite.** Existing tables stay; we add embedding columns and one new `memory_events` table where needed.
+- **No full event-sourcing rewrite.** Existing tables stay. No new event log table — the existing `memory_activities` audit log is extended with workflow attribution columns. See §4.4.
 - **No rewrite of existing Temporal workflows.** Business workflows (`DynamicWorkflowExecutor`, `CodeTaskWorkflow`, `DealPipelineWorkflow`, etc.) continue unchanged. They gain memory access via a new gRPC API.
 - **No MemGPT-style hierarchical memory paging.** Our three-layer model (working / episodic / semantic) is sufficient.
 - **No decentralized marketplace in Phases 1–3.** Phase 4 introduces cluster federation. Marketplace economics (creator/operator revenue splits) are a separate future spec.
@@ -139,13 +139,35 @@ The ultimate product story: **"Enterprise agentic orchestration with a memory-fi
 - 2–5x faster than Python sentence-transformers
 - First Rust service in production, template for memory-core extraction
 
-**chat-runtime (new K8s Deployment, Phase 3)**
-- Pods running warm Claude CLI subprocesses (one process per pod)
-- Subscribes to `servicetsunami-chat` Temporal task queue
-- Session affinity: same `session_id` routes to same pod via Temporal session API
-- HPA scales on queue depth and CPU
-- Replaces today's per-message cold-start subprocess pattern
-- Tenant isolation: per-call OAuth token, `--no-session-persistence`, no disk writes
+**chat-runtime (new K8s Deployment, Phase 3a)**
+
+This section was significantly tightened after review. An earlier draft said "warm Claude CLI subprocess per pod" which is architecturally wrong — `claude -p` is a one-shot process that exits after producing its response. There is no long-running CLI process to keep warm at the CLI level.
+
+**What chat-runtime actually saves** (honest accounting):
+
+1. **Container is already running** — no image pull, no pod schedule, no Python import cost. Spawning `claude -p` from an already-running container is ~100-300ms vs ~2-5s cold from a new pod.
+2. **Node.js + Claude Code module warm in OS page cache** — the second invocation on a pod is faster because binary and dependencies are cached.
+3. **OAuth token is pre-fetched and held in-memory** — first turn on a pod fetches the token; subsequent turns reuse it (within TTL, with refresh).
+4. **MCP server connections are warm** — the pod maintains long-lived HTTP connections to `mcp-tools`; each `claude -p` call references these via `--mcp-config`.
+5. **Filesystem is pre-populated** — `CLAUDE.md` template and `mcp.json` pre-written; per-turn changes are deltas, not full rewrites.
+
+**Net per-turn saving: ~2s** (cold subprocess spawn + MCP handshake + token fetch → ~300-600ms warm). Not the "5-10s" the first draft implied. The bigger latency win comes from pre-loaded memory recall (avoiding round-trip MCP tool calls for recall during the turn), NOT from the pod warmth.
+
+**A long-running CLI supervisor** (true single-process multi-turn via the Claude Agent SDK) is a separate architectural bet and is **out of scope for this spec**. Phase 4+ may add a `long-running-agent-supervisor` sub-design if the saving is worth the complexity.
+
+Concrete Phase 3a shape:
+
+- K8s Deployment with HPA on Temporal queue depth
+- Each pod runs a Temporal worker on `servicetsunami-chat` queue
+- Worker is a Python supervisor that:
+  - Receives `ChatCliActivity` from Temporal
+  - Spawns `claude -p --no-session-persistence --mcp-config /config/mcp.json --append-system-prompt @/tmp/claude-md-{turn_id}.md` as a subprocess
+  - Streams stdout back, returns the activity result
+  - **Keeps no cross-request state in Python memory** (tenant isolation safety)
+- **Session affinity**: same `chat_session_id` → same worker pod within session lifetime. **Primary approach**: Temporal session API. **Fallback**: Redis-backed sticky hash map (`session_id` → pod IP, lease TTL = session idle timeout). Prototype session affinity in Phase 3a kickoff; if Temporal API doesn't fit, switch to Redis-based sticky routing.
+- OAuth token cache: per-pod, keyed by `(tenant_id, integration_name)`, TTL = token expiry. Cache miss → API internal endpoint.
+- MCP connection pool: per-pod HTTP keepalive to `mcp-tools`.
+- Tenant isolation: `--no-session-persistence`, per-call OAuth token via env, no disk writes, subprocess stdout cleared after each call.
 
 **ingestion-worker (new Temporal worker)**
 - Runs source ingestion workflows:
@@ -189,7 +211,7 @@ Explicit fate of every file in the current memory/chat path. Prevents ambiguity 
 |---|---|---|
 | `apps/api/app/services/chat.py` | Chat HTTP handler, history building, session memory | **Refactor**: becomes thin HTTP layer that calls `memory.recall()` and dispatches workflow. History building moves to memory package. |
 | `apps/api/app/services/cli_session_manager.py` | Builds CLAUDE.md, dispatches ChatCliWorkflow | **Refactor**: `generate_cli_instructions()` stays, but memory context injection moves to calling `memory.recall()` instead of assembling from multiple services. Hardcoded brain-gap blocks stay removed. |
-| `apps/api/app/services/enhanced_chat.py` | Legacy enhanced chat service (mostly unused) | **Delete** in Phase 1 if confirmed unused; otherwise delete in Phase 2. |
+| `apps/api/app/services/enhanced_chat.py` | In-use — `EnhancedChatService`, imported by `apps/api/app/api/v1/chat.py` and `test_whitelabel.py`. | **Keep**. Refactor only to consume `memory.recall()` for context, don't delete. |
 | `apps/api/app/services/context_manager.py` | Conversation summarization, token counting | **Refactor**: token counting stays as utility; conversation summarization moves into `EpisodeWorkflow`. |
 | `apps/api/app/services/commitment_extractor.py` | Currently a no-op stub (disabled yesterday) | **Delete** in Phase 1. Replaced by `PostChatMemoryWorkflow.detect_commitment` Gemma4 activity. |
 | `apps/api/app/services/memory_recall.py` | Builds memory context blob for CLI prompt | **Delete** in Phase 1. Logic moves into `memory.recall()` in the new package. |
@@ -206,75 +228,90 @@ Everything else in `apps/api/app/services/` stays untouched in Phase 1.
 
 ## 4. Data Model
 
-### 4.1. Existing tables that stay
+### 4.1. Existing schema inventory and reuse
 
-All existing memory tables (from the audit) stay with additive changes only. No destructive migrations.
+**Two existing tables we were about to accidentally clobber** — this needs to be addressed explicitly because the first draft of this spec proposed a `session_journals` table that would have collided with one already in production.
 
-- `knowledge_entities` — add `embedding vector(768)` if not already present
-- `knowledge_observations` — already has embedding
-- `knowledge_relations` — no change
-- `chat_sessions` — no change
-- `chat_messages` — **add `embedding vector(768)` column** (new)
-- `commitment_records` — **add `embedding vector(768)` column** (new)
-- `goal_records` — **add `embedding vector(768)` column** (new)
-- `behavioral_signals` — already has embedding
-- `world_state_assertions` — no change
-- `world_state_snapshots` — no change
-- `agent_memories` — already has `content_embedding`
-- `memory_activities` — no change
-- `plans`, `plan_steps`, `plan_assumptions` — no change
-- `embeddings` — no change (generic embedding table)
+| Table | Migration | Current shape | Intent | Our use |
+|---|---|---|---|---|
+| `conversation_episodes` | `075_add_conversation_episodes.sql` | `session_id FK`, `summary`, `key_topics JSONB`, `key_entities JSONB`, `mood`, `outcome`, `message_count`, `source_channel`, `embedding vector(768)`, HNSW index | Per-conversation episode records | **THIS is the episode table. Reuse and extend.** |
+| `session_journals` | `083_add_session_journals.sql` | `period_start DATE`, `period_end DATE`, `period_type='week'`, `key_themes`, `key_accomplishments`, `key_challenges`, `mentioned_people`, `mentioned_projects`, `episode_count`, `message_count`, `embedding vector(768)` | Weekly rollup narrative | **Keep as-is, honestly a weekly rollup.** Generated by `NightlyConsolidationWorkflow.consolidate_weekly_theme`. |
 
-### 4.2. New tables
+**Decision**: reuse `conversation_episodes` as the episode layer. Add the fields our design needs via additive migration:
 
-**`session_journals`** — rolling conversation episode summaries.
 ```sql
-CREATE TABLE session_journals (
-    id UUID PRIMARY KEY,
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    chat_session_id UUID NOT NULL REFERENCES chat_sessions(id),
-    agent_slug VARCHAR(100),             -- participating agent
-    window_start TIMESTAMPTZ NOT NULL,   -- first message in the episode
-    window_end TIMESTAMPTZ NOT NULL,     -- last message in the episode
-    message_count INTEGER NOT NULL,
-    summary TEXT NOT NULL,               -- Gemma4-generated narrative summary
-    key_entities TEXT[],                 -- extracted entity names
-    topics TEXT[],                       -- inferred topics
-    sentiment VARCHAR(20),               -- positive / neutral / concerned / escalated
-    embedding VECTOR(768),
-    generated_by VARCHAR(50) NOT NULL,   -- "gemma4" | "sonnet" | etc.
-    trigger_reason VARCHAR(30) NOT NULL, -- "window_full" | "idle_timeout" | "end_of_day" | "manual"
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT uk_session_window UNIQUE (chat_session_id, window_start, window_end)
-);
-CREATE INDEX idx_session_journals_tenant_time ON session_journals(tenant_id, window_end DESC);
-CREATE INDEX idx_session_journals_embedding ON session_journals USING ivfflat (embedding vector_cosine_ops);
+-- Migration 086_extend_conversation_episodes.sql
+ALTER TABLE conversation_episodes
+    ADD COLUMN IF NOT EXISTS agent_slug VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS window_start TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS window_end TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS trigger_reason VARCHAR(30),  -- 'window_full' | 'idle_timeout' | 'end_of_day' | 'manual'
+    ADD COLUMN IF NOT EXISTS generated_by VARCHAR(50);    -- 'gemma4' | 'sonnet' | ...
+
+-- Idempotency guard for trigger races (see §6.3)
+CREATE UNIQUE INDEX IF NOT EXISTS uk_conv_episodes_session_window
+    ON conversation_episodes(session_id, window_start, window_end)
+    WHERE window_start IS NOT NULL;
 ```
 
-**`memory_events`** — append-only log of memory mutations (for audit + future event-sourcing).
-```sql
-CREATE TABLE memory_events (
-    id UUID PRIMARY KEY,
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    event_type VARCHAR(50) NOT NULL,     -- "entity_created" | "commitment_created" | ...
-    source_type VARCHAR(50) NOT NULL,    -- "chat" | "email" | "calendar" | "jira" | ...
-    source_id VARCHAR(200),              -- raw source's native ID
-    actor_slug VARCHAR(100),             -- agent or system that created the memory
-    target_table VARCHAR(50) NOT NULL,   -- which memory table was affected
-    target_id UUID NOT NULL,             -- PK of the affected record
-    payload JSONB,                       -- minimal event payload
-    visibility VARCHAR(20) DEFAULT 'tenant_wide',
-    workflow_id VARCHAR(200),            -- Temporal workflow id (for replay/audit)
-    workflow_run_id VARCHAR(200),
-    confidence REAL DEFAULT 1.0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-CREATE INDEX idx_memory_events_tenant_time ON memory_events(tenant_id, created_at DESC);
-CREATE INDEX idx_memory_events_source ON memory_events(tenant_id, source_type, source_id);
-CREATE INDEX idx_memory_events_target ON memory_events(target_table, target_id);
-```
+The existing rows (no `window_start`) stay valid because the unique index is partial. All new rows created by `EpisodeWorkflow` get proper window boundaries.
 
-This is NOT a full event-sourcing rewrite — the canonical state still lives in the typed tables. `memory_events` is an audit log. Phase 2 or later can add projections from the log if we want event-sourcing properly.
+`session_journals` as the weekly rollup stays where it is. `NightlyConsolidationWorkflow.consolidate_weekly_theme` writes into it (it's already half-wired per the audit).
+
+**Renaming avoided on purpose** — `session_journals` is already referenced by `session_journal_service.py` which is half-wired. Renaming it breaks more than it fixes. The confusion is resolved by clear naming in code comments and the decommissioning map.
+
+### 4.2. Embedding storage: inline columns vs generic table
+
+The existing `embeddings` table (migration `042_add_pgvector_and_embeddings.sql`) provides generic `(content_type, content_id, embedding, text_content)` storage and is already used for several content types including `chat_message`. Some newer tables (`knowledge_observations`, `behavioral_signals`, `conversation_episodes`) added **inline** `embedding` columns instead.
+
+**Choice for this design**: **use the generic `embeddings` table for chat messages, commitments, and goals**, and leave the existing inline columns on observations/signals/episodes alone.
+
+Rationale:
+
+- **Hot-path recall queries** (`recall` on a user turn) already need a JOIN anyway because they combine multiple content types. One JOIN per type from `embeddings` is fine at current scale and pushes the embedding storage into a single index rather than scattered per-table IVFFLAT indexes.
+- **Cold/heterogeneous content** (random tool outputs, attachments, episode summaries) fits the generic pattern naturally — no schema change per new content type.
+- **No migration needed on `chat_messages`, `commitment_records`, `goal_records`** — writes go to the `embeddings` table with `content_type = 'chat_message' | 'commitment' | 'goal'` and the appropriate `content_id`. Saves three migrations and keeps the existing schema thin.
+- **Existing inline columns stay** — `knowledge_observations.embedding`, `behavioral_signals.embedding`, `conversation_episodes.embedding` are tightly coupled to their table and queried alongside the row's other fields. Moving them is net-negative churn.
+
+This decision inverts the first draft of this spec (which proposed inline columns on `chat_messages` et al.) and aligns with the established house pattern. The trade-off is one JOIN per recall; we accept it for schema hygiene.
+
+### 4.3. Table changes summary
+
+All additive. No destructive migrations.
+
+| Table | Change |
+|---|---|
+| `knowledge_entities` | No change (has embedding) |
+| `knowledge_observations` | No change (has embedding) |
+| `knowledge_relations` | No change |
+| `chat_sessions` | No change |
+| `chat_messages` | **No schema change.** Embeddings stored in `embeddings` table with `content_type='chat_message'`. |
+| `commitment_records` | **No schema change.** Embeddings stored in `embeddings` table with `content_type='commitment'`. Add `visibility` + `visible_to` (§4.4). |
+| `goal_records` | **No schema change.** Embeddings in `embeddings` table with `content_type='goal'`. Add `visibility` + `visible_to`. |
+| `behavioral_signals` | Add `visibility` + `visible_to`. Inline embedding stays. |
+| `world_state_assertions` | No change |
+| `world_state_snapshots` | No change |
+| `agent_memories` | Add `visibility` + `visible_to`. Inline `content_embedding` stays. |
+| `memory_activities` | No change |
+| `plans`, `plan_steps`, `plan_assumptions` | No change |
+| `conversation_episodes` | **Extend** with `agent_slug`, `window_start`, `window_end`, `trigger_reason`, `generated_by` (migration 086). Unique index on `(session_id, window_start, window_end)`. |
+| `session_journals` | No change. Weekly rollups only. Written by `NightlyConsolidationWorkflow`. |
+| `embeddings` | No change. Reused for chat messages, commitments, goals. |
+
+### 4.4. New tables
+
+**We already have a `memory_activities` audit log** (from the audit in Section 15) and it covers most of what the first draft of this doc proposed as a new `memory_events` table. **Decision: drop `memory_events` from Phase 1 scope.**
+
+Reasoning:
+
+- The reviewer flagged (correctly) that the first draft sat in the worst of both worlds — paying the storage cost of an event log without building projections from it, and leaving audit coverage partial (sync writes had no `workflow_id`, async writes did).
+- `memory_activities` already logs entity_created, entity_updated, relation_created, memory_created, action_triggered (from the audit). It's tenant-scoped and has an attribution field.
+- Phase 1 can extend `memory_activities` with one new event type (`workflow_triggered_change`) if we need workflow attribution. That's cheaper and consistent.
+- If we later want true event-sourcing (projections, replay, time-travel debugging), introduce it as a Phase 5 separate spec with proper scope. Not now.
+
+**Action**: extend `memory_activities` with `workflow_id VARCHAR(200)` and `workflow_run_id VARCHAR(200)` columns (nullable) via an additive migration. Both memory-core sync writes and memory workflows populate them when the mutation happens inside a workflow context. Sync writes without a workflow context leave them NULL — which is honest about the provenance, not partial coverage.
+
+No new `memory_events` table. No new index juggling. One less thing to maintain.
 
 ### 4.3. Existing columns that become first-class
 
@@ -314,9 +351,11 @@ For really large historical datasets (100k+ chat messages), the workflow continu
 @dataclass
 class MemoryEvent:
     tenant_id: UUID
-    source_type: Literal["chat", "email", "calendar", "jira", "github",
-                          "ads", "scraper", "upload", "voice", "sql",
-                          "device", "mcp", "inbox_monitor"]
+    source_type: str  # free-text discriminator, registered in source_adapter_registry
+                      # known values: chat, email, calendar, jira, github, ads,
+                      # scraper, upload, voice, sql, device, mcp, inbox_monitor
+                      # New sources register themselves in the adapter registry
+                      # without requiring a schema/enum migration.
     source_id: str                # raw source's native ID
     source_metadata: dict         # arbitrary source-specific metadata
     actor_slug: str | None        # agent or user that created the source data
@@ -334,7 +373,7 @@ class MemoryEvent:
     visibility: str               # default tenant_wide
 ```
 
-Every source adapter takes raw source data and emits a list of `MemoryEvent` objects. The downstream write pipeline turns those into typed rows across the memory tables and creates `memory_events` log entries.
+Every source adapter takes raw source data and emits a list of `MemoryEvent` objects. The downstream write pipeline turns those into typed rows across the memory tables and writes `memory_activities` audit rows (with workflow attribution).
 
 ---
 
@@ -456,36 +495,88 @@ This is the critical design constraint that makes Phase 2 a rewrite (not a re-ar
 ```
 1. User message arrives at api (HTTP POST /chat/sessions/{id}/messages)
 2. api authenticates, loads session, rolls back any poisoned DB state
-3. api calls embedding-service.Embed(message) via gRPC       [~20ms]
-4. api calls memory.recall(tenant_id, agent_slug, message_embedding)
+3. api calls agent_router.route(message, session) → decides fast/slow path, selects agent [~30ms]
+   └── If router says "trivial" (greeting, ack, short Q) → skip recall entirely
+4. api calls embedding-service.Embed(message) via gRPC       [~20ms]
+5. api calls memory.recall(tenant_id, agent_slug, message_embedding)
    ├── Python (Phase 1) or Rust gRPC (Phase 2)
    ├── pgvector queries in parallel: entities, observations,
    │   past_conversations, episodes, commitments, goals, world_state
    ├── Ranked by weighted score (semantic 0.55, recency 0.20,
    │   confidence 0.15, source_priority 0.10)
    ├── Filtered by agent visibility
-   ├── Bounded by total token budget (default 8K)
-   └── Returns MemoryContext object                          [~80-150ms]
-5. api builds CLAUDE.md with pre-loaded memory context
+   ├── Bounded by total token budget (default 4K — see §6.1.1)
+   ├── SOFT timeout: 500ms (p99 target). If exceeded, proceed with
+   │   what we have so far (degraded context).
+   ├── HARD timeout: 1500ms. If exceeded, degrade to working-window-
+   │   only (level 4 in §6.5 degradation ordering).
+   └── Returns MemoryContext object                          [~80-200ms p50]
+6. api builds CLAUDE.md with pre-loaded memory context
    (no tool call needed — it's all already there)
-6. api dispatches ChatCliWorkflow to Temporal with session affinity
-7. Temporal routes to a chat-runtime pod (same session → same pod)
-   ├── If the pod has a warm Claude CLI process, message streams to it
-   └── If not, pod spins one up (cold path, ~5s)
-8. Claude responds (Haiku for fast path, Sonnet for slow path)
-9. Response streams back to api
-10. api saves user message + assistant message to DB
-11. api calls embedding-service.EmbedBatch([user_msg, assistant_msg])
-    └── Writes embedding to chat_messages.embedding so they're
-        recallable on the NEXT turn                          [~40ms]
+7. api dispatches ChatCliWorkflow to Temporal with session affinity
+8. Temporal routes to a chat-runtime pod (same session → same pod)
+   ├── Container is already running; spawns fresh `claude -p` subprocess
+   ├── Pre-warmed OS cache, pre-fetched OAuth token, pre-established
+   │   MCP connections → subprocess spawn cost ~300-600ms (not 2-5s)
+9. Claude responds (Haiku for fast path, Sonnet for slow path)
+10. Response streams back to api
+11. api saves user message + assistant message to DB
 12. api dispatches PostChatMemoryWorkflow (async, fire-and-forget)
+    └── embedding of the user+assistant messages happens INSIDE this
+        workflow, not inline. The turn returns to the user without
+        waiting. Messages become recallable ~500ms-2s after the
+        response (acceptable because the next turn is usually >5s away).
 13. api returns HTTP 201 to user
 ```
 
-Target latencies:
-- **Fast path** (greetings, simple Q&A, Haiku, no tool calls): 1.5–2.5s
-- **Slow path** (Sonnet, 1–3 tool calls, analytical turns): 5–15s
-- **Cold chat-runtime pod** (first turn after scale-up): add ~3–5s one-time
+### 6.1.1. Token budget for CLAUDE.md / system prompt
+
+For a fast-path Haiku turn (200K context window):
+
+| Component | Tokens (target) | Notes |
+|---|---|---|
+| Claude Code scaffolding (baseline system prompt, tool descriptions) | ~4,000 | Fixed cost from `claude -p` |
+| Skill body (Luna persona, operating principles) | ~2,000 | From skill registry |
+| MCP tool manifest (81 tools) | ~6,000 | From `mcp.json` — consider pruning to agent-scoped tool subset |
+| **Pre-loaded memory context (from memory.recall)** | **~4,000** | **Budget for all recalled entities, observations, commitments, goals, episodes, past conversations** |
+| Recent conversation history (last N messages, full-length, budget cap) | ~8,000 | Tenant-tuneable, cap via `max_history_tokens` setting |
+| Current user message | ~200 | |
+| Headroom (safety margin, tool call overhead) | ~10,000 | |
+| **Total** | **~34,200** | Out of 200,000 — comfortable |
+
+The first-draft "50K history budget" was too aggressive given the other fixed costs. **Revised to 8K** for history. With 4K for recall context + 8K for history, memory-related context is 12K of a ~34K total prompt — room to grow, headroom preserved.
+
+**Action item (Phase 1)**: add instrumentation that logs the actual prompt size per turn so we can tune these caps against real traffic.
+
+### 6.1.2. Latency budget (revised)
+
+Honest budget for fast-path p50 <2s target, **conditional on Phase 3a warm chat-runtime pods**:
+
+| Stage | Budget (fast path) | Notes |
+|---|---|---|
+| HTTP + auth + session load | 20ms | |
+| Router decision | 30ms | Embedding + rule match |
+| `embedding-service.Embed` | 20ms | Rust; Python ~30-50ms |
+| `memory.recall` (SOFT 500ms, HARD 1500ms) | 150ms p50 / 500ms p99 | 6 pgvector queries in parallel |
+| Temporal dispatch + session routing | 50ms | Session affinity lookup |
+| **chat-runtime subprocess spawn** | **400ms** | **Warm pod assumption. Cold pod = +2-4s.** |
+| Claude API inference (Haiku, no tool calls, short response) | 800ms | 50-200 output tokens |
+| Response streaming + DB writes | 50ms | |
+| **Fast-path p50 target** | **~1.5s** | Conditional on all above |
+| **Fast-path p95 target** | **~3s** | Allows 500ms recall + 2s inference worst case |
+
+**Slow path** (Sonnet, 1-3 tool calls, analytical response):
+
+| Stage | Budget |
+|---|---|
+| Platform overhead (same as fast path) | ~700ms |
+| Claude API inference (Sonnet, with thinking + tool calls) | 3-8s |
+| Each tool call (MCP round-trip) | 500-1500ms |
+| Response streaming + DB writes | 100ms |
+| **Slow-path p50 target** | **~6-10s** |
+| **Slow-path p95 target** | **~20s** |
+
+**Pre-Phase-3a reality check**: With today's cold subprocess + per-message CLAUDE.md rebuild, fast-path p50 is realistically **4-8s**. The <2s target is **unlocked by Phase 3a**. Phase 1 and Phase 2 success criteria should use a **6s fast-path p50 target** and be re-baselined after Phase 3a ships.
 
 ### 6.2. Write path: PostChatMemoryWorkflow
 
@@ -499,7 +590,7 @@ PostChatMemoryWorkflow(tenant_id, chat_session_id, user_msg_id, assistant_msg_id
     - Call Gemma4 (via Ollama) with extraction prompt
     - Parse structured output: entities, observations, relations
     - Call memory.IngestEvents with the extracted items
-    - Update memory_events audit log
+    - Write to memory_activities audit log (with workflow_id)
 
   [Activity 2: detect_commitment]
     - Call Gemma4 with commitment classification prompt
@@ -562,7 +653,7 @@ NightlyConsolidationWorkflow(tenant_id):
   [Activity 1: merge_duplicate_entities]
     - For each entity with low recall count, find semantic neighbors
     - If similarity > 0.95 and same category, merge with higher-confidence one
-    - Create memory_events audit entries
+    - Create memory_activities audit entries
 
   [Activity 2: decay_old_confidences]
     - For assertions older than N days, apply exponential decay
@@ -634,6 +725,21 @@ def visible_records_for(agent_slug: str, records: Query):
 ```
 
 Applied at the memory-core query layer. Business logic above never filters — the memory API does it.
+
+**Index plan** (required by Phase 1 migration 088):
+
+```sql
+-- Composite index for the common "tenant + tenant-wide or agent-scoped to me" query
+CREATE INDEX idx_commitment_records_visibility
+    ON commitment_records (tenant_id, visibility, owner_agent_slug);
+
+-- GIN index for agent_group membership lookup
+CREATE INDEX idx_commitment_records_visible_to
+    ON commitment_records USING GIN (visible_to)
+    WHERE visibility = 'agent_group';
+```
+
+Same pattern applied to `goal_records`, `behavioral_signals`, `agent_memories`, `knowledge_entities`. At today's scale (331 entities, 4817 observations) these are free; the indexes pay off once any tenant crosses 10k+ records. Worth paying upfront to avoid schema changes under load later.
 
 ### Examples
 
@@ -806,39 +912,78 @@ Both strategies use the same helm chart; only the values differ.
 
 ## 10. Phasing
 
-### Phase 1: Python memory layer + embedding service + chat ingester (3-4 weeks)
+### Phase 0: Prerequisites (1 week, before Phase 1 starts)
 
-**Goal**: fix Luna's current problem. Docker Compose still in use. No K8s yet.
+- **Full gRPC IDL frozen** and committed as `docs/plans/2026-04-07-memory-first-grpc-idl.proto` — this is the contract Phase 1 Python signatures are designed around.
+- **Gemma4 commitment-classification gold set** — 200 labeled user/assistant messages from current production data. Half with commitments, half without. Target F1 ≥ 0.75 to retire the regex stub. If below threshold, commitment classification is NOT retired in Phase 1.
+- **Recall accuracy gold set** — 30 labeled questions against `saguilera1608@gmail.com` real production data (Integral, Levi's, Ray Aristy, fintech leads). Threshold ≥ 80% for Phase 1 acceptance.
+- **Decommission map verification** — grep for `enhanced_chat`, `context_manager`, `session_journal_service` usage in the repo and update Section 3.4 with concrete per-file decisions (no "TBD" entries).
 
-Deliverables:
-- `apps/api/app/memory/` package with `recall`, `record_*`, `ingest_events` APIs (Python, designed around the future gRPC contract)
-- Embedding columns added to `chat_messages`, `commitment_records`, `goal_records`
-- `session_journals` and `memory_events` tables created (migrations)
-- Embedding-service Rust container with gRPC, dockerized, wired via gRPC
-- Python memory package calls embedding-service for all embeddings
-- ChatAdapter (source adapter for chat messages)
-- PostChatMemoryWorkflow (Temporal, on memory-worker queue — reuses orchestration-worker for now)
-- EpisodeWorkflow + IdleEpisodeScanWorkflow
-- Gemma4-based commitment classification (replaces the disabled regex extractor)
-- Pre-loaded memory context in the chat hot path (replaces ad-hoc context building)
-- Full conversation history (untruncated, 50K budget) in CLAUDE.md — keeps yesterday's fix
-- End-to-end test: Luna recalls entities, commitments, past conversations without tool calls
+### Phase 1: Python memory layer + chat ingester (6-8 weeks)
 
-### Phase 2: Rust memory-core extraction (4-6 weeks)
+**Goal**: fix Luna's current memory and latency problems. Docker Compose still in use. No K8s. **Python only — no Rust in Phase 1.**
 
-**Goal**: migrate memory computation to Rust. Python memory package becomes a gRPC client.
+**Rust `embedding-service` is deferred to Phase 2** — the hot path uses a single query embedding (~20-50ms in Python) and all bulk embedding is async. The 2-5x Rust speedup matters for Phase 3 multi-tenant scale, not for Phase 1. Moving it out of Phase 1 cuts scope and removes a prerequisite (the candle/ort benchmark), letting the Python path ship faster.
 
 Deliverables:
-- `memory-core/` Rust crate with `candle` embedding, pgvector queries, ranking, ingestion, reconciliation
-- gRPC IDL finalized (from the Phase 1 Python API)
-- Port embedding path first (biggest perf win)
-- Port ranking next (hot path)
-- Port ingestion adapters for chat (Phase 1 adapter re-implemented in Rust)
-- Python memory package rewritten as thin gRPC client
-- Benchmark: 2-5x faster hot path, lower memory footprint
-- Memory-core Deployment added to helm charts (even though still Docker Compose)
-- NightlyConsolidationWorkflow
-- EntityMergeWorkflow, WorldStateReconciliationWorkflow
+
+1. `apps/api/app/memory/` package with `recall`, `record_*`, `ingest_events` Python APIs, signatures designed to match the Phase 0 gRPC IDL 1:1
+2. Migrations:
+   - `086_extend_conversation_episodes.sql` (window_start, window_end, trigger_reason, agent_slug, generated_by, partial unique index)
+   - `087_extend_memory_activities.sql` (workflow_id, workflow_run_id)
+   - `088_add_visibility_to_memory_tables.sql` (visibility, visible_to on commitment_records, goal_records, behavioral_signals, agent_memories, knowledge_entities)
+3. Deleted files (per §3.4): `memory_recall.py`, `commitment_extractor.py`
+4. Refactored files: `chat.py`, `cli_session_manager.py`, `behavioral_signals.py`, `session_journal_service.py`
+5. Pre-loaded memory context in the chat hot path (replaces ad-hoc context building)
+6. Conversation history in CLAUDE.md capped at **8K tokens** (revised from 50K — see §6.1.1)
+7. `ChatAdapter` source adapter
+8. `PostChatMemoryWorkflow` on existing `servicetsunami-orchestration` queue (no new worker deployment):
+   - `extract_knowledge` activity (Gemma4)
+   - `detect_commitment` activity (Gemma4, gated on Phase 0 gold set F1)
+   - `update_world_state` activity
+   - `update_behavioral_signals` activity
+   - `embed_messages` activity (post-hoc embedding via sentence-transformers)
+9. `EpisodeWorkflow` + `IdleEpisodeScanWorkflow` (writes to extended `conversation_episodes` table)
+10. `BackfillEmbeddingsWorkflow` — on first Phase 1 startup, backfill 1,239+ chat messages + 331 entities + 4,817 observations
+11. `agent_router` integration: router returns "trivial" classification to skip recall on greetings/acks
+12. Instrumentation: log per-turn prompt token counts so we can tune caps with real data
+13. Integration test suite covering recall accuracy (≥80% on gold set), cross-tenant isolation, agent scoping, episode trigger races
+14. Feature flag `USE_MEMORY_V2` — rollback guard
+
+**Explicitly NOT in Phase 1**:
+- Rust embedding-service (moved to Phase 2)
+- memory-core as a separate service (Phase 2)
+- K8s deployment (Phase 3a)
+- Chat-runtime warm pods (Phase 3a)
+- Additional source adapters beyond chat (Phase 3b)
+
+### Phase 2: Rust memory-core + embedding-service (6-10 weeks)
+
+**Goal**: migrate memory computation to Rust. Python memory package becomes a gRPC client. First Rust services in production.
+
+**Realistic budget**: 6-10 weeks, not 4-6. First production Rust service for a team doesn't slip 20% — it slips 50-100%. We plan for the slip.
+
+Phase 2 prerequisites (must complete before Phase 2 starts):
+- Phase 1 stable in production ≥ 1 week
+- `candle` vs `ort` benchmark — 1-2 day spike on the Phase 1 codebase to decide embedding runtime
+- Rust dev environment set up on the dev box (toolchain, tonic, sqlx, candle)
+
+Deliverables:
+- `embedding-service/` Rust crate: gRPC server, candle + nomic-embed-text-v1.5, containerized
+- `memory-core/` Rust crate: gRPC server, pgvector via sqlx, ranking, reconciliation
+- Port order:
+  1. **embedding-service** first (smallest scope, biggest speedup for backfill + Phase 3 scale)
+  2. `memory.recall` ranking/scoring logic (Phase 1 Python → Rust port)
+  3. `memory.record_*` sync writes (small)
+  4. Ingestion chat adapter (Phase 1 Python → Rust port)
+  5. World state reconciliation
+- Python memory package becomes a gRPC client shim calling memory-core
+- **Dual-write validation phase**: for 1 week, every memory write goes to BOTH Python and Rust. Shadow reads compare rankings.
+  - **Tolerance threshold**: top-3 entity IDs must match exactly; top-10 must have Jaccard ≥ 0.9.
+  - **Cutover criterion**: 99% of queries meet tolerance for 3 consecutive days.
+  - **Rollback**: keep Python as fallback for 1 release cycle after cutover.
+- `NightlyConsolidationWorkflow` (with `consolidate_weekly_theme` writing to `session_journals`)
+- `EntityMergeWorkflow`, `WorldStateReconciliationWorkflow`
 
 ### Phase 3a: K8s migration + chat-runtime (4-5 weeks)
 
@@ -895,28 +1040,37 @@ Deliverables:
 
 | Phase | Duration | Infra | Deliverable |
 |---|---|---|---|
-| 1 | 3-4 weeks | Docker Compose | Python memory layer, Rust embedding-service, chat ingester, fix Luna's current problems |
-| 2 | 4-6 weeks | Docker Compose | Rust memory-core extraction, dual-write validation, flip to Rust-primary |
-| 3a | 4-5 weeks | **K8s** (first use) | Helm charts, kind/k3s local, chat-runtime warm pods, session affinity |
+| 0 | 1 week | Docker Compose | gRPC IDL freeze, gold sets built, decommission map verified |
+| 1 | **6-8 weeks** | Docker Compose | Python memory layer, chat ingester, pre-loaded recall, Gemma4 commitment classification, backfill workflow. **No Rust.** |
+| 2 | **6-10 weeks** | Docker Compose | Rust `embedding-service` + `memory-core` extraction, dual-write validation, flip to Rust-primary. Nightly consolidation workflows. |
+| 3a | **4-5 weeks** | **K8s** (first use) | Helm charts, kind/k3s local, chat-runtime pods with warm container + per-turn subprocess, session affinity prototype, namespace-isolated single-cluster deployment |
 | 3b | 3-4 weeks | K8s | Email, calendar, Jira, GitHub, ads ingesters + customer onboarding |
-| 4 | parallel | K8s | Rust federation daemon, exotic sources, marketplace |
+| 4 | parallel | K8s | Rust federation daemon (cluster-to-cluster), exotic sources, marketplace, long-running CLI supervisor sub-design |
 
-**Total to "customer-ready enterprise platform": 14-19 weeks.** Start date 2026-04-08, Phase 3b done between late July and early August 2026.
+**Total to "single-cluster enterprise ready" (end of Phase 3b): 20-27 weeks** (~5-6 months). Start 2026-04-08, Phase 3b complete between September and November 2026.
+
+**Important product-marketing note**: End of Phase 3b delivers **single-cluster enterprise** (Integral runs their own cluster, Levi's runs theirs, both fully isolated). End of Phase 4 delivers **federated multi-cluster** (the decentralized network story). The go-to-market team should distinguish these in customer conversations — don't promise federation when only single-cluster is shipping.
 
 ---
 
 ## 11. Success Criteria
 
-**Technical**
+**Technical — conditional on phase**
 
-- Fast path latency: p50 < 2s, p95 < 4s for conversational turns
-- Slow path latency: p50 < 10s, p95 < 30s for tool-orchestration turns
-- Memory recall accuracy: Luna correctly answers "who is X" / "what did we discuss" / "what are my open commitments" without tool calls, for X/topics discussed up to 30 days ago
-- Zero cross-tenant data leaks in automated integration tests
-- Zero `InFailedSqlTransaction` errors in production logs
-- Chat message embedding lag: < 500ms from save to recallable
-- PostChatMemoryWorkflow completion: p95 < 10s (async, doesn't affect user latency)
-- Embedding service throughput: ≥ 200 req/s per replica (vs ~40 req/s with Python sentence-transformers)
+| Criterion | Phase 1 target | Phase 2 target | Phase 3a+ target |
+|---|---|---|---|
+| Fast-path latency p50 | < 6s | < 5s | **< 2s** (requires warm chat-runtime) |
+| Fast-path latency p95 | < 12s | < 10s | **< 4s** |
+| Slow-path latency p50 | < 12s | < 10s | < 8s |
+| Slow-path latency p95 | < 40s | < 30s | < 20s |
+| Memory recall accuracy on gold set (30 questions) | ≥ 80% | ≥ 85% | ≥ 90% |
+| Zero cross-tenant data leaks (integration tests) | hard requirement | hard | hard |
+| `InFailedSqlTransaction` errors | 0 in prod logs | 0 | 0 |
+| PostChatMemoryWorkflow p95 | < 30s | < 15s | < 10s |
+| Chat message recall lag (after save) | < 3s | < 2s | < 1s |
+| Embedding throughput per replica | ~40 req/s (Python) | **≥ 200 req/s (Rust)** | ≥ 200 req/s |
+
+Gold set for recall accuracy: 30 labeled questions over saguilera1608@gmail.com's real production session (Integral, Levi's, fintech leads, Ray Aristy, etc.) where we know the correct answer. Luna must find it without calling a recall tool. Built as a Phase 1 prerequisite.
 
 **Product**
 
@@ -1044,8 +1198,8 @@ No phase starts until the previous phase meets its anti-success criteria AND its
 10. **gRPC vs HTTP+protobuf** — gRPC is the default; HTTP+protobuf as fallback if any component has trouble with HTTP/2.
 11. **Schema migration tooling** — current `migrations/` folder is manual SQL; consider Alembic for Phase 1.
 12. **Ollama deployment model in K8s** — native host is fine on a dev Mac (M-series GPU), but enterprise K8s clusters need either a GPU node pool or external Ollama. Document both options in Phase 3a.
-13. **`memory_events` retention policy** — partition by month, drop after 12 months by default. Tenant-configurable.
-14. **Fast-path intent gating** — should trivial messages ("hey", "thanks", "ok") skip the recall step entirely? Local Gemma4 intent classifier at ~30ms could shave recall overhead off ~30% of turns. Worth considering for the fast-path target.
+13. **`memory_activities` retention policy** — currently unbounded. Phase 2: partition by month, drop after 12 months by default. Tenant-configurable.
+14. **Fast-path intent gating is already partially solved.** The existing `agent_router.py` does deterministic routing with zero LLM cost. The right question isn't "add gating" but "how does `memory.recall` integrate with `agent_router`?". **Decision in Phase 1**: `agent_router.route()` runs first, returns a `trivial=True` flag for greetings/acks, and the chat hot path skips `memory.recall` entirely when trivial. No new classifier; reuse what's there.
 
 ---
 
@@ -1083,5 +1237,5 @@ No phase starts until the previous phase meets its anti-success criteria AND its
 - Hardcoded Gap 1/2/3 system prompt injection blocks (retired — memory is now surfaced via unified recall)
 - `claude -p --resume` session bloat path (retired — session management is platform-owned)
 - 800-char chat history truncation (retired — full messages up to 50K budget)
-- `chat_session.memory_context` JSONB blob as a primary state holder (kept but deprecated in favor of proper memory layer)
+- `chat_session.memory_context` JSONB blob — **removed in Phase 1**. Phase 1 migration `089_drop_chat_session_memory_context.sql` drops the column after confirming no readers remain. The blob currently holds stale ADK session IDs and `claude_code_cli_session_id` (which we stopped writing yesterday). Keeping it creates drift.
 - Ad-hoc threading for auto-scoring / knowledge extraction (retired — all async writes go through Temporal workflows)
