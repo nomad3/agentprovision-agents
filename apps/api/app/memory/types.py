@@ -137,6 +137,9 @@ class MemoryEvent:
     actor_slug: Optional[str] = None
     source_metadata: dict[str, Any] = field(default_factory=dict)
     text: Optional[str] = None
+    # NOTE: gRPC IDL has this as `structured_json: optional string` (JSON-encoded
+    # at the wire boundary). Python uses dict for ergonomics — Phase 2 Rust client
+    # will JSON-encode at gRPC serialization. Field name divergence is intentional.
     structured: Optional[dict[str, Any]] = None
     media_ref: Optional[str] = None
     proposed_entities: list[dict[str, Any]] = field(default_factory=list)

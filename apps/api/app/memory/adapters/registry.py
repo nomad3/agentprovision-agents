@@ -24,3 +24,20 @@ def get_adapter(source_type: str) -> SourceAdapter:
 
 def list_source_types() -> list[str]:
     return sorted(_REGISTRY.keys())
+
+
+def unregister_adapter(source_type: str) -> None:
+    """Remove an adapter from the registry. Used by tests for isolation;
+    not called by production code."""
+    _REGISTRY.pop(source_type, None)
+
+
+def snapshot_registry() -> dict[str, SourceAdapter]:
+    """Return a shallow copy of the registry. Used by tests to save+restore."""
+    return dict(_REGISTRY)
+
+
+def restore_registry(snapshot: dict[str, SourceAdapter]) -> None:
+    """Replace the registry with a snapshot. Used by tests to restore state."""
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)
