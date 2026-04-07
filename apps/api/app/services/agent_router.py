@@ -247,7 +247,7 @@ def route_and_execute(
     # Per-decision-point config overrides global env vars when available
     import random
     exploration_mode = os.environ.get("EXPLORATION_MODE", "off")
-    exploration_rate = float(os.environ.get("EXPLORATION_RATE", "0.1"))
+    exploration_rate = float(os.environ.get("EXPLORATION_RATE", "0.0"))
     routing_source = "default"
 
     # Check per-decision-point exploration config (set by autonomous learning)
@@ -263,7 +263,9 @@ def route_and_execute(
         ).first()
         if dp_config:
             exploration_mode = dp_config.exploration_mode or exploration_mode
-            exploration_rate = float(dp_config.exploration_rate or exploration_rate)
+            # Use `is not None` so a DB value of 0.0 is respected (don't fall back).
+            if dp_config.exploration_rate is not None:
+                exploration_rate = float(dp_config.exploration_rate)
     except Exception:
         pass  # Table may not exist yet
 

@@ -146,8 +146,8 @@ def get_exploration_rate(db: Session, tenant_id: uuid.UUID, decision_point: str)
         overrides = features.rl_settings.get("per_decision_overrides", {})
         if decision_point in overrides and "exploration_rate" in overrides[decision_point]:
             return overrides[decision_point]["exploration_rate"]
-        return features.rl_settings.get("exploration_rate", 0.1)
-    return 0.1
+        return features.rl_settings.get("exploration_rate", 0.0)
+    return 0.0
 
 
 def get_exploration_rate_with_decay(

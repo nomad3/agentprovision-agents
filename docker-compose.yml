@@ -39,7 +39,7 @@ services:
       - PROVIDER_COUNCIL_SAMPLE_RATE=${PROVIDER_COUNCIL_SAMPLE_RATE:-0.05}
       - EXPLORATION_MODE=${EXPLORATION_MODE:-off}
       - CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS:-}
-      - EXPLORATION_RATE=${EXPLORATION_RATE:-0.05}
+      - EXPLORATION_RATE=${EXPLORATION_RATE:-0.0}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
