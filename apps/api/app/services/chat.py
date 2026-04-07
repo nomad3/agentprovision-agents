@@ -282,25 +282,35 @@ def _generate_agentic_response(
                     agent_slug = skill.slug
                     break
 
-    # Build recent conversation history for CLI context
+    # Build recent conversation history for CLI context.
+    # Strategy: fit as many recent messages as possible into a 50KB budget,
+    # keeping messages full-length. We walk newest→oldest, adding full
+    # messages until we hit the cap. Older messages beyond the cap are
+    # dropped entirely (rather than showing a truncated stub that confuses
+    # the model). This preserves rich responses like lead gen lists intact.
     recent_msgs = (
         db.query(ChatMessage)
         .filter(ChatMessage.session_id == session.id)
         .order_by(ChatMessage.created_at.desc())
-        .limit(20)  # Last 20 messages (10 turns) for conversation continuity
+        .limit(30)  # Pull up to 30; budget decides how many fit
         .all()
     )
-    history_lines = []
-    for m in reversed(recent_msgs):
+    max_total = 50000  # ~12K tokens budget for history
+    kept = []  # (idx, line) newest→oldest
+    total_chars = 0
+    for m in recent_msgs:  # newest first
         role = "User" if m.role == "user" else "Assistant"
-        content = m.content[:800]
-        history_lines.append(f"[{role}]: {content}")
-        # Note if message had an attachment
+        line = f"[{role}]: {m.content}"
         if m.context and isinstance(m.context, dict):
             attachment = m.context.get("attachment")
             if attachment:
-                history_lines.append(f"  (attached: {attachment.get('type', 'file')} — {attachment.get('name', 'unnamed')})")
-    summary = "\n\n".join(history_lines)
+                line += f"\n  (attached: {attachment.get('type', 'file')} — {attachment.get('name', 'unnamed')})"
+        if total_chars + len(line) > max_total and kept:
+            break  # stop before exceeding budget, but keep at least one
+        kept.append(line)
+        total_chars += len(line)
+    # Reverse to chronological order for the prompt
+    summary = "\n\n".join(reversed(kept))
 
     # If media_parts present, extract image data for CLI
     cli_message = user_message
@@ -368,17 +378,14 @@ def _generate_agentic_response(
     agent_tier = context.get("agent_tier", "full") if context else "full"
     tool_groups = context.get("tool_groups", []) if context else []
 
-    # Save CLI session ID and recalled entity names for cross-turn continuity
+    # Save recalled entity names for cross-turn continuity.
+    # NOTE: CLI session_id is NOT persisted — we intentionally run each
+    # Claude invocation as a fresh one-shot session (see workflows.py).
+    # Resuming accumulates unbounded JSONL state that grows to 16+ MB and
+    # causes slow startup + lossy context compaction.
     if context and isinstance(context, dict):
         _mem_dirty = False
         _mem = dict(session.memory_context or {})
-
-        cli_session_id = context.get("claude_session_id") or context.get("claude_cli_session_id")
-        if cli_session_id:
-            # Key matches what cli_session_manager reads: f"{platform}_cli_session_id"
-            platform_key = context.get("platform", "claude_code")
-            _mem[f"{platform_key}_cli_session_id"] = cli_session_id
-            _mem_dirty = True
 
         # Persist recalled entity names so the next turn can boost them
         recalled_entity_names = context.get("recalled_entity_names")

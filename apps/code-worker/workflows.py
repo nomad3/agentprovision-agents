@@ -966,8 +966,12 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             if codex_result.success:
                 return codex_result
 
-            # Codex failed — fallback to Claude Code regardless of error type
+            # Codex failed — fallback to Claude Code regardless of error type.
+            # IMPORTANT: clear the model slug since Codex-specific slugs
+            # (e.g. "codex-mini") are not valid Claude models. Let Claude
+            # use its own default.
             logger.warning("Codex failed (%s), falling back to Claude Code", codex_result.error[:200] if codex_result.error else "unknown")
+            task_input.model = ""  # reset to Claude default
             claude_result = _execute_claude_chat(task_input, session_dir)
             if claude_result.success:
                 meta = dict(claude_result.metadata or {})
@@ -1025,9 +1029,20 @@ def _execute_claude_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliR
     if os.path.isdir(WORKSPACE):
         cmd.extend(["--add-dir", WORKSPACE])
 
-    # Resume previous conversation if session_id is available
-    if task_input.session_id:
-        cmd.extend(["--resume", task_input.session_id])
+    # NOTE: --resume intentionally NOT used. Previously we stored an
+    # ever-growing session_id per chat and resumed it on every message.
+    # For long conversations (Luna on WhatsApp), the JSONL session file
+    # grew to 16+ MB, causing:
+    #   - slow startup (loading + parsing the full file)
+    #   - lossy context compaction (old details silently dropped)
+    #   - context loss on specific entities (names, prior lead gen lists)
+    # Instead, each `claude -p` invocation is a fresh one-shot session,
+    # and the caller (chat.py) is responsible for passing the last N
+    # messages via --append-system-prompt. This gives deterministic,
+    # bounded context under our control.
+    # Use --no-session-persistence to avoid leaking JSONL files on every
+    # call (842+ files were accumulated in the previous model).
+    cmd.append("--no-session-persistence")
 
     claude_md_path = os.path.join(session_dir, "CLAUDE.md")
     if os.path.exists(claude_md_path):
