@@ -296,48 +296,13 @@ def generate_cli_instructions(
             lines.append(f"- **{c.get('title', '')}**{due}")
         lines.append("")
 
-    # ── Brain Gap context blocks (Gap 1/2/3) ──────────────────────────────────
-    # Full tier only — Gap 1 calls Ollama/Gemma4 (~10-15s) which kills light-tier latency.
-    # Gap 2/3 are DB-only (~50ms) but still unnecessary for greetings/simple chat.
-    if limits.get("include_goals", True):  # proxy for "full tier"
-        try:
-            import uuid as _uuid
-            _tid = _uuid.UUID(tenant_name) if len(tenant_name) > 30 else None
-            if _tid:
-                from app.db.session import SessionLocal as _SL
-                _gdb = _SL()
-                try:
-                    # Gap 1: Morning briefing (session journal continuity)
-                    # NOTE: calls summarize_conversation_sync() → Ollama/Gemma4
-                    from app.services.session_journals import session_journal_service
-                    briefing = session_journal_service.synthesize_morning_context(
-                        db=_gdb, tenant_id=_tid, days_lookback=7
-                    )
-                    if briefing:
-                        lines.append("## Your Recent Activity (Last 7 Days)")
-                        lines.append("")
-                        lines.append(briefing)
-                        lines.append("")
-
-                    # Gap 2: Behavioral learning context (suggestion performance)
-                    from app.services.behavioral_signals import build_learning_context
-                    learning = build_learning_context(_gdb, _tid)
-                    if learning:
-                        lines.append(learning)
-                        lines.append("")
-
-                    # Gap 3: Live stakes context (open + overdue commitments)
-                    from app.services.commitment_extractor import build_stakes_context
-                    stakes = build_stakes_context(_gdb, _tid)
-                    if stakes:
-                        lines.append(stakes)
-                        lines.append("")
-                except Exception:
-                    pass
-                finally:
-                    _gdb.close()
-        except Exception:
-            pass
+    # Brain gap context injection (Gap 1 morning briefing, Gap 2 behavioral,
+    # Gap 3 stakes) removed. These blocks were hardcoded to always inject into
+    # every system prompt, polluting context with topics Luna had already
+    # resolved. Memory recall, commitment awareness, and behavioral learning
+    # should flow through the existing RL/memory/knowledge-graph pipeline
+    # (semantic recall via embeddings, tool-based commitment creation),
+    # not via hardcoded text injection on every message.
 
     # World model context: current state, unstable assumptions, causal patterns
     world_model = memory_context.get("world_model", {})

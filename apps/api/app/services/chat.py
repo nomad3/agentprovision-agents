@@ -707,32 +707,10 @@ def _generate_agentic_response(
     except Exception:
         pass
 
-    # 5. Commitment extraction — parse Luna's response for explicit promises/predictions
-    #    and store as CommitmentRecord rows for Gap 3 (Stakes).
-    try:
-        def _extract_commitments():
-            from app.db.session import SessionLocal as _SL
-            from app.services.commitment_extractor import extract_commitments_from_response
-
-            edb = _SL()
-            try:
-                extract_commitments_from_response(
-                    db=edb,
-                    tenant_id=_tenant_id,
-                    response_text=_response_text,
-                    message_id=_assistant_msg_id,
-                    session_id=_session_id,
-                )
-            except Exception:
-                import logging as _log
-                _log.getLogger(__name__).debug("Commitment extraction failed", exc_info=True)
-                edb.rollback()
-            finally:
-                edb.close()
-
-        threading.Thread(target=_extract_commitments, daemon=True).start()
-    except Exception:
-        pass
+    # 5. Commitment extraction — DISABLED.
+    # Regex-matching Luna's output to auto-create commitments was creating junk
+    # data from explanations and third-person text. Proper path: Luna creates
+    # commitments via explicit tool call (commitments API) when she decides to.
 
     # 6. Confidence scoring — score the response for uncertainty level and
     #    store in execution trace context for RL and observability (Gap 4).

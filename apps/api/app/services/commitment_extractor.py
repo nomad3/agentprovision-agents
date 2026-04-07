@@ -1,49 +1,32 @@
 """
-Commitment extraction — auto-capture Luna's predictions and promises (Gap 3: Stakes).
+Commitment extractor — DISABLED.
 
-Identifies sentences where Luna makes implicit or explicit commitments:
-- "I'll send you..." → follow_up commitment
-- "This should solve..." → prediction commitment
-- "Let me check..." → task commitment
-- "I recommend..." → recommendation commitment with stakes
+Auto-extraction of commitments from Luna's responses via regex was removed
+because:
+  1. Patterns were always either too broad (extracting third-person
+     descriptions) or too narrow (missing genuine commitments).
+  2. Extracted fragments polluted Luna's system prompt and caused
+     self-referential loops (Luna explaining Gap 3 → extractor creates
+     "Gap 3" commitment → next prompt includes it → Luna explains Gap 3
+     again).
+  3. We already have RL + embeddings + knowledge graph for proper
+     context management. Regex-matching LLM output is the wrong layer.
 
-Creates CommitmentRecord entries with:
-- type = prediction|follow_up|task|recommendation
-- state = open (until resolved/broken)
-- due_at = inferred or set to next morning briefing time
+Proper path forward: Luna creates commitments via explicit tool calls
+(commitments API) when she decides to, and they're recalled via semantic
+search on the knowledge graph when relevant.
+
+This module now exposes no-op stubs for the legacy callers.
 """
 
-import re
-import uuid
 import logging
-from datetime import datetime, timedelta
-from typing import List, Tuple, Optional
+import uuid
+from typing import List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.commitment_record import CommitmentRecord
 
 logger = logging.getLogger(__name__)
-
-# Patterns that indicate commitment/prediction
-_COMMITMENT_PATTERNS = [
-    # Direct promises
-    (r"i(?:'ll| will) (?:send|draft|write|schedule|reach out|follow up|check|investigate)", "follow_up"),
-    (r"(?:let me|let's) (?:send|draft|schedule|check|look into|investigate)", "follow_up"),
-    (r"want me to (?:send|draft|schedule|create|follow up)", "follow_up"),
-
-    # Predictions with stakes
-    (r"this (?:should|will|ought to|might) (?:solve|fix|help|work|improve)", "prediction"),
-    (r"i (?:think|expect|predict|believe) (?:this|it) (?:will|should)", "prediction"),
-    (r"that (?:should|will|would) (?:address|resolve|help|improve)", "prediction"),
-
-    # Recommendations
-    (r"i (?:recommend|suggest|advise|propose) (?:you|we|that you)", "recommendation"),
-    (r"best (?:approach|path|move|next step) (?:would|is) ", "recommendation"),
-
-    # Tasks
-    (r"(?:i'll|let me|i need to) (?:create|log|track|add|set up) (?:a|this) (?:task|ticket|reminder)", "task"),
-    (r"(?:you should|remember to) (?:follow up|check in|review)", "task"),
-]
 
 
 def extract_commitments_from_response(
@@ -54,95 +37,37 @@ def extract_commitments_from_response(
     session_id: Optional[uuid.UUID] = None,
     agent_slug: str = "luna",
 ) -> List[CommitmentRecord]:
-    """Parse Luna's response for commitments/predictions and create CommitmentRecord entries."""
-    commitments = _parse_commitments(response_text)
-    if not commitments:
-        return []
-
-    records = []
-    for text, ctype in commitments:
-        now = datetime.utcnow()
-        next_morning = (now + timedelta(days=1)).replace(hour=8, minute=0, second=0, microsecond=0)
-
-        record = CommitmentRecord(
-            tenant_id=tenant_id,
-            owner_agent_slug=agent_slug,
-            created_by=None,
-            title=_extract_title(text),
-            description=text,
-            commitment_type=ctype,
-            state="open",
-            priority="normal",
-            source_type="response_extraction",
-            source_ref={"message_id": str(message_id), "session_id": str(session_id)} if message_id else {},
-            due_at=next_morning,
-        )
-        db.add(record)
-        db.flush()
-        records.append(record)
-
-    if records:
-        db.commit()
-        logger.info(f"Extracted {len(records)} commitments for tenant {tenant_id}")
-
-    return records
+    """No-op. Auto-extraction disabled — see module docstring."""
+    return []
 
 
 def build_stakes_context(db: Session, tenant_id: uuid.UUID) -> str:
-    """Build stakes context for system prompt. Gap 3 (Stakes) feature."""
-    now = datetime.utcnow()
-    open_records = db.query(CommitmentRecord).filter(
+    """No-op. Stakes context is no longer injected into every system prompt.
+
+    Commitment awareness should flow through semantic recall on demand,
+    not via hardcoded injection on every message.
+    """
+    return ""
+
+
+def get_commitment_stats(db: Session, tenant_id: uuid.UUID, days: int = 30) -> dict:
+    """Return actual stats from the DB (no extraction, just counts)."""
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    rows = db.query(CommitmentRecord).filter(
         CommitmentRecord.tenant_id == tenant_id,
-        CommitmentRecord.state == "open",
+        CommitmentRecord.created_at >= cutoff,
     ).all()
-
-    if not open_records:
-        return ""
-
-    total = len(open_records)
-    overdue = sum(1 for r in open_records if r.due_at and r.due_at < now)
-
-    lines = [f"## Your Open Commitments ({total})"]
-    if overdue:
-        lines.append(f"⚠️ **{overdue} overdue** — check back with user")
-
-    by_type = {}
-    for r in open_records:
-        t = r.commitment_type or "task"
-        by_type[t] = by_type.get(t, 0) + 1
-
-    for ctype, count in sorted(by_type.items()):
-        lines.append(f"- {count} {ctype}")
-
-    lines.append("")
-    lines.append("Remember: You made these commitments. Follow through. Your word matters.")
-
-    return "\n".join(lines)
-
-
-def _parse_commitments(text: str) -> List[Tuple[str, str]]:
-    """Extract commitment sentences from response text."""
-    sentences = re.split(r'(?<=[.!?])\s+', text)
-    results = []
-    seen = set()
-
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if len(sentence) < 15 or len(sentence) > 400:
-            continue
-
-        lower = sentence.lower()
-        for pattern, ctype in _COMMITMENT_PATTERNS:
-            if re.search(pattern, lower):
-                key = sentence[:60]
-                if key not in seen:
-                    seen.add(key)
-                    results.append((sentence, ctype))
-                break
-
-    return results
-
-
-def _extract_title(text: str) -> str:
-    """Extract a short title from commitment text."""
-    return text[:100].rstrip(".!?")
+    if not rows:
+        return {}
+    fulfilled = sum(1 for c in rows if c.state == "fulfilled")
+    broken = sum(1 for c in rows if c.state == "broken")
+    open_count = sum(1 for c in rows if c.state == "open")
+    total = len(rows)
+    return {
+        "total": total,
+        "fulfilled": fulfilled,
+        "broken": broken,
+        "open": open_count,
+        "fulfillment_rate": round(fulfilled / total, 2) if total else 0,
+    }
