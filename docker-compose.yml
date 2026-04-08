@@ -136,6 +136,8 @@ services:
     build:
       context: ./apps/code-worker
       dockerfile: Dockerfile
+    env_file:
+      - ./apps/api/.env
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - API_BASE_URL=http://api:8000
