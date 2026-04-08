@@ -175,11 +175,29 @@ def route_and_execute(
     if features and hasattr(features, 'default_cli_platform') and features.default_cli_platform:
         platform = features.default_cli_platform
 
-    # Pin to Claude Code when the session has an active --resume session ID.
-    # Switching to Codex (one-shot) mid-conversation breaks context continuity.
+    # Pin to Claude Code when the session has substantial conversation history.
+    #
+    # ORIGINAL intent: detect an active --resume session ID and avoid switching
+    # to a one-shot platform mid-conversation. But --resume was removed in
+    # commit 4b6dae99 ("stop --resume on Claude CLI to prevent runaway session
+    # bloat"). After that change, claude_code_cli_session_id is never set, so
+    # the check became dead and EVERY short reply in an ongoing session was
+    # falling through to the short-message local path (line 389), which uses
+    # local_inference.py:561's 800-char history truncation.
+    #
+    # Concrete production impact: Aremko's WhatsApp booking flow receives short
+    # replies like "Hornopiren", "Si 16:45", "1", "ok" — all <= 100 chars with
+    # no semantic intent match — and was routing each one to local Gemma4 with
+    # only ~3 turns of context. Multi-step bookings would fall apart.
+    #
+    # REPLACEMENT: pin to Claude when conversation_summary has substantial
+    # content. The 500-char threshold is ~125 tokens / ~3 short messages —
+    # any real conversation crosses it within 2-3 turns. Fresh single-turn
+    # sessions (just "hola") still take the local fast path.
     _mem = db_session_memory or {}
-    _has_claude_session = _mem.get("claude_code_cli_session_id") or _mem.get("claude_cli_session_id")
-    if _has_claude_session:
+    _legacy_resume_session = _mem.get("claude_code_cli_session_id") or _mem.get("claude_cli_session_id")
+    _has_substantial_history = len((conversation_summary or "").strip()) >= 500
+    if _legacy_resume_session or _has_substantial_history:
         platform = "claude_code"
         _pin_to_claude = True
     else:
