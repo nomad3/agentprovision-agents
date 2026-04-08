@@ -12,7 +12,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.data_source.DataSource])
+@router.get("", response_model=List[schemas.data_source.DataSource])
 def read_data_sources(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -28,7 +28,7 @@ def read_data_sources(
     return data_sources
 
 
-@router.post("/", response_model=schemas.data_source.DataSource, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.data_source.DataSource, status_code=status.HTTP_201_CREATED)
 def create_data_source(
     *,
     db: Session = Depends(deps.get_db),

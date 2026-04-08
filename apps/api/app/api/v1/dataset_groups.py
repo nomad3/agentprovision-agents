@@ -9,8 +9,7 @@ from app.services import dataset_groups as service
 from app.models.user import User
 
 router = APIRouter()
-
-@router.get("/", response_model=List[schemas.dataset_group.DatasetGroup])
+@router.get("", response_model=List[schemas.dataset_group.DatasetGroup])
 def read_dataset_groups(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -20,11 +19,13 @@ def read_dataset_groups(
     """
     Retrieve dataset groups for the current tenant.
     """
-    return service.get_dataset_groups_by_tenant(
+    dataset_groups = dataset_group_service.get_dataset_groups_by_tenant(
         db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
     )
+    return dataset_groups
 
-@router.post("/", response_model=schemas.dataset_group.DatasetGroup, status_code=status.HTTP_201_CREATED)
+
+@router.post("", response_model=schemas.dataset_group.DatasetGroup, status_code=status.HTTP_201_CREATED)
 def create_dataset_group(
     *,
     db: Session = Depends(deps.get_db),

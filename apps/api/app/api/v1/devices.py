@@ -38,7 +38,7 @@ class DeviceRegisterRequest(BaseModel):
     config: dict = {}
 
 
-@router.get("/")
+@router.get("")
 def list_devices(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_active_user),
@@ -61,7 +61,7 @@ def list_devices(
     ]
 
 
-@router.post("/")
+@router.post("")
 def register_device(
     body: DeviceRegisterRequest,
     db: Session = Depends(get_db),

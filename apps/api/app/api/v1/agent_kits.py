@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.agent_kit.AgentKit])
+@router.get("", response_model=List[schemas.agent_kit.AgentKit])
 def read_agent_kits(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_agent_kits(
     return agent_kits
 
 
-@router.post("/", response_model=schemas.agent_kit.AgentKit, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.agent_kit.AgentKit, status_code=status.HTTP_201_CREATED)
 def create_agent_kit(
     *,
     db: Session = Depends(deps.get_db),

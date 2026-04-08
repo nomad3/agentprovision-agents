@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.data_pipeline.DataPipeline])
+@router.get("", response_model=List[schemas.data_pipeline.DataPipeline])
 def read_data_pipelines(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_data_pipelines(
     return data_pipelines
 
 
-@router.post("/", response_model=schemas.data_pipeline.DataPipeline, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.data_pipeline.DataPipeline, status_code=status.HTTP_201_CREATED)
 def create_data_pipeline(
     *,
     db: Session = Depends(deps.get_db),

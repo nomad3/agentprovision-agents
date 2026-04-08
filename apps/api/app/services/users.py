@@ -83,8 +83,9 @@ def seed_shared_cli_credentials_for_tenant(
     )
 
     seed_specs = [
-        ("claude_code", {"session_token": os.environ.get("PLATFORM_CLAUDE_CODE_TOKEN", "").strip()}),
+        ("claude_code", {"session_token": (settings.PLATFORM_CLAUDE_CODE_TOKEN or os.environ.get("PLATFORM_CLAUDE_CODE_TOKEN", "")).strip()}),
         ("codex", {"auth_json": (settings.PLATFORM_CODEX_AUTH_JSON or "").strip()}),
+        ("gemini_cli", {"oauth_token": (settings.PLATFORM_GEMINI_CLI_TOKEN or "").strip()}),
     ]
 
     for integration_name, env_fallback in seed_specs:
@@ -130,7 +131,8 @@ def seed_shared_cli_credentials_for_tenant(
             continue
 
         target_config = _get_or_create_integration_config(db, tenant_id, integration_name)
-        credential_type = "oauth_token" if integration_name == "claude_code" else "api_key"
+        # Use oauth_token type for Claude Code and Gemini CLI
+        credential_type = "oauth_token" if integration_name in ["claude_code", "gemini_cli"] else "api_key"
         for credential_key, plaintext_value in credentials_to_copy.items():
             store_credential(
                 db,

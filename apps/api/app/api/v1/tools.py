@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.tool.Tool])
+@router.get("", response_model=List[schemas.tool.Tool])
 def read_tools(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_tools(
     return tools
 
 
-@router.post("/", response_model=schemas.tool.Tool, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.tool.Tool, status_code=status.HTTP_201_CREATED)
 def create_tool(
     *,
     db: Session = Depends(deps.get_db),

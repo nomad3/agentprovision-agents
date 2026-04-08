@@ -945,7 +945,7 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             if claude_result.success:
                 return claude_result
 
-            # Claude Code failed — fallback to Codex regardless of error type
+            # Claude Code failed — try Codex first as fallback
             logger.warning("Claude Code failed (%s), falling back to Codex", claude_result.error[:200] if claude_result.error else "unknown")
             codex_result = _execute_codex_chat(task_input, session_dir, image_path)
             if codex_result.success:
@@ -956,38 +956,92 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
                 codex_result.metadata = meta
                 return codex_result
 
+            # Codex also failed — try Gemini CLI as final fallback
+            logger.warning("Codex fallback failed (%s), falling back to Gemini CLI", codex_result.error[:200] if codex_result.error else "unknown")
+            gemini_result = _execute_gemini_chat(task_input, session_dir, image_path)
+            if gemini_result.success:
+                meta = dict(gemini_result.metadata or {})
+                meta["fallback_from"] = "codex"
+                meta["requested_platform"] = "claude_code"
+                meta["claude_error"] = (claude_result.error or "")[:200]
+                meta["codex_error"] = (codex_result.error or "")[:200]
+                gemini_result.metadata = meta
+                return gemini_result
+
             return ChatCliResult(
                 response_text="",
                 success=False,
-                error=f"Claude Code failed: {claude_result.error}. Codex fallback also failed: {codex_result.error}",
+                error=f"Claude Code failed: {claude_result.error}. Codex fallback failed: {codex_result.error}. Gemini CLI fallback failed: {gemini_result.error}",
             )
+
         if task_input.platform == "codex":
             codex_result = _execute_codex_chat(task_input, session_dir, image_path)
             if codex_result.success:
                 return codex_result
 
-            # Codex failed — fallback to Claude Code regardless of error type.
-            # IMPORTANT: clear the model slug since Codex-specific slugs
-            # (e.g. "codex-mini") are not valid Claude models. Let Claude
-            # use its own default.
-            logger.warning("Codex failed (%s), falling back to Claude Code", codex_result.error[:200] if codex_result.error else "unknown")
-            task_input.model = ""  # reset to Claude default
-            claude_result = _execute_claude_chat(task_input, session_dir)
-            if claude_result.success:
-                meta = dict(claude_result.metadata or {})
+            # Codex failed — fallback to Gemini CLI
+            logger.warning("Codex failed (%s), falling back to Gemini CLI", codex_result.error[:200] if codex_result.error else "unknown")
+            gemini_result = _execute_gemini_chat(task_input, session_dir, image_path)
+            if gemini_result.success:
+                meta = dict(gemini_result.metadata or {})
                 meta["fallback_from"] = "codex"
                 meta["requested_platform"] = "codex"
                 meta["codex_error"] = (codex_result.error or "")[:200]
+                gemini_result.metadata = meta
+                return gemini_result
+
+            # Gemini failed — try Claude Code
+            logger.warning("Gemini fallback failed (%s), falling back to Claude Code", gemini_result.error[:200] if gemini_result.error else "unknown")
+            task_input.model = ""
+            claude_result = _execute_claude_chat(task_input, session_dir)
+            if claude_result.success:
+                meta = dict(claude_result.metadata or {})
+                meta["fallback_from"] = "gemini_cli"
+                meta["requested_platform"] = "codex"
+                meta["codex_error"] = (codex_result.error or "")[:200]
+                meta["gemini_error"] = (gemini_result.error or "")[:200]
                 claude_result.metadata = meta
                 return claude_result
 
             return ChatCliResult(
                 response_text="",
                 success=False,
-                error=f"Codex failed: {codex_result.error}. Claude Code fallback also failed: {claude_result.error}",
+                error=f"Codex failed: {codex_result.error}. Gemini fallback failed: {gemini_result.error}. Claude fallback failed: {claude_result.error}",
             )
+
         if task_input.platform == "gemini_cli":
-            return _execute_gemini_chat(task_input, session_dir, image_path)
+            gemini_result = _execute_gemini_chat(task_input, session_dir, image_path)
+            if gemini_result.success:
+                return gemini_result
+
+            # Gemini failed — fallback to Claude Code
+            logger.warning("Gemini CLI failed (%s), falling back to Claude Code", gemini_result.error[:200] if gemini_result.error else "unknown")
+            claude_result = _execute_claude_chat(task_input, session_dir)
+            if claude_result.success:
+                meta = dict(claude_result.metadata or {})
+                meta["fallback_from"] = "gemini_cli"
+                meta["requested_platform"] = "gemini_cli"
+                meta["gemini_error"] = (gemini_result.error or "")[:200]
+                claude_result.metadata = meta
+                return claude_result
+
+            # Claude failed — try Codex
+            logger.warning("Claude fallback failed (%s), falling back to Codex", claude_result.error[:200] if claude_result.error else "unknown")
+            codex_result = _execute_codex_chat(task_input, session_dir, image_path)
+            if codex_result.success:
+                meta = dict(codex_result.metadata or {})
+                meta["fallback_from"] = "claude_code"
+                meta["requested_platform"] = "gemini_cli"
+                meta["gemini_error"] = (gemini_result.error or "")[:200]
+                meta["claude_error"] = (claude_result.error or "")[:200]
+                codex_result.metadata = meta
+                return codex_result
+
+            return ChatCliResult(
+                response_text="",
+                success=False,
+                error=f"Gemini CLI failed: {gemini_result.error}. Claude fallback failed: {claude_result.error}. Codex fallback failed: {codex_result.error}",
+            )
         if task_input.platform == "opencode":
             return _execute_opencode_chat(task_input, session_dir)
         return ChatCliResult(

@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.vector_store.VectorStore])
+@router.get("", response_model=List[schemas.vector_store.VectorStore])
 def read_vector_stores(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_vector_stores(
     return vector_stores
 
 
-@router.post("/", response_model=schemas.vector_store.VectorStore, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.vector_store.VectorStore, status_code=status.HTTP_201_CREATED)
 def create_vector_store(
     *,
     db: Session = Depends(deps.get_db),

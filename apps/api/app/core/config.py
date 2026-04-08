@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     ENCRYPTION_KEY: str | None = None
     PLATFORM_SHARED_CREDENTIALS_TENANT_ID: str | None = None
     PLATFORM_CODEX_AUTH_JSON: str | None = None
+    PLATFORM_CLAUDE_CODE_TOKEN: str | None = None
+    PLATFORM_GEMINI_CLI_TOKEN: str | None = None
 
     # OAuth2 - Google (Gmail + Calendar)
     GOOGLE_CLIENT_ID: str | None = None

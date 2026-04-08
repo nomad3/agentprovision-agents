@@ -374,7 +374,7 @@ def delete_file_skill(
 # DB-backed skills (existing CRUD — unchanged)
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=List[SkillInDB])
+@router.get("", response_model=List[SkillInDB])
 def list_skills(
     skill_type: Optional[str] = None,
     skip: int = 0,
@@ -385,7 +385,7 @@ def list_skills(
     return service.get_skills(db, current_user.tenant_id, skill_type, skip, limit)
 
 
-@router.post("/", response_model=SkillInDB, status_code=201)
+@router.post("", response_model=SkillInDB, status_code=201)
 def create_skill(
     skill_in: SkillCreate,
     db: Session = Depends(get_db),

@@ -10,12 +10,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/presence", tags=["presence"])
 
 
-@router.get("/")
+@router.get("")
 def get_presence(current_user=Depends(get_current_user)):
     return luna_presence_service.get_presence(current_user.tenant_id)
 
 
-@router.put("/")
+@router.put("")
 def update_presence(body: LunaPresenceUpdate, current_user=Depends(get_current_user)):
     return luna_presence_service.update_state(
         current_user.tenant_id,

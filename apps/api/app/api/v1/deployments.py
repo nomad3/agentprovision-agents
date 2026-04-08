@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.deployment.Deployment])
+@router.get("", response_model=List[schemas.deployment.Deployment])
 def read_deployments(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_deployments(
     return deployments
 
 
-@router.post("/", response_model=schemas.deployment.Deployment, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.deployment.Deployment, status_code=status.HTTP_201_CREATED)
 def create_deployment(
     *,
     db: Session = Depends(deps.get_db),

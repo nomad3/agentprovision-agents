@@ -229,7 +229,7 @@ def get_integration_registry(
 # Integration config CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("/", response_model=List[schemas.integration_config.IntegrationConfig])
+@router.get("", response_model=List[schemas.integration_config.IntegrationConfig])
 def read_integration_configs(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -237,7 +237,7 @@ def read_integration_configs(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """
-    Retrieve integration configurations for the current tenant.
+    Retrieve integration configs for the current tenant.
     """
     configs = integration_config_service.get_integration_configs_by_tenant(
         db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
@@ -245,7 +245,7 @@ def read_integration_configs(
     return configs
 
 
-@router.post("/", response_model=schemas.integration_config.IntegrationConfig, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.integration_config.IntegrationConfig, status_code=status.HTTP_201_CREATED)
 def create_integration_config(
     *,
     db: Session = Depends(deps.get_db),

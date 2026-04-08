@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.notebook.Notebook])
+@router.get("", response_model=List[schemas.notebook.Notebook])
 def read_notebooks(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_notebooks(
     return notebooks
 
 
-@router.post("/", response_model=schemas.notebook.Notebook, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.notebook.Notebook, status_code=status.HTTP_201_CREATED)
 def create_notebook(
     *,
     db: Session = Depends(deps.get_db),

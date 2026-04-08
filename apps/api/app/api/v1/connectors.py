@@ -13,7 +13,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.connector.Connector])
+@router.get("", response_model=List[schemas.connector.Connector])
 def read_connectors(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -29,7 +29,7 @@ def read_connectors(
     return connectors
 
 
-@router.post("/", response_model=schemas.connector.Connector, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.connector.Connector, status_code=status.HTTP_201_CREATED)
 def create_connector(
     *,
     db: Session = Depends(deps.get_db),

@@ -11,7 +11,7 @@ import uuid
 
 router = APIRouter()
 
-@router.get("/", response_model=List[schemas.agent.Agent])
+@router.get("", response_model=List[schemas.agent.Agent])
 def read_agents(
     db: Session = Depends(deps.get_db),
     skip: int = 0,
@@ -27,7 +27,7 @@ def read_agents(
     return agents
 
 
-@router.post("/", response_model=schemas.agent.Agent, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=schemas.agent.Agent, status_code=status.HTTP_201_CREATED)
 def create_agent(
     *,
     db: Session = Depends(deps.get_db),

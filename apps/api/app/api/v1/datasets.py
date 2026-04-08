@@ -27,7 +27,7 @@ class QueryRequest(BaseModel):
     limit: int = 100
 
 
-@router.get("/", response_model=List[dataset_schema.Dataset])
+@router.get("", response_model=List[dataset_schema.Dataset])
 def list_datasets(
     *,
     db: Session = Depends(deps.get_db),
