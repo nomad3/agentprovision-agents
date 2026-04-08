@@ -19,7 +19,7 @@ def read_dataset_groups(
     """
     Retrieve dataset groups for the current tenant.
     """
-    dataset_groups = dataset_group_service.get_dataset_groups_by_tenant(
+    dataset_groups = service.get_dataset_groups_by_tenant(
         db, tenant_id=current_user.tenant_id, skip=skip, limit=limit
     )
     return dataset_groups

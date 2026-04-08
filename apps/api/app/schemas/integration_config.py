@@ -8,7 +8,7 @@ class IntegrationConfigBase(BaseModel):
     integration_name: str
     account_email: Optional[str] = None
     enabled: bool = True
-    requires_approval: bool = False
+    requires_approval: Optional[bool] = False
     rate_limit: Optional[dict] = None
     allowed_scopes: Optional[list] = None
     llm_config_id: Optional[uuid.UUID] = None
