@@ -4,12 +4,11 @@ from datetime import datetime
 from uuid import UUID
 from temporalio import activity
 
-with activity.unsafe.imports_passed_through():
-    from app.db.session import SessionLocal
-    from app.models.chat import ChatMessage
-    from app.models.conversation_episode import ConversationEpisode
-    from app.services.local_inference import summarize_chat_window
-    from app.services.embedding_service import embed_text
+from app.db.session import SessionLocal
+from app.models.chat import ChatMessage
+from app.models.conversation_episode import ConversationEpisode
+from app.services.local_inference import summarize_chat_window
+from app.services.embedding_service import embed_text
 
 logger = logging.getLogger(__name__)
 

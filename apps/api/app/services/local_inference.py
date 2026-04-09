@@ -445,6 +445,7 @@ def extract_knowledge_with_prompt_sync(prompt: str) -> Optional[dict]:
     )
 
     if not result:
+        logger.warning("extract_knowledge_with_prompt_sync: generate_sync returned empty result")
         return None
 
     try:
@@ -453,8 +454,10 @@ def extract_knowledge_with_prompt_sync(prompt: str) -> Optional[dict]:
         data = json.loads(result[start:end])
         if "entities" in data:
             return data
-    except (json.JSONDecodeError, ValueError, IndexError):
-        logger.debug("Failed to parse Gemma 4 knowledge extraction (with prompt): %s", result[:200])
+        else:
+            logger.warning("extract_knowledge_with_prompt_sync: 'entities' key missing in parsed JSON")
+    except (json.JSONDecodeError, ValueError, IndexError) as e:
+        logger.warning("Failed to parse Gemma 4 knowledge extraction: %s. Raw result: %s", e, result[:500])
     return None
 
 

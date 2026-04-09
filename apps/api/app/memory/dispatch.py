@@ -17,10 +17,13 @@ def dispatch_post_chat_memory(
     assistant_message_id: UUID,
 ):
     """Trigger the PostChatMemoryWorkflow in Temporal (fire-and-forget)."""
+    print(f"DEBUG: dispatch_post_chat_memory called for session {session_id}")
     
     async def _dispatch():
         try:
+            print(f"DEBUG: _dispatch: connecting to Temporal at {settings.TEMPORAL_ADDRESS}...")
             client = await Client.connect(settings.TEMPORAL_ADDRESS)
+            print(f"DEBUG: _dispatch: connected. Starting workflow PostChatMemoryWorkflow...")
             await client.start_workflow(
                 PostChatMemoryWorkflow.run,
                 args=[
@@ -32,8 +35,10 @@ def dispatch_post_chat_memory(
                 id=f"pcm-{session_id}-{int(time.time())}",
                 task_queue="servicetsunami-orchestration",
             )
+            print(f"DEBUG: _dispatch: workflow started successfully.")
             logger.debug("Dispatched PostChatMemoryWorkflow for session %s", str(session_id)[:8])
         except Exception as e:
+            print(f"DEBUG: _dispatch: FAILED: {e}")
             logger.warning("Async dispatch of PostChatMemoryWorkflow failed: %s", e)
 
     def _run_in_new_loop():

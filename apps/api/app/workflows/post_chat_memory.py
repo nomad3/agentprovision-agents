@@ -62,12 +62,12 @@ class PostChatMemoryWorkflow:
             window_start = ep_signal["window_start_iso"]
             window_end = ep_signal["window_end_iso"]
             try:
-                # We assume EpisodeWorkflow is registered in the worker
                 await workflow.start_child_workflow(
-                    "Gap1JournalSynthesis", # Reusing Gap1JournalSynthesis as the episode/journal processor
-                    args=[tenant_id, chat_session_id, window_start, window_end],
+                    "EpisodeWorkflow",
+                    args=[tenant_id, chat_session_id, window_start, window_end, "chat_threshold"],
                     id=f"episode-{chat_session_id}-{window_start[:10]}",
                     task_queue="servicetsunami-orchestration",
+                    parent_close_policy=workflow.ParentClosePolicy.ABANDON,
                 )
                 results["episode_triggered"] = True
             except Exception as e:

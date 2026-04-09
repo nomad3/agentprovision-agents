@@ -3,10 +3,9 @@ import logging
 from uuid import UUID
 from temporalio import activity
 
-with activity.unsafe.imports_passed_through():
-    from app.db.session import SessionLocal
-    from app.services.embedding_service import embed_and_store
-    from sqlalchemy import text as sql_text
+from app.db.session import SessionLocal
+from app.services.embedding_service import embed_and_store
+from sqlalchemy import text as sql_text
 
 logger = logging.getLogger(__name__)
 
