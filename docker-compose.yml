@@ -40,6 +40,8 @@ services:
       - EXPLORATION_MODE=${EXPLORATION_MODE:-off}
       - CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS:-}
       - EXPLORATION_RATE=${EXPLORATION_RATE:-0.0}
+      - USE_MEMORY_V2=${USE_MEMORY_V2:-false}
+      - USE_MEMORY_V2_TENANT_ALLOWLIST=${USE_MEMORY_V2_TENANT_ALLOWLIST:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

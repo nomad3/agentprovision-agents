@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Tuple
 import uuid
 
@@ -331,8 +332,6 @@ def _generate_agentic_response(
                     cli_message += f"\n\n{part['text']}"
 
     # Use a fresh DB session for routing to prevent poisoned transaction cascades.
-    # If any query inside route_and_execute fails, only the routing session is affected,
-    # not the main request session used for saving the response.
     from app.db.session import SessionLocal
     routing_db = SessionLocal()
     try:
@@ -345,13 +344,13 @@ def _generate_agentic_response(
             sender_phone=sender_phone,
             agent_slug=agent_slug,
             conversation_summary=summary,
-        image_b64=image_b64,
-        image_mime=image_mime,
-        db_session_memory={
-            **(session.memory_context or {}),
-            "chat_session_id": str(session.id),
-        },
-    )
+            image_b64=image_b64,
+            image_mime=image_mime,
+            db_session_memory={
+                **(session.memory_context or {}),
+                "chat_session_id": str(session.id),
+            },
+        )
     finally:
         try:
             routing_db.close()
@@ -359,7 +358,6 @@ def _generate_agentic_response(
             pass
 
     # Gap 4: Score confidence and apply hedging when uncertain.
-    # Gate on full-tier only — light/local tiers are already constrained by design.
     _agent_tier_early = context.get("agent_tier", "full") if context else "full"
     if _agent_tier_early == "full":
         try:
@@ -374,30 +372,21 @@ def _generate_agentic_response(
                 context = {}
             context["confidence_score"] = _confidence
         except Exception:
-            pass  # Never block response delivery for confidence scoring
+            pass
 
     # Extract tier metadata from router trace for downstream RL logging
     agent_tier = context.get("agent_tier", "full") if context else "full"
     tool_groups = context.get("tool_groups", []) if context else []
 
-    # Save recalled entity names for cross-turn continuity.
-    # NOTE: CLI session_id is NOT persisted — we intentionally run each
-    # Claude invocation as a fresh one-shot session (see workflows.py).
-    # Resuming accumulates unbounded JSONL state that grows to 16+ MB and
-    # causes slow startup + lossy context compaction.
     if context and isinstance(context, dict):
         _mem_dirty = False
         _mem = dict(session.memory_context or {})
-
-        # Persist recalled entity names so the next turn can boost them
         recalled_entity_names = context.get("recalled_entity_names")
         if recalled_entity_names:
-            # Merge with existing session entities, keeping last 50 unique names
             existing = _mem.get("recalled_entity_names", [])
             merged = list(dict.fromkeys(existing + recalled_entity_names))[:50]
             _mem["recalled_entity_names"] = merged
             _mem_dirty = True
-
         if _mem_dirty:
             session.memory_context = _mem
             flag_modified(session, "memory_context")
@@ -455,58 +444,18 @@ def _generate_agentic_response(
         db.rollback()
 
     # Phase 1.6: Dispatch post-chat memory activities (Temporal)
-    try:
-        _dispatch_post_chat_memory(
-            session_id=session.id,
-            tenant_id=session.tenant_id,
-            user_message_id=user_message_id,
-            assistant_message_id=assistant_msg.id,
-        )
-    except Exception as e:
-        logger.warning("Failed to dispatch PostChatMemoryWorkflow: %s", e)
-
-    return assistant_msg
-
-
-def _dispatch_post_chat_memory(
-    session_id: uuid.UUID,
-    tenant_id: uuid.UUID,
-    user_message_id: uuid.UUID,
-    assistant_message_id: uuid.UUID,
-):
-    """Trigger the PostChatMemoryWorkflow in Temporal (fire-and-forget)."""
-    import asyncio
-    from temporalio.client import Client
-    from app.core.config import settings
-    from app.workflows.post_chat_memory import PostChatMemoryWorkflow
-
-    async def _dispatch():
+    from app.memory.feature_flag import is_v2_enabled
+    if is_v2_enabled(session.tenant_id):
         try:
-            client = await Client.connect(settings.TEMPORAL_ADDRESS)
-            await client.start_workflow(
-                PostChatMemoryWorkflow.run,
-                args=[str(tenant_id), str(session_id), str(user_message_id), str(assistant_message_id)],
-                id=f"pcm-{session_id}-{int(time.time())}",
-                task_queue="servicetsunami-orchestration",
+            from app.memory.dispatch import dispatch_post_chat_memory
+            dispatch_post_chat_memory(
+                tenant_id=session.tenant_id,
+                session_id=session.id,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_msg.id,
             )
         except Exception as e:
-            logger.warning("Async dispatch of PostChatMemoryWorkflow failed: %s", e)
-
-    # Fire and forget via background task/thread if not in event loop
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            loop.create_task(_dispatch())
-        else:
-            asyncio.run(_dispatch())
-    except RuntimeError:
-        # No event loop in this thread (likely a daemon thread from whatsapp_service)
-        # Use a one-off thread to avoid blocking the hot path
-        import threading
-        threading.Thread(target=lambda: asyncio.run(_dispatch()), daemon=True).start()
-        db.commit()
-    except Exception:
-        pass  # Never block response for tracing
+            logger.warning("Failed to dispatch PostChatMemoryWorkflow: %s", e)
 
     # Update presence: idle (response delivered), scoped to this session
     try:
@@ -529,16 +478,13 @@ def _dispatch_post_chat_memory(
             platform=meta.get("platform", "claude_code"),
             agent_slug=agent_slug or "luna",
             channel="whatsapp" if sender_phone else "web",
-            tokens_used=meta.get("input_tokens", 0) + meta.get("output_tokens", 0),
-            cost_usd=meta.get("cost_usd", 0.0),
-            rollout_experiment_id=meta.get("rollout_experiment_id"),
-            rollout_arm=meta.get("rollout_arm"),
-            routing_trajectory_id=meta.get("routing_trajectory_id"),
-            agent_tier=agent_tier,
+            tokens_used=int(meta.get("input_tokens", 0) or 0) + int(meta.get("output_tokens", 0) or 0),
+            cost_usd=meta.get("cost_usd"),
+            trajectory_id=meta.get("routing_trajectory_id"),
             tool_groups=tool_groups,
         )
     except Exception:
-        pass  # Never block response delivery for scoring
+        pass
 
     # ── Post-response confidence scoring ──
     try:

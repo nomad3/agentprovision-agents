@@ -632,3 +632,53 @@ CONVERSATION:
         max_tokens=800,
         timeout=45.0,
     )
+
+
+import json
+
+def summarize_chat_window(messages: list[dict]) -> dict:
+    """Summarize a chat window with structured output via Gemma4 JSON mode.
+
+    Args:
+        messages: list of {"role", "content", "created_at"} dicts.
+
+    Returns:
+        {"summary": str, "key_topics": list[str], "key_entities": list[str],
+         "mood": str, "messages": list (echoed for downstream count)}
+    """
+    if not messages:
+        return {"summary": "", "key_topics": [], "key_entities": [], "mood": "neutral", "messages": []}
+
+    convo_text = "\n".join(
+        f"[{m.get('role', 'user')}] {str(m.get('content', ''))[:500]}" for m in messages[:60]
+    )
+    prompt = f"""Summarize this conversation window. Return JSON ONLY in this exact shape:
+{{"summary": "<2-3 sentence narrative summary>",
+  "key_topics": ["topic1", "topic2"],
+  "key_entities": ["Person A", "Project B"],
+  "mood": "positive|neutral|concerned|escalated"}}
+
+CONVERSATION:
+{convo_text[:6000]}"""
+
+    raw = generate_sync(
+        prompt=prompt,
+        model=QUALITY_MODEL,
+        system="You are a conversation summarizer. Output valid JSON only, no prose, no markdown.",
+        temperature=0.2,
+        max_tokens=500,
+        timeout=60.0,
+        response_format="json",
+    )
+    try:
+        parsed = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        parsed = {"summary": (raw or "")[:500], "key_topics": [], "key_entities": [], "mood": "neutral"}
+
+    return {
+        "summary": parsed.get("summary", "")[:2000],
+        "key_topics": parsed.get("key_topics", [])[:10],
+        "key_entities": parsed.get("key_entities", [])[:10],
+        "mood": parsed.get("mood", "neutral"),
+        "messages": messages,  # passed through for message_count downstream
+    }
