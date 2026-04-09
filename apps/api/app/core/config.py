@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     HEALTHPETS_API_URL: str = "http://localhost:8000"
 
     # Memory-First Phase 1 cutover flags
-    USE_MEMORY_V2: bool = False
+    USE_MEMORY_V2: bool = True
     USE_MEMORY_V2_TENANT_ALLOWLIST: list[str] = []
 
     class Config:

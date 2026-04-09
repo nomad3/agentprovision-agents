@@ -423,23 +423,35 @@ def _get_cli_platform_credentials(
     tenant_id: uuid.UUID,
     integration_name: str,
 ) -> Dict[str, Any]:
-    """Retrieve active credentials for a tenant CLI platform."""
-    config = (
-        db.query(IntegrationConfig)
-        .filter(
-            IntegrationConfig.tenant_id == tenant_id,
-            IntegrationConfig.integration_name == integration_name,
-            IntegrationConfig.enabled.is_(True),
+    """Retrieve active credentials for a tenant CLI platform.
+    
+    Falls back to other compatible Google integrations for gemini_cli.
+    """
+    search_names = [integration_name]
+    if integration_name == "gemini_cli":
+        search_names.extend(["gmail", "google_drive", "google_calendar"])
+
+    config = None
+    for name in search_names:
+        config = (
+            db.query(IntegrationConfig)
+            .filter(
+                IntegrationConfig.tenant_id == tenant_id,
+                IntegrationConfig.integration_name == name,
+                IntegrationConfig.enabled.is_(True),
+            )
+            .first()
         )
-        .first()
-    )
+        if config:
+            break
+
     if not config:
-        logger.warning("No active %s integration config for tenant %s", integration_name, tenant_id)
+        logger.warning("No active %s (or compatible) integration config for tenant %s", integration_name, tenant_id)
         return {}
 
     creds = retrieve_credentials_for_skill(db, config.id, tenant_id)
     if not creds:
-        logger.warning("No credentials found for %s integration, tenant %s", integration_name, tenant_id)
+        logger.warning("No credentials found for %s integration, tenant %s", config.integration_name, tenant_id)
     return creds
 
 
