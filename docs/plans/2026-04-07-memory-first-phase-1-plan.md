@@ -4263,3 +4263,4 @@ When Task 41 ships:
 **Total: 41 tasks.**
 
 Realistic timeline at 1-2 tasks per working day with TDD discipline: **6-8 weeks**, matching the design doc Phase 1 estimate. Acceptance gates (Tasks 17, 19, 36, 38, 40) are blocking checkpoints — do not skip.
+\nGate result: F1=0.722 on 2026-04-08. Proceed=YES.

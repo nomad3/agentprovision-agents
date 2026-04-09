@@ -45,6 +45,7 @@ async def generate(
     max_tokens: int = 500,
     timeout: float = 30.0,
     priority: str = "background",
+    response_format: str = None,
 ) -> Optional[str]:
     """Call Ollama generate endpoint. Returns None on failure.
 
@@ -54,16 +55,16 @@ async def generate(
     model = model or DEFAULT_MODEL
 
     if priority == "foreground":
-        return await _generate_foreground(prompt, model, system, temperature, max_tokens, timeout)
+        return await _generate_foreground(prompt, model, system, temperature, max_tokens, timeout, response_format)
     else:
-        return await _generate_background(prompt, model, system, temperature, max_tokens, timeout)
+        return await _generate_background(prompt, model, system, temperature, max_tokens, timeout, response_format)
 
 
-async def _generate_foreground(prompt, model, system, temperature, max_tokens, timeout):
+async def _generate_foreground(prompt, model, system, temperature, max_tokens, timeout, response_format=None):
     """Foreground async inference — sets shared flag so background skips."""
     try:
         _foreground_active.set()
-        return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
+        return await _do_generate(prompt, model, system, temperature, max_tokens, timeout, response_format)
     except Exception as e:
         logger.warning("Foreground inference failed: %s", e)
         return None
@@ -71,7 +72,7 @@ async def _generate_foreground(prompt, model, system, temperature, max_tokens, t
         _foreground_active.clear()
 
 
-async def _generate_background(prompt, model, system, temperature, max_tokens, timeout):
+async def _generate_background(prompt, model, system, temperature, max_tokens, timeout, response_format=None):
     """Background inference — skips if any foreground caller (async or sync) is active."""
     if _foreground_active.is_set():
         logger.debug("GPU busy with foreground — skipping background inference")
@@ -84,7 +85,7 @@ async def _generate_background(prompt, model, system, temperature, max_tokens, t
         if _foreground_active.is_set():
             logger.debug("GPU became busy — skipping background inference")
             return None
-        return await _do_generate(prompt, model, system, temperature, max_tokens, timeout)
+        return await _do_generate(prompt, model, system, temperature, max_tokens, timeout, response_format)
     except Exception as e:
         logger.warning("Background inference failed: %s", e)
         return None
@@ -92,22 +93,26 @@ async def _generate_background(prompt, model, system, temperature, max_tokens, t
         _background_lock.release()
 
 
-async def _do_generate(prompt, model, system, temperature, max_tokens, timeout):
+async def _do_generate(prompt, model, system, temperature, max_tokens, timeout, response_format=None):
     """Raw Ollama generate call — no locking, called by foreground/background wrappers."""
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "system": system,
+                "stream": False,
+                "options": {
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                },
+            }
+            if response_format:
+                payload["format"] = response_format
+
             resp = await client.post(
                 f"{OLLAMA_BASE_URL}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "system": system,
-                    "stream": False,
-                    "options": {
-                        "temperature": temperature,
-                        "num_predict": max_tokens,
-                    },
-                },
+                json=payload,
             )
             if resp.status_code == 200:
                 return resp.json().get("response", "").strip()
@@ -278,6 +283,7 @@ def generate_sync(
     temperature: float = 0.1,
     max_tokens: int = 500,
     timeout: float = 45.0,
+    response_format: str = None,
 ) -> Optional[str]:
     """Synchronous Ollama call. Returns None on failure. Sets foreground flag so background skips."""
     model = model or DEFAULT_MODEL
@@ -285,18 +291,22 @@ def generate_sync(
         _foreground_active.set()
         try:
             with httpx.Client(timeout=timeout) as client:
+                payload = {
+                    "model": model,
+                    "prompt": prompt,
+                    "system": system,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                }
+                if response_format:
+                    payload["format"] = response_format
+
                 resp = client.post(
                     f"{OLLAMA_BASE_URL}/api/generate",
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "system": system,
-                        "stream": False,
-                        "options": {
-                            "temperature": temperature,
-                            "num_predict": max_tokens,
-                        },
-                    },
+                    json=payload,
                 )
                 if resp.status_code == 200:
                     return resp.json().get("response", "").strip()

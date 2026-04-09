@@ -13,6 +13,7 @@ from temporalio.worker import Worker
 from app.core.config import settings
 from app.workflows.dynamic_executor import DynamicWorkflowExecutor
 from app.workflows.gap1_journal_synthesis import Gap1JournalSynthesis
+from app.workflows.post_chat_memory import PostChatMemoryWorkflow
 from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
     dispatch_task,
@@ -141,6 +142,13 @@ from app.workflows.activities.morning_briefing import (
     create_daily_journal_entry,
     create_weekly_journal_summary,
 )
+from app.workflows.activities.post_chat_memory_activities import (
+    extract_knowledge,
+    detect_commitment,
+    update_world_state,
+    update_behavioral_signals,
+    maybe_trigger_episode,
+)
 from app.workflows.activities.journal_synthesis import (
     synthesize_daily_journal,
     synthesize_weekly_journal,
@@ -188,6 +196,7 @@ async def run_orchestration_worker():
         workflows=[
             DynamicWorkflowExecutor,
             Gap1JournalSynthesis,
+            PostChatMemoryWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -298,6 +307,12 @@ async def run_orchestration_worker():
             # Inbound lead capture activities (Sales Phase 2: Module 5)
             classify_email_as_lead,
             classify_whatsapp_as_lead,
+            # Memory activities (Memory-First Phase 1)
+            extract_knowledge,
+            detect_commitment,
+            update_world_state,
+            update_behavioral_signals,
+            maybe_trigger_episode,
         ],
     )
 
