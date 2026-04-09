@@ -3,15 +3,14 @@ import logging
 from uuid import UUID
 from temporalio import activity
 
-with activity.unsafe.imports_passed_through():
-    from app.db.session import SessionLocal
-    from app.memory import ingest
-    from app.memory.types import MemoryEvent
+from app.db.session import SessionLocal
+from app.memory import ingest
+from app.memory.types import MemoryEvent
 
 logger = logging.getLogger(__name__)
 
 
-@activity.activity
+@activity.defn
 async def extract_knowledge(
     tenant_id: str,
     chat_session_id: str,
@@ -57,7 +56,7 @@ async def extract_knowledge(
         db.close()
 
 
-@activity.activity
+@activity.defn
 async def detect_commitment(
     tenant_id: str,
     chat_session_id: str,
@@ -109,7 +108,7 @@ async def detect_commitment(
         db.close()
 
 
-@activity.activity
+@activity.defn
 async def update_world_state(
     tenant_id: str,
     chat_session_id: str,
@@ -124,7 +123,7 @@ async def update_world_state(
     return {"updated": 0, "disputes": 0, "novel": 0, "status": "no-op in phase 1"}
 
 
-@activity.activity
+@activity.defn
 async def update_behavioral_signals(
     tenant_id: str,
     chat_session_id: str,
@@ -181,7 +180,7 @@ async def update_behavioral_signals(
         db.close()
 
 
-@activity.activity
+@activity.defn
 async def maybe_trigger_episode(
     tenant_id: str,
     chat_session_id: str,
