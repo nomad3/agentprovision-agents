@@ -16,6 +16,7 @@ from app.workflows.gap1_journal_synthesis import Gap1JournalSynthesis
 from app.workflows.post_chat_memory import PostChatMemoryWorkflow
 from app.workflows.episode_workflow import EpisodeWorkflow
 from app.workflows.idle_episode_scan import IdleEpisodeScanWorkflow
+from app.workflows.backfill_embeddings import BackfillEmbeddingsWorkflow
 from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
     dispatch_task,
@@ -150,13 +151,18 @@ from app.workflows.activities.post_chat_memory_activities import (
     update_world_state,
     update_behavioral_signals,
     maybe_trigger_episode,
-)
 from app.workflows.activities.episode_activities import (
     fetch_window_messages,
     summarize_window,
     embed_and_store_episode,
+    find_idle_sessions,
+)
+from app.workflows.activities.backfill_activities import (
+    find_unembedded_chat_messages,
+    embed_message_batch,
 )
 from app.workflows.activities.journal_synthesis import (
+
     synthesize_daily_journal,
     synthesize_weekly_journal,
 )
@@ -206,6 +212,7 @@ async def run_orchestration_worker():
             PostChatMemoryWorkflow,
             EpisodeWorkflow,
             IdleEpisodeScanWorkflow,
+            BackfillEmbeddingsWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -326,6 +333,8 @@ async def run_orchestration_worker():
             summarize_window,
             embed_and_store_episode,
             find_idle_sessions,
+            find_unembedded_chat_messages,
+            embed_message_batch,
         ],
     )
 
