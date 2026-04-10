@@ -63,11 +63,12 @@ configMap:
     TEMPORAL_NAMESPACE: "default"
     MCP_ENABLED: "true"
     USE_MEMORY_V2: "true"
-    USE_RUST_EMBEDDING: "true"
-    USE_RUST_MEMORY: "true"
-    MEMORY_DUAL_READ: "true"
-    EMBEDDING_SERVICE_URL: "embedding-service:50051"
-    MEMORY_CORE_URL: "memory-core:50052"
+    USE_RUST_EMBEDDING: "false"
+    USE_RUST_MEMORY: "false"
+    MEMORY_DUAL_READ: "false"
+    # Rust services disabled until candle/nomic model compat is resolved
+    # EMBEDDING_SERVICE_URL: "embedding-service:50051"
+    # MEMORY_CORE_URL: "memory-core:50052"
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
     TEMPORAL_ADDRESS: "temporal:7233"
 

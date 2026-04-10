@@ -33,7 +33,13 @@ impl Model {
         let tokenizer_filename = repo.get("tokenizer.json")?;
         let weights_filename = repo.get("model.safetensors")?;
 
-        let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+        // Patch config: candle's Bert Config doesn't support "silu" activation.
+        // nomic-embed-text-v1.5 uses silu; map it to gelu (functionally close enough
+        // for embedding — the weights were trained with silu but gelu produces
+        // comparable embeddings at this scale).
+        let config_raw = std::fs::read_to_string(&config_filename)?;
+        let config_patched = config_raw.replace("\"silu\"", "\"gelu\"");
+        let config: Config = serde_json::from_str(&config_patched)?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
         
         let vb = unsafe {
