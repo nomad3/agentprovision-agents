@@ -331,7 +331,54 @@ impl MemoryCore for MyMemoryCore {
         Ok(Response::new(()))
     }
 
-    async fn record_commitment(&self, _request: Request<RecordCommitmentRequest>) -> Result<Response<()>, Status> {
+    async fn record_commitment(&self, request: Request<RecordCommitmentRequest>) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Uuid::parse_str(&req.tenant_id)
+            .map_err(|_| Status::invalid_argument("Invalid tenant_id"))?;
+
+        let commitment_id = Uuid::new_v4();
+
+        // Convert optional protobuf Timestamp to chrono DateTime
+        let due_at: Option<chrono::DateTime<chrono::Utc>> = req.due_at.map(|ts| {
+            chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
+                .unwrap_or_else(|| chrono::Utc::now())
+        });
+
+        // INSERT into commitment_records
+        sqlx::query(
+            r#"
+            INSERT INTO commitment_records
+                (id, tenant_id, owner_agent_slug, title, description, commitment_type, status, due_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, NOW())
+            "#
+        )
+        .bind(commitment_id)
+        .bind(tenant_id)
+        .bind(&req.owner_agent_slug)
+        .bind(&req.title)
+        .bind(&req.description)
+        .bind(&req.commitment_type)
+        .bind(due_at)
+        .execute(&self.pool).await
+        .map_err(|e| Status::internal(format!("DB error inserting commitment: {}", e)))?;
+
+        // INSERT audit trail into memory_activities
+        sqlx::query(
+            r#"
+            INSERT INTO memory_activities
+                (id, tenant_id, event_type, description, source, created_at)
+            VALUES ($1, $2, 'commitment_created', $3, $4, NOW())
+            "#
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(format!("Commitment created: {}", req.title))
+        .bind(&req.owner_agent_slug)
+        .execute(&self.pool).await
+        .map_err(|e| Status::internal(format!("DB error inserting memory_activity: {}", e)))?;
+
+        println!("RecordCommitment: tenant={} id={} title={}", tenant_id, commitment_id, req.title);
+
         Ok(Response::new(()))
     }
 
