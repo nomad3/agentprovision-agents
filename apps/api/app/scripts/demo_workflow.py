@@ -79,7 +79,7 @@ class DemoRunner:
         handle = await workflows.start_workflow(
             workflow_type="MorningRoutineWorkflow",
             tenant_id=tenant_id,
-            task_queue="servicetsunami-lifeops",
+            task_queue="agentprovision-lifeops",
             arguments={"dataset_id": dataset_id},
             memo={"source": "demo_script"},
         )
@@ -123,7 +123,7 @@ async def run_demo(args: argparse.Namespace) -> None:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run ServiceTsunami demo workflow.")
+    parser = argparse.ArgumentParser(description="Run AgentProvision demo workflow.")
     parser.add_argument("--api-base", default="http://localhost:8000/api/v1", help="API base URL")
     parser.add_argument("--temporal", default="temporal:7233", help="Temporal address")
     parser.add_argument("--email", default=DEMO_EMAIL, help="Demo user email")

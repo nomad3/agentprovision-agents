@@ -32,16 +32,16 @@ def _build_allowed_tools_from_mcp(mcp_config_json: str = "", extra: str = "") ->
         for key in mcp.get("mcpServers", {}):
             tools.append(f"mcp__{key}__*")
     except Exception:
-        tools.append("mcp__servicetsunami__*")
+        tools.append("mcp__agentprovision__*")
     if not any("mcp__" in t for t in tools):
-        tools.append("mcp__servicetsunami__*")
+        tools.append("mcp__agentprovision__*")
     return ",".join(tools)
 
 
 WORKSPACE = "/workspace"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 API_INTERNAL_KEY = os.environ.get("API_INTERNAL_KEY", "").strip()
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://servicetsunami-api").strip()
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://agentprovision-api").strip()
 CODE_TASK_COMMAND_TIMEOUT_SECONDS = 45 * 60
 CODE_TASK_ACTIVITY_TIMEOUT_MINUTES = 120
 CODE_TASK_SCHEDULE_TIMEOUT_MINUTES = 150
@@ -918,7 +918,7 @@ async def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             # Update git remote with token
             subprocess.run(
                 ["git", "remote", "set-url", "origin",
-                 f"https://{github_token}@github.com/nomad3/servicetsunami-agents.git"],
+                 f"https://{github_token}@github.com/nomad3/agentprovision-agents.git"],
                 cwd=WORKSPACE, capture_output=True,
             )
             # Auth gh CLI

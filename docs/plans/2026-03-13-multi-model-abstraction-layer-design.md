@@ -321,7 +321,7 @@ The old `llm_config.provider_api_keys` plaintext JSON column and the legacy `/ll
 |------|--------|
 | `apps/adk-server/requirements.txt` | Add `litellm` |
 | `apps/adk-server/config/model_callback.py` | **New** — `before_model_callback` function |
-| `apps/adk-server/servicetsunami_supervisor/agent.py` | Register `before_model_callback` on root agent |
+| `apps/adk-server/agentprovision_supervisor/agent.py` | Register `before_model_callback` on root agent |
 | `apps/adk-server/**/*_agent.py` (all 25 agent files) | Add `before_model_callback=before_model_callback` import + kwarg |
 
 ### Frontend

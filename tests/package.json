@@ -1,7 +1,7 @@
 {
-  "name": "servicetsunami-e2e-tests",
+  "name": "agentprovision-e2e-tests",
   "version": "1.0.0",
-  "description": "End-to-end tests for ServiceTsunami",
+  "description": "End-to-end tests for AgentProvision",
   "scripts": {
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",

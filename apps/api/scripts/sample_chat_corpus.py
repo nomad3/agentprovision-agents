@@ -6,7 +6,7 @@ Output: apps/api/tests/fixtures/commitment_gold_set_unlabeled.jsonl with
 label=null on every row — Simon hand-labels next.
 
 Usage:
-    DATABASE_URL=postgresql://postgres:postgres@localhost:8003/servicetsunami \\
+    DATABASE_URL=postgresql://postgres:postgres@localhost:8003/agentprovision \\
       python apps/api/scripts/sample_chat_corpus.py
 
 Env:

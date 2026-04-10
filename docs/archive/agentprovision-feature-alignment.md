@@ -1,7 +1,7 @@
-# ServiceTsunami Feature Alignment
+# AgentProvision Feature Alignment
 
 ## Purpose
-Document how the current ServiceTsunami application maps to the Master Prompt (`docs/prompt.md`) and outline the feature backlog and user flows needed for BusinessOps, LifeOps, and Hybrid tenants across the orchestration layer.
+Document how the current AgentProvision application maps to the Master Prompt (`docs/prompt.md`) and outline the feature backlog and user flows needed for BusinessOps, LifeOps, and Hybrid tenants across the orchestration layer.
 
 ## Current Application Snapshot
 - **Landing & marketing**: `apps/web/src/LandingPage.js`
@@ -105,4 +105,4 @@ Document how the current ServiceTsunami application maps to the Master Prompt (`
 
 ---
 
-This document should be reviewed alongside `docs/prompt.md` before implementing new features to ensure consistency with the ServiceTsunami Orchestrator system definition.
+This document should be reviewed alongside `docs/prompt.md` before implementing new features to ensure consistency with the AgentProvision Orchestrator system definition.

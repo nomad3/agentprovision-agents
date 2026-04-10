@@ -5,7 +5,6 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from app.workflows.activities.post_chat_memory_activities import (
-        extract_knowledge,
         detect_commitment,
         update_world_state,
         update_behavioral_signals,
@@ -65,7 +64,7 @@ class PostChatMemoryWorkflow:
                     "EpisodeWorkflow",
                     args=[tenant_id, chat_session_id, window_start, window_end, "chat_threshold"],
                     id=f"episode-{chat_session_id}-{window_start[:10]}",
-                    task_queue="servicetsunami-orchestration",
+                    task_queue="agentprovision-orchestration",
                     parent_close_policy=workflow.ParentClosePolicy.ABANDON,
                 )
                 results["episode_triggered"] = True

@@ -238,7 +238,7 @@ def _sse_jsonrpc_call(
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "servicetsunami", "version": "1.0.0"},
+            "clientInfo": {"name": "agentprovision", "version": "1.0.0"},
         },
     }
     resp = post_client.post(messages_url, json=init_rpc, headers=headers)
@@ -491,7 +491,7 @@ def health_check(db: Session, connector: MCPServerConnector, timeout: int = 10) 
         "params": {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
-            "clientInfo": {"name": "servicetsunami", "version": "1.0.0"},
+            "clientInfo": {"name": "agentprovision", "version": "1.0.0"},
         },
     }
 

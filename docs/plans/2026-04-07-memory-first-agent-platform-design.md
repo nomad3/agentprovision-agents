@@ -16,7 +16,7 @@ The platform is optimized for:
 1. **Low-latency conversational interfaces** (<2s fast path for ~70% of turns)
 2. **Enterprise on-prem adoption** — each customer (Integral, Levi's, HealthPets, future tenants) runs the platform inside their own K8s cluster with data sovereignty
 3. **Multi-agent specialization** — many agents (Luna, Sales, Data Analyst, Code, SRE, Support, Marketing Analyst, Vet Cardiac, etc.) sharing a coherent memory substrate with clean access-control boundaries
-4. **Multi-source ingestion** — chat, email, calendar, Jira, GitHub, ads platforms, scraped web data, voice notes, uploaded documents, Databricks, devices, MCP servers, inbox monitor — all feeding one canonical memory layer
+4. **Multi-source ingestion** — chat, email, calendar, Jira, GitHub, ads platforms, scraped web data, voice notes, uploaded documents, PostgreSQL, devices, MCP servers, inbox monitor — all feeding one canonical memory layer
 5. **Rust where it earns its place** — embedding service from day one, memory-core extraction in Phase 2, federation daemon in Phase 4
 
 The ultimate product story: **"Enterprise agentic orchestration with a memory-first architecture, Rust core, deployed on Kubernetes."**
@@ -158,7 +158,7 @@ This section was significantly tightened after review. An earlier draft said "wa
 Concrete Phase 3a shape:
 
 - K8s Deployment with HPA on Temporal queue depth
-- Each pod runs a Temporal worker on `servicetsunami-chat` queue
+- Each pod runs a Temporal worker on `agentprovision-chat` queue
 - Worker is a Python supervisor that:
   - Receives `ChatCliActivity` from Temporal
   - Spawns `claude -p --no-session-persistence --mcp-config /config/mcp.json --append-system-prompt @/tmp/claude-md-{turn_id}.md` as a subprocess
@@ -937,7 +937,7 @@ Deliverables:
 5. Pre-loaded memory context in the chat hot path (replaces ad-hoc context building)
 6. Conversation history in CLAUDE.md capped at **8K tokens** (revised from 50K — see §6.1.1)
 7. `ChatAdapter` source adapter
-8. `PostChatMemoryWorkflow` on existing `servicetsunami-orchestration` queue (no new worker deployment):
+8. `PostChatMemoryWorkflow` on existing `agentprovision-orchestration` queue (no new worker deployment):
    - `extract_knowledge` activity (Gemma4)
    - `detect_commitment` activity (Gemma4, gated on Phase 0 gold set F1)
    - `update_world_state` activity
@@ -1033,7 +1033,7 @@ Deliverables:
 - Device ingester (IoT sensor data)
 - Scraper ingester (web scraping → entity updates)
 - Upload ingester (PDF, docx, images → text + embeddings)
-- SQL ingester (scheduled Databricks/data warehouse sync)
+- SQL ingester (scheduled PostgreSQL/data warehouse sync)
 - Marketplace mechanics (separate spec)
 
 ### Phasing summary

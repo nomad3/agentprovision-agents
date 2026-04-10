@@ -4,7 +4,7 @@
 set -e
 
 API_URL="${API_URL:-http://localhost:8010}"
-echo "🔍 Verifying ServiceTsunami Implementation"
+echo "🔍 Verifying AgentProvision Implementation"
 echo "API URL: $API_URL"
 echo ""
 

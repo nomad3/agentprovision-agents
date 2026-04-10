@@ -83,7 +83,7 @@ def parse_session_file(filepath: str) -> list[dict]:
 
 def extract_project_name(project_dir_name: str) -> str:
     """Convert encoded project dir name to human-readable name."""
-    # -Users-nomade-Documents-GitHub-servicetsunami-agents -> servicetsunami-agents
+    # -Users-nomade-Documents-GitHub-agentprovision-agents -> agentprovision-agents
     parts = project_dir_name.split('-')
     # Find the last meaningful part (after GitHub)
     try:
@@ -255,7 +255,7 @@ def extract_from_design_docs(docs_dir: str) -> list[dict]:
                 observations.append({
                     'content': f"[{title}] {section_title}: {section_body[:500]}",
                     'observation_type': 'design_document',
-                    'project': 'servicetsunami-agents',
+                    'project': 'agentprovision-agents',
                     'timestamp': f"{date}T00:00:00Z" if date else '',
                     'source_file': filename,
                 })

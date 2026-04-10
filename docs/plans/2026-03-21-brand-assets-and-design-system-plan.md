@@ -127,13 +127,13 @@ public/assets/brand/
 
 | Component | Current | Update |
 |-----------|---------|--------|
-| Sidebar logo | Text "ServiceTsunami" or "Wolfpoint" | `wolf-icon.svg` + brand name |
+| Sidebar logo | Text "AgentProvision" or "Wolfpoint" | `wolf-icon.svg` + brand name |
 | Login page | Generic form | Wolf hero bg + branded login card |
 | Register page | Generic form | Same wolf branding |
 | Loading states | Bootstrap spinner | `wolf-loading.svg` |
 | Empty states | Text only | Wolf icon + message |
 | Favicon | Old React icon | `favicon.ico` from wolf |
-| Page title | "ServiceTsunami" | "wolfpoint.ai" |
+| Page title | "AgentProvision" | "wolfpoint.ai" |
 | Email templates | None | Wolf header + footer |
 
 ### Phase 6: Meta & SEO

@@ -6,7 +6,7 @@
 
 ## 1. Why this exists
 
-ServiceTsunami can execute workflows and multi-step tasks, but most intelligence still lives inside short-lived request cycles. AGI-like systems need to sustain work over longer horizons, recover from interruption, and adapt plans when reality changes.
+AgentProvision can execute workflows and multi-step tasks, but most intelligence still lives inside short-lived request cycles. AGI-like systems need to sustain work over longer horizons, recover from interruption, and adapt plans when reality changes.
 
 ## 2. Current state
 

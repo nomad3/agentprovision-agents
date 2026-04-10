@@ -67,14 +67,14 @@ async def query_data_source(
 
     IMPORTANT: For REST API data sources, you MUST use the endpoint and params
     parameters. SQL queries will NOT work for REST API sources.
-    Only use SQL for database-type data sources (postgres, mysql, databricks).
+    Only use SQL for database-type data sources (postgres, mysql, postgres).
 
     Args:
         query: SQL query for database sources only. Ignored for REST API sources.
         tenant_id: Tenant UUID (resolved from session if omitted).
         connector_id: Specific connector UUID to query. If omitted, auto-discovers
             the first active connector matching connector_type.
-        connector_type: Filter by type: postgres, mysql, snowflake, databricks, api.
+        connector_type: Filter by type: postgres, mysql, postgres, postgres, api.
         endpoint: REST API endpoint path, e.g. "/medications/search",
             "/prices/compare". Required for API sources.
         params: JSON string of query parameters, e.g. '{"q": "paracetamol", "limit": 10}'.

@@ -2,7 +2,7 @@
 
 ## Context
 
-ServiceTsunami is an agent orchestration platform. The ADK supervisor currently routes to 4 sub-agents: data_analyst, report_generator, knowledge_manager, web_researcher. Customer-facing messages (WhatsApp, chat) that don't match these categories get rejected. There's no conversational, customer support, or sales automation capability.
+AgentProvision is an agent orchestration platform. The ADK supervisor currently routes to 4 sub-agents: data_analyst, report_generator, knowledge_manager, web_researcher. Customer-facing messages (WhatsApp, chat) that don't match these categories get rejected. There's no conversational, customer support, or sales automation capability.
 
 Both WhatsApp and the chat UI share the same pipeline: `chat_service.post_user_message()` → enhanced_chat (memory, LLM routing) → ADK supervisor → sub-agents → tools → context_manager → knowledge_extraction. New agents automatically work for both channels.
 
@@ -17,7 +17,7 @@ Both WhatsApp and the chat UI share the same pipeline: `chat_service.post_user_m
 ## Architecture
 
 ```
-servicetsunami_supervisor (router)
+agentprovision_supervisor (router)
 ├── data_analyst          (existing)
 ├── report_generator      (existing)
 ├── knowledge_manager     (existing)
@@ -228,7 +228,7 @@ class FollowUpWorkflow:
 Activities:
 - `execute_followup_action` — Routes to: send WhatsApp message (via whatsapp_service), update pipeline stage, or create a reminder notification.
 
-Registered on `servicetsunami-orchestration` task queue alongside existing workflows.
+Registered on `agentprovision-orchestration` task queue alongside existing workflows.
 
 ## WhatsApp Self-Message Bug Fix
 
@@ -248,8 +248,8 @@ if is_from_me and chat_jid != sender_jid:
 
 | File | Purpose |
 |------|---------|
-| `apps/adk-server/servicetsunami_supervisor/customer_support.py` | Agent definition + system prompt |
-| `apps/adk-server/servicetsunami_supervisor/sales_agent.py` | Agent definition + system prompt |
+| `apps/adk-server/agentprovision_supervisor/customer_support.py` | Agent definition + system prompt |
+| `apps/adk-server/agentprovision_supervisor/sales_agent.py` | Agent definition + system prompt |
 | `apps/adk-server/tools/connector_tools.py` | `query_data_source` tool |
 | `apps/adk-server/tools/sales_tools.py` | Sales-specific tools (qualify, outreach, pipeline, proposal, followup) |
 | `apps/api/app/workflows/follow_up.py` | FollowUpWorkflow + FollowUpInput |
@@ -259,8 +259,8 @@ if is_from_me and chat_jid != sender_jid:
 
 | File | Change |
 |------|--------|
-| `apps/adk-server/servicetsunami_supervisor/agent.py` | Add 2 sub-agents + routing rules to supervisor |
-| `apps/adk-server/servicetsunami_supervisor/__init__.py` | Export new agents |
+| `apps/adk-server/agentprovision_supervisor/agent.py` | Add 2 sub-agents + routing rules to supervisor |
+| `apps/adk-server/agentprovision_supervisor/__init__.py` | Export new agents |
 | `apps/api/app/workers/orchestration_worker.py` | Register FollowUpWorkflow + activity |
 | `apps/api/app/services/whatsapp_service.py` | Fix self-message bug (chat_jid != sender_jid check) |
 | `apps/web/src/components/wizard/TemplateSelector.js` | Update customer_support and sales_assistant templates with real tools |

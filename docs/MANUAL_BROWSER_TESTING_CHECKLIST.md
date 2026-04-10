@@ -1,7 +1,7 @@
 # Manual Browser Testing Checklist
 
 ## Test Environment
-- **URL**: https://servicetsunami.com
+- **URL**: https://agentprovision.com
 - **Credentials**: test@example.com / password
 - **Date**: 2025-11-28
 
@@ -56,9 +56,9 @@
   - [x] Verify Agent Kit appears in `/agent-kits` (API verified).
 
 ## 6. Settings & Integrations
-- [x] **Databricks Connection** (Verified via API Simulation)
+- [x] **PostgreSQL Connection** (Verified via API Simulation)
   - [x] Go to Settings.
-  - [x] Verify Databricks status (if credentials provided).
+  - [x] Verify PostgreSQL status (if credentials provided).
 
 ## 7. Mobile Responsiveness
 - [ ] Resize browser to mobile width.
@@ -109,9 +109,9 @@
 - [x] Complete wizard
 - [x] **Verify**: Agent is created successfully
 
-### 8. Databricks Integration Status
+### 8. PostgreSQL Integration Status
 - [x] Navigate to /settings (Verified via API Simulation)
-- [x] Scroll to "Databricks Integration" section
+- [x] Scroll to "PostgreSQL Integration" section
 - [x] **Verify**: MCP Server connection status is displayed
 - [x] **Verify**: Unity Catalog status is shown
 - [x] **Verify**: Available capabilities are listed
@@ -138,9 +138,9 @@
 - [ ] **Verify**: Success message appears
 - [ ] **Verify**: Imported chat appears in Chat History (if visible) or Knowledge Graph is updated
 
-### 12. Databricks Integration Status
+### 12. PostgreSQL Integration Status
 - [x] Navigate to /settings (Verified via API)
-- [x] Scroll to "Databricks Integration" section
+- [x] Scroll to "PostgreSQL Integration" section
 - [x] **Verify**: MCP Server Connection shows "Connected" (API health check: healthy)
 - [x] **Verify**: Unity Catalog status is displayed
 - [x] **Verify**: Available Capabilities badges are shown

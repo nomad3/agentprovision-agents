@@ -51,7 +51,6 @@ async def execute_pipeline(db: Session, data_pipeline_id: uuid.UUID) -> Dict[str
     Execute a data pipeline by triggering the associated Temporal workflow.
 
     Supports pipeline types:
-    - databricks_job: Run a Databricks notebook
     - connector_sync: Sync data from a connector to datalake
     - schedule/sync/alert: Execute an agent kit workflow
     """
@@ -78,9 +77,7 @@ async def execute_pipeline(db: Session, data_pipeline_id: uuid.UUID) -> Dict[str
     try:
         result = {}
         # Route to appropriate handler based on pipeline type
-        if pipeline_type == "databricks_job":
-            result = await _execute_databricks_job(db, pipeline, config)
-        elif pipeline_type == "connector_sync":
+        if pipeline_type == "connector_sync":
             result = await _execute_connector_sync(db, pipeline, config)
         else:
             result = await _execute_agent_kit_workflow(db, pipeline, config)
@@ -142,36 +139,6 @@ async def _execute_connector_sync(db: Session, pipeline: DataPipeline, config: d
     }
 
 
-async def _execute_databricks_job(db: Session, pipeline: DataPipeline, config: dict) -> Dict[str, Any]:
-    """Execute a Databricks notebook job."""
-    data_source_id = config.get("data_source_id")
-    notebook_path = config.get("notebook_path")
-
-    if not data_source_id or not notebook_path:
-        raise ValueError("Missing data_source_id or notebook_path for Databricks job")
-
-    data_source = data_source_service.get_data_source(db, uuid.UUID(data_source_id))
-    if not data_source:
-        raise ValueError("Data source not found")
-
-    ds_config = data_source.config
-    host = ds_config.get("host")
-    token = ds_config.get("token")
-    cluster_id = ds_config.get("cluster_id")
-
-    if not host or not token:
-        raise ValueError("Incomplete Databricks configuration (host, token)")
-
-    if not cluster_id:
-        raise ValueError("Cluster ID is required in Data Source config to run notebooks")
-
-    # Clean host
-    if host.startswith("https://"):
-        host = host.replace("https://", "")
-    if host.endswith("/"):
-        host = host[:-1]
-
-    url = f"https://{host}/api/2.1/jobs/runs/submit"
 
     payload = {
         "run_name": f"pipeline-{pipeline.name}-{uuid.uuid4()}",
@@ -192,14 +159,14 @@ async def _execute_databricks_job(db: Session, pipeline: DataPipeline, config: d
     response = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, headers=headers))
 
     if response.status_code != 200:
-        raise ValueError(f"Databricks API error: {response.text}")
+        raise ValueError(f"PostgreSQL API error: {response.text}")
 
     result = response.json()
     run_id = result.get("run_id")
 
     return {
         "status": "started",
-        "workflow_id": f"databricks-run-{run_id}",
+        "workflow_id": f"postgres-run-{run_id}",
         "run_id": str(run_id),
-        "databricks_url": f"https://{host}/#job/runs/{run_id}"
+        "postgres_url": f"https://{host}/#job/runs/{run_id}"
     }

@@ -19,7 +19,7 @@
 
 syntax = "proto3";
 
-package servicetsunami.memory.v1;
+package agentprovision.memory.v1;
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";

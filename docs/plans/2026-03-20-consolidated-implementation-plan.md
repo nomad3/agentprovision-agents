@@ -82,7 +82,7 @@
 ### Task 1.1 — Cloudflare Tunnel + DNS
 - **Modify:** `docker-compose.yaml` (cloudflared service config)
 - **Add:** `wolfpoint.ai` hostname to tunnel ingress rules
-- **Keep:** `servicetsunami.com` as redirect during transition
+- **Keep:** `agentprovision.com` as redirect during transition
 - **Update:** DNS records in Cloudflare dashboard
 
 ### Task 1.2 — Frontend Rebrand

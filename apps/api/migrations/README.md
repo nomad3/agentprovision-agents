@@ -1,6 +1,6 @@
 # Database Migrations
 
-This directory contains SQL migration scripts for the ServiceTsunami database.
+This directory contains SQL migration scripts for the AgentProvision database.
 
 ## Running Migrations
 
@@ -8,10 +8,10 @@ This directory contains SQL migration scripts for the ServiceTsunami database.
 
 ```bash
 # Connect to database
-docker exec -i servicetsunami-db-1 psql -U postgres -d servicetsunami < migrations/001_add_databricks_metadata.sql
+docker exec -i agentprovision-db-1 psql -U postgres -d agentprovision < migrations/001_add_postgres_metadata.sql
 
 # Verify
-docker exec servicetsunami-db-1 psql -U postgres -d servicetsunami -c "\d datasets"
+docker exec agentprovision-db-1 psql -U postgres -d agentprovision -c "\d datasets"
 ```
 
 ### Via Python Script
@@ -26,7 +26,7 @@ import os
 async def run_migration():
     conn = await asyncpg.connect(os.getenv('DATABASE_URL').replace('+asyncpg', ''))
 
-    with open('../../migrations/001_add_databricks_metadata.sql', 'r') as f:
+    with open('../../migrations/001_add_postgres_metadata.sql', 'r') as f:
         sql = f.read()
 
     await conn.execute(sql)
@@ -39,7 +39,7 @@ asyncio.run(run_migration())
 
 ## Migration Files
 
-- `001_add_databricks_metadata.sql` - Adds metadata_ JSONB column to all Databricks-integrated tables
+- `001_add_postgres_metadata.sql` - Adds metadata_ JSONB column to all PostgreSQL-integrated tables
 - `002_update_connectors_table.sql` - Updates connectors table schema
 - `003_add_connectors_timestamps.sql` - Adds timestamps to connectors
 - `026_add_execution_traces.sql` - Adds execution_traces table for task audit trails

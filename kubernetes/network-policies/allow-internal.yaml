@@ -6,12 +6,12 @@ metadata:
   name: allow-gateway-to-web
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: servicetsunami-web
+      app.kubernetes.io/name: agentprovision-web
   policyTypes:
     - Ingress
   ingress:
@@ -30,12 +30,12 @@ metadata:
   name: allow-gateway-to-api
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: servicetsunami-api
+      app.kubernetes.io/name: agentprovision-api
   policyTypes:
     - Ingress
   ingress:
@@ -54,19 +54,19 @@ metadata:
   name: allow-web-to-api
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: servicetsunami-api
+      app.kubernetes.io/name: agentprovision-api
   policyTypes:
     - Ingress
   ingress:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: servicetsunami-web
+              app.kubernetes.io/name: agentprovision-web
       ports:
         - protocol: TCP
           port: 8000
@@ -78,7 +78,7 @@ metadata:
   name: allow-api-to-mcp
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
@@ -90,10 +90,10 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: servicetsunami-api
+              app.kubernetes.io/name: agentprovision-api
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: servicetsunami-worker
+              app.kubernetes.io/name: agentprovision-worker
       ports:
         - protocol: TCP
           port: 8000
@@ -105,7 +105,7 @@ metadata:
   name: allow-to-temporal
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
@@ -117,10 +117,10 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: servicetsunami-api
+              app.kubernetes.io/name: agentprovision-api
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: servicetsunami-worker
+              app.kubernetes.io/name: agentprovision-worker
         - podSelector:
             matchLabels:
               app.kubernetes.io/name: temporal-web
@@ -135,7 +135,7 @@ metadata:
   name: allow-prod-to-postgresql
   namespace: database
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
@@ -159,7 +159,7 @@ metadata:
   name: allow-to-redis
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector:
@@ -171,7 +171,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: servicetsunami-api
+              app.kubernetes.io/name: agentprovision-api
       ports:
         - protocol: TCP
           port: 6379

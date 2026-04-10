@@ -1,6 +1,6 @@
-# MCP Server Configuration for ServiceTsunami
+# MCP Server Configuration for AgentProvision
 
-ServiceTsunami includes 81 MCP tools accessible through multiple MCP servers. This configuration enables Copilot to discover, validate, and invoke these tools.
+AgentProvision includes 81 MCP tools accessible through multiple MCP servers. This configuration enables Copilot to discover, validate, and invoke these tools.
 
 ## Local Development Setup
 
@@ -181,7 +181,7 @@ const response = await axios.post(
 
 ### API Key Requirement
 Most MCP tools require:
-- **Bearer token**: JWT from ServiceTsunami API (`/api/v1/auth/login`)
+- **Bearer token**: JWT from AgentProvision API (`/api/v1/auth/login`)
 - **Tenant context**: Automatic from token claims (`tenant_id`, `user_id`)
 
 ### External Platform Credentials

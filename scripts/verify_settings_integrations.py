@@ -2,7 +2,7 @@ import requests
 import json
 import sys
 
-BASE_URL = "https://servicetsunami.com/api/v1"
+BASE_URL = "https://agentprovision.com/api/v1"
 USERNAME = "test@example.com"
 PASSWORD = "password"
 
@@ -22,25 +22,25 @@ def login():
         print(f"Login failed: {e}")
         sys.exit(1)
 
-def verify_databricks(token):
-    print("\n--- Verifying Databricks Integration ---")
+def verify_postgres(token):
+    print("\n--- Verifying PostgreSQL Integration ---")
     try:
         response = requests.get(
-            f"{BASE_URL}/databricks/status",
+            f"{BASE_URL}/postgres/status",
             headers={"Authorization": f"Bearer {token}"}
         )
         if response.status_code == 200:
             data = response.json()
-            print("Databricks Status:")
+            print("PostgreSQL Status:")
             print(json.dumps(data, indent=2))
             if data.get("enabled"):
-                print("✅ Databricks integration is ENABLED.")
+                print("✅ PostgreSQL integration is ENABLED.")
             else:
-                print("⚠️ Databricks integration is DISABLED (expected if env vars not set).")
+                print("⚠️ PostgreSQL integration is DISABLED (expected if env vars not set).")
         else:
-            print(f"❌ Failed to get Databricks status: {response.status_code} - {response.text}")
+            print(f"❌ Failed to get PostgreSQL status: {response.status_code} - {response.text}")
     except Exception as e:
-        print(f"❌ Error verifying Databricks: {e}")
+        print(f"❌ Error verifying PostgreSQL: {e}")
 
 def verify_branding(token):
     print("\n--- Verifying Branding ---")
@@ -80,7 +80,7 @@ def verify_llm_settings(token):
 
 def main():
     token = login()
-    verify_databricks(token)
+    verify_postgres(token)
     verify_branding(token)
     verify_llm_settings(token)
 

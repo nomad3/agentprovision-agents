@@ -2,7 +2,7 @@
 """Backfill missing embeddings on knowledge_entities and knowledge_observations.
 
 Usage:
-    docker exec servicetsunami-agents-api-1 python /app/scripts/backfill_embeddings.py
+    docker exec agentprovision-agents-api-1 python /app/scripts/backfill_embeddings.py
 
 Uses the embedding_service already loaded in the API container.
 """
@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from sqlalchemy import create_engine, text
 from sentence_transformers import SentenceTransformer
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@db:5432/servicetsunami")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@db:5432/agentprovision")
 BATCH_SIZE = 50
 
 # Fix driver prefix

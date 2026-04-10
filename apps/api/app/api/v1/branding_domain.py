@@ -10,7 +10,7 @@ DOMAIN_BRANDING = {
         "theme": "ocean",
         "tagline": "Enterprise AI Agent Platform",
     },
-    "servicetsunami.com": {
+    "agentprovision.com": {
         "brand_name": "AgentProvision",
         "logo_url": "/assets/agentprovision-logo.png",
         "theme": "ocean",

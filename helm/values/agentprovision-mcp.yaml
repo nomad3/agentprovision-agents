@@ -1,9 +1,9 @@
-# ServiceTsunami MCP Server - Data Integration + Web Scraping
-nameOverride: "servicetsunami-mcp"
-fullnameOverride: "servicetsunami-mcp"
+# AgentProvision MCP Server - Data Integration + Web Scraping
+nameOverride: "agentprovision-mcp"
+fullnameOverride: "agentprovision-mcp"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-mcp
+  repository: gcr.io/ai-agency-479516/agentprovision-mcp
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -46,7 +46,7 @@ resources:
 livenessProbe:
   enabled: true
   httpGet:
-    path: /servicetsunami/v1/health
+    path: /agentprovision/v1/health
     port: http
   initialDelaySeconds: 30
   periodSeconds: 10
@@ -56,7 +56,7 @@ livenessProbe:
 readinessProbe:
   enabled: true
   httpGet:
-    path: /servicetsunami/v1/health
+    path: /agentprovision/v1/health
     port: http
   initialDelaySeconds: 15
   periodSeconds: 5
@@ -66,7 +66,7 @@ readinessProbe:
 startupProbe:
   enabled: true
   httpGet:
-    path: /servicetsunami/v1/health
+    path: /agentprovision/v1/health
     port: http
   initialDelaySeconds: 10
   periodSeconds: 10
@@ -86,14 +86,12 @@ configMap:
     FASTMCP_HOST: "0.0.0.0"
     FASTMCP_PORT: "8086"
     MCP_PORT: "8086"
-    DATABRICKS_HOST: ""
-    DATABRICKS_CATALOG_PREFIX: "tenant_"
     BROWSER_HEADLESS: "true"
     BROWSER_TIMEOUT: "30000"
     SCRAPE_MAX_RESULTS: "10"
     DATABASE_HOST: "localhost"
     DATABASE_PORT: "5432"
-    DATABASE_NAME: "servicetsunami"
+    DATABASE_NAME: "agentprovision"
 
 # External Secrets - pulls from GCP Secret Manager
 externalSecret:
@@ -103,15 +101,15 @@ externalSecret:
     name: gcpsm-secret-store
     kind: SecretStore
   target:
-    name: servicetsunami-mcp-secret
+    name: agentprovision-mcp-secret
     creationPolicy: Owner
   data:
     - secretKey: MCP_API_KEY
       remoteRef:
-        key: servicetsunami-mcp-api-key
+        key: agentprovision-mcp-api-key
     - secretKey: DATABASE_URL
       remoteRef:
-        key: servicetsunami-database-url
+        key: agentprovision-database-url
 
 # Cloud SQL Proxy sidecar for secure database connection
 extraContainers:

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expose local Docker Compose stack to the internet via Cloudflare Tunnel, serving both `servicetsunami.com` and `agentprovision.com` from this laptop.
+**Goal:** Expose local Docker Compose stack to the internet via Cloudflare Tunnel, serving both `agentprovision.com` and `agentprovision.com` from this laptop.
 
 **Architecture:** Cloudflare Tunnel (outbound-only) → routes `*/api/*` to FastAPI (:8001), everything else to React SPA (:8002). Both domains, one tunnel, one stack.
 
@@ -48,8 +48,8 @@ cloudflared tunnel login
 
 - [ ] **Step 3: Create the tunnel**
 ```bash
-cloudflared tunnel create servicetsunami
-# Output: Created tunnel servicetsunami with id <TUNNEL_ID>
+cloudflared tunnel create agentprovision
+# Output: Created tunnel agentprovision with id <TUNNEL_ID>
 # Saves credentials to ~/.cloudflared/<TUNNEL_ID>.json
 ```
 
@@ -60,16 +60,16 @@ Save the `<TUNNEL_ID>` — needed for DNS and config.
 
 ## Task 2: Configure DNS
 
-- [ ] **Step 1: Route servicetsunami.com**
+- [ ] **Step 1: Route agentprovision.com**
 ```bash
-cloudflared tunnel route dns servicetsunami servicetsunami.com
-cloudflared tunnel route dns servicetsunami www.servicetsunami.com
+cloudflared tunnel route dns agentprovision agentprovision.com
+cloudflared tunnel route dns agentprovision www.agentprovision.com
 ```
 
 - [ ] **Step 2: Route agentprovision.com**
 ```bash
-cloudflared tunnel route dns servicetsunami agentprovision.com
-cloudflared tunnel route dns servicetsunami www.agentprovision.com
+cloudflared tunnel route dns agentprovision agentprovision.com
+cloudflared tunnel route dns agentprovision www.agentprovision.com
 ```
 
 - [ ] **Step 3: Verify in Cloudflare dashboard**
@@ -101,12 +101,12 @@ cp ~/.cloudflared/<TUNNEL_ID>.json cloudflared/credentials.json
 
 ```yaml
 # cloudflared/config.yml
-tunnel: servicetsunami
+tunnel: agentprovision
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
   # API routes
-  - hostname: servicetsunami.com
+  - hostname: agentprovision.com
     path: /api/*
     service: http://api:8000
   - hostname: agentprovision.com
@@ -114,7 +114,7 @@ ingress:
     service: http://api:8000
 
   # Web SPA (catch-all per domain)
-  - hostname: servicetsunami.com
+  - hostname: agentprovision.com
     service: http://web:80
   - hostname: agentprovision.com
     service: http://web:80
@@ -146,13 +146,13 @@ Add before `test-db`:
 - [ ] **Step 6: Start and verify**
 ```bash
 DB_PORT=8003 API_PORT=8001 WEB_PORT=8002 docker-compose up -d
-docker logs servicetsunami-agents-cloudflared-1
+docker logs agentprovision-agents-cloudflared-1
 # Should show: "Connection registered" and "Tunnel is connected"
 ```
 
 - [ ] **Step 7: Test from browser**
-Open `https://servicetsunami.com` — should see the React SPA.
-Open `https://servicetsunami.com/api/v1/` — should see API health response.
+Open `https://agentprovision.com` — should see the React SPA.
+Open `https://agentprovision.com/api/v1/` — should see API health response.
 
 - [ ] **Step 8: Commit**
 ```bash
@@ -178,9 +178,9 @@ from fastapi import APIRouter, Request
 router = APIRouter()
 
 DOMAIN_BRANDING = {
-    "servicetsunami.com": {
-        "brand_name": "ServiceTsunami",
-        "logo_url": "/assets/servicetsunami-logo.png",
+    "agentprovision.com": {
+        "brand_name": "AgentProvision",
+        "logo_url": "/assets/agentprovision-logo.png",
         "theme": "ocean",
         "tagline": "AI Agent Orchestration Platform",
     },
@@ -192,7 +192,7 @@ DOMAIN_BRANDING = {
     },
 }
 
-DEFAULT_BRANDING = DOMAIN_BRANDING["servicetsunami.com"]
+DEFAULT_BRANDING = DOMAIN_BRANDING["agentprovision.com"]
 
 
 @router.get("/branding")
@@ -238,8 +238,8 @@ Find the `CORSMiddleware` setup in `apps/api/app/main.py` and add both productio
 
 ```python
 origins = [
-    "https://servicetsunami.com",
-    "https://www.servicetsunami.com",
+    "https://agentprovision.com",
+    "https://www.agentprovision.com",
     "https://agentprovision.com",
     "https://www.agentprovision.com",
     "http://localhost:8002",
@@ -249,14 +249,14 @@ origins = [
 
 - [ ] **Step 2: Verify CORS works**
 ```bash
-curl -I https://servicetsunami.com/api/v1/ -H "Origin: https://servicetsunami.com"
-# Should include: Access-Control-Allow-Origin: https://servicetsunami.com
+curl -I https://agentprovision.com/api/v1/ -H "Origin: https://agentprovision.com"
+# Should include: Access-Control-Allow-Origin: https://agentprovision.com
 ```
 
 - [ ] **Step 3: Commit**
 ```bash
 git add apps/api/app/main.py
-git commit -m "feat: add CORS for servicetsunami.com and agentprovision.com"
+git commit -m "feat: add CORS for agentprovision.com and agentprovision.com"
 ```
 
 ---
@@ -265,13 +265,13 @@ git commit -m "feat: add CORS for servicetsunami.com and agentprovision.com"
 
 - [ ] **Step 1: Update Google Cloud Console**
 Add both callback URLs in GCP → APIs & Services → Credentials → OAuth client:
-- `https://servicetsunami.com/api/v1/oauth/google/callback`
+- `https://agentprovision.com/api/v1/oauth/google/callback`
 - `https://agentprovision.com/api/v1/oauth/google/callback`
 
 - [ ] **Step 2: Update .env redirect URI**
 In `apps/api/.env`, change:
 ```
-GOOGLE_REDIRECT_URI=https://servicetsunami.com/api/v1/oauth/google/callback
+GOOGLE_REDIRECT_URI=https://agentprovision.com/api/v1/oauth/google/callback
 ```
 
 - [ ] **Step 3: Commit**

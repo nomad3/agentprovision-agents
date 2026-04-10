@@ -216,7 +216,7 @@ async def run_workflow_internal(
                 input_data=payload.input_data or {},
             ),
             id=temporal_wf_id,
-            task_queue="servicetsunami-orchestration",
+            task_queue="agentprovision-orchestration",
         )
 
         run.temporal_workflow_id = temporal_wf_id
@@ -605,7 +605,7 @@ async def run_workflow(
                 input_data=payload.input_data or {},
             ),
             id=temporal_wf_id,
-            task_queue="servicetsunami-orchestration",
+            task_queue="agentprovision-orchestration",
         )
 
         run.temporal_workflow_id = temporal_wf_id

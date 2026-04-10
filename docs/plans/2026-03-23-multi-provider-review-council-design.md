@@ -143,7 +143,7 @@ class ProviderReviewWorkflow:
         return result
 ```
 
-**Queue**: `servicetsunami-code` (reuses code-worker which has Claude + Codex CLIs installed)
+**Queue**: `agentprovision-code` (reuses code-worker which has Claude + Codex CLIs installed)
 
 **Timeout**: 5 min per provider, 10 min total workflow
 
@@ -184,7 +184,7 @@ Over time, this data enables:
 ### Phase 2: ProviderReviewWorkflow
 - Temporal workflow that runs reviewers in parallel
 - Meta-adjudicator computes agreement, disagreements, recommendation
-- Queue: `servicetsunami-code`
+- Queue: `agentprovision-code`
 
 ### Phase 3: Decision Gate + RL Update
 - Trigger logic in `auto_quality_scorer.py`

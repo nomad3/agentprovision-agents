@@ -459,7 +459,7 @@ def _maybe_trigger_provider_council(
                         "original_experience_id": experience_id,
                     },
                     id=f"provider-review-{experience_id[:8]}-{uuid.uuid4().hex[:6]}",
-                    task_queue="servicetsunami-code",
+                    task_queue="agentprovision-code",
                     execution_timeout=timedelta(minutes=15),
                 )
                 logger.info("Provider council workflow dispatched for experience %s", experience_id[:8])

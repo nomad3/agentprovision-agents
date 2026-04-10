@@ -61,7 +61,7 @@ class TestProgressMessages:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `docker exec servicetsunami-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
+Run: `docker exec agentprovision-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
 Expected: FAIL with `ImportError: cannot import name '_build_ack_message'`
 
 - [ ] **Step 3: Implement `_build_ack_message` helper**
@@ -84,7 +84,7 @@ def _build_ack_message(user_message: str, task_type: str) -> str:
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `docker exec servicetsunami-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
+Run: `docker exec agentprovision-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -138,7 +138,7 @@ except Exception:
 
 - [ ] **Step 3: Verify in container**
 
-Run: `docker exec servicetsunami-agents-api-1 python -m py_compile /app/app/services/whatsapp_service.py`
+Run: `docker exec agentprovision-agents-api-1 python -m py_compile /app/app/services/whatsapp_service.py`
 Expected: No errors
 
 - [ ] **Step 4: Commit**
@@ -222,7 +222,7 @@ async def _keep_typing():
 
 - [ ] **Step 4: Run tests**
 
-Run: `docker exec servicetsunami-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
+Run: `docker exec agentprovision-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -293,7 +293,7 @@ if completion_note:
 
 - [ ] **Step 4: Run all tests**
 
-Run: `docker exec servicetsunami-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
+Run: `docker exec agentprovision-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
 Expected: All PASS
 
 - [ ] **Step 5: Commit**
@@ -346,7 +346,7 @@ class TestProgressIntegration:
 
 - [ ] **Step 2: Run full test suite in container**
 
-Run: `docker exec servicetsunami-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
+Run: `docker exec agentprovision-agents-api-1 pytest /app/tests/test_whatsapp_progress.py -v`
 Expected: All PASS
 
 - [ ] **Step 3: Rebuild and restart API**

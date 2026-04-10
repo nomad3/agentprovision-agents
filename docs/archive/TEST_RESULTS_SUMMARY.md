@@ -1,4 +1,4 @@
-# Test Results Summary - ServiceTsunami E2E Testing
+# Test Results Summary - AgentProvision E2E Testing
 
 **Date**: October 31, 2025
 **Tester**: Claude Code
@@ -55,7 +55,7 @@ Failed: 0
 
 **Note**: Homepage test skipped when testing API directly (expected behavior)
 
-### ⚠️ Production Environment (https://servicetsunami.com)
+### ⚠️ Production Environment (https://agentprovision.com)
 
 ```
 =========================================
@@ -141,7 +141,7 @@ SSH into your GCP VM and perform the following:
 
 ```bash
 # 1. Navigate to project
-cd /path/to/servicetsunami
+cd /path/to/agentprovision
 
 # 2. Edit API environment file
 vi apps/api/.env
@@ -349,7 +349,7 @@ Use this checklist after each deployment:
 
 ## Conclusion
 
-The ServiceTsunami platform is **production-ready** with one critical bug that needs immediate fixing:
+The AgentProvision platform is **production-ready** with one critical bug that needs immediate fixing:
 
 **Critical**: Chat messaging requires `ANTHROPIC_API_KEY` in production
 

@@ -60,7 +60,7 @@ WHERE table_name = 'knowledge_entities' AND column_name IN ('status', 'collectio
 
 **Step 2: Apply migration locally**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/029_extend_knowledge_entities.sql`
+Run: `docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/029_extend_knowledge_entities.sql`
 Expected: ALTER TABLE (x4), CREATE INDEX (x3), and SELECT showing 4 rows
 
 **Step 3: Commit**
@@ -1672,13 +1672,13 @@ kubectl get pods -n prod -w
 
 ```bash
 # Test skill registry (should show 10 skills including peekaboo + linkedin)
-curl -s https://servicetsunami.com/api/v1/skill-configs/registry -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; skills=json.load(sys.stdin); print(f'{len(skills)} skills:', [s['skill_name'] for s in skills])"
+curl -s https://agentprovision.com/api/v1/skill-configs/registry -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; skills=json.load(sys.stdin); print(f'{len(skills)} skills:', [s['skill_name'] for s in skills])"
 
 # Test entity list with filters
-curl -s "https://servicetsunami.com/api/v1/knowledge/entities?status=draft" -H "Authorization: Bearer $TOKEN"
+curl -s "https://agentprovision.com/api/v1/knowledge/entities?status=draft" -H "Authorization: Bearer $TOKEN"
 
 # Test collection summary
-curl -s "https://servicetsunami.com/api/v1/knowledge/collections/{task_id}/summary" -H "Authorization: Bearer $TOKEN"
+curl -s "https://agentprovision.com/api/v1/knowledge/collections/{task_id}/summary" -H "Authorization: Bearer $TOKEN"
 ```
 
 ---

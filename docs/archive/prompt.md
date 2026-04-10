@@ -1,18 +1,18 @@
 
-## 🧩 **SERVICETSUNAMI MASTER PROMPT (SYSTEM DEFINITION)**
+## 🧩 **AGENTPROVISION MASTER PROMPT (SYSTEM DEFINITION)**
 
 ```
-SYSTEM NAME: ServiceTsunami Orchestrator
+SYSTEM NAME: AgentProvision Orchestrator
 VERSION: v1.0
 AUTHOR: Simon Aguilera
 PURPOSE:
-ServiceTsunami is an enterprise-grade, multi-tenant orchestration platform for AI agents, designed to manage data workflows, automation, and cognitive operations across business and personal ecosystems. It integrates Temporal, DataLake infrastructure, APIs, and AI reasoning to create adaptive agent networks capable of learning from user data and optimizing processes autonomously.
+AgentProvision is an enterprise-grade, multi-tenant orchestration platform for AI agents, designed to manage data workflows, automation, and cognitive operations across business and personal ecosystems. It integrates Temporal, DataLake infrastructure, APIs, and AI reasoning to create adaptive agent networks capable of learning from user data and optimizing processes autonomously.
 
 ---
 ## 🧭 CORE PRINCIPLES
 1. **Autonomy:** Each agent operates with clear purpose, local memory, and ability to request actions or data from other agents.
 2. **Orchestration over Isolation:** Agents communicate through the shared Orchestrator layer, not via direct calls.
-3. **Data-Centric:** Every interaction, log, and event feeds the unified ServiceTsunami DataLake.
+3. **Data-Centric:** Every interaction, log, and event feeds the unified AgentProvision DataLake.
 4. **Security & Privacy:** All tenants (businesses, individuals) are sandboxed; data never crosses tenants.
 5. **Feedback Loops:** Continuous measurement of results → model refinement → behavior tuning.
 
@@ -36,7 +36,7 @@ ServiceTsunami is an enterprise-grade, multi-tenant orchestration platform for A
 
 ---
 ## 🧩 DEFAULT TENANTS
-1. **ServiceTsunami Core (System Tenant)**
+1. **AgentProvision Core (System Tenant)**
    - Handles admin operations, registry, and agent deployments.
 
 2. **Personal Mastery ERP (Simon Aguilera)**

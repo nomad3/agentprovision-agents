@@ -1226,8 +1226,8 @@ git commit -m "feat: add Meta/Google/TikTok ads tools with campaign management a
 ## Task 4: Create Marketing Analyst Sub-Agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/marketing_analyst.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/marketing_team.py` (add marketing_analyst as sub-agent)
+- Create: `apps/adk-server/agentprovision_supervisor/marketing_analyst.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/marketing_team.py` (add marketing_analyst as sub-agent)
 
 **Context:** The marketing_analyst combines ads tools + competitor tools + knowledge graph tools. It's a leaf agent (has tools, no sub-agents). Follow the personal_assistant pattern for tool imports and the web_researcher pattern for Agent definition.
 
@@ -1373,7 +1373,7 @@ When asked for a competitive comparison:
 
 **Step 2: Update marketing_team.py to include marketing_analyst**
 
-Replace the entire file `apps/adk-server/servicetsunami_supervisor/marketing_team.py`:
+Replace the entire file `apps/adk-server/agentprovision_supervisor/marketing_team.py`:
 
 ```python
 """Marketing Team sub-supervisor.
@@ -1433,7 +1433,7 @@ Always explain which specialist you're routing to and why.
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/marketing_analyst.py apps/adk-server/servicetsunami_supervisor/marketing_team.py
+git add apps/adk-server/agentprovision_supervisor/marketing_analyst.py apps/adk-server/agentprovision_supervisor/marketing_team.py
 git commit -m "feat: add marketing_analyst sub-agent to marketing_team with ads and competitor tools"
 ```
 
@@ -1442,13 +1442,13 @@ git commit -m "feat: add marketing_analyst sub-agent to marketing_team with ads 
 ## Task 5: Update Root Supervisor Routing
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py:23-120` (update routing instructions)
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py:23-120` (update routing instructions)
 
 **Context:** The root supervisor needs updated routing to send competitor monitoring + ad campaign requests to the right places. Per the design: "Monitor competitor X" → personal_assistant (Luna manages directly). "Campaign performance" / "ad analytics" → marketing_team → marketing_analyst.
 
 **Step 1: Update marketing_team routing section in root agent instruction**
 
-In `apps/adk-server/servicetsunami_supervisor/agent.py`, find the `### marketing_team:` section (lines ~79-86) and replace it with:
+In `apps/adk-server/agentprovision_supervisor/agent.py`, find the `### marketing_team:` section (lines ~79-86) and replace it with:
 
 ```
 ### marketing_team:
@@ -1476,7 +1476,7 @@ Also update the `### personal_assistant (Luna):` section to add:
 
 **Step 2: Add competitor tools to personal_assistant**
 
-Modify `apps/adk-server/servicetsunami_supervisor/personal_assistant.py` to import and wire competitor tools into Luna:
+Modify `apps/adk-server/agentprovision_supervisor/personal_assistant.py` to import and wire competitor tools into Luna:
 
 Add import at top (after the jira_tools import block):
 
@@ -1508,7 +1508,7 @@ Also add a section to Luna's instruction about competitors:
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/agent.py apps/adk-server/servicetsunami_supervisor/personal_assistant.py
+git add apps/adk-server/agentprovision_supervisor/agent.py apps/adk-server/agentprovision_supervisor/personal_assistant.py
 git commit -m "feat: update root supervisor routing for ads/competitors, wire competitor tools to Luna"
 ```
 
@@ -1521,7 +1521,7 @@ git commit -m "feat: update root supervisor routing for ads/competitors, wire co
 - Create: `apps/api/app/workflows/activities/competitor_monitor.py`
 - Modify: `apps/api/app/workers/orchestration_worker.py` (register workflow + activities)
 
-**Context:** Follow the `InboxMonitorWorkflow` pattern exactly. One workflow instance per tenant. Uses `continue_as_new` to prevent history growth. Queue: `servicetsunami-orchestration`. The workflow fetches competitors from the knowledge graph, scrapes their web presence via the MCP scraper, checks public ad libraries, stores observations, and creates notifications for notable changes.
+**Context:** Follow the `InboxMonitorWorkflow` pattern exactly. One workflow instance per tenant. Uses `continue_as_new` to prevent history growth. Queue: `agentprovision-orchestration`. The workflow fetches competitors from the knowledge graph, scrapes their web presence via the MCP scraper, checks public ad libraries, stores observations, and creates notifications for notable changes.
 
 **Step 1: Create the workflow**
 
@@ -1709,7 +1709,7 @@ async def fetch_competitors(tenant_id: str) -> dict:
 async def scrape_competitor_activity(tenant_id: str, competitors: list) -> dict:
     """Scrape competitor websites and social profiles via MCP scraper."""
     results = {}
-    mcp_url = settings.MCP_SCRAPER_URL if hasattr(settings, 'MCP_SCRAPER_URL') else getattr(settings, 'mcp_scraper_url', 'http://servicetsunami-mcp')
+    mcp_url = settings.MCP_SCRAPER_URL if hasattr(settings, 'MCP_SCRAPER_URL') else getattr(settings, 'mcp_scraper_url', 'http://agentprovision-mcp')
 
     async with httpx.AsyncClient(
         base_url=mcp_url,
@@ -1727,7 +1727,7 @@ async def scrape_competitor_activity(tenant_id: str, competitors: list) -> dict:
             website = comp.get("website_url", "")
             if website:
                 try:
-                    resp = await client.post("/servicetsunami/v1/scrape", json={
+                    resp = await client.post("/agentprovision/v1/scrape", json={
                         "url": website,
                         "extract_links": True,
                     })
@@ -1744,7 +1744,7 @@ async def scrape_competitor_activity(tenant_id: str, competitors: list) -> dict:
 
             # Search for recent news
             try:
-                resp = await client.post("/servicetsunami/v1/search-and-scrape", json={
+                resp = await client.post("/agentprovision/v1/search-and-scrape", json={
                     "query": f"{name} company news {datetime.now().year}",
                     "max_results": 3,
                 })
@@ -2111,7 +2111,7 @@ These should follow the same pattern as the inbox monitor endpoints in `oauth.py
 **Step 5: Commit**
 
 ```bash
-git add apps/adk-server/tools/monitor_tools.py apps/adk-server/servicetsunami_supervisor/personal_assistant.py
+git add apps/adk-server/tools/monitor_tools.py apps/adk-server/agentprovision_supervisor/personal_assistant.py
 git commit -m "feat: add competitor monitor control tools and wire to Luna"
 ```
 
@@ -2153,7 +2153,7 @@ async def start_competitor_monitor(
             "CompetitorMonitorWorkflow",
             args=[tenant_id, interval, None],
             id=wf_id,
-            task_queue="servicetsunami-orchestration",
+            task_queue="agentprovision-orchestration",
         )
         return {"status": "started", "workflow_id": wf_id, "interval_hours": interval // 3600}
     except Exception as e:
@@ -2226,7 +2226,7 @@ git push origin main
 The CI auto-deploys on changes to `apps/adk-server/**`. Monitor:
 
 ```bash
-kubectl rollout status deployment/servicetsunami-adk -n prod
+kubectl rollout status deployment/agentprovision-adk -n prod
 ```
 
 **Step 3: Watch API/Worker deployment**
@@ -2234,14 +2234,14 @@ kubectl rollout status deployment/servicetsunami-adk -n prod
 Changes to `apps/api/**` trigger API + worker deploys:
 
 ```bash
-kubectl rollout status deployment/servicetsunami-api -n prod
-kubectl rollout status deployment/servicetsunami-worker -n prod
+kubectl rollout status deployment/agentprovision-api -n prod
+kubectl rollout status deployment/agentprovision-worker -n prod
 ```
 
 **Step 4: Verify integration registry**
 
 ```bash
-curl -s https://servicetsunami.com/api/v1/integration_configs/registry -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | grep -A2 meta_ads
+curl -s https://agentprovision.com/api/v1/integration_configs/registry -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | grep -A2 meta_ads
 ```
 
 Should show `meta_ads`, `google_ads`, `tiktok_ads` entries.

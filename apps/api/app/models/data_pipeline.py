@@ -12,7 +12,7 @@ class DataPipeline(Base):
     name = Column(String, index=True)
     config = Column(JSON)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"))
-    metadata_ = Column(JSON, nullable=True, default=dict)  # Databricks metadata
+    metadata_ = Column(JSON, nullable=True, default=dict)  # PostgreSQL metadata
     tenant = relationship("Tenant")
 
     # Scheduling fields

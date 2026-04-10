@@ -8,9 +8,9 @@ from src.tools.ingestion import sync_table_to_bronze, upload_file
 
 @pytest.mark.asyncio
 async def test_sync_table_to_bronze():
-    """Test syncing PostgreSQL table to Databricks Bronze"""
+    """Test syncing PostgreSQL table to PostgreSQL Bronze"""
     with patch('src.tools.ingestion.api') as mock_api, \
-         patch('src.tools.ingestion.databricks') as mock_databricks, \
+         patch('src.tools.ingestion.postgres') as mock_postgres, \
          patch('src.tools.ingestion.asyncpg') as mock_asyncpg:
 
         # Mock API
@@ -28,8 +28,8 @@ async def test_sync_table_to_bronze():
         ])
         mock_asyncpg.connect = AsyncMock(return_value=mock_conn)
 
-        # Mock Databricks
-        mock_databricks.create_table_from_parquet = AsyncMock(return_value={
+        # Mock PostgreSQL
+        mock_postgres.create_table_from_parquet = AsyncMock(return_value={
             "table": "tenant_123.bronze.customers",
             "row_count": 2
         })
@@ -43,15 +43,15 @@ async def test_sync_table_to_bronze():
 
 @pytest.mark.asyncio
 async def test_upload_file_csv():
-    """Test uploading CSV file to Databricks Bronze"""
+    """Test uploading CSV file to PostgreSQL Bronze"""
     csv_content = "id,name\n1,Alice\n2,Bob"
     encoded = base64.b64encode(csv_content.encode()).decode()
 
     with patch('src.tools.ingestion.api') as mock_api, \
-         patch('src.tools.ingestion.databricks') as mock_databricks:
+         patch('src.tools.ingestion.postgres') as mock_postgres:
 
         mock_api.create_dataset = AsyncMock(return_value={"id": "dataset-789"})
-        mock_databricks.create_table_from_parquet = AsyncMock(return_value={
+        mock_postgres.create_table_from_parquet = AsyncMock(return_value={
             "table": "tenant_123.bronze.my_data",
             "row_count": 2
         })

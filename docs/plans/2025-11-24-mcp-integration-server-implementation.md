@@ -2,18 +2,18 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build an MCP-compliant server that connects data sources to Databricks, following Anthropic's Model Context Protocol specification.
+**Goal:** Build an MCP-compliant server that connects data sources to PostgreSQL, following Anthropic's Model Context Protocol specification.
 
-**Architecture:** The MCP server acts as the "Integration Brain" - it handles external connections (PostgreSQL), data ingestion to Databricks, SQL queries, and AI-assisted analysis. The API remains the "System of Record" for auth, credentials, and metadata. All data flows through Databricks (Bronze/Silver/Gold layers).
+**Architecture:** The MCP server acts as the "Integration Brain" - it handles external connections (PostgreSQL), data ingestion to PostgreSQL, SQL queries, and AI-assisted analysis. The API remains the "System of Record" for auth, credentials, and metadata. All data flows through PostgreSQL (Bronze/Silver/Gold layers).
 
-**Tech Stack:** Python 3.11+, FastMCP (mcp SDK), asyncpg, httpx, databricks-sql-connector, pyarrow, pandas
+**Tech Stack:** Python 3.11+, FastMCP (mcp SDK), asyncpg, httpx, postgres-sql-connector, pyarrow, pandas
 
 ---
 
 ## Prerequisites
 
 Before starting, ensure:
-1. Working in worktree: `/Users/nomade/Documents/GitHub/servicetsunami/.worktrees/mcp-server`
+1. Working in worktree: `/Users/nomade/Documents/GitHub/agentprovision/.worktrees/mcp-server`
 2. Branch: `feature/mcp-integration-server`
 3. Docker services available for integration testing
 
@@ -44,15 +44,15 @@ Create: `apps/mcp-server/pyproject.toml`
 
 ```toml
 [project]
-name = "servicetsunami-mcp-server"
+name = "agentprovision-mcp-server"
 version = "0.1.0"
-description = "MCP Integration Server for ServiceTsunami - connects data sources to Databricks"
+description = "MCP Integration Server for AgentProvision - connects data sources to PostgreSQL"
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=1.0.0",
     "asyncpg>=0.29.0",
     "httpx>=0.27.0",
-    "databricks-sql-connector>=3.0.0",
+    "postgres-sql-connector>=3.0.0",
     "pyarrow>=15.0.0",
     "pandas>=2.0.0",
     "pydantic>=2.0.0",
@@ -89,15 +89,15 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """MCP Server settings loaded from environment"""
 
-    # ServiceTsunami API
+    # AgentProvision API
     API_BASE_URL: str = "http://localhost:8001"
     API_INTERNAL_KEY: str = "internal-service-key"
 
-    # Databricks
-    DATABRICKS_HOST: str = ""
-    DATABRICKS_TOKEN: str = ""
-    DATABRICKS_WAREHOUSE_ID: str = ""
-    DATABRICKS_CATALOG_PREFIX: str = "tenant_"
+    # PostgreSQL
+    POSTGRESQL_HOST: str = ""
+    POSTGRESQL_TOKEN: str = ""
+    POSTGRESQL_WAREHOUSE_ID: str = ""
+    POSTGRESQL_CATALOG_PREFIX: str = "tenant_"
 
     # MCP Server
     MCP_PORT: int = 8085
@@ -116,14 +116,14 @@ settings = Settings()
 Create: `apps/mcp-server/.env.example`
 
 ```bash
-# ServiceTsunami API
+# AgentProvision API
 API_BASE_URL=http://localhost:8001
 API_INTERNAL_KEY=your-internal-service-key
 
-# Databricks
-DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-DATABRICKS_TOKEN=dapi_your_token_here
-DATABRICKS_WAREHOUSE_ID=your_warehouse_id
+# PostgreSQL
+POSTGRESQL_HOST=https://your-workspace.cloud.postgres.com
+POSTGRESQL_TOKEN=dapi_your_token_here
+POSTGRESQL_WAREHOUSE_ID=your_warehouse_id
 
 # MCP Server
 MCP_PORT=8085
@@ -135,7 +135,7 @@ MCP_TRANSPORT=streamable-http
 Create: `apps/mcp-server/src/__init__.py`
 
 ```python
-"""ServiceTsunami MCP Server"""
+"""AgentProvision MCP Server"""
 ```
 
 Create: `apps/mcp-server/src/tools/__init__.py`
@@ -219,22 +219,22 @@ git commit -m "feat(mcp): initialize MCP server package structure
 Create: `apps/mcp-server/tests/test_api_client.py`
 
 ```python
-"""Tests for ServiceTsunami API client"""
+"""Tests for AgentProvision API client"""
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.clients.api_client import ServiceTsunamiAPI
+from src.clients.api_client import AgentProvisionAPI
 
 
 @pytest.fixture
 def api():
-    return ServiceTsunamiAPI()
+    return AgentProvisionAPI()
 
 
 @pytest.mark.asyncio
 async def test_api_client_creates_data_source():
     """Test creating a data source via API"""
-    api = ServiceTsunamiAPI()
+    api = AgentProvisionAPI()
 
     with patch.object(api, '_request', new_callable=AsyncMock) as mock_request:
         mock_request.return_value = {
@@ -259,7 +259,7 @@ async def test_api_client_creates_data_source():
 @pytest.mark.asyncio
 async def test_api_client_gets_data_source():
     """Test fetching a data source with decrypted credentials"""
-    api = ServiceTsunamiAPI()
+    api = AgentProvisionAPI()
 
     with patch.object(api, '_request', new_callable=AsyncMock) as mock_request:
         mock_request.return_value = {
@@ -278,7 +278,7 @@ async def test_api_client_gets_data_source():
 @pytest.mark.asyncio
 async def test_api_client_creates_dataset():
     """Test creating dataset metadata"""
-    api = ServiceTsunamiAPI()
+    api = AgentProvisionAPI()
 
     with patch.object(api, '_request', new_callable=AsyncMock) as mock_request:
         mock_request.return_value = {"id": "dataset-789", "name": "customers"}
@@ -310,7 +310,7 @@ Create: `apps/mcp-server/src/clients/api_client.py`
 
 ```python
 """
-ServiceTsunami API Client
+AgentProvision API Client
 
 Handles communication with the main API for:
 - Credential storage and retrieval
@@ -328,9 +328,9 @@ class APIClientError(Exception):
     pass
 
 
-class ServiceTsunamiAPI:
+class AgentProvisionAPI:
     """
-    Client for ServiceTsunami API.
+    Client for AgentProvision API.
 
     Used by MCP server to:
     - Store/retrieve encrypted credentials
@@ -456,7 +456,7 @@ class ServiceTsunamiAPI:
         """
         Create dataset metadata record.
 
-        Called after data is synced to Databricks to record
+        Called after data is synced to PostgreSQL to record
         the bronze/silver table locations.
         """
         return await self._request(
@@ -501,7 +501,7 @@ Expected: PASS (3 tests)
 
 ```bash
 git add apps/mcp-server/src/clients/api_client.py apps/mcp-server/tests/test_api_client.py
-git commit -m "feat(mcp): add ServiceTsunami API client
+git commit -m "feat(mcp): add AgentProvision API client
 
 - Create/get data sources with encrypted credentials
 - Create/update dataset metadata
@@ -511,28 +511,28 @@ git commit -m "feat(mcp): add ServiceTsunami API client
 
 ---
 
-## Task 3: Create Databricks Client
+## Task 3: Create PostgreSQL Client
 
 **Files:**
-- Create: `apps/mcp-server/src/clients/databricks_client.py`
-- Create: `apps/mcp-server/tests/test_databricks_client.py`
+- Create: `apps/mcp-server/src/clients/postgres_client.py`
+- Create: `apps/mcp-server/tests/test_postgres_client.py`
 
 **Step 1: Write failing test**
 
-Create: `apps/mcp-server/tests/test_databricks_client.py`
+Create: `apps/mcp-server/tests/test_postgres_client.py`
 
 ```python
-"""Tests for Databricks client"""
+"""Tests for PostgreSQL client"""
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.clients.databricks_client import DatabricksClient
+from src.clients.postgres_client import PostgreSQLClient
 
 
 @pytest.mark.asyncio
-async def test_databricks_client_executes_query():
+async def test_postgres_client_executes_query():
     """Test executing SQL query"""
-    client = DatabricksClient()
+    client = PostgreSQLClient()
 
     mock_cursor = MagicMock()
     mock_cursor.fetchall.return_value = [{"id": 1, "name": "test"}]
@@ -549,9 +549,9 @@ async def test_databricks_client_executes_query():
 
 
 @pytest.mark.asyncio
-async def test_databricks_client_lists_tables():
+async def test_postgres_client_lists_tables():
     """Test listing tables in catalog"""
-    client = DatabricksClient()
+    client = PostgreSQLClient()
 
     mock_cursor = MagicMock()
     mock_cursor.fetchall.return_value = [
@@ -573,20 +573,20 @@ async def test_databricks_client_lists_tables():
 
 ```bash
 cd apps/mcp-server
-pytest tests/test_databricks_client.py -v
+pytest tests/test_postgres_client.py -v
 ```
 
 Expected: FAIL with `ModuleNotFoundError`
 
-**Step 3: Implement Databricks client**
+**Step 3: Implement PostgreSQL client**
 
-Create: `apps/mcp-server/src/clients/databricks_client.py`
+Create: `apps/mcp-server/src/clients/postgres_client.py`
 
 ```python
 """
-Databricks Client
+PostgreSQL Client
 
-Handles all Databricks operations:
+Handles all PostgreSQL operations:
 - SQL query execution
 - Table management (create, describe, list)
 - Data upload to volumes
@@ -594,37 +594,37 @@ Handles all Databricks operations:
 """
 from typing import Any, Dict, List, Optional
 import io
-from databricks import sql as databricks_sql
+from postgres import sql as postgres_sql
 import pyarrow.parquet as pq
 import pandas as pd
 
 from src.config import settings
 
 
-class DatabricksClientError(Exception):
-    """Base exception for Databricks client errors"""
+class PostgreSQLClientError(Exception):
+    """Base exception for PostgreSQL client errors"""
     pass
 
 
-class DatabricksClient:
+class PostgreSQLClient:
     """
-    Client for Databricks SQL and Unity Catalog.
+    Client for PostgreSQL SQL and Unity Catalog.
 
     All operations are tenant-scoped using catalog naming:
     tenant_{id}.bronze.*, tenant_{id}.silver.*, tenant_{id}.gold.*
     """
 
     def __init__(self):
-        self.host = settings.DATABRICKS_HOST
-        self.token = settings.DATABRICKS_TOKEN
-        self.warehouse_id = settings.DATABRICKS_WAREHOUSE_ID
-        self.catalog_prefix = settings.DATABRICKS_CATALOG_PREFIX
+        self.host = settings.POSTGRESQL_HOST
+        self.token = settings.POSTGRESQL_TOKEN
+        self.warehouse_id = settings.POSTGRESQL_WAREHOUSE_ID
+        self.catalog_prefix = settings.POSTGRESQL_CATALOG_PREFIX
         self._connection = None
 
     def _get_connection(self):
-        """Get or create Databricks SQL connection"""
+        """Get or create PostgreSQL SQL connection"""
         if self._connection is None:
-            self._connection = databricks_sql.connect(
+            self._connection = postgres_sql.connect(
                 server_hostname=self.host.replace("https://", ""),
                 http_path=f"/sql/1.0/warehouses/{self.warehouse_id}",
                 access_token=self.token
@@ -869,7 +869,7 @@ class DatabricksClient:
 
 ```bash
 cd apps/mcp-server
-pytest tests/test_databricks_client.py -v
+pytest tests/test_postgres_client.py -v
 ```
 
 Expected: PASS (2 tests)
@@ -877,8 +877,8 @@ Expected: PASS (2 tests)
 **Step 5: Commit**
 
 ```bash
-git add apps/mcp-server/src/clients/databricks_client.py apps/mcp-server/tests/test_databricks_client.py
-git commit -m "feat(mcp): add Databricks client
+git add apps/mcp-server/src/clients/postgres_client.py apps/mcp-server/tests/test_postgres_client.py
+git commit -m "feat(mcp): add PostgreSQL client
 
 - Execute SQL queries scoped to tenant catalog
 - List and describe tables
@@ -999,9 +999,9 @@ Tools for connecting to and extracting data from PostgreSQL databases.
 import asyncpg
 from typing import Dict, Any
 
-from src.clients.api_client import ServiceTsunamiAPI
+from src.clients.api_client import AgentProvisionAPI
 
-api = ServiceTsunamiAPI()
+api = AgentProvisionAPI()
 
 
 async def connect_postgres(
@@ -1212,9 +1212,9 @@ from src.tools.ingestion import sync_table_to_bronze, upload_file
 
 @pytest.mark.asyncio
 async def test_sync_table_to_bronze():
-    """Test syncing PostgreSQL table to Databricks Bronze"""
+    """Test syncing PostgreSQL table to PostgreSQL Bronze"""
     with patch('src.tools.ingestion.api') as mock_api, \
-         patch('src.tools.ingestion.databricks') as mock_databricks, \
+         patch('src.tools.ingestion.postgres') as mock_postgres, \
          patch('src.tools.ingestion.asyncpg') as mock_asyncpg:
 
         # Mock API
@@ -1232,8 +1232,8 @@ async def test_sync_table_to_bronze():
         ])
         mock_asyncpg.connect = AsyncMock(return_value=mock_conn)
 
-        # Mock Databricks
-        mock_databricks.create_table_from_parquet = AsyncMock(return_value={
+        # Mock PostgreSQL
+        mock_postgres.create_table_from_parquet = AsyncMock(return_value={
             "table": "tenant_123.bronze.customers",
             "row_count": 2
         })
@@ -1247,15 +1247,15 @@ async def test_sync_table_to_bronze():
 
 @pytest.mark.asyncio
 async def test_upload_file_csv():
-    """Test uploading CSV file to Databricks Bronze"""
+    """Test uploading CSV file to PostgreSQL Bronze"""
     csv_content = "id,name\n1,Alice\n2,Bob"
     encoded = base64.b64encode(csv_content.encode()).decode()
 
     with patch('src.tools.ingestion.api') as mock_api, \
-         patch('src.tools.ingestion.databricks') as mock_databricks:
+         patch('src.tools.ingestion.postgres') as mock_postgres:
 
         mock_api.create_dataset = AsyncMock(return_value={"id": "dataset-789"})
-        mock_databricks.create_table_from_parquet = AsyncMock(return_value={
+        mock_postgres.create_table_from_parquet = AsyncMock(return_value={
             "table": "tenant_123.bronze.my_data",
             "row_count": 2
         })
@@ -1312,7 +1312,7 @@ Create: `apps/mcp-server/src/tools/ingestion.py`
 """
 Data Ingestion MCP Tools
 
-Tools for syncing data from sources to Databricks Bronze layer.
+Tools for syncing data from sources to PostgreSQL Bronze layer.
 """
 import asyncpg
 import base64
@@ -1320,12 +1320,12 @@ import io
 import pandas as pd
 from typing import Dict, Any
 
-from src.clients.api_client import ServiceTsunamiAPI
-from src.clients.databricks_client import DatabricksClient
+from src.clients.api_client import AgentProvisionAPI
+from src.clients.postgres_client import PostgreSQLClient
 from src.utils.parquet import dataframe_to_parquet
 
-api = ServiceTsunamiAPI()
-databricks = DatabricksClient()
+api = AgentProvisionAPI()
+postgres = PostgreSQLClient()
 
 
 async def sync_table_to_bronze(
@@ -1334,10 +1334,10 @@ async def sync_table_to_bronze(
     sync_mode: str = "full"
 ) -> Dict[str, Any]:
     """
-    Sync a PostgreSQL table to Databricks Bronze layer.
+    Sync a PostgreSQL table to PostgreSQL Bronze layer.
 
     Extracts all data from the source table and loads it into
-    a Bronze (raw) table in Databricks Unity Catalog.
+    a Bronze (raw) table in PostgreSQL Unity Catalog.
 
     Args:
         connection_id: Data source connection ID
@@ -1385,8 +1385,8 @@ async def sync_table_to_bronze(
         catalog = f"tenant_{tenant_id}"
         bronze_table = f"{catalog}.bronze.{safe_table_name}"
 
-        # Upload to Databricks
-        await databricks.create_table_from_parquet(
+        # Upload to PostgreSQL
+        await postgres.create_table_from_parquet(
             catalog=catalog,
             schema="bronze",
             table_name=safe_table_name,
@@ -1428,12 +1428,12 @@ async def upload_file(
     tenant_id: str
 ) -> Dict[str, Any]:
     """
-    Upload a CSV/Excel file to Databricks Bronze layer.
+    Upload a CSV/Excel file to PostgreSQL Bronze layer.
 
     Args:
         file_content: Base64 encoded file content
         file_name: Original file name (for format detection)
-        dataset_name: Name for the dataset in Databricks
+        dataset_name: Name for the dataset in PostgreSQL
         tenant_id: Tenant identifier
 
     Returns:
@@ -1463,8 +1463,8 @@ async def upload_file(
     catalog = f"tenant_{tenant_id}"
     bronze_table = f"{catalog}.bronze.{safe_name}"
 
-    # Upload to Databricks
-    await databricks.create_table_from_parquet(
+    # Upload to PostgreSQL
+    await postgres.create_table_from_parquet(
         catalog=catalog,
         schema="bronze",
         table_name=safe_name,
@@ -1510,36 +1510,36 @@ Expected: PASS (2 tests)
 git add apps/mcp-server/src/tools/ingestion.py apps/mcp-server/src/utils/parquet.py apps/mcp-server/tests/test_ingestion_tools.py
 git commit -m "feat(mcp): add data ingestion tools
 
-- sync_table_to_bronze: Sync PostgreSQL tables to Databricks
-- upload_file: Upload CSV/Excel/JSON to Databricks Bronze
+- sync_table_to_bronze: Sync PostgreSQL tables to PostgreSQL
+- upload_file: Upload CSV/Excel/JSON to PostgreSQL Bronze
 - Parquet conversion utilities
 "
 ```
 
 ---
 
-## Task 6: Create Databricks Query Tools
+## Task 6: Create PostgreSQL Query Tools
 
 **Files:**
-- Create: `apps/mcp-server/src/tools/databricks.py`
-- Create: `apps/mcp-server/tests/test_databricks_tools.py`
+- Create: `apps/mcp-server/src/tools/postgres.py`
+- Create: `apps/mcp-server/tests/test_postgres_tools.py`
 
 **Step 1: Write failing test**
 
-Create: `apps/mcp-server/tests/test_databricks_tools.py`
+Create: `apps/mcp-server/tests/test_postgres_tools.py`
 
 ```python
-"""Tests for Databricks MCP tools"""
+"""Tests for PostgreSQL MCP tools"""
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.tools.databricks import query_sql, list_tables, describe_table, transform_to_silver
+from src.tools.postgres import query_sql, list_tables, describe_table, transform_to_silver
 
 
 @pytest.mark.asyncio
 async def test_query_sql():
     """Test executing SQL query"""
-    with patch('src.tools.databricks.databricks') as mock_db:
+    with patch('src.tools.postgres.postgres') as mock_db:
         mock_db.execute_query = AsyncMock(return_value={
             "rows": [{"count": 42}],
             "columns": ["count"],
@@ -1555,7 +1555,7 @@ async def test_query_sql():
 @pytest.mark.asyncio
 async def test_list_tables():
     """Test listing tables"""
-    with patch('src.tools.databricks.databricks') as mock_db:
+    with patch('src.tools.postgres.postgres') as mock_db:
         mock_db.list_tables = AsyncMock(return_value={
             "tables": [{"name": "customers"}, {"name": "orders"}],
             "count": 2
@@ -1570,7 +1570,7 @@ async def test_list_tables():
 @pytest.mark.asyncio
 async def test_describe_table():
     """Test describing table schema"""
-    with patch('src.tools.databricks.databricks') as mock_db:
+    with patch('src.tools.postgres.postgres') as mock_db:
         mock_db.describe_table = AsyncMock(return_value={
             "table": "tenant_123.bronze.customers",
             "columns": [{"name": "id", "type": "INT"}],
@@ -1586,7 +1586,7 @@ async def test_describe_table():
 @pytest.mark.asyncio
 async def test_transform_to_silver():
     """Test Bronze to Silver transformation"""
-    with patch('src.tools.databricks.databricks') as mock_db:
+    with patch('src.tools.postgres.postgres') as mock_db:
         mock_db.transform_to_silver = AsyncMock(return_value={
             "bronze_table": "tenant_123.bronze.customers",
             "silver_table": "tenant_123.silver.customers",
@@ -1604,31 +1604,31 @@ async def test_transform_to_silver():
 
 ```bash
 cd apps/mcp-server
-pytest tests/test_databricks_tools.py -v
+pytest tests/test_postgres_tools.py -v
 ```
 
 Expected: FAIL with `ModuleNotFoundError`
 
-**Step 3: Implement Databricks tools**
+**Step 3: Implement PostgreSQL tools**
 
-Create: `apps/mcp-server/src/tools/databricks.py`
+Create: `apps/mcp-server/src/tools/postgres.py`
 
 ```python
 """
-Databricks MCP Tools
+PostgreSQL MCP Tools
 
-Tools for querying and transforming data in Databricks Unity Catalog.
+Tools for querying and transforming data in PostgreSQL Unity Catalog.
 """
 from typing import Dict, Any, List, Optional
 
-from src.clients.databricks_client import DatabricksClient
+from src.clients.postgres_client import PostgreSQLClient
 
-databricks = DatabricksClient()
+postgres = PostgreSQLClient()
 
 
 async def query_sql(sql: str, tenant_id: str) -> Dict[str, Any]:
     """
-    Execute SQL query against Databricks.
+    Execute SQL query against PostgreSQL.
 
     Query is automatically scoped to tenant's catalog for security.
 
@@ -1639,13 +1639,13 @@ async def query_sql(sql: str, tenant_id: str) -> Dict[str, Any]:
     Returns:
         rows, columns, row_count
     """
-    result = await databricks.execute_query(sql, tenant_id)
+    result = await postgres.execute_query(sql, tenant_id)
     return result
 
 
 async def list_tables(tenant_id: str, layer: str = "bronze") -> Dict[str, Any]:
     """
-    List tables in tenant's Databricks catalog.
+    List tables in tenant's PostgreSQL catalog.
 
     Args:
         tenant_id: Tenant identifier
@@ -1654,7 +1654,7 @@ async def list_tables(tenant_id: str, layer: str = "bronze") -> Dict[str, Any]:
     Returns:
         catalog, layer, tables, count
     """
-    result = await databricks.list_tables(tenant_id, layer)
+    result = await postgres.list_tables(tenant_id, layer)
     return result
 
 
@@ -1669,7 +1669,7 @@ async def describe_table(table_name: str, tenant_id: str) -> Dict[str, Any]:
     Returns:
         table, columns, row_count
     """
-    result = await databricks.describe_table(table_name, tenant_id)
+    result = await postgres.describe_table(table_name, tenant_id)
     return result
 
 
@@ -1693,7 +1693,7 @@ async def transform_to_silver(
     Returns:
         bronze_table, silver_table, row_count, status
     """
-    result = await databricks.transform_to_silver(bronze_table, tenant_id, transformations)
+    result = await postgres.transform_to_silver(bronze_table, tenant_id, transformations)
     return result
 ```
 
@@ -1701,7 +1701,7 @@ async def transform_to_silver(
 
 ```bash
 cd apps/mcp-server
-pytest tests/test_databricks_tools.py -v
+pytest tests/test_postgres_tools.py -v
 ```
 
 Expected: PASS (4 tests)
@@ -1709,10 +1709,10 @@ Expected: PASS (4 tests)
 **Step 5: Commit**
 
 ```bash
-git add apps/mcp-server/src/tools/databricks.py apps/mcp-server/tests/test_databricks_tools.py
-git commit -m "feat(mcp): add Databricks query tools
+git add apps/mcp-server/src/tools/postgres.py apps/mcp-server/tests/test_postgres_tools.py
+git commit -m "feat(mcp): add PostgreSQL query tools
 
-- query_sql: Execute SQL on Databricks
+- query_sql: Execute SQL on PostgreSQL
 - list_tables: List tables by layer
 - describe_table: Get schema and stats
 - transform_to_silver: Bronze to Silver transformation
@@ -1760,7 +1760,7 @@ def test_server_has_tools():
 
 def test_server_name():
     """Test server has correct name"""
-    assert mcp.name == "ServiceTsunami"
+    assert mcp.name == "AgentProvision"
 ```
 
 **Step 2: Run test to verify it fails**
@@ -1778,10 +1778,10 @@ Create: `apps/mcp-server/src/server.py`
 
 ```python
 """
-ServiceTsunami MCP Server
+AgentProvision MCP Server
 
 MCP-compliant server following Anthropic's Model Context Protocol.
-Provides tools for data source connections, Databricks operations,
+Provides tools for data source connections, PostgreSQL operations,
 and AI-assisted analysis.
 
 Usage:
@@ -1793,8 +1793,8 @@ from src.config import settings
 
 # Initialize MCP Server
 mcp = FastMCP(
-    name="ServiceTsunami",
-    description="Data lakehouse integration server - connect sources, sync to Databricks, query with AI"
+    name="AgentProvision",
+    description="Data lakehouse integration server - connect sources, sync to PostgreSQL, query with AI"
 )
 
 
@@ -1866,9 +1866,9 @@ async def sync_table_to_bronze(
     sync_mode: str = "full"
 ) -> dict:
     """
-    Sync a table from source database to Databricks Bronze layer.
+    Sync a table from source database to PostgreSQL Bronze layer.
 
-    Extracts data from the source and loads it into Databricks
+    Extracts data from the source and loads it into PostgreSQL
     as a raw Bronze table.
 
     Args:
@@ -1888,24 +1888,24 @@ async def upload_file(
     tenant_id: str
 ) -> dict:
     """
-    Upload a CSV/Excel file to Databricks Bronze layer.
+    Upload a CSV/Excel file to PostgreSQL Bronze layer.
 
     Args:
         file_content: Base64 encoded file content
         file_name: Original file name (for format detection)
-        dataset_name: Name for the dataset in Databricks
+        dataset_name: Name for the dataset in PostgreSQL
         tenant_id: Your tenant identifier
     """
     from src.tools.ingestion import upload_file as _upload
     return await _upload(file_content, file_name, dataset_name, tenant_id)
 
 
-# ==================== Databricks Query Tools ====================
+# ==================== PostgreSQL Query Tools ====================
 
 @mcp.tool()
 async def query_sql(sql: str, tenant_id: str) -> dict:
     """
-    Execute SQL query against Databricks.
+    Execute SQL query against PostgreSQL.
 
     Query is automatically scoped to your tenant's catalog.
 
@@ -1913,20 +1913,20 @@ async def query_sql(sql: str, tenant_id: str) -> dict:
         sql: SQL query to execute
         tenant_id: Your tenant identifier
     """
-    from src.tools.databricks import query_sql as _query
+    from src.tools.postgres import query_sql as _query
     return await _query(sql, tenant_id)
 
 
 @mcp.tool()
 async def list_tables(tenant_id: str, layer: str = "bronze") -> dict:
     """
-    List tables in your Databricks catalog.
+    List tables in your PostgreSQL catalog.
 
     Args:
         tenant_id: Your tenant identifier
         layer: "bronze", "silver", or "gold"
     """
-    from src.tools.databricks import list_tables as _list
+    from src.tools.postgres import list_tables as _list
     return await _list(tenant_id, layer)
 
 
@@ -1939,7 +1939,7 @@ async def describe_table(table_name: str, tenant_id: str) -> dict:
         table_name: Table name (can include schema, e.g., "bronze.customers")
         tenant_id: Your tenant identifier
     """
-    from src.tools.databricks import describe_table as _describe
+    from src.tools.postgres import describe_table as _describe
     return await _describe(table_name, tenant_id)
 
 
@@ -1960,7 +1960,7 @@ async def transform_to_silver(
         tenant_id: Your tenant identifier
         transformations: Optional list of custom transformations
     """
-    from src.tools.databricks import transform_to_silver as _transform
+    from src.tools.postgres import transform_to_silver as _transform
     return await _transform(bronze_table, tenant_id, transformations)
 
 
@@ -2030,7 +2030,7 @@ CMD ["python", "-m", "src.server"]
 
 **Step 2: Update docker-compose.yml**
 
-Add to `docker-compose.yml` after the `databricks-worker` service:
+Add to `docker-compose.yml` after the `postgres-worker` service:
 
 ```yaml
   mcp-server:
@@ -2042,9 +2042,9 @@ Add to `docker-compose.yml` after the `databricks-worker` service:
     environment:
       - API_BASE_URL=http://api:8000
       - API_INTERNAL_KEY=${API_INTERNAL_KEY:-internal-service-key}
-      - DATABRICKS_HOST=${DATABRICKS_HOST}
-      - DATABRICKS_TOKEN=${DATABRICKS_TOKEN}
-      - DATABRICKS_WAREHOUSE_ID=${DATABRICKS_WAREHOUSE_ID}
+      - POSTGRESQL_HOST=${POSTGRESQL_HOST}
+      - POSTGRESQL_TOKEN=${POSTGRESQL_TOKEN}
+      - POSTGRESQL_WAREHOUSE_ID=${POSTGRESQL_WAREHOUSE_ID}
       - MCP_PORT=8085
     depends_on:
       - api
@@ -2055,7 +2055,7 @@ Add to `docker-compose.yml` after the `databricks-worker` service:
 
 ```bash
 cd apps/mcp-server
-docker build -t servicetsunami-mcp-server .
+docker build -t agentprovision-mcp-server .
 ```
 
 Expected: Build succeeds
@@ -2160,13 +2160,13 @@ git commit -m "feat(api): add internal endpoint for MCP credential access
 
 **Step 1: Update CLAUDE.md**
 
-Add to the "Architecture" section after "Databricks Integration":
+Add to the "Architecture" section after "PostgreSQL Integration":
 
 ```markdown
-**MCP Integration Server**: ServiceTsunami includes an MCP-compliant server following Anthropic's Model Context Protocol:
+**MCP Integration Server**: AgentProvision includes an MCP-compliant server following Anthropic's Model Context Protocol:
 - Located in `apps/mcp-server/`
-- Provides tools for: PostgreSQL connections, data ingestion, Databricks queries
-- Works with Claude Desktop, Claude Code, and ServiceTsunami Chat
+- Provides tools for: PostgreSQL connections, data ingestion, PostgreSQL queries
+- Works with Claude Desktop, Claude Code, and AgentProvision Chat
 - See `docs/plans/2025-11-24-mcp-integration-server-design.md` for architecture details
 ```
 
@@ -2206,7 +2206,7 @@ After implementing all tasks, verify:
 
 - [ ] All tests pass: `cd apps/mcp-server && pytest tests/ -v`
 - [ ] Server starts: `python -m src.server`
-- [ ] Docker builds: `docker build -t servicetsunami-mcp-server apps/mcp-server/`
+- [ ] Docker builds: `docker build -t agentprovision-mcp-server apps/mcp-server/`
 - [ ] Full docker-compose works: `docker-compose up -d`
 
 ---
@@ -2215,9 +2215,9 @@ After implementing all tasks, verify:
 
 1. MCP server runs and exposes 9 tools via MCP protocol
 2. PostgreSQL connections can be created and tested
-3. Tables can be synced from PostgreSQL to Databricks Bronze
-4. Files can be uploaded to Databricks Bronze
-5. SQL queries execute against Databricks
+3. Tables can be synced from PostgreSQL to PostgreSQL Bronze
+4. Files can be uploaded to PostgreSQL Bronze
+5. SQL queries execute against PostgreSQL
 6. Bronze → Silver transformations work
 7. All unit tests pass
 8. Docker deployment works

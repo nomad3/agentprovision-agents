@@ -80,7 +80,7 @@ Write `~/.copilot/mcp-config.json` in the session directory:
 ```json
 {
   "servers": {
-    "servicetsunami": {
+    "agentprovision": {
       "type": "http",
       "url": "http://mcp-tools:8000/mcp",
       "env": {},

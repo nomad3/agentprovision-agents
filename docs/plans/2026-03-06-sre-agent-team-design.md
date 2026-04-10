@@ -118,7 +118,7 @@ Add "Slack" card to Integrations page, same style as Google/GitHub/LinkedIn. Sho
 
 ### sre_team (Routing Supervisor)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/sre_team.py`
+**File:** `apps/adk-server/agentprovision_supervisor/sre_team.py`
 
 Routes SRE requests to the appropriate specialist. No tools — routing only.
 
@@ -131,7 +131,7 @@ Routing rules:
 
 ### sre_analyst (Leaf Agent)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/sre_analyst.py`
+**File:** `apps/adk-server/agentprovision_supervisor/sre_analyst.py`
 
 **Tools:** `search_slack_messages`, `read_slack_channel`, `get_slack_thread`, `react_to_message`, `search_knowledge`, `find_entities`, `create_entity`
 
@@ -146,7 +146,7 @@ Routing rules:
 
 ### infra_engineer (Leaf Agent)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/infra_engineer.py`
+**File:** `apps/adk-server/agentprovision_supervisor/infra_engineer.py`
 
 **Tools:** `execute_shell`, `search_slack_messages`, `read_slack_channel`, `search_knowledge`
 
@@ -161,7 +161,7 @@ Routing rules:
 
 ### cloud_architect (Leaf Agent)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/cloud_architect.py`
+**File:** `apps/adk-server/agentprovision_supervisor/cloud_architect.py`
 
 **Tools:** `search_knowledge`, `find_entities`, `create_entity`, `search_slack_messages`
 

@@ -1,4 +1,4 @@
-# External Secrets Configuration for ServiceTsunami
+# External Secrets Configuration for AgentProvision
 
 This directory contains the External Secrets Operator configuration for syncing secrets from GCP Secret Manager.
 
@@ -38,14 +38,14 @@ This directory contains the External Secrets Operator configuration for syncing 
 3. **Create Secrets in GCP Secret Manager**
    ```bash
    # API secrets
-   echo -n "your-jwt-secret-key" | gcloud secrets create servicetsunami-secret-key --data-file=-
-   echo -n "postgresql://user:pass@host:5432/servicetsunami" | gcloud secrets create servicetsunami-database-url --data-file=-
-   echo -n "sk-ant-api03-xxx" | gcloud secrets create servicetsunami-anthropic-api-key --data-file=-
-   echo -n "your-mcp-api-key" | gcloud secrets create servicetsunami-mcp-api-key --data-file=-
-   echo -n "your-internal-key" | gcloud secrets create servicetsunami-api-internal-key --data-file=-
+   echo -n "your-jwt-secret-key" | gcloud secrets create agentprovision-secret-key --data-file=-
+   echo -n "postgresql://user:pass@host:5432/agentprovision" | gcloud secrets create agentprovision-database-url --data-file=-
+   echo -n "sk-ant-api03-xxx" | gcloud secrets create agentprovision-anthropic-api-key --data-file=-
+   echo -n "your-mcp-api-key" | gcloud secrets create agentprovision-mcp-api-key --data-file=-
+   echo -n "your-internal-key" | gcloud secrets create agentprovision-api-internal-key --data-file=-
 
    # Database secrets
-   echo -n "your-postgres-password" | gcloud secrets create servicetsunami-postgres-password --data-file=-
+   echo -n "your-postgres-password" | gcloud secrets create agentprovision-postgres-password --data-file=-
 
    # Temporal secrets
    echo -n "temporal-postgres-password" | gcloud secrets create temporal-postgres-password --data-file=-
@@ -56,12 +56,12 @@ This directory contains the External Secrets Operator configuration for syncing 
 
 | Secret Name | Description | Used By |
 |------------|-------------|---------|
-| `servicetsunami-secret-key` | JWT signing key | API |
-| `servicetsunami-database-url` | PostgreSQL connection string | API, Worker |
-| `servicetsunami-anthropic-api-key` | Claude AI API key | API |
-| `servicetsunami-mcp-api-key` | MCP server authentication | API, Worker |
-| `servicetsunami-api-internal-key` | Service-to-service auth | API, Worker, MCP |
-| `servicetsunami-postgres-password` | PostgreSQL password | PostgreSQL |
+| `agentprovision-secret-key` | JWT signing key | API |
+| `agentprovision-database-url` | PostgreSQL connection string | API, Worker |
+| `agentprovision-anthropic-api-key` | Claude AI API key | API |
+| `agentprovision-mcp-api-key` | MCP server authentication | API, Worker |
+| `agentprovision-api-internal-key` | Service-to-service auth | API, Worker, MCP |
+| `agentprovision-postgres-password` | PostgreSQL password | PostgreSQL |
 | `temporal-postgres-password` | Temporal DB password | Temporal |
 | `temporal-postgres-host` | Temporal DB host | Temporal |
 

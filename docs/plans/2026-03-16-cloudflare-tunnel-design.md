@@ -1,6 +1,6 @@
 # Cloudflare Tunnel — Local Laptop as Production Server
 
-> Expose local Docker Compose services to the internet via Cloudflare Tunnel. Both `servicetsunami.com` and `agentprovision.com` served from this laptop.
+> Expose local Docker Compose services to the internet via Cloudflare Tunnel. Both `agentprovision.com` and `agentprovision.com` served from this laptop.
 
 **Date:** 2026-03-16
 **Status:** Approved
@@ -9,14 +9,14 @@
 
 ## Goal
 
-Use Cloudflare Tunnel to make this laptop the production server for `servicetsunami.com` and `agentprovision.com`. No port forwarding, no static IP, no GKE needed. Cloudflare handles SSL, DDoS protection, and DNS.
+Use Cloudflare Tunnel to make this laptop the production server for `agentprovision.com` and `agentprovision.com`. No port forwarding, no static IP, no GKE needed. Cloudflare handles SSL, DDoS protection, and DNS.
 
 ## Architecture
 
 ```
 Internet
   │
-  ├── servicetsunami.com ──→ Cloudflare DNS (CNAME → tunnel)
+  ├── agentprovision.com ──→ Cloudflare DNS (CNAME → tunnel)
   ├── agentprovision.com ──→ Cloudflare DNS (CNAME → tunnel)
   │
   └── Cloudflare Tunnel (cloudflared in Docker Compose)
@@ -41,12 +41,12 @@ Only web and API are exposed. DB, Temporal, MCP, and code-worker are internal-on
 
 **`~/.cloudflared/config.yml`:**
 ```yaml
-tunnel: servicetsunami
+tunnel: agentprovision
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
   # API routes (path-based, checked first)
-  - hostname: servicetsunami.com
+  - hostname: agentprovision.com
     path: /api/*
     service: http://api:8000
   - hostname: agentprovision.com
@@ -54,7 +54,7 @@ ingress:
     service: http://api:8000
 
   # OAuth callbacks
-  - hostname: servicetsunami.com
+  - hostname: agentprovision.com
     path: /api/v1/oauth/*
     service: http://api:8000
   - hostname: agentprovision.com
@@ -62,7 +62,7 @@ ingress:
     service: http://api:8000
 
   # Web SPA (catch-all)
-  - hostname: servicetsunami.com
+  - hostname: agentprovision.com
     service: http://web:80
   - hostname: agentprovision.com
     service: http://web:80
@@ -108,9 +108,9 @@ Reads `Host` header from request. Returns brand config:
 
 ```python
 DOMAIN_BRANDING = {
-    "servicetsunami.com": {
-        "brand_name": "ServiceTsunami",
-        "logo_url": "/assets/servicetsunami-logo.png",
+    "agentprovision.com": {
+        "brand_name": "AgentProvision",
+        "logo_url": "/assets/agentprovision-logo.png",
         "theme": "ocean",
         "tagline": "AI Agent Orchestration Platform",
     },
@@ -128,7 +128,7 @@ DOMAIN_BRANDING = {
 **CORS:** API allows both domains as origins:
 ```python
 origins = [
-    "https://servicetsunami.com",
+    "https://agentprovision.com",
     "https://agentprovision.com",
     "http://localhost:8002",  # local dev
 ]
@@ -137,7 +137,7 @@ origins = [
 ## OAuth Considerations
 
 Google OAuth callback URLs need both domains registered:
-- `https://servicetsunami.com/api/v1/oauth/google/callback`
+- `https://agentprovision.com/api/v1/oauth/google/callback`
 - `https://agentprovision.com/api/v1/oauth/google/callback`
 
 Or use a single callback domain and redirect. Simpler to register both in GCP Console.
@@ -148,14 +148,14 @@ Or use a single callback domain and redirect. Simpler to register both in GCP Co
 ```bash
 brew install cloudflared
 cloudflared tunnel login
-cloudflared tunnel create servicetsunami
+cloudflared tunnel create agentprovision
 # Saves credentials to ~/.cloudflared/<tunnel-id>.json
 ```
 
 ### 2. Configure DNS (one-time per domain)
 ```bash
-cloudflared tunnel route dns servicetsunami servicetsunami.com
-cloudflared tunnel route dns servicetsunami agentprovision.com
+cloudflared tunnel route dns agentprovision agentprovision.com
+cloudflared tunnel route dns agentprovision agentprovision.com
 ```
 
 ### 3. Write Config

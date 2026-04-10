@@ -2,7 +2,7 @@
 
 ## 1. Vision & Core Concepts
 
-The Integrations Hub will be the central place in ServiceTsunami for connecting to external data sources and services. It will function like a marketplace where users can discover, configure, and manage all third-party integrations. This is a key step towards making ServiceTsunami a data-driven platform, similar to Databricks, by enabling seamless data ingestion and automation.
+The Integrations Hub will be the central place in AgentProvision for connecting to external data sources and services. It will function like a marketplace where users can discover, configure, and manage all third-party integrations. This is a key step towards making AgentProvision a data-driven platform, similar to PostgreSQL, by enabling seamless data ingestion and automation.
 
 **Key Components:**
 
@@ -73,4 +73,4 @@ The Integrations Hub in the dashboard will have:
     *   Implement the UI/UX for the marketplace, configuration, and list views.
     *   Connect the frontend to the new backend API endpoints.
 
-This plan provides a comprehensive roadmap for building a powerful and user-friendly Integrations Hub, making ServiceTsunami a true data-driven platform.
+This plan provides a comprehensive roadmap for building a powerful and user-friendly Integrations Hub, making AgentProvision a true data-driven platform.

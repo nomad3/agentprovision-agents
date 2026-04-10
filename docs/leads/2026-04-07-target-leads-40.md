@@ -1,4 +1,4 @@
-# ServiceTsunami — Target Leads (40 companies)
+# AgentProvision — Target Leads (40 companies)
 
 Generated: 2026-04-07
 Updated: 2026-04-07 — added LinkedIn decision-maker contacts
@@ -6,7 +6,7 @@ Anchor profiles: Levi Strauss & Co (apparel/retail), Integral Development Corp (
 
 ## How to read this list
 
-This list is clustered into three segments. Segment A mirrors the Levi Strauss pattern — mid-to-large apparel and retail brands with mixed legacy/modern stacks, global operations, and a publicly stated modernization or AI agenda that hints at agent-orchestration pain. Segment B mirrors Integral Development Corp — capital markets, FX venues, exchanges, and trading infrastructure companies with heavy SRE/DevOps loads, regulated on-prem or hybrid footprints, and 24x7 operational surfaces. Segment C is adjacent fintech (payments, wealth, clearing, mid-tier brokers) where the same SRE/DevOps/BizSupport plays land but with slightly less trading-floor intensity. Entries mark `unknown — needs discovery call` wherever I could not confirm a public signal. No single competitor in any segment has a shipping agent-orchestration platform built the way ServiceTsunami has it — the pitch is "orchestration glue across your existing systems, on-prem capable, with memory and RL."
+This list is clustered into three segments. Segment A mirrors the Levi Strauss pattern — mid-to-large apparel and retail brands with mixed legacy/modern stacks, global operations, and a publicly stated modernization or AI agenda that hints at agent-orchestration pain. Segment B mirrors Integral Development Corp — capital markets, FX venues, exchanges, and trading infrastructure companies with heavy SRE/DevOps loads, regulated on-prem or hybrid footprints, and 24x7 operational surfaces. Segment C is adjacent fintech (payments, wealth, clearing, mid-tier brokers) where the same SRE/DevOps/BizSupport plays land but with slightly less trading-floor intensity. Entries mark `unknown — needs discovery call` wherever I could not confirm a public signal. No single competitor in any segment has a shipping agent-orchestration platform built the way AgentProvision has it — the pitch is "orchestration glue across your existing systems, on-prem capable, with memory and RL."
 
 ## Segment A — Apparel & Retail (Levi's-like) — 15 companies
 
@@ -14,7 +14,7 @@ This list is clustered into three segments. Segment A mirrors the Levi Strauss p
 - **HQ / Region:** Denver, CO (EMEA HQ: Stabio, Switzerland)
 - **Employees:** ~31,000
 - **Industry:** Apparel conglomerate (The North Face, Vans, Timberland, Dickies)
-- **Tech stack (public signals):** SAP ERP, Databricks, Automation Anywhere, Rackspace, MicroStrategy, PyTorch
+- **Tech stack (public signals):** SAP ERP, PostgreSQL, Automation Anywhere, Rackspace, MicroStrategy, PyTorch
 - **Likely problems we solve:** cross-brand data silos, supply chain exceptions across regions, marketing ops across 5+ brands
 - **Why now:** Project Reinvent turnaround, new COO Abhishek Dalmia, combining Digital + Technology into one team, building new Core Enterprise Platforms
 - **Entry agent:** Marketing Analyst + Knowledge Manager (cross-brand competitor monitor)

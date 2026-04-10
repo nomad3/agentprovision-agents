@@ -1,0 +1,65 @@
+# AgentProvision Code Worker - Local Development
+nameOverride: "code-worker"
+fullnameOverride: "code-worker"
+
+image:
+  repository: agentprovision-code-worker
+  tag: latest
+  pullPolicy: Never
+
+replicaCount: 1
+
+container:
+  port: 8000
+  command:
+    - /app/entrypoint.sh
+
+# Pod security
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+
+# Resource allocation
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# ConfigMap
+configMap:
+  enabled: true
+  data:
+    TEMPORAL_NAMESPACE: "default"
+    API_BASE_URL: "http://api"
+    CLAUDE_CODE_MODEL: "sonnet"
+    OPENCODE_OLLAMA_URL: "http://host.docker.internal:11434/v1"
+    OPENCODE_MODEL: "gemma4"
+    GIT_BRANCH: "feat/memory-first-phase-1"
+    USE_MEMORY_V2: "true"
+
+# Manual secrets for local
+env:
+  - name: TEMPORAL_ADDRESS
+    value: "temporal:7233"
+  - name: GITHUB_TOKEN
+    value: "ghp_placeholder"
+  - name: API_INTERNAL_KEY
+    value: "dev_mcp_key"
+
+# Disable GKE specifics
+externalSecret:
+  enabled: false
+persistence:
+  enabled: false
+tmpDirs:
+  - /tmp
+  - /workspace
+  - /home/codeworker

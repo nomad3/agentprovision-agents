@@ -156,7 +156,7 @@ async def _api_call(method: str, path: str, tenant_id: str, json_data: dict = No
 
 - [ ] **Step 5: Verify MCP tools work end-to-end**
 
-Test by calling the MCP tools via the ServiceTsunami platform or directly via HTTP to the MCP server.
+Test by calling the MCP tools via the AgentProvision platform or directly via HTTP to the MCP server.
 
 - [ ] **Step 6: Commit**
 
@@ -2020,14 +2020,14 @@ git commit -m "feat: add continue_as_new step type for infinite-duration workflo
 
 - [ ] **Step 1: Add cli_execute handler**
 
-Dispatches a child workflow on `servicetsunami-code` queue:
+Dispatches a child workflow on `agentprovision-code` queue:
 
 ```python
 elif step_type == "cli_execute":
     activity.heartbeat("Dispatching CLI execution")
     # This step type is handled in the executor via child workflow
     # The activity just validates params
-    return {"delegated_to": "servicetsunami-code", "task": params.get("task", "")}
+    return {"delegated_to": "agentprovision-code", "task": params.get("task", "")}
 ```
 
 In the executor, add cli_execute handling:
@@ -2043,7 +2043,7 @@ elif step["type"] == "cli_execute":
             "repo_url": step.get("repo_url", ""),
         }],
         id=f"{workflow.info().workflow_id}-cli-{step['id']}",
-        task_queue="servicetsunami-code",
+        task_queue="agentprovision-code",
     )
     ctx.set(step["id"], result)
 ```

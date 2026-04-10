@@ -1,7 +1,7 @@
 """Analytics and calculation MCP tools.
 
 Mathematical calculation and time-series analytics tools.
-Provides calculations and Databricks-powered time-series analytics.
+Provides calculations and PostgreSQL-powered time-series analytics.
 """
 import logging
 
@@ -16,15 +16,15 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_databricks_client():
-    """Return a Databricks client from MCP server config."""
+def _get_postgres_client():
+    """Return a PostgreSQL client from MCP server config."""
     try:
-        from src.databricks_client import get_databricks_client
-        return get_databricks_client()
+        from src.postgres_client import get_postgres_client
+        return get_postgres_client()
     except ImportError:
         class _FallbackClient:
             async def query_sql(self, sql: str, **kwargs) -> dict:
-                return {"error": "Databricks client not available in this MCP deployment."}
+                return {"error": "PostgreSQL client not available in this MCP deployment."}
         return _FallbackClient()
 
 
@@ -110,7 +110,7 @@ async def compare_periods(
     p1 = _parse_json(period1, {})
     p2 = _parse_json(period2, {})
 
-    client = _get_databricks_client()
+    client = _get_postgres_client()
 
     sql = f"""
     WITH period1_data AS (
@@ -180,7 +180,7 @@ async def forecast(
     if not dataset_id or not target_column or not time_column:
         return {"error": "dataset_id, target_column, and time_column are required."}
 
-    client = _get_databricks_client()
+    client = _get_postgres_client()
 
     sql = f"""
     SELECT

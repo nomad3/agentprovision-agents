@@ -41,7 +41,7 @@
       "createTitle": "Agregar Nuevo Conector",
       "editTitle": "Editar Conector",
       "name": "Nombre",
-      "namePlaceholder": "ej. Snowflake Producción",
+      "namePlaceholder": "ej. Producción",
       "type": "Tipo",
       "description": "Descripción",
       "descriptionPlaceholder": "Descripción opcional...",
@@ -108,7 +108,6 @@
       "connect": "Conectar"
     },
     "fields": {
-      "databricksHost": "Databricks Host",
       "accessToken": "Token de Acceso",
       "httpPath": "HTTP Path / ID de Warehouse",
       "host": "Host",

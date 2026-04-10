@@ -88,7 +88,6 @@
   "designs": {
     "description": "Visual structure of all Temporal workflows. Click a workflow to expand its step-by-step flowchart.",
     "orchestrationQueue": "orchestration queue",
-    "databricksQueue": "databricks queue",
     "codeQueue": "code queue",
     "workflows": "{{count}} workflow",
     "workflows_plural": "{{count}} workflows",

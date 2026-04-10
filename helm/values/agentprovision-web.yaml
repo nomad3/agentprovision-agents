@@ -1,9 +1,9 @@
-# ServiceTsunami Web Service - React Frontend with Nginx
-nameOverride: "servicetsunami-web"
-fullnameOverride: "servicetsunami-web"
+# AgentProvision Web Service - React Frontend with Nginx
+nameOverride: "agentprovision-web"
+fullnameOverride: "agentprovision-web"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-web
+  repository: gcr.io/ai-agency-479516/agentprovision-web
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -91,7 +91,7 @@ nginxConfig:
 
         # API proxy - forward to API service
         location /api/ {
-            proxy_pass http://servicetsunami-api/api/;
+            proxy_pass http://agentprovision-api/api/;
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
@@ -104,7 +104,7 @@ nginxConfig:
 
         # WebSocket support for real-time features
         location /ws/ {
-            proxy_pass http://servicetsunami-api/ws/;
+            proxy_pass http://agentprovision-api/ws/;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection "upgrade";

@@ -51,7 +51,7 @@ CREATE INDEX idx_embeddings_vector ON embeddings USING ivfflat (embedding vector
 
 **Step 2: Run migration against local DB**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/042_add_pgvector_and_embeddings.sql`
+Run: `docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/042_add_pgvector_and_embeddings.sql`
 Expected: CREATE EXTENSION, CREATE TABLE, CREATE INDEX x3
 
 **Step 3: Commit**
@@ -98,7 +98,7 @@ CREATE INDEX idx_skill_registry_category ON skill_registry(category);
 
 **Step 2: Run migration**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/043_add_skill_registry.sql`
+Run: `docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/043_add_skill_registry.sql`
 Expected: CREATE TABLE, CREATE INDEX x3
 
 **Step 3: Commit**
@@ -2156,9 +2156,9 @@ git commit -m "feat: rewrite SkillsPage as three-tab marketplace with categories
 ### Task 15: Helm + Secrets Updates
 
 **Files:**
-- Modify: `helm/values/servicetsunami-api.yaml`
-- Modify: `helm/values/servicetsunami-adk.yaml`
-- Modify: `helm/values/servicetsunami-worker.yaml`
+- Modify: `helm/values/agentprovision-api.yaml`
+- Modify: `helm/values/agentprovision-adk.yaml`
+- Modify: `helm/values/agentprovision-worker.yaml`
 
 **Step 1: Add GOOGLE_API_KEY secret reference**
 
@@ -2169,14 +2169,14 @@ In each Helm values file, add GOOGLE_API_KEY to the secrets/env section (follows
 - name: GOOGLE_API_KEY
   valueFrom:
     secretKeyRef:
-      name: servicetsunami-secrets
-      key: servicetsunami-google-api-key
+      name: agentprovision-secrets
+      key: agentprovision-google-api-key
 ```
 
 **Step 2: Create GCP Secret**
 
 ```bash
-echo -n "YOUR_GOOGLE_API_KEY" | gcloud secrets create servicetsunami-google-api-key --data-file=-
+echo -n "YOUR_GOOGLE_API_KEY" | gcloud secrets create agentprovision-google-api-key --data-file=-
 ```
 
 **Step 3: Enable pgvector on Cloud SQL**
@@ -2192,14 +2192,14 @@ Note: This requires a brief database restart.
 After deploying the API with new code:
 
 ```bash
-kubectl exec -it deployment/servicetsunami-api -n prod -- psql $DATABASE_URL -f /app/migrations/042_add_pgvector_and_embeddings.sql
-kubectl exec -it deployment/servicetsunami-api -n prod -- psql $DATABASE_URL -f /app/migrations/043_add_skill_registry.sql
+kubectl exec -it deployment/agentprovision-api -n prod -- psql $DATABASE_URL -f /app/migrations/042_add_pgvector_and_embeddings.sql
+kubectl exec -it deployment/agentprovision-api -n prod -- psql $DATABASE_URL -f /app/migrations/043_add_skill_registry.sql
 ```
 
 **Step 5: Commit**
 
 ```bash
-git add helm/values/servicetsunami-api.yaml helm/values/servicetsunami-adk.yaml helm/values/servicetsunami-worker.yaml
+git add helm/values/agentprovision-api.yaml helm/values/agentprovision-adk.yaml helm/values/agentprovision-worker.yaml
 git commit -m "feat: add GOOGLE_API_KEY to Helm values for API, ADK, and worker"
 ```
 
@@ -2269,7 +2269,7 @@ if __name__ == "__main__":
 **Step 2: Run on prod after deploy**
 
 ```bash
-kubectl exec -it deployment/servicetsunami-api -n prod -- python migrations/044_backfill_embeddings.py
+kubectl exec -it deployment/agentprovision-api -n prod -- python migrations/044_backfill_embeddings.py
 ```
 
 **Step 3: Commit**

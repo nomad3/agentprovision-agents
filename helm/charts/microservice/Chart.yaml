@@ -1,9 +1,9 @@
 apiVersion: v2
 name: microservice
-description: A reusable Helm chart for ServiceTsunami microservices
+description: A reusable Helm chart for AgentProvision microservices
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
 maintainers:
-  - name: ServiceTsunami Team
-    email: devops@servicetsunami.com
+  - name: AgentProvision Team
+    email: devops@agentprovision.com

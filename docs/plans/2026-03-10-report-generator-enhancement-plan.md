@@ -160,7 +160,7 @@ router = APIRouter()
 
 # ── File storage ──────────────────────────────────────────────────────────
 
-REPORTS_DIR = Path("/tmp/servicetsunami_reports")
+REPORTS_DIR = Path("/tmp/agentprovision_reports")
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 REPORT_TTL_HOURS = 24
 
@@ -610,7 +610,7 @@ git commit -m "feat: add ADK report_tools for data extraction and Excel generati
 ### Task 4: Update report_generator Agent
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/report_generator.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/report_generator.py`
 
 **Step 1: Rewrite report_generator.py**
 
@@ -712,7 +712,7 @@ You can also:
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/report_generator.py
+git add apps/adk-server/agentprovision_supervisor/report_generator.py
 git commit -m "feat: enhance report_generator with document extraction and Excel tools"
 ```
 
@@ -721,7 +721,7 @@ git commit -m "feat: enhance report_generator with document extraction and Excel
 ### Task 5: Update Data Team Routing
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/data_team.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/data_team.py`
 
 **Step 1: Update routing instructions**
 
@@ -757,7 +757,7 @@ Always explain which specialist you're routing to and why.
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/data_team.py
+git add apps/adk-server/agentprovision_supervisor/data_team.py
 git commit -m "feat: update data_team routing for document uploads and Excel reports"
 ```
 
@@ -870,13 +870,13 @@ This triggers CI/CD for both API and ADK services.
 **Step 2: Monitor deployments**
 
 ```bash
-kubectl rollout status deployment/servicetsunami-api -n prod
-kubectl rollout status deployment/servicetsunami-adk -n prod
+kubectl rollout status deployment/agentprovision-api -n prod
+kubectl rollout status deployment/agentprovision-adk -n prod
 ```
 
 **Step 3: Test end-to-end**
 
-1. Open chat at servicetsunami.com/chat
+1. Open chat at agentprovision.com/chat
 2. Upload a sample CSV or PDF
 3. Verify the agent acknowledges the upload and describes extracted data
 4. Say "generate the operations report"
@@ -893,5 +893,5 @@ kubectl rollout status deployment/servicetsunami-adk -n prod
 | API reports route | `apps/api/app/api/v1/reports.py` | New — Excel generation + download |
 | API routes | `apps/api/app/api/v1/routes.py` | Register reports router |
 | ADK report_tools | `apps/adk-server/tools/report_tools.py` | New — extraction schema + Excel generation tool |
-| ADK report_generator | `apps/adk-server/servicetsunami_supervisor/report_generator.py` | Enhanced instructions + new tools |
-| ADK data_team | `apps/adk-server/servicetsunami_supervisor/data_team.py` | Updated routing for file uploads |
+| ADK report_generator | `apps/adk-server/agentprovision_supervisor/report_generator.py` | Enhanced instructions + new tools |
+| ADK data_team | `apps/adk-server/agentprovision_supervisor/data_team.py` | Updated routing for file uploads |

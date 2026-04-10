@@ -2,7 +2,7 @@ import requests
 import json
 import time
 
-BASE_URL = "https://servicetsunami.com/api/v1"
+BASE_URL = "https://agentprovision.com/api/v1"
 USERNAME = "test@example.com"
 PASSWORD = "password"
 

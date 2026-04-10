@@ -24,7 +24,7 @@ WORKSPACE = os.environ.get("CODE_WORKSPACE", "/workspace")
 @dataclass
 class GitHistoryInput:
     tenant_id: str
-    repo_name: str = "nomad3/servicetsunami-agents"
+    repo_name: str = "nomad3/agentprovision-agents"
     since_hours: int = 24
 
 
@@ -40,7 +40,7 @@ class GitHistoryResult:
 @dataclass
 class PROutcomeInput:
     tenant_id: str
-    repo_name: str = "nomad3/servicetsunami-agents"
+    repo_name: str = "nomad3/agentprovision-agents"
 
 
 @dataclass

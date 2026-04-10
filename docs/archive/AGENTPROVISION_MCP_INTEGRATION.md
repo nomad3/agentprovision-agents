@@ -1,8 +1,8 @@
-# ServiceTsunami + MCP Databricks Integration Guide
+# AgentProvision + MCP PostgreSQL Integration Guide
 
-**Purpose**: This document outlines the ServiceTsunami-side integration with the MCP Server's Databricks connector.
+**Purpose**: This document outlines the AgentProvision-side integration with the MCP Server's PostgreSQL connector.
 
-**Context**: The Databricks connector is being built in `../dentalerp/mcp-server`. This document focuses on what needs to change in ServiceTsunami to use it.
+**Context**: The PostgreSQL connector is being built in `../dentalerp/mcp-server`. This document focuses on what needs to change in AgentProvision to use it.
 
 ---
 
@@ -10,7 +10,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                  ServiceTsunami                              │
+│                  AgentProvision                              │
 │  ┌────────────────────────────────────────────────────┐     │
 │  │ Frontend (React)                                   │     │
 │  │  • DatasetsPage                                    │     │
@@ -34,7 +34,7 @@
 │  │  ┌──────────────────────────────────────────┐  │  │     │
 │  │  │ PostgreSQL                               │  │  │     │
 │  │  │  • Stores metadata                       │  │  │     │
-│  │  │  • Tracks Databricks resources           │  │  │     │
+│  │  │  • Tracks PostgreSQL resources           │  │  │     │
 │  │  └──────────────────────────────────────────┘  │  │     │
 │  └──────────────────────────────────────────────────┘  │     │
 └────────────────────────────────────────────────────────┼─────┘
@@ -44,24 +44,24 @@
                     ┌────────────────────────────────────▼─────┐
                     │         MCP Server (Port 8085)           │
                     │  ┌────────────────────────────────────┐  │
-                    │  │ ServiceTsunami Module               │  │
-                    │  │  /servicetsunami/v1/*              │  │
-                    │  │  ├─ /databricks/datasets            │  │
-                    │  │  ├─ /databricks/notebooks           │  │
-                    │  │  ├─ /databricks/jobs                │  │
-                    │  │  ├─ /databricks/serving-endpoints   │  │
-                    │  │  └─ /databricks/vector-indexes      │  │
+                    │  │ AgentProvision Module               │  │
+                    │  │  /agentprovision/v1/*              │  │
+                    │  │  ├─ /postgres/datasets            │  │
+                    │  │  ├─ /postgres/notebooks           │  │
+                    │  │  ├─ /postgres/jobs                │  │
+                    │  │  ├─ /postgres/serving-endpoints   │  │
+                    │  │  └─ /postgres/vector-indexes      │  │
                     │  └────────────────────────────────────┘  │
                     │  ┌────────────────────────────────────┐  │
-                    │  │ Databricks Connector                │  │
+                    │  │ PostgreSQL Connector                │  │
                     │  │  (Being built in other session)     │  │
                     │  └────────────────────────────────────┘  │
                     └──────────────────┬───────────────────────┘
                                        │
-                                       │ Databricks REST API
+                                       │ PostgreSQL REST API
                                        │
                             ┌──────────▼──────────┐
-                            │   Databricks        │
+                            │   PostgreSQL        │
                             │  Unity Catalog      │
                             │  • Notebooks        │
                             │  • Delta Tables     │
@@ -73,13 +73,13 @@
 
 ---
 
-## What's Been Created (ServiceTsunami Side)
+## What's Been Created (AgentProvision Side)
 
 ### ✅ Completed
 
 1. **MCP Client Service** (`apps/api/app/services/mcp_client.py`)
    - HTTP client for MCP server
-   - Methods for all Databricks operations:
+   - Methods for all PostgreSQL operations:
      - Catalogs: `create_tenant_catalog()`, `get_catalog_status()`
      - Datasets: `create_dataset()`, `upload_dataset_file()`, `query_dataset()`
      - Notebooks: `create_notebook()`, `execute_notebook()`, `get_notebook_run_status()`
@@ -106,7 +106,7 @@
 **Current State**:
 - Stores Parquet files locally
 - Uses pandas for processing
-- No integration with Databricks
+- No integration with PostgreSQL
 
 **Required Changes**:
 
@@ -116,7 +116,7 @@
 from app.services.mcp_client import get_mcp_client
 from app.core.config import settings
 
-async def ingest_tabular_to_databricks(
+async def ingest_tabular_to_postgres(
     db: Session,
     *,
     tenant_id: uuid.UUID,
@@ -125,19 +125,19 @@ async def ingest_tabular_to_databricks(
     description: str | None = None,
 ) -> Dataset:
     """
-    Ingest file to Databricks Delta Lake via MCP
+    Ingest file to PostgreSQL Delta Lake via MCP
 
     Flow:
     1. Read file locally (pandas)
-    2. Upload to Databricks via MCP
+    2. Upload to PostgreSQL via MCP
     3. Store metadata in PostgreSQL
     4. Keep local Parquet as backup
     """
     # Read file
     df = _load_dataframe(file)
 
-    # Upload to Databricks if enabled
-    databricks_table = None
+    # Upload to PostgreSQL if enabled
+    postgres_table = None
     if settings.MCP_ENABLED:
         mcp = get_mcp_client()
         try:
@@ -151,9 +151,9 @@ async def ingest_tabular_to_databricks(
                 file_content=parquet_bytes,
                 file_format="parquet"
             )
-            databricks_table = result.get("table_path")
+            postgres_table = result.get("table_path")
         except MCPClientError as e:
-            logger.error(f"Databricks upload failed: {e}, falling back to local storage")
+            logger.error(f"PostgreSQL upload failed: {e}, falling back to local storage")
 
     # Always persist locally as backup
     dataset = _persist_dataframe(
@@ -166,17 +166,17 @@ async def ingest_tabular_to_databricks(
         file_name=file.filename,
     )
 
-    # Store Databricks reference if available
-    if databricks_table:
+    # Store PostgreSQL reference if available
+    if postgres_table:
         dataset.metadata_ = dataset.metadata_ or {}
-        dataset.metadata_["databricks_table"] = databricks_table
+        dataset.metadata_["postgres_table"] = postgres_table
         db.commit()
 
     return dataset
 ```
 
 **Database Schema Update**:
-Add `metadata_` JSON column to `datasets` table to store Databricks references.
+Add `metadata_` JSON column to `datasets` table to store PostgreSQL references.
 
 ### 2. Notebook Service Integration
 
@@ -191,14 +191,14 @@ Add `metadata_` JSON column to `datasets` table to store Databricks references.
 ```python
 from app.services.mcp_client import get_mcp_client
 
-async def create_databricks_notebook(
+async def create_postgres_notebook(
     db: Session,
     *,
     tenant_id: uuid.UUID,
     item_in: NotebookCreate
 ) -> Notebook:
     """
-    Create notebook in Databricks and store metadata locally
+    Create notebook in PostgreSQL and store metadata locally
     """
     # Create in PostgreSQL
     db_item = Notebook(**item_in.dict(), tenant_id=tenant_id)
@@ -206,7 +206,7 @@ async def create_databricks_notebook(
     db.commit()
     db.refresh(db_item)
 
-    # Create in Databricks if enabled
+    # Create in PostgreSQL if enabled
     if settings.MCP_ENABLED:
         mcp = get_mcp_client()
         try:
@@ -217,14 +217,14 @@ async def create_databricks_notebook(
                 content=item_in.content.get("source", "") if item_in.content else ""
             )
 
-            # Store Databricks workspace path
+            # Store PostgreSQL workspace path
             db_item.metadata_ = {
-                "databricks_path": result.get("path"),
-                "databricks_id": result.get("object_id")
+                "postgres_path": result.get("path"),
+                "postgres_id": result.get("object_id")
             }
             db.commit()
         except MCPClientError as e:
-            logger.error(f"Databricks notebook creation failed: {e}")
+            logger.error(f"PostgreSQL notebook creation failed: {e}")
 
     return db_item
 
@@ -235,20 +235,20 @@ async def execute_notebook(
     tenant_id: uuid.UUID,
     parameters: dict | None = None
 ) -> dict:
-    """Execute notebook in Databricks"""
+    """Execute notebook in PostgreSQL"""
     notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
     if not notebook or notebook.tenant_id != tenant_id:
         raise ValueError("Notebook not found")
 
     if not settings.MCP_ENABLED:
-        raise ValueError("Databricks integration not enabled")
+        raise ValueError("PostgreSQL integration not enabled")
 
     mcp = get_mcp_client()
-    databricks_path = notebook.metadata_.get("databricks_path")
+    postgres_path = notebook.metadata_.get("postgres_path")
 
     result = await mcp.execute_notebook(
         tenant_id=str(tenant_id),
-        notebook_path=databricks_path,
+        notebook_path=postgres_path,
         parameters=parameters or {}
     )
 
@@ -270,14 +270,14 @@ async def execute_notebook(
 **Required Changes**:
 
 ```python
-async def create_databricks_job(
+async def create_postgres_job(
     db: Session,
     *,
     tenant_id: uuid.UUID,
     pipeline_in: DataPipelineCreate
 ) -> DataPipeline:
     """
-    Create data pipeline as Databricks Job
+    Create data pipeline as PostgreSQL Job
     """
     # Create in PostgreSQL
     db_item = DataPipeline(**pipeline_in.dict(), tenant_id=tenant_id)
@@ -285,12 +285,12 @@ async def create_databricks_job(
     db.commit()
     db.refresh(db_item)
 
-    # Create Databricks Job if enabled
+    # Create PostgreSQL Job if enabled
     if settings.MCP_ENABLED:
         mcp = get_mcp_client()
 
-        # Convert pipeline config to Databricks job tasks
-        tasks = _convert_to_databricks_tasks(pipeline_in.config)
+        # Convert pipeline config to PostgreSQL job tasks
+        tasks = _convert_to_postgres_tasks(pipeline_in.config)
 
         try:
             result = await mcp.create_job(
@@ -301,12 +301,12 @@ async def create_databricks_job(
             )
 
             db_item.metadata_ = {
-                "databricks_job_id": result.get("job_id"),
+                "postgres_job_id": result.get("job_id"),
                 "job_url": result.get("job_url")
             }
             db.commit()
         except MCPClientError as e:
-            logger.error(f"Databricks job creation failed: {e}")
+            logger.error(f"PostgreSQL job creation failed: {e}")
 
     return db_item
 
@@ -322,10 +322,10 @@ async def run_pipeline(
         raise ValueError("Pipeline not found")
 
     if not settings.MCP_ENABLED:
-        raise ValueError("Databricks integration not enabled")
+        raise ValueError("PostgreSQL integration not enabled")
 
     mcp = get_mcp_client()
-    job_id = pipeline.metadata_.get("databricks_job_id")
+    job_id = pipeline.metadata_.get("postgres_job_id")
 
     result = await mcp.run_job(
         tenant_id=str(tenant_id),
@@ -346,25 +346,25 @@ async def run_pipeline(
 **Required Changes**:
 
 ```python
-async def deploy_agent_to_databricks(
+async def deploy_agent_to_postgres(
     db: Session,
     *,
     agent_id: uuid.UUID,
     tenant_id: uuid.UUID
 ) -> dict:
     """
-    Deploy agent as Databricks model serving endpoint
+    Deploy agent as PostgreSQL model serving endpoint
     """
     agent = db.query(Agent).filter(Agent.id == agent_id).first()
     if not agent or agent.tenant_id != tenant_id:
         raise ValueError("Agent not found")
 
     if not settings.MCP_ENABLED:
-        raise ValueError("Databricks integration not enabled")
+        raise ValueError("PostgreSQL integration not enabled")
 
     mcp = get_mcp_client()
 
-    # Deploy to Databricks Model Serving
+    # Deploy to PostgreSQL Model Serving
     result = await mcp.deploy_model(
         tenant_id=str(tenant_id),
         model_name=agent.name.lower().replace(" ", "_"),
@@ -389,14 +389,14 @@ async def deploy_agent_to_databricks(
 **Required Changes**:
 
 ```python
-async def create_databricks_vector_index(
+async def create_postgres_vector_index(
     db: Session,
     *,
     tenant_id: uuid.UUID,
     vector_store_in: VectorStoreCreate
 ) -> VectorStore:
     """
-    Create vector search index in Databricks
+    Create vector search index in PostgreSQL
     """
     # Create in PostgreSQL
     db_item = VectorStore(**vector_store_in.dict(), tenant_id=tenant_id)
@@ -404,7 +404,7 @@ async def create_databricks_vector_index(
     db.commit()
     db.refresh(db_item)
 
-    # Create in Databricks if enabled
+    # Create in PostgreSQL if enabled
     if settings.MCP_ENABLED:
         mcp = get_mcp_client()
 
@@ -418,12 +418,12 @@ async def create_databricks_vector_index(
             )
 
             db_item.metadata_ = {
-                "databricks_index_name": result.get("index_name"),
+                "postgres_index_name": result.get("index_name"),
                 "index_url": result.get("index_url")
             }
             db.commit()
         except MCPClientError as e:
-            logger.error(f"Databricks vector index creation failed: {e}")
+            logger.error(f"PostgreSQL vector index creation failed: {e}")
 
     return db_item
 ```
@@ -459,9 +459,9 @@ CREATE INDEX idx_vector_stores_metadata ON vector_stores USING GIN (metadata_);
 **File**: `apps/web/src/pages/DatasetsPage.js`
 
 **Required Changes**:
-- Add "Databricks Status" column showing sync status
-- Add "Query in Databricks" button for datasets with Databricks tables
-- Show Databricks table path in metadata
+- Add "PostgreSQL Status" column showing sync status
+- Add "Query in PostgreSQL" button for datasets with PostgreSQL tables
+- Show PostgreSQL table path in metadata
 - Add execution status for running queries
 
 ### 2. Notebooks Page
@@ -469,9 +469,9 @@ CREATE INDEX idx_vector_stores_metadata ON vector_stores USING GIN (metadata_);
 **File**: `apps/web/src/pages/NotebooksPage.js`
 
 **Required Changes**:
-- Add "Execute" button to run notebooks in Databricks
+- Add "Execute" button to run notebooks in PostgreSQL
 - Show execution status (Running, Completed, Failed)
-- Add link to Databricks workspace
+- Add link to PostgreSQL workspace
 - Display execution results
 
 ### 3. Data Pipelines Page
@@ -480,16 +480,16 @@ CREATE INDEX idx_vector_stores_metadata ON vector_stores USING GIN (metadata_);
 
 **Required Changes**:
 - Add "Run Pipeline" button
-- Show job run history from Databricks
+- Show job run history from PostgreSQL
 - Display run status (Pending, Running, Succeeded, Failed)
-- Add link to Databricks job UI
+- Add link to PostgreSQL job UI
 
 ### 4. Agents Page
 
 **File**: `apps/web/src/pages/AgentsPage.js`
 
 **Required Changes**:
-- Add "Deploy to Databricks" button
+- Add "Deploy to PostgreSQL" button
 - Show serving endpoint status
 - Add "Test Endpoint" functionality
 - Display endpoint URL for API calls
@@ -498,10 +498,10 @@ CREATE INDEX idx_vector_stores_metadata ON vector_stores USING GIN (metadata_);
 
 ## API Endpoints to Add
 
-### Databricks Status Endpoint
+### PostgreSQL Status Endpoint
 
 ```python
-# apps/api/app/api/v1/databricks.py
+# apps/api/app/api/v1/postgres.py
 
 from fastapi import APIRouter, Depends
 from app.services.mcp_client import get_mcp_client
@@ -509,11 +509,11 @@ from app.api.deps import get_current_user
 
 router = APIRouter()
 
-@router.get("/databricks/status")
-async def get_databricks_status(
+@router.get("/postgres/status")
+async def get_postgres_status(
     current_user: User = Depends(get_current_user)
 ):
-    """Get Databricks integration status for current tenant"""
+    """Get PostgreSQL integration status for current tenant"""
     mcp = get_mcp_client()
 
     try:
@@ -535,21 +535,21 @@ async def get_databricks_status(
             "error": str(e)
         }
 
-@router.post("/databricks/initialize")
-async def initialize_databricks_for_tenant(
+@router.post("/postgres/initialize")
+async def initialize_postgres_for_tenant(
     current_user: User = Depends(get_current_user)
 ):
-    """Initialize Databricks resources for tenant"""
+    """Initialize PostgreSQL resources for tenant"""
     mcp = get_mcp_client()
 
-    catalog_name = f"servicetsunami_{current_user.tenant_id}"
+    catalog_name = f"agentprovision_{current_user.tenant_id}"
     result = await mcp.create_tenant_catalog(
         tenant_id=str(current_user.tenant_id),
         catalog_name=catalog_name
     )
 
     return {
-        "message": "Databricks catalog created successfully",
+        "message": "PostgreSQL catalog created successfully",
         "catalog_name": result.get("catalog_name")
     }
 ```
@@ -589,13 +589,13 @@ async def test_create_dataset():
 ### Integration Tests
 
 ```python
-# tests/test_databricks_integration.py
+# tests/test_postgres_integration.py
 
 @pytest.mark.integration
 async def test_end_to_end_dataset_flow():
-    """Test full dataset ingestion to Databricks"""
-    # 1. Upload file to ServiceTsunami
-    # 2. Verify it's pushed to Databricks via MCP
+    """Test full dataset ingestion to PostgreSQL"""
+    # 1. Upload file to AgentProvision
+    # 2. Verify it's pushed to PostgreSQL via MCP
     # 3. Query the data
     # 4. Verify results match
     pass
@@ -606,10 +606,10 @@ async def test_end_to_end_dataset_flow():
 ## Deployment Checklist
 
 - [ ] MCP server running on port 8085
-- [ ] Databricks workspace configured
+- [ ] PostgreSQL workspace configured
 - [ ] MCP_SERVER_URL and MCP_API_KEY set in `.env`
 - [ ] Database migration executed (add `metadata_` columns)
-- [ ] ServiceTsunami API restarted
+- [ ] AgentProvision API restarted
 - [ ] Frontend updated with new features
 - [ ] Integration tests passing
 - [ ] Health check endpoint returns healthy status
@@ -621,7 +621,7 @@ async def test_end_to_end_dataset_flow():
 ### Phase 1: Datasets (Week 1)
 - Deploy MCP client
 - Update dataset service
-- Add Databricks status UI
+- Add PostgreSQL status UI
 - Test with sample datasets
 
 ### Phase 2: Notebooks (Week 2)
@@ -672,17 +672,17 @@ All MCP interactions should be logged:
 - Request details (operation, tenant)
 - Response time
 - Errors with full context
-- Databricks resource IDs
+- PostgreSQL resource IDs
 
 ---
 
 ## Next Steps
 
-1. **Immediate**: Wait for Databricks connector completion in MCP server
+1. **Immediate**: Wait for PostgreSQL connector completion in MCP server
 2. **Test MCP Client**: Once MCP endpoints are ready, test `mcp_client.py`
 3. **Update Services**: Implement hybrid approach in dataset, notebook, pipeline services
 4. **Database Migration**: Add `metadata_` columns
-5. **Frontend Updates**: Add Databricks status indicators
+5. **Frontend Updates**: Add PostgreSQL status indicators
 6. **Integration Testing**: End-to-end workflow validation
 
 ---
@@ -692,11 +692,11 @@ All MCP interactions should be logged:
 1. What's the expected response format for each endpoint?
 2. How are errors returned (status codes, error messages)?
 3. Is authentication handled via Bearer token?
-4. What's the rate limit for Databricks operations?
+4. What's the rate limit for PostgreSQL operations?
 5. How should we handle long-running operations (notebooks, jobs)?
 
 ---
 
-**Document Owner**: ServiceTsunami Platform Team
+**Document Owner**: AgentProvision Platform Team
 **Last Updated**: October 30, 2025
 **Status**: Integration in Progress

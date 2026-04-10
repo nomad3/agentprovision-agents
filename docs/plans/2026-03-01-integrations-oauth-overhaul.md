@@ -103,13 +103,13 @@ Add OAuth settings:
 ```python
 GOOGLE_CLIENT_ID: str | None = None
 GOOGLE_CLIENT_SECRET: str | None = None
-GOOGLE_REDIRECT_URI: str = "https://servicetsunami.com/api/v1/oauth/google/callback"
+GOOGLE_REDIRECT_URI: str = "https://agentprovision.com/api/v1/oauth/google/callback"
 GITHUB_CLIENT_ID: str | None = None
 GITHUB_CLIENT_SECRET: str | None = None
-GITHUB_REDIRECT_URI: str = "https://servicetsunami.com/api/v1/oauth/github/callback"
+GITHUB_REDIRECT_URI: str = "https://agentprovision.com/api/v1/oauth/github/callback"
 LINKEDIN_CLIENT_ID: str | None = None
 LINKEDIN_CLIENT_SECRET: str | None = None
-LINKEDIN_REDIRECT_URI: str = "https://servicetsunami.com/api/v1/oauth/linkedin/callback"
+LINKEDIN_REDIRECT_URI: str = "https://agentprovision.com/api/v1/oauth/linkedin/callback"
 ```
 
 ### 5. MODIFY: `apps/api/app/api/v1/routes.py`
@@ -148,29 +148,29 @@ oauthStatus: (provider) => api.get(`/oauth/${provider}/status`),
 - Rename "Skills" tab label → "Connected Apps"
 - Update page subtitle
 
-### 9. MODIFY: `helm/values/servicetsunami-api.yaml`
+### 9. MODIFY: `helm/values/agentprovision-api.yaml`
 
 Add to `configMap.data`:
 ```yaml
-GOOGLE_REDIRECT_URI: "https://servicetsunami.com/api/v1/oauth/google/callback"
-GITHUB_REDIRECT_URI: "https://servicetsunami.com/api/v1/oauth/github/callback"
-LINKEDIN_REDIRECT_URI: "https://servicetsunami.com/api/v1/oauth/linkedin/callback"
+GOOGLE_REDIRECT_URI: "https://agentprovision.com/api/v1/oauth/google/callback"
+GITHUB_REDIRECT_URI: "https://agentprovision.com/api/v1/oauth/github/callback"
+LINKEDIN_REDIRECT_URI: "https://agentprovision.com/api/v1/oauth/linkedin/callback"
 ```
 
 Add to `externalSecret.data`:
 ```yaml
 - secretKey: GOOGLE_CLIENT_ID
-  remoteRef: { key: servicetsunami-google-oauth-client-id }
+  remoteRef: { key: agentprovision-google-oauth-client-id }
 - secretKey: GOOGLE_CLIENT_SECRET
-  remoteRef: { key: servicetsunami-google-oauth-client-secret }
+  remoteRef: { key: agentprovision-google-oauth-client-secret }
 - secretKey: GITHUB_CLIENT_ID
-  remoteRef: { key: servicetsunami-github-oauth-client-id }
+  remoteRef: { key: agentprovision-github-oauth-client-id }
 - secretKey: GITHUB_CLIENT_SECRET
-  remoteRef: { key: servicetsunami-github-oauth-client-secret }
+  remoteRef: { key: agentprovision-github-oauth-client-secret }
 - secretKey: LINKEDIN_CLIENT_ID
-  remoteRef: { key: servicetsunami-linkedin-oauth-client-id }
+  remoteRef: { key: agentprovision-linkedin-oauth-client-id }
 - secretKey: LINKEDIN_CLIENT_SECRET
-  remoteRef: { key: servicetsunami-linkedin-oauth-client-secret }
+  remoteRef: { key: agentprovision-linkedin-oauth-client-secret }
 ```
 
 ## Implementation Order
@@ -189,18 +189,18 @@ Add to `externalSecret.data`:
 
 **Google Cloud Console:**
 1. APIs & Services > Credentials > Create OAuth 2.0 Client ID (Web application)
-2. Authorized redirect URI: `https://servicetsunami.com/api/v1/oauth/google/callback`
+2. Authorized redirect URI: `https://agentprovision.com/api/v1/oauth/google/callback`
 3. Enable Gmail API + Google Calendar API
 4. Store client_id/secret in GCP Secret Manager
 
 **GitHub:**
 1. Settings > Developer Settings > OAuth Apps > New
-2. Callback URL: `https://servicetsunami.com/api/v1/oauth/github/callback`
+2. Callback URL: `https://agentprovision.com/api/v1/oauth/github/callback`
 3. Store client_id/secret in GCP Secret Manager
 
 **LinkedIn:**
 1. LinkedIn Developer Portal > Create App
-2. Redirect URL: `https://servicetsunami.com/api/v1/oauth/linkedin/callback`
+2. Redirect URL: `https://agentprovision.com/api/v1/oauth/linkedin/callback`
 3. Request "Sign in with LinkedIn using OpenID Connect" product
 4. Store client_id/secret in GCP Secret Manager
 

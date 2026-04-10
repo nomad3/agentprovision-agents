@@ -48,7 +48,7 @@ class TenantFeatures(Base):
     storage_limit_gb = Column(Float, default=10.0)
 
     # UI Customization
-    hide_servicetsunami_branding = Column(Boolean, default=False)
+    hide_agentprovision_branding = Column(Boolean, default=False)
 
     # Plan Type
     plan_type = Column(String, default="starter")  # starter, professional, enterprise

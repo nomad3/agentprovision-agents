@@ -24,6 +24,7 @@ from app.services.embedding_service import match_intent
 from app.services.local_inference import generate_agent_response_sync
 from app.services.tool_groups import TIER_LIMITS
 from app.memory.feature_flag import is_v2_enabled
+from app.services.agent_identity import resolve_primary_agent_slug
 
 logger = logging.getLogger(__name__)
 
@@ -66,18 +67,6 @@ def _build_memory_context(
         except Exception:
             pass
         return None
-
-
-def _resolve_primary_agent_slug(db: Session, tenant_id: uuid.UUID) -> str:
-    """Resolve the default agent slug for this tenant from branding or defaults."""
-    try:
-        branding = db.query(TenantBranding).filter(TenantBranding.tenant_id == tenant_id).first()
-        if branding and branding.ai_assistant_name and branding.ai_assistant_name != "AI Assistant":
-            return branding.ai_assistant_name.lower().replace(" ", "-")
-    except Exception:
-        try: db.rollback()
-        except Exception: pass
-    return "luna"
 
 
 def _recall_response_to_legacy_dict(resp) -> dict:
@@ -237,7 +226,7 @@ def dispatch_coalition(
                     "CoalitionWorkflow",
                     args=[str(tenant_id), chat_session_id, task_description],
                     id=f"coalition-{chat_session_id}-{uuid.uuid4().hex[:8]}",
-                    task_queue="servicetsunami-orchestration",
+                    task_queue="agentprovision-orchestration",
                 )
             asyncio.run(_go())
         except Exception as e:
@@ -263,7 +252,7 @@ def route_and_execute(
 ) -> Tuple[Optional[str], Dict[str, Any]]:
     # Apply channel-based agent default if not explicitly specified
     if not agent_slug:
-        agent_slug = _resolve_primary_agent_slug(db, tenant_id)
+        agent_slug = resolve_primary_agent_slug(db, tenant_id)
 
     # 1. Load tenant features
     try:

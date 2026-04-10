@@ -1,0 +1,57 @@
+# AgentProvision Orchestration Worker - Local Development
+nameOverride: "orchestration-worker"
+fullnameOverride: "orchestration-worker"
+
+image:
+  repository: agentprovision-orchestration-worker
+  tag: latest
+  pullPolicy: Never
+
+replicaCount: 1
+
+container:
+  port: 8000
+  command:
+    - python
+    - -m
+    - app.workers.orchestration_worker
+
+# Pod security
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+
+# Resource allocation
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ConfigMap
+configMap:
+  enabled: true
+  data:
+    TEMPORAL_NAMESPACE: "default"
+    USE_MEMORY_V2: "true"
+    USE_RUST_EMBEDDING: "true"
+    USE_RUST_MEMORY: "true"
+    EMBEDDING_SERVICE_URL: "embedding-service:50051"
+    MEMORY_CORE_URL: "memory-core:50052"
+    DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
+    TEMPORAL_ADDRESS: "temporal:7233"
+
+# Disable GKE specifics
+externalSecret:
+  enabled: false
+extraContainers: []
+persistence:
+  enabled: false

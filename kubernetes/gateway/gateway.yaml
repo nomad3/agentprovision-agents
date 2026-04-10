@@ -3,14 +3,14 @@
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: servicetsunami-gateway
+  name: agentprovision-gateway
   namespace: gateway-system
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: gateway
   annotations:
     # Link to GCP Managed Certificate
-    networking.gke.io/certmap: servicetsunami-certmap
+    networking.gke.io/certmap: agentprovision-certmap
 spec:
   # GKE L7 Global External Managed Gateway Class
   gatewayClassName: gke-l7-global-external-managed
@@ -36,7 +36,7 @@ spec:
   # IP address allocation
   addresses:
     - type: NamedAddress
-      value: servicetsunami-gateway-ip
+      value: agentprovision-gateway-ip
 ---
 # HTTP to HTTPS redirect route
 apiVersion: gateway.networking.k8s.io/v1
@@ -45,11 +45,11 @@ metadata:
   name: http-to-https-redirect
   namespace: gateway-system
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: gateway
 spec:
   parentRefs:
-    - name: servicetsunami-gateway
+    - name: agentprovision-gateway
       namespace: gateway-system
       sectionName: http
   rules:

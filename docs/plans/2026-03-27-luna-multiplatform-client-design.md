@@ -8,7 +8,7 @@
 
 ## Vision
 
-Luna lives in WhatsApp and a chat UI today. That's too small. She should be on your desk, in your pocket, around your neck, watching through the camera, and listening through the necklace — all connected to the same brain: the MacBook M4 running ServiceTsunami as the production server.
+Luna lives in WhatsApp and a chat UI today. That's too small. She should be on your desk, in your pocket, around your neck, watching through the camera, and listening through the necklace — all connected to the same brain: the MacBook M4 running AgentProvision as the production server.
 
 This design creates **Luna Client**: a single, unified application shell that runs natively on macOS (M4), iOS, Android, and as a PWA in any browser. It also introduces the **Device Bridge** — a lightweight microservice that connects IoT devices (EZVIZ H6 camera, desk robot, future glasses) to Luna via WebSocket and WebRTC. All platforms share one codebase, one backend, one knowledge graph.
 
@@ -42,7 +42,7 @@ The MacBook M4 is the brain. Every device is a sense organ or a voice.
 │              MacBook M4 — Production Server                      │
 │                                                                  │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │              ServiceTsunami API (port 8001)              │    │
+│  │              AgentProvision API (port 8001)              │    │
 │  │  + /api/v1/devices/       — device registry CRUD        │    │
 │  │  + /api/v1/robot/interact — voice+vision interaction    │    │
 │  │  + /api/v1/vision/analyze — camera frame analysis       │    │
@@ -96,7 +96,7 @@ The MacBook M4 is the brain. Every device is a sense organ or a voice.
 
 ### Device Bridge — Python + FastAPI + aiortc
 
-Same tech stack as ServiceTsunami API. Minimal new service. Key libraries:
+Same tech stack as AgentProvision API. Minimal new service. Key libraries:
 - `websockets` — IoT device WebSocket server
 - `aiortc` — WebRTC for camera stream relay
 - `asyncio` subprocess — ffmpeg for RTSP pull
@@ -312,7 +312,7 @@ Camera frame capture → POST /api/v1/vision/analyze
 
 ---
 
-## API Extensions (ServiceTsunami)
+## API Extensions (AgentProvision)
 
 ### New Model: `apps/api/app/models/device_registry.py`
 

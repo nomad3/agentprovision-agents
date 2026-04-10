@@ -1,9 +1,9 @@
-# ServiceTsunami Code Worker - Claude Code CLI Temporal Worker
-nameOverride: "servicetsunami-code-worker"
-fullnameOverride: "servicetsunami-code-worker"
+# AgentProvision Code Worker - Claude Code CLI Temporal Worker
+nameOverride: "agentprovision-code-worker"
+fullnameOverride: "agentprovision-code-worker"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-code-worker
+  repository: gcr.io/ai-agency-479516/agentprovision-code-worker
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -60,7 +60,7 @@ configMap:
   enabled: true
   data:
     TEMPORAL_NAMESPACE: "default"
-    API_BASE_URL: "http://servicetsunami-api"
+    API_BASE_URL: "http://agentprovision-api"
 
 # External Secrets — GitHub token + API internal key only (no DB access)
 externalSecret:
@@ -70,15 +70,15 @@ externalSecret:
     name: gcpsm-secret-store
     kind: SecretStore
   target:
-    name: servicetsunami-code-worker-secret
+    name: agentprovision-code-worker-secret
     creationPolicy: Owner
   data:
     - secretKey: GITHUB_TOKEN
       remoteRef:
-        key: servicetsunami-github-token
+        key: agentprovision-github-token
     - secretKey: API_INTERNAL_KEY
       remoteRef:
-        key: servicetsunami-api-internal-key
+        key: agentprovision-api-internal-key
 
 # Additional environment variables
 env:

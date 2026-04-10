@@ -96,11 +96,11 @@ def verify_internal_key(ctx) -> bool:
 
 ```python
 # apps/mcp-server/src/mcp_app.py
-"""Unified MCP server for ServiceTsunami tools."""
+"""Unified MCP server for AgentProvision tools."""
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP(
-    "ServiceTsunami",
+    "AgentProvision",
     stateless_http=True,
     json_response=True,
 )
@@ -240,7 +240,7 @@ git commit -m "feat: port email and calendar tools to MCP format"
 
 - [ ] **Step 1: Extract Luna's instructions**
 
-Read `apps/adk-server/servicetsunami_supervisor/personal_assistant.py` lines 74-300 (the instruction string). Convert to skill.md format:
+Read `apps/adk-server/agentprovision_supervisor/personal_assistant.py` lines 74-300 (the instruction string). Convert to skill.md format:
 
 ```yaml
 ---
@@ -338,7 +338,7 @@ def generate_claude_md(
 - Channel: {channel}
 
 ## MCP Tools
-All tools are provided via the ServiceTsunami MCP server.
+All tools are provided via the AgentProvision MCP server.
 Use the MCP tools directly — do NOT make HTTP calls.
 """)
 
@@ -349,7 +349,7 @@ def generate_mcp_config(tenant_id: str, internal_key: str) -> dict:
     """Generate MCP config JSON for CLI session."""
     return {
         "mcpServers": {
-            "servicetsunami": {
+            "agentprovision": {
                 "url": f"{MCP_SERVER_URL}/mcp",
                 "headers": {
                     "X-Tenant-Id": tenant_id,

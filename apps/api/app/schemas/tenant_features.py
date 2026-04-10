@@ -23,7 +23,7 @@ class TenantFeaturesBase(BaseModel):
     monthly_token_limit: int = 1000000
     storage_limit_gb: float = 10.0
     # UI
-    hide_servicetsunami_branding: bool = False
+    hide_agentprovision_branding: bool = False
     plan_type: str = "starter"
     # LLM Provider Selection
     active_llm_provider: Optional[str] = "gemini_llm"
@@ -53,7 +53,7 @@ class TenantFeaturesUpdate(BaseModel):
     max_agent_groups: Optional[int] = None
     monthly_token_limit: Optional[int] = None
     storage_limit_gb: Optional[float] = None
-    hide_servicetsunami_branding: Optional[bool] = None
+    hide_agentprovision_branding: Optional[bool] = None
     plan_type: Optional[str] = None
     active_llm_provider: Optional[str] = None
     cli_orchestrator_enabled: Optional[bool] = None

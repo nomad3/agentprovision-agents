@@ -93,7 +93,7 @@ async def execute_shell(
 
 **Step 2: Verify the file is syntactically valid**
 
-Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents/apps/adk-server && python -c "from tools.shell_tools import execute_shell; print('OK')"`
+Run: `cd /Users/nomade/Documents/GitHub/agentprovision-agents/apps/adk-server && python -c "from tools.shell_tools import execute_shell; print('OK')"`
 Expected: `OK`
 
 **Step 3: Commit**
@@ -190,7 +190,7 @@ async def deploy_changes(
 
         # Check if changes will trigger ADK deploy
         adk_paths = any(
-            f.startswith("apps/adk-server/") or f.startswith("helm/values/servicetsunami-adk")
+            f.startswith("apps/adk-server/") or f.startswith("helm/values/agentprovision-adk")
             for f in changed_files
         )
 
@@ -209,7 +209,7 @@ async def deploy_changes(
 
 **Step 2: Verify both functions import correctly**
 
-Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents/apps/adk-server && python -c "from tools.shell_tools import execute_shell, deploy_changes; print('OK')"`
+Run: `cd /Users/nomade/Documents/GitHub/agentprovision-agents/apps/adk-server && python -c "from tools.shell_tools import execute_shell, deploy_changes; print('OK')"`
 Expected: `OK`
 
 **Step 3: Commit**
@@ -224,7 +224,7 @@ git commit -m "feat: add deploy_changes tool for git push deploys"
 ### Task 3: Create `dev_ops` sub-agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/dev_ops.py`
+- Create: `apps/adk-server/agentprovision_supervisor/dev_ops.py`
 
 **Step 1: Create the dev_ops agent file**
 
@@ -255,15 +255,15 @@ If you cannot access the session state, use "auto" as tenant_id and the system w
 Your capabilities:
 - Execute any shell command inside the container (explore code, install packages, run tests, inspect logs)
 - Create new tools by writing Python async functions in the tools/ directory
-- Create new agents by adding files in servicetsunami_supervisor/
+- Create new agents by adding files in agentprovision_supervisor/
 - Deploy changes by committing and pushing to git (triggers CI/CD, ~3 min deploy)
 - Record what you changed and why in the knowledge graph
 
 ## Working directory layout (/app):
 - tools/ — Tool modules (async Python functions). Each tool file exports functions used by agents.
-- servicetsunami_supervisor/ — Agent definitions. Each file exports an Agent instance.
-- servicetsunami_supervisor/agent.py — Root supervisor with sub_agents list and routing instructions.
-- servicetsunami_supervisor/__init__.py — Exports all agents.
+- agentprovision_supervisor/ — Agent definitions. Each file exports an Agent instance.
+- agentprovision_supervisor/agent.py — Root supervisor with sub_agents list and routing instructions.
+- agentprovision_supervisor/__init__.py — Exports all agents.
 - config/settings.py — Environment configuration via pydantic-settings.
 - server.py — FastAPI wrapper for ADK.
 - requirements.txt — Python dependencies.
@@ -279,20 +279,20 @@ Your capabilities:
 3. Test it locally:
    execute_shell("python -c \\"from tools.my_tool import my_function; print('OK')\\"")
 
-4. Add the tool to the relevant agent's tools=[] list in servicetsunami_supervisor/
+4. Add the tool to the relevant agent's tools=[] list in agentprovision_supervisor/
 
 5. Deploy:
-   deploy_changes("feat: add my_tool", ["tools/my_tool.py", "servicetsunami_supervisor/some_agent.py"])
+   deploy_changes("feat: add my_tool", ["tools/my_tool.py", "agentprovision_supervisor/some_agent.py"])
 
 ## How to create a new agent:
 
-1. Write the agent file in servicetsunami_supervisor/:
-   execute_shell("cat > servicetsunami_supervisor/my_agent.py << 'PYEOF'\nfrom google.adk.agents import Agent\nfrom config.settings import settings\n\nmy_agent = Agent(name='my_agent', model=settings.adk_model, instruction='...', tools=[...])\nPYEOF")
+1. Write the agent file in agentprovision_supervisor/:
+   execute_shell("cat > agentprovision_supervisor/my_agent.py << 'PYEOF'\nfrom google.adk.agents import Agent\nfrom config.settings import settings\n\nmy_agent = Agent(name='my_agent', model=settings.adk_model, instruction='...', tools=[...])\nPYEOF")
 
 2. Add import + export in __init__.py
 3. Add import + sub_agents entry in agent.py
 4. Add routing rules to the supervisor instruction in agent.py
-5. Test: execute_shell("python -c \\"from servicetsunami_supervisor import root_agent; print(root_agent.sub_agents)\\"")
+5. Test: execute_shell("python -c \\"from agentprovision_supervisor import root_agent; print(root_agent.sub_agents)\\"")
 6. Deploy all changed files
 
 ## How to install a Python package:
@@ -323,13 +323,13 @@ Your capabilities:
 
 **Step 2: Verify the agent imports correctly**
 
-Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents/apps/adk-server && python -c "from servicetsunami_supervisor.dev_ops import dev_ops; print(dev_ops.name)"`
+Run: `cd /Users/nomade/Documents/GitHub/agentprovision-agents/apps/adk-server && python -c "from agentprovision_supervisor.dev_ops import dev_ops; print(dev_ops.name)"`
 Expected: `dev_ops`
 
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/dev_ops.py
+git add apps/adk-server/agentprovision_supervisor/dev_ops.py
 git commit -m "feat: add dev_ops sub-agent with shell and deploy tools"
 ```
 
@@ -338,15 +338,15 @@ git commit -m "feat: add dev_ops sub-agent with shell and deploy tools"
 ### Task 4: Wire `dev_ops` into supervisor
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/__init__.py:1-16`
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py:1-77`
+- Modify: `apps/adk-server/agentprovision_supervisor/__init__.py:1-16`
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py:1-77`
 
 **Step 1: Add dev_ops to `__init__.py`**
 
 Add import on line 7 (before the agent.py import) and add to `__all__`:
 
 ```python
-"""Agent definitions for ServiceTsunami ADK server."""
+"""Agent definitions for AgentProvision ADK server."""
 from .data_analyst import data_analyst
 from .report_generator import report_generator
 from .knowledge_manager import knowledge_manager
@@ -397,13 +397,13 @@ sub_agents=[data_analyst, report_generator, knowledge_manager, web_researcher, c
 
 **Step 3: Verify the full agent tree loads**
 
-Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents/apps/adk-server && python -c "from servicetsunami_supervisor import root_agent; print([a.name for a in root_agent.sub_agents])"`
+Run: `cd /Users/nomade/Documents/GitHub/agentprovision-agents/apps/adk-server && python -c "from agentprovision_supervisor import root_agent; print([a.name for a in root_agent.sub_agents])"`
 Expected: `['data_analyst', 'report_generator', 'knowledge_manager', 'web_researcher', 'customer_support', 'sales_agent', 'dev_ops']`
 
 **Step 4: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/__init__.py apps/adk-server/servicetsunami_supervisor/agent.py
+git add apps/adk-server/agentprovision_supervisor/__init__.py apps/adk-server/agentprovision_supervisor/agent.py
 git commit -m "feat: wire dev_ops agent into supervisor routing"
 ```
 
@@ -516,15 +516,15 @@ git commit -m "feat: add git to Dockerfile and entrypoint for dev_ops agent"
 ### Task 6: Add git credentials to Helm values
 
 **Files:**
-- Modify: `helm/values/servicetsunami-adk.yaml:83-118`
+- Modify: `helm/values/agentprovision-adk.yaml:83-118`
 
 **Step 1: Add git env vars to configMap**
 
 Add to the `configMap.data` section (after line 96):
 
 ```yaml
-    GIT_AUTHOR_NAME: "ServiceTsunami Agent"
-    GIT_AUTHOR_EMAIL: "agent@servicetsunami.com"
+    GIT_AUTHOR_NAME: "AgentProvision Agent"
+    GIT_AUTHOR_EMAIL: "agent@agentprovision.com"
 ```
 
 **Step 2: Add GITHUB_TOKEN to externalSecret**
@@ -534,13 +534,13 @@ Add a new entry to `externalSecret.data` (after the MCP_API_KEY entry, line 118)
 ```yaml
     - secretKey: GITHUB_TOKEN
       remoteRef:
-        key: servicetsunami-github-token
+        key: agentprovision-github-token
 ```
 
 **Step 3: Commit**
 
 ```bash
-git add helm/values/servicetsunami-adk.yaml
+git add helm/values/agentprovision-adk.yaml
 git commit -m "feat: add git credentials to ADK Helm values"
 ```
 
@@ -556,14 +556,14 @@ This must be done manually or via `gcloud`:
 
 ```bash
 # Create the secret (replace <YOUR_GITHUB_PAT> with a GitHub PAT that has repo push access)
-gcloud secrets create servicetsunami-github-token --project=ai-agency-479516
-echo -n "<YOUR_GITHUB_PAT>" | gcloud secrets versions add servicetsunami-github-token --data-file=- --project=ai-agency-479516
+gcloud secrets create agentprovision-github-token --project=ai-agency-479516
+echo -n "<YOUR_GITHUB_PAT>" | gcloud secrets versions add agentprovision-github-token --data-file=- --project=ai-agency-479516
 ```
 
 **Step 2: Verify the secret exists**
 
 ```bash
-gcloud secrets versions access latest --secret=servicetsunami-github-token --project=ai-agency-479516
+gcloud secrets versions access latest --secret=agentprovision-github-token --project=ai-agency-479516
 ```
 
 **Step 3: No commit needed** (this is a manual infrastructure step)
@@ -587,7 +587,7 @@ git push origin main
 gh run list --workflow=adk-deploy.yaml --limit=1
 
 # Watch pod rollout
-kubectl rollout status deployment/servicetsunami-adk -n prod
+kubectl rollout status deployment/agentprovision-adk -n prod
 ```
 
 **Step 3: Verify dev_ops agent is available**
@@ -596,7 +596,7 @@ Once the new pod is running, test via the ADK API:
 
 ```bash
 # Check agents list
-kubectl exec -n prod deploy/servicetsunami-adk -c servicetsunami-adk -- python -c "from servicetsunami_supervisor import root_agent; print([a.name for a in root_agent.sub_agents])"
+kubectl exec -n prod deploy/agentprovision-adk -c agentprovision-adk -- python -c "from agentprovision_supervisor import root_agent; print([a.name for a in root_agent.sub_agents])"
 ```
 
 Expected: list includes `dev_ops`
@@ -604,10 +604,10 @@ Expected: list includes `dev_ops`
 **Step 4: Verify git is configured**
 
 ```bash
-kubectl exec -n prod deploy/servicetsunami-adk -c servicetsunami-adk -- git config --list
+kubectl exec -n prod deploy/agentprovision-adk -c agentprovision-adk -- git config --list
 ```
 
-Expected: shows `user.name=ServiceTsunami Agent` and `user.email=agent@servicetsunami.com`
+Expected: shows `user.name=AgentProvision Agent` and `user.email=agent@agentprovision.com`
 
 **Step 5: Commit** (no commit needed — this is verification only)
 
@@ -619,9 +619,9 @@ Expected: shows `user.name=ServiceTsunami Agent` and `user.email=agent@servicets
 |------|------|-------|
 | 1 | `execute_shell` tool | `tools/shell_tools.py` (create) |
 | 2 | `deploy_changes` tool | `tools/shell_tools.py` (modify) |
-| 3 | `dev_ops` agent | `servicetsunami_supervisor/dev_ops.py` (create) |
+| 3 | `dev_ops` agent | `agentprovision_supervisor/dev_ops.py` (create) |
 | 4 | Wire into supervisor | `__init__.py` + `agent.py` (modify) |
 | 5 | Dockerfile + entrypoint | `Dockerfile` + `entrypoint.sh` (modify/create) |
-| 6 | Helm git credentials | `servicetsunami-adk.yaml` (modify) |
+| 6 | Helm git credentials | `agentprovision-adk.yaml` (modify) |
 | 7 | GCP secret for GitHub PAT | Manual `gcloud` command |
 | 8 | Deploy and verify | Push + kubectl verification |

@@ -40,7 +40,7 @@
 - `See if your memory graph is being populated correctly and the RL system is working as expected` actual=1 predicted=0 conf=0.95
 - `Extract all contacts from my personal Gmail and store them as entity with their contact details and ` actual=1 predicted=0 conf=1.00
 - `It went through cleanly. The fix is merged on `main` as PR #18 on March 20, 2026, and the actual cha` actual=0 predicted=1 conf=0.90
-- `Jira's not connected yet. Head to **ServiceTsunami → Settings → Connected Apps** and link your Jira ` actual=1 predicted=0 conf=0.90
+- `Jira's not connected yet. Head to **AgentProvision → Settings → Connected Apps** and link your Jira ` actual=1 predicted=0 conf=0.90
 - `Make me a prompt how you would like to be if you were human so I can ask Gemini or ChatGPT to draw i` actual=1 predicted=0 conf=1.00
 - `Which medicines are you looking for? You didn't mention them — send me the list and I'll check which` actual=1 predicted=0 conf=0.90
 - `Yes don’t use the coding one use general model you suggested` actual=1 predicted=0 conf=1.00

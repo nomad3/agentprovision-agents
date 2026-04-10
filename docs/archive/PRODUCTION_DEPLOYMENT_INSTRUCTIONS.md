@@ -15,8 +15,8 @@ ssh your-gcp-vm-name
 ## Step 2: Navigate to Project
 
 ```bash
-cd /path/to/servicetsunami
-# Replace /path/to/servicetsunami with your actual project path
+cd /path/to/agentprovision
+# Replace /path/to/agentprovision with your actual project path
 ```
 
 ## Step 3: Add API Key to Production Environment
@@ -169,7 +169,7 @@ If this happens, double-check the API key was copied correctly.
 
 ### Test Chat in the UI
 
-1. Go to https://servicetsunami.com
+1. Go to https://agentprovision.com
 2. Log in with your account
 3. Navigate to "Ask AI" (Chat)
 4. Create a new chat session
@@ -199,7 +199,7 @@ If something goes wrong:
 
 ```bash
 # On GCP VM
-cd /path/to/servicetsunami
+cd /path/to/agentprovision
 
 # Remove the API key
 vi apps/api/.env

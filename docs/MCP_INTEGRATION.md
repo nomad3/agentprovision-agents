@@ -6,7 +6,7 @@ Connect any external MCP server to AgentProvision. Agents get access to all disc
 
 ```
 User message → Luna → CLI Orchestrator (Claude Code)
-                         ├── mcp__servicetsunami__*  (built-in, 81 tools)
+                         ├── mcp__agentprovision__*  (built-in, 81 tools)
                          ├── mcp__integral-sre__*    (external, 71 tools)
                          └── mcp__your-server__*     (external, N tools)
 ```
@@ -111,7 +111,7 @@ When a chat message is processed, `generate_mcp_config()` in `cli_session_manage
 ```json
 {
   "mcpServers": {
-    "servicetsunami": {
+    "agentprovision": {
       "type": "http",
       "url": "http://mcp-tools:8000/mcp",
       "headers": { "X-Internal-Key": "...", "X-Tenant-Id": "..." }

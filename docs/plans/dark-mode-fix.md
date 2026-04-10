@@ -1,4 +1,4 @@
-# Dark Mode Fix Plan - ServiceTsunami Internal Dashboard
+# Dark Mode Fix Plan - AgentProvision Internal Dashboard
 
 ## Context
 
