@@ -275,7 +275,59 @@ impl MemoryCore for MyMemoryCore {
         }))
     }
 
-    async fn record_observation(&self, _request: Request<RecordObservationRequest>) -> Result<Response<()>, Status> {
+    async fn record_observation(&self, request: Request<RecordObservationRequest>) -> Result<Response<()>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Uuid::parse_str(&req.tenant_id)
+            .map_err(|_| Status::invalid_argument("Invalid tenant_id"))?;
+        let entity_id = Uuid::parse_str(&req.entity_id)
+            .map_err(|_| Status::invalid_argument("Invalid entity_id"))?;
+
+        // Embed the observation text
+        let embedding = self.get_embedding(&req.content, "search_document").await?;
+        let embedding_str = format!(
+            "[{}]",
+            embedding.iter().map(|v| v.to_string()).collect::<Vec<String>>().join(",")
+        );
+
+        let obs_id = Uuid::new_v4();
+        let source_type = if req.source_type.is_empty() { "agent".to_string() } else { req.source_type.clone() };
+
+        // INSERT into knowledge_observations
+        sqlx::query(
+            r#"
+            INSERT INTO knowledge_observations
+                (id, tenant_id, entity_id, observation_text, observation_type, source_type, confidence, embedding, created_at)
+            VALUES ($1, $2, $3, $4, 'fact', $5, $6, $7::vector, NOW())
+            "#
+        )
+        .bind(obs_id)
+        .bind(tenant_id)
+        .bind(entity_id)
+        .bind(&req.content)
+        .bind(&source_type)
+        .bind(req.confidence)
+        .bind(&embedding_str)
+        .execute(&self.pool).await
+        .map_err(|e| Status::internal(format!("DB error inserting observation: {}", e)))?;
+
+        // INSERT audit trail into memory_activities
+        sqlx::query(
+            r#"
+            INSERT INTO memory_activities
+                (id, tenant_id, event_type, description, source, entity_id, created_at)
+            VALUES ($1, $2, 'observation_created', $3, $4, $5, NOW())
+            "#
+        )
+        .bind(Uuid::new_v4())
+        .bind(tenant_id)
+        .bind(format!("Observation recorded for entity {}", entity_id))
+        .bind(&req.actor_slug)
+        .bind(entity_id)
+        .execute(&self.pool).await
+        .map_err(|e| Status::internal(format!("DB error inserting memory_activity: {}", e)))?;
+
+        println!("RecordObservation: tenant={} entity={} obs_id={}", tenant_id, entity_id, obs_id);
+
         Ok(Response::new(()))
     }
 
