@@ -382,8 +382,64 @@ impl MemoryCore for MyMemoryCore {
         Ok(Response::new(()))
     }
 
-    async fn ingest_events(&self, _request: Request<IngestRequest>) -> Result<Response<IngestResponse>, Status> {
-        Ok(Response::new(IngestResponse { processed: 0 }))
+    async fn ingest_events(&self, request: Request<IngestRequest>) -> Result<Response<IngestResponse>, Status> {
+        let req = request.into_inner();
+        let tenant_id = Uuid::parse_str(&req.tenant_id)
+            .map_err(|_| Status::invalid_argument("Invalid tenant_id"))?;
+
+        let mut processed: i32 = 0;
+
+        for event in &req.events {
+            for entity_name in &event.proposed_entities {
+                if entity_name.trim().is_empty() {
+                    continue;
+                }
+
+                // Check if entity already exists for this tenant
+                let existing = sqlx::query(
+                    r#"
+                    SELECT id FROM knowledge_entities
+                    WHERE tenant_id = $1 AND name = $2 AND deleted_at IS NULL
+                    LIMIT 1
+                    "#
+                )
+                .bind(tenant_id)
+                .bind(entity_name)
+                .fetch_optional(&self.pool).await
+                .map_err(|e| Status::internal(format!("DB error checking entity: {}", e)))?;
+
+                if let Some(row) = existing {
+                    // Update the existing entity's updated_at
+                    let entity_id: Uuid = row.get("id");
+                    sqlx::query(
+                        r#"UPDATE knowledge_entities SET updated_at = NOW() WHERE id = $1"#
+                    )
+                    .bind(entity_id)
+                    .execute(&self.pool).await
+                    .map_err(|e| Status::internal(format!("DB error updating entity: {}", e)))?;
+                } else {
+                    // Insert new entity
+                    sqlx::query(
+                        r#"
+                        INSERT INTO knowledge_entities
+                            (id, tenant_id, name, entity_type, category, confidence, created_at, updated_at)
+                        VALUES ($1, $2, $3, 'unknown', 'unknown', 0.5, NOW(), NOW())
+                        "#
+                    )
+                    .bind(Uuid::new_v4())
+                    .bind(tenant_id)
+                    .bind(entity_name)
+                    .execute(&self.pool).await
+                    .map_err(|e| Status::internal(format!("DB error inserting entity: {}", e)))?;
+                }
+
+                processed += 1;
+            }
+        }
+
+        println!("IngestEvents: tenant={} processed={} entities", tenant_id, processed);
+
+        Ok(Response::new(IngestResponse { processed }))
     }
 }
 
