@@ -1,0 +1,91 @@
+# AgentProvision Embedding Service - Rust/Candle gRPC Backend
+nameOverride: "embedding-service"
+fullnameOverride: "embedding-service"
+
+image:
+  repository: agentprovision-embedding-service
+  tag: latest
+  pullPolicy: Never # Using local image
+
+replicaCount: 1
+
+container:
+  port: 50051
+
+# Pod security
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false # Needs write for HF cache if not persistent
+  capabilities:
+    drop:
+      - ALL
+
+# Resource allocation
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Health checks - gRPC health probes via tonic-health
+livenessProbe:
+  enabled: true
+  grpc:
+    port: 50051
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  grpc:
+    port: 50051
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 50051
+  targetPort: 50051
+
+# ConfigMap with non-sensitive configuration
+configMap:
+  enabled: true
+  data:
+    RUST_LOG: "info"
+
+# Persistent storage for HF models
+persistence:
+  enabled: true
+  storageClass: hostpath
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  mountPath: /root/.cache/huggingface
+
+# Disable Cloud SQL Proxy
+extraContainers: []
+
+# Disable GKE specifics
+externalSecret:
+  enabled: false
+backendConfig:
+  enabled: false
+healthCheckPolicy:
+  enabled: false
+ingress:
+  enabled: false
+managedCertificate:
+  enabled: false
