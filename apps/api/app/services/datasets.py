@@ -24,55 +24,6 @@ logger = get_logger(__name__)
 STORAGE_ROOT = Path(settings.DATA_STORAGE_PATH)
 
 
-def _trigger_databricks_sync(db: Session, dataset: Dataset, tenant_id: uuid.UUID) -> None:
-    """
-    Trigger Databricks sync workflow for a dataset.
-
-    This is a non-blocking operation that starts an async workflow.
-    If workflow start fails, the dataset upload still succeeds but the error is logged.
-
-    Args:
-        db: Database session
-        dataset: Dataset to sync
-        tenant_id: Tenant UUID for isolation
-    """
-    if not settings.DATABRICKS_AUTO_SYNC:
-        return
-
-    logger.info(f"Triggering Databricks sync for dataset {dataset.id}")
-
-    # Initialize metadata
-    if not dataset.metadata_:
-        dataset.metadata_ = {}
-
-    dataset.metadata_.update({
-        "databricks_enabled": True,
-        "sync_status": "pending",
-        "last_sync_attempt": None
-    })
-    db.commit()
-
-    # Start dynamic workflow (async, non-blocking)
-    try:
-        from app.services.dynamic_workflow_launcher import start_dynamic_workflow_by_name
-
-        asyncio.create_task(
-            start_dynamic_workflow_by_name(
-                "Dataset Sync (Bronze/Silver)", str(tenant_id),
-                input_data={"dataset_id": str(dataset.id)},
-            )
-        )
-
-        logger.info(f"Dataset sync dynamic workflow started for dataset {dataset.id}")
-
-    except Exception as e:
-        # Don't fail dataset upload if workflow start fails
-        logger.error(f"Failed to start dataset sync workflow: {e}")
-        dataset.metadata_["sync_status"] = "failed"
-        dataset.metadata_["last_sync_error"] = str(e)
-        db.commit()
-
-
 def _ensure_storage_root() -> Path:
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     return STORAGE_ROOT
@@ -303,8 +254,7 @@ def ingest_tabular(
         file_name=file.filename,
     )
 
-    # Trigger Databricks sync workflow if enabled
-    _trigger_databricks_sync(db, dataset, tenant_id)
+    # Trigger PostgreSQL sync workflow if enabled
 
     return dataset
 
@@ -335,8 +285,7 @@ def ingest_records(
         file_name=None,
     )
 
-    # Trigger Databricks sync workflow if enabled
-    _trigger_databricks_sync(db, dataset, tenant_id)
+    # Trigger PostgreSQL sync workflow if enabled
 
     return dataset
 

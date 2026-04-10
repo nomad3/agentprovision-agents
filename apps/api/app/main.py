@@ -113,8 +113,12 @@ async def startup_skill_manager():
 @app.on_event("startup")
 async def startup_whatsapp():
     """Reconnect all enabled WhatsApp channel_accounts on startup."""
-    from app.services.whatsapp_service import whatsapp_service
-    await whatsapp_service.restore_connections()
+    try:
+        from app.services.whatsapp_service import whatsapp_service
+        await whatsapp_service.restore_connections()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("WhatsApp startup skipped (neonize unavailable): %s", e)
 
 
 @app.on_event("startup")
@@ -183,5 +187,8 @@ async def startup_proactive_workflows():
 @app.on_event("shutdown")
 async def shutdown_whatsapp():
     """Gracefully disconnect all neonize clients."""
-    from app.services.whatsapp_service import whatsapp_service
-    await whatsapp_service.shutdown()
+    try:
+        from app.services.whatsapp_service import whatsapp_service
+        await whatsapp_service.shutdown()
+    except Exception:
+        pass
