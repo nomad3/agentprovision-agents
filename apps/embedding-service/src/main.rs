@@ -1,4 +1,5 @@
 use tonic::{transport::Server, Request, Response, Status};
+use tonic_health::server::health_reporter;
 use embedding::v1::embedding_service_server::{EmbeddingService, EmbeddingServiceServer};
 use embedding::v1::{EmbedRequest, EmbedResponse, EmbedBatchRequest, EmbedBatchResponse, HealthResponse};
 use std::time::Instant;
@@ -152,10 +153,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = Model::load()?;
     let service = MyEmbeddingService::new(model);
 
+    let (mut health_reporter, health_service) = health_reporter();
+    health_reporter
+        .set_serving::<EmbeddingServiceServer<MyEmbeddingService>>()
+        .await;
+
     let addr = "0.0.0.0:50051".parse()?;
     println!("EmbeddingService listening on {}", addr);
 
     Server::builder()
+        .add_service(health_service)
         .add_service(EmbeddingServiceServer::new(service))
         .serve(addr)
         .await?;
