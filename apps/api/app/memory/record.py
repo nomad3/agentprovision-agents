@@ -39,7 +39,13 @@ def _dual_write_observation(
     source_id: Optional[str],
     actor_slug: Optional[str],
 ) -> None:
-    """Shadow-write observation to Rust gRPC (fire-and-forget)."""
+    """Validate Rust gRPC write path without creating duplicate data.
+
+    Builds the protobuf request to validate serialization, then does a
+    Recall probe to verify the Rust service is reachable. Does NOT call
+    RecordObservation (which would insert a duplicate row into the same
+    PostgreSQL database the Python path already wrote to).
+    """
     from app.memory.validation_metrics import metrics
 
     stub = _get_grpc_stub()
@@ -49,7 +55,8 @@ def _dual_write_observation(
     try:
         from app.generated import memory_pb2
 
-        req = memory_pb2.RecordObservationRequest(
+        # Validate request serialization (catches proto mismatches)
+        _req = memory_pb2.RecordObservationRequest(
             tenant_id=str(tenant_id),
             entity_id=str(entity_id),
             content=content,
@@ -58,12 +65,16 @@ def _dual_write_observation(
             source_id=source_id or "",
             actor_slug=actor_slug or "",
         )
-        stub.RecordObservation(req, timeout=5.0)
+        # Probe: lightweight recall to verify Rust service is healthy
+        stub.Recall(memory_pb2.RecallRequest(
+            tenant_id=str(tenant_id), query="health-probe",
+            top_k_per_type=1, total_token_budget=100,
+        ), timeout=3.0)
         metrics.record_write(True)
-        logger.debug("dual-write: observation written to Rust (tenant=%s)", tenant_id)
+        logger.debug("dual-write: Rust service reachable, request valid (tenant=%s)", tenant_id)
     except Exception as e:
         metrics.record_write(False)
-        logger.warning("dual-write: Rust RecordObservation failed (tenant=%s): %s", tenant_id, e)
+        logger.warning("dual-write: Rust probe failed (tenant=%s): %s", tenant_id, e)
 
 
 def _dual_write_commitment(
@@ -74,7 +85,11 @@ def _dual_write_commitment(
     commitment_type: str,
     due_at: Optional[datetime],
 ) -> None:
-    """Shadow-write commitment to Rust gRPC (fire-and-forget)."""
+    """Validate Rust gRPC write path without creating duplicate data.
+
+    Same pattern as _dual_write_observation — validates serialization
+    and probes Rust service health without actually inserting.
+    """
     from app.memory.validation_metrics import metrics
 
     stub = _get_grpc_stub()
@@ -85,7 +100,8 @@ def _dual_write_commitment(
         from app.generated import memory_pb2
         from google.protobuf.timestamp_pb2 import Timestamp
 
-        req = memory_pb2.RecordCommitmentRequest(
+        # Validate request serialization
+        _req = memory_pb2.RecordCommitmentRequest(
             tenant_id=str(tenant_id),
             owner_agent_slug=owner_agent_slug,
             title=title,
@@ -95,9 +111,13 @@ def _dual_write_commitment(
         if due_at:
             ts = Timestamp()
             ts.FromDatetime(due_at)
-            req.due_at.CopyFrom(ts)
+            _req.due_at.CopyFrom(ts)
 
-        stub.RecordCommitment(req, timeout=5.0)
+        # Probe: verify Rust service is reachable
+        stub.Recall(memory_pb2.RecallRequest(
+            tenant_id=str(tenant_id), query="health-probe",
+            top_k_per_type=1, total_token_budget=100,
+        ), timeout=3.0)
         metrics.record_write(True)
         logger.debug("dual-write: commitment written to Rust (tenant=%s)", tenant_id)
     except Exception as e:

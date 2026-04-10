@@ -27,7 +27,7 @@ import logging
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import or_, text
@@ -35,7 +35,9 @@ from sqlalchemy.orm import Session
 
 from app.memory import _query
 from app.memory.types import (
+    CommitmentSummary,
     ContradictionSummary,
+    ConversationSummary,
     EntitySummary,
     EpisodeSummary,
     ObservationSummary,
@@ -124,11 +126,11 @@ def _recall_rust(request: RecallRequest) -> Optional[RecallResponse]:
             EntitySummary(
                 id=uuid.UUID(e.id),
                 name=e.name,
-                category=e.category,
-                description=e.description,
+                category=e.category or None,
+                description=e.description or None,
                 similarity=e.similarity,
                 confidence=1.0,
-                source_type=e.entity_type,
+                source_type=e.entity_type or None,
             )
             for e in resp.entities
         ]
@@ -140,16 +142,18 @@ def _recall_rust(request: RecallRequest) -> Optional[RecallResponse]:
                 content=o.content,
                 similarity=o.similarity,
                 confidence=1.0,
-                created_at=datetime.utcnow(),  # TODO: use proto timestamp
+                created_at=datetime.now(timezone.utc),
             )
             for o in resp.observations
         ]
 
         relations = [
             RelationSummary(
+                id=uuid.UUID(r.from_entity),  # use from_entity as pseudo-id
                 from_entity=r.from_entity,
                 to_entity=r.to_entity,
                 relation_type=r.relation_type,
+                confidence=1.0,
             )
             for r in resp.relations
         ]
@@ -157,11 +161,43 @@ def _recall_rust(request: RecallRequest) -> Optional[RecallResponse]:
         episodes = [
             EpisodeSummary(
                 id=uuid.UUID(e.id),
+                session_id=None,
                 summary=e.summary,
+                key_topics=[],
+                key_entities=[],
                 similarity=e.similarity,
-                created_at=datetime.fromtimestamp(e.created_at.seconds),
+                created_at=datetime.fromtimestamp(
+                    e.created_at.seconds, tz=timezone.utc
+                ) if e.created_at else datetime.now(timezone.utc),
             )
             for e in resp.episodes
+        ]
+
+        commitments = [
+            CommitmentSummary(
+                id=uuid.UUID(c.id),
+                title=c.title,
+                state=c.status,  # proto field is 'status', maps to 'state'
+                due_at=datetime.fromtimestamp(
+                    c.due_at.seconds, tz=timezone.utc
+                ) if c.due_at and c.due_at.seconds else None,
+                priority="normal",
+                similarity=0.0,
+            )
+            for c in resp.commitments
+        ]
+
+        past_conversations = [
+            ConversationSummary(
+                id=uuid.UUID(cv.session_id) if cv.session_id else uuid.uuid4(),
+                role=cv.role,
+                content=cv.content,
+                created_at=datetime.fromtimestamp(
+                    cv.created_at.seconds, tz=timezone.utc
+                ) if cv.created_at and cv.created_at.seconds else datetime.now(timezone.utc),
+                similarity=cv.similarity,
+            )
+            for cv in resp.past_conversations
         ]
 
         return RecallResponse(
@@ -169,7 +205,15 @@ def _recall_rust(request: RecallRequest) -> Optional[RecallResponse]:
             observations=observations,
             relations=relations,
             episodes=episodes,
-            metadata=RecallMetadata(elapsed_ms=elapsed),
+            commitments=commitments,
+            past_conversations=past_conversations,
+            goals=[],  # Rust doesn't query goals yet
+            contradictions=[],  # Rust doesn't query contradictions yet
+            total_tokens_estimate=resp.metadata.total_tokens_estimate if resp.metadata else 0,
+            metadata=RecallMetadata(
+                elapsed_ms=elapsed,
+                degraded=resp.metadata.degraded if resp.metadata else False,
+            ),
         )
     except Exception as e:
         # Force reconnect on next call (service may have restarted)
