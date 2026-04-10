@@ -178,18 +178,18 @@ impl MemoryCore for MyMemoryCore {
             similarity: r.get::<f64, _>("similarity") as f32,
         }).collect();
 
-        // 6. Search commitments (active/pending, not completed)
+        // 6. Search commitments (open/in_progress, not fulfilled/broken/cancelled)
         let commitment_rows = sqlx::query(
             r#"
             SELECT
                 id::text as id,
                 title,
                 commitment_type,
-                status,
+                state,
                 due_at,
                 owner_agent_slug
             FROM commitment_records
-            WHERE tenant_id = $1 AND status != 'completed'
+            WHERE tenant_id = $1 AND state NOT IN ('fulfilled', 'broken', 'cancelled')
             ORDER BY due_at ASC NULLS LAST
             LIMIT $2
             "#
@@ -205,7 +205,7 @@ impl MemoryCore for MyMemoryCore {
                 id: r.get("id"),
                 title: r.get("title"),
                 commitment_type: r.get("commitment_type"),
-                status: r.get("status"),
+                status: r.get("state"),
                 due_at: due_at.map(|dt| prost_types::Timestamp {
                     seconds: dt.timestamp(),
                     nanos: dt.timestamp_subsec_nanos() as i32,
@@ -349,8 +349,8 @@ impl MemoryCore for MyMemoryCore {
         sqlx::query(
             r#"
             INSERT INTO commitment_records
-                (id, tenant_id, owner_agent_slug, title, description, commitment_type, status, due_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, NOW())
+                (id, tenant_id, owner_agent_slug, title, description, commitment_type, state, due_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, NOW())
             "#
         )
         .bind(commitment_id)

@@ -21,8 +21,8 @@ openai
 pytest
 pytest-asyncio
 asyncpg
-databricks-sql-connector
-snowflake-connector-python
+# postgres-sql-connector (Removed - PostgreSQL no longer used)
+# snowflake-connector-python (Removed in migration to PostgreSQL)
 pyyaml
 cryptography
 websockets
@@ -32,6 +32,6 @@ pdfplumber>=0.10.0
 pgvector>=0.3.6
 sentence-transformers>=3.0.0
 einops
-protobuf>=5.26.1
-grpcio>=1.62.0
-grpcio-tools>=1.62.0
+protobuf>=6.30.0
+grpcio>=1.80.0
+grpcio-tools>=1.80.0
