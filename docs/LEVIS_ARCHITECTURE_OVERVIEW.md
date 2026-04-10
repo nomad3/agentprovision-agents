@@ -1,4 +1,4 @@
-# ServiceTsunami: Enterprise Agentic Orchestration Architecture
+# AgentProvision: Enterprise Agentic Orchestration Architecture
 
 **Date:** 2026-04-09
 **Subject:** Technical Architecture & Protocol Guarantees
@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary
 
-ServiceTsunami is a **memory-first, workflow-orchestrated agent platform** designed for enterprise data sovereignty. Unlike standard chatbot wrappers, it treats memory and durable execution as first-class architectural pillars, enabling multi-agent teams to collaborate on long-horizon tasks with full auditability and cross-turn continuity.
+AgentProvision is a **memory-first, workflow-orchestrated agent platform** designed for enterprise data sovereignty. Unlike standard chatbot wrappers, it treats memory and durable execution as first-class architectural pillars, enabling multi-agent teams to collaborate on long-horizon tasks with full auditability and cross-turn continuity.
 
 ---
 
@@ -73,7 +73,7 @@ The platform uses a **Reward-Weighted Experience Store (RWES)** to optimize rout
 
 ## 3. Agent-to-Agent (A2A) Protocol Guarantees
 
-ServiceTsunami solves the "context loss" and "handoff reliability" problems common in multi-agent systems through a formal orchestration protocol.
+AgentProvision solves the "context loss" and "handoff reliability" problems common in multi-agent systems through a formal orchestration protocol.
 
 ### 3.1. Shared Blackboard Architecture
 Handoffs are not just "message passing." We use a **Shared Blackboard** model where multiple agents read from and write to a common state-space.
