@@ -11,52 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 @activity.defn
-async def extract_knowledge(
-    tenant_id: str,
-    chat_session_id: str,
-    user_message_id: str,
-    assistant_message_id: str,
-) -> dict:
-    """Extract entities and observations from chat history."""
-    from uuid import UUID
-    from app.db.session import SessionLocal
-    from app.models.chat import ChatMessage
-    from app.services.knowledge_extraction import KnowledgeExtractionService
-
-    db = SessionLocal()
-    try:
-        user_msg = db.get(ChatMessage, UUID(user_message_id))
-        asst_msg = db.get(ChatMessage, UUID(assistant_message_id))
-        if not user_msg or not asst_msg:
-            logger.warning("Messages not found for extraction: %s, %s", user_message_id, assistant_message_id)
-            return {"extracted": 0, "skipped": "messages not found"}
-
-        content = f"User: {user_msg.content}\n\nAssistant: {asst_msg.content}"
-        svc = KnowledgeExtractionService()
-        result = svc.extract_from_content(
-            db,
-            tenant_id=UUID(tenant_id),
-            content=content,
-            content_type='chat_transcript',
-            activity_source='chat',
-        )
-        db.commit()
-        
-        entities = result.get("entities", [])
-        observations = result.get("observations", [])
-        return {
-            "entities_extracted": len(entities),
-            "observations_extracted": len(observations),
-        }
-    except Exception as e:
-        logger.exception("extract_knowledge activity failed")
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-@activity.defn
 async def detect_commitment(
     tenant_id: str,
     chat_session_id: str,
@@ -85,7 +39,22 @@ async def detect_commitment(
             if not cls.is_commitment:
                 continue
             
-            owner = "luna" if msg.role == "assistant" else "user"
+            # Resolve owner: check metadata for agent_slug (important for coalitions)
+            owner = "user"
+            if msg.role == "assistant":
+                # Default to tenant branding or luna
+                owner = "luna"
+                try:
+                    from app.models.tenant_branding import TenantBranding
+                    branding = db.query(TenantBranding).filter(TenantBranding.tenant_id == UUID(tenant_id)).first()
+                    if branding and branding.ai_assistant_name and branding.ai_assistant_name != "AI Assistant":
+                        owner = branding.ai_assistant_name.lower().replace(" ", "-")
+                except Exception:
+                    pass
+                
+                if msg.context and isinstance(msg.context, dict):
+                    owner = msg.context.get("agent_slug") or owner
+
             c = record_commitment(
                 db, 
                 tenant_id=UUID(tenant_id),
@@ -117,10 +86,54 @@ async def update_world_state(
 ) -> dict:
     """Sync world state based on new observations.
     
-    NOTE: In Phase 1, automated world state projection from observations is
-    not yet active. This activity exists as a hook for Phase 2 reconciliation.
+    Uses ingest_events to merge any extracted observations from this turn
+    into the long-term memory graph.
     """
-    return {"updated": 0, "disputes": 0, "novel": 0, "status": "no-op in phase 1"}
+    from uuid import UUID
+    from app.db.session import SessionLocal
+    from app.models.chat import ChatMessage
+    from app.services.knowledge_extraction import KnowledgeExtractionService
+    from app.memory.ingest import ingest_events, MemoryEvent
+
+    db = SessionLocal()
+    try:
+        user_msg = db.get(ChatMessage, UUID(user_message_id))
+        asst_msg = db.get(ChatMessage, UUID(assistant_message_id))
+        if not user_msg or not asst_msg:
+            return {"updated": 0, "skipped": "messages not found"}
+
+        # Extract (re-run or use cached results if we had an extraction activity)
+        # For Phase 1 reliability, we re-extract to ensure we have the objects.
+        content = f"User: {user_msg.content}\n\nAssistant: {asst_msg.content}"
+        svc = KnowledgeExtractionService()
+        raw_result = svc.extract_from_content(
+            db,
+            tenant_id=UUID(tenant_id),
+            content=content,
+            content_type='chat_transcript',
+            activity_source='chat',
+        )
+        
+        # Convert raw extraction to MemoryEvents for ingest
+        event = MemoryEvent(
+            source_type="chat",
+            source_id=user_message_id,
+            proposed_entities=raw_result.get("entities", []),
+            proposed_observations=raw_result.get("observations", []),
+            proposed_relations=[],
+            proposed_commitments=[],
+            confidence=0.9
+        )
+        
+        ingest_result = ingest_events(db, UUID(tenant_id), [event], workflow_id=activity.info().workflow_id)
+        
+        return {
+            "entities_created": ingest_result.entities_created,
+            "observations_created": ingest_result.observations_created,
+            "status": "ingested"
+        }
+    finally:
+        db.close()
 
 
 @activity.defn

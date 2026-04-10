@@ -11,6 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.models.chat import ChatSession as ChatSessionModel, ChatMessage
 from app.services import agent_kits as agent_kit_service
 from app.services import datasets as dataset_service
+from app.services.agent_router import _resolve_primary_agent_slug
 from app.services.embedding_service import embed_and_store as _embed
 
 logger = logging.getLogger(__name__)
@@ -273,6 +274,7 @@ def _generate_agentic_response(
 
     # Derive agent_slug from session's agent kit config or skill lookup
     agent_slug = None
+    primary_slug = _resolve_primary_agent_slug(db, session.tenant_id)
     if session.agent_kit:
         kit_config = session.agent_kit.config or {}
         # Check if kit config specifies a skill slug directly
@@ -284,6 +286,9 @@ def _generate_agentic_response(
                 if skill.slug == kit_name_lower or kit_name_lower.startswith(skill.slug):
                     agent_slug = skill.slug
                     break
+    
+    if not agent_slug:
+        agent_slug = primary_slug
 
     # Strategy: fit as many recent messages as possible into a 65KB budget
     recent_msgs = (
@@ -414,7 +419,7 @@ def _generate_agentic_response(
             step_type="chat_response",
             step_order=0,
             details={
-                "agent_slug": agent_slug or "luna",
+                "agent_slug": agent_slug or primary_slug,
                 "platform": meta.get("platform", "unknown"),
                 "channel": "whatsapp" if sender_phone else "web",
                 "user_message": user_message[:500],

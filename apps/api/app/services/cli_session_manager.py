@@ -15,6 +15,7 @@ from app.models.mcp_server_connector import MCPServerConnector
 from app.services.memory_recall import build_memory_context_with_git
 from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 from app.services.skill_manager import skill_manager
+from app.services.agent_router import _resolve_primary_agent_slug
 from app.services.tool_groups import TIER_LIMITS, TIER_MODEL_MAP, format_allowed_tools, resolve_tool_names
 
 logger = logging.getLogger(__name__)
@@ -499,14 +500,15 @@ def run_agent_session(
         metadata["error"] = err
         return None, metadata
 
+    primary_slug = _resolve_primary_agent_slug(db, tenant_id)
     skill = skill_manager.get_skill_by_slug(agent_slug, str(tenant_id))
-    if not skill and agent_slug != "luna":
-        logger.info("Skill '%s' not found, falling back to 'luna'", agent_slug)
-        skill = skill_manager.get_skill_by_slug("luna", str(tenant_id))
+    if not skill and agent_slug != primary_slug:
+        logger.info("Skill '%s' not found, falling back to primary '%s'", agent_slug, primary_slug)
+        skill = skill_manager.get_skill_by_slug(primary_slug, str(tenant_id))
         if skill:
-            agent_slug = "luna"
+            agent_slug = primary_slug
     if not skill:
-        err = f"No agent skill found (tried '{agent_slug}' and 'luna')"
+        err = f"No agent skill found (tried '{agent_slug}' and '{primary_slug}')"
         logger.error(err)
         metadata["error"] = err
         return None, metadata
