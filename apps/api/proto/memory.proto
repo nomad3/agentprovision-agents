@@ -50,11 +50,55 @@ message EpisodeSummary {
   float similarity = 4;
 }
 
+message CommitmentSummary {
+  string id = 1;
+  string title = 2;
+  string commitment_type = 3;
+  string status = 4;
+  google.protobuf.Timestamp due_at = 5;
+  string owner_agent_slug = 6;
+}
+
+message GoalSummary {
+  string id = 1;
+  string title = 2;
+  string status = 3;
+  string owner_agent_slug = 4;
+}
+
+message ConversationSnippet {
+  string session_id = 1;
+  string content = 2;
+  string role = 3;
+  google.protobuf.Timestamp created_at = 4;
+  float similarity = 5;
+}
+
+message ContradictionSummary {
+  string assertion_id = 1;
+  string claim = 2;
+  string counter_claim = 3;
+  string source_a = 4;
+  string source_b = 5;
+}
+
+message RecallMetadata {
+  int32 query_time_ms = 1;
+  int32 total_tokens_estimate = 2;
+  bool degraded = 3;
+  string degradation_reason = 4;
+}
+
 message RecallResponse {
   repeated Entity entities = 1;
   repeated Observation observations = 2;
   repeated Relation relations = 3;
   repeated EpisodeSummary episodes = 4;
+  repeated CommitmentSummary commitments = 5;
+  repeated GoalSummary goals = 6;
+  repeated ConversationSnippet past_conversations = 7;
+  repeated ContradictionSummary contradictions = 8;
+  RecallMetadata metadata = 9;
 }
 
 message RecordObservationRequest {

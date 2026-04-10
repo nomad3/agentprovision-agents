@@ -26,7 +26,7 @@ from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__
 from google.protobuf import empty_pb2 as google_dot_protobuf_dot_empty__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cmemory.proto\x12\tmemory.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\"\xa3\x01\n\rRecallRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x12\n\nagent_slug\x18\x02 \x01(\t\x12\r\n\x05query\x18\x03 \x01(\t\x12\x0f\n\x07user_id\x18\x04 \x01(\t\x12\x17\n\x0f\x63hat_session_id\x18\x05 \x01(\t\x12\x16\n\x0etop_k_per_type\x18\x06 \x01(\x05\x12\x1a\n\x12total_token_budget\x18\x07 \x01(\x05\"r\n\x06\x45ntity\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x13\n\x0b\x65ntity_type\x18\x03 \x01(\t\x12\x10\n\x08\x63\x61tegory\x18\x04 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x05 \x01(\t\x12\x12\n\nsimilarity\x18\x06 \x01(\x02\"Q\n\x0bObservation\x12\n\n\x02id\x18\x01 \x01(\t\x12\x11\n\tentity_id\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x12\n\nsimilarity\x18\x04 \x01(\x02\"I\n\x08Relation\x12\x13\n\x0b\x66rom_entity\x18\x01 \x01(\t\x12\x11\n\tto_entity\x18\x02 \x01(\t\x12\x15\n\rrelation_type\x18\x03 \x01(\t\"q\n\x0e\x45pisodeSummary\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12.\n\ncreated_at\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nsimilarity\x18\x04 \x01(\x02\"\xb8\x01\n\x0eRecallResponse\x12#\n\x08\x65ntities\x18\x01 \x03(\x0b\x32\x11.memory.v1.Entity\x12,\n\x0cobservations\x18\x02 \x03(\x0b\x32\x16.memory.v1.Observation\x12&\n\trelations\x18\x03 \x03(\x0b\x32\x13.memory.v1.Relation\x12+\n\x08\x65pisodes\x18\x04 \x03(\x0b\x32\x19.memory.v1.EpisodeSummary\"\xa1\x01\n\x18RecordObservationRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x11\n\tentity_id\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x12\n\nconfidence\x18\x04 \x01(\x02\x12\x13\n\x0bsource_type\x18\x05 \x01(\t\x12\x11\n\tsource_id\x18\x06 \x01(\t\x12\x12\n\nactor_slug\x18\x07 \x01(\t\"\xaf\x01\n\x17RecordCommitmentRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x18\n\x10owner_agent_slug\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\x17\n\x0f\x63ommitment_type\x18\x05 \x01(\t\x12*\n\x06\x64ue_at\x18\x06 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"d\n\x0bMemoryEvent\x12\x13\n\x0bsource_type\x18\x01 \x01(\t\x12\x11\n\tsource_id\x18\x02 \x01(\t\x12\x19\n\x11proposed_entities\x18\x03 \x03(\t\x12\x12\n\nactor_slug\x18\x04 \x01(\t\"J\n\rIngestRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12&\n\x06\x65vents\x18\x02 \x03(\x0b\x32\x16.memory.v1.MemoryEvent\"#\n\x0eIngestResponse\x12\x11\n\tprocessed\x18\x01 \x01(\x05\x32\xb2\x02\n\nMemoryCore\x12=\n\x06Recall\x12\x18.memory.v1.RecallRequest\x1a\x19.memory.v1.RecallResponse\x12P\n\x11RecordObservation\x12#.memory.v1.RecordObservationRequest\x1a\x16.google.protobuf.Empty\x12N\n\x10RecordCommitment\x12\".memory.v1.RecordCommitmentRequest\x1a\x16.google.protobuf.Empty\x12\x43\n\x0cIngestEvents\x12\x18.memory.v1.IngestRequest\x1a\x19.memory.v1.IngestResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cmemory.proto\x12\tmemory.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\"\xa3\x01\n\rRecallRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x12\n\nagent_slug\x18\x02 \x01(\t\x12\r\n\x05query\x18\x03 \x01(\t\x12\x0f\n\x07user_id\x18\x04 \x01(\t\x12\x17\n\x0f\x63hat_session_id\x18\x05 \x01(\t\x12\x16\n\x0etop_k_per_type\x18\x06 \x01(\x05\x12\x1a\n\x12total_token_budget\x18\x07 \x01(\x05\"r\n\x06\x45ntity\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x13\n\x0b\x65ntity_type\x18\x03 \x01(\t\x12\x10\n\x08\x63\x61tegory\x18\x04 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x05 \x01(\t\x12\x12\n\nsimilarity\x18\x06 \x01(\x02\"Q\n\x0bObservation\x12\n\n\x02id\x18\x01 \x01(\t\x12\x11\n\tentity_id\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x12\n\nsimilarity\x18\x04 \x01(\x02\"I\n\x08Relation\x12\x13\n\x0b\x66rom_entity\x18\x01 \x01(\t\x12\x11\n\tto_entity\x18\x02 \x01(\t\x12\x15\n\rrelation_type\x18\x03 \x01(\t\"q\n\x0e\x45pisodeSummary\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07summary\x18\x02 \x01(\t\x12.\n\ncreated_at\x18\x03 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nsimilarity\x18\x04 \x01(\x02\"\x9d\x01\n\x11\x43ommitmentSummary\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x17\n\x0f\x63ommitment_type\x18\x03 \x01(\t\x12\x0e\n\x06status\x18\x04 \x01(\t\x12*\n\x06\x64ue_at\x18\x05 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x18\n\x10owner_agent_slug\x18\x06 \x01(\t\"R\n\x0bGoalSummary\x12\n\n\x02id\x18\x01 \x01(\t\x12\r\n\x05title\x18\x02 \x01(\t\x12\x0e\n\x06status\x18\x03 \x01(\t\x12\x18\n\x10owner_agent_slug\x18\x04 \x01(\t\"\x8c\x01\n\x13\x43onversationSnippet\x12\x12\n\nsession_id\x18\x01 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x02 \x01(\t\x12\x0c\n\x04role\x18\x03 \x01(\t\x12.\n\ncreated_at\x18\x04 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12\x12\n\nsimilarity\x18\x05 \x01(\x02\"v\n\x14\x43ontradictionSummary\x12\x14\n\x0c\x61ssertion_id\x18\x01 \x01(\t\x12\r\n\x05\x63laim\x18\x02 \x01(\t\x12\x15\n\rcounter_claim\x18\x03 \x01(\t\x12\x10\n\x08source_a\x18\x04 \x01(\t\x12\x10\n\x08source_b\x18\x05 \x01(\t\"t\n\x0eRecallMetadata\x12\x15\n\rquery_time_ms\x18\x01 \x01(\x05\x12\x1d\n\x15total_tokens_estimate\x18\x02 \x01(\x05\x12\x10\n\x08\x64\x65graded\x18\x03 \x01(\x08\x12\x1a\n\x12\x64\x65gradation_reason\x18\x04 \x01(\t\"\xb4\x03\n\x0eRecallResponse\x12#\n\x08\x65ntities\x18\x01 \x03(\x0b\x32\x11.memory.v1.Entity\x12,\n\x0cobservations\x18\x02 \x03(\x0b\x32\x16.memory.v1.Observation\x12&\n\trelations\x18\x03 \x03(\x0b\x32\x13.memory.v1.Relation\x12+\n\x08\x65pisodes\x18\x04 \x03(\x0b\x32\x19.memory.v1.EpisodeSummary\x12\x31\n\x0b\x63ommitments\x18\x05 \x03(\x0b\x32\x1c.memory.v1.CommitmentSummary\x12%\n\x05goals\x18\x06 \x03(\x0b\x32\x16.memory.v1.GoalSummary\x12:\n\x12past_conversations\x18\x07 \x03(\x0b\x32\x1e.memory.v1.ConversationSnippet\x12\x37\n\x0e\x63ontradictions\x18\x08 \x03(\x0b\x32\x1f.memory.v1.ContradictionSummary\x12+\n\x08metadata\x18\t \x01(\x0b\x32\x19.memory.v1.RecallMetadata\"\xa1\x01\n\x18RecordObservationRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x11\n\tentity_id\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontent\x18\x03 \x01(\t\x12\x12\n\nconfidence\x18\x04 \x01(\x02\x12\x13\n\x0bsource_type\x18\x05 \x01(\t\x12\x11\n\tsource_id\x18\x06 \x01(\t\x12\x12\n\nactor_slug\x18\x07 \x01(\t\"\xaf\x01\n\x17RecordCommitmentRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x18\n\x10owner_agent_slug\x18\x02 \x01(\t\x12\r\n\x05title\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\x17\n\x0f\x63ommitment_type\x18\x05 \x01(\t\x12*\n\x06\x64ue_at\x18\x06 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\"d\n\x0bMemoryEvent\x12\x13\n\x0bsource_type\x18\x01 \x01(\t\x12\x11\n\tsource_id\x18\x02 \x01(\t\x12\x19\n\x11proposed_entities\x18\x03 \x03(\t\x12\x12\n\nactor_slug\x18\x04 \x01(\t\"J\n\rIngestRequest\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12&\n\x06\x65vents\x18\x02 \x03(\x0b\x32\x16.memory.v1.MemoryEvent\"#\n\x0eIngestResponse\x12\x11\n\tprocessed\x18\x01 \x01(\x05\x32\xb2\x02\n\nMemoryCore\x12=\n\x06Recall\x12\x18.memory.v1.RecallRequest\x1a\x19.memory.v1.RecallResponse\x12P\n\x11RecordObservation\x12#.memory.v1.RecordObservationRequest\x1a\x16.google.protobuf.Empty\x12N\n\x10RecordCommitment\x12\".memory.v1.RecordCommitmentRequest\x1a\x16.google.protobuf.Empty\x12\x43\n\x0cIngestEvents\x12\x18.memory.v1.IngestRequest\x1a\x19.memory.v1.IngestResponseb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -43,18 +43,28 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_RELATION']._serialized_end=527
   _globals['_EPISODESUMMARY']._serialized_start=529
   _globals['_EPISODESUMMARY']._serialized_end=642
-  _globals['_RECALLRESPONSE']._serialized_start=645
-  _globals['_RECALLRESPONSE']._serialized_end=829
-  _globals['_RECORDOBSERVATIONREQUEST']._serialized_start=832
-  _globals['_RECORDOBSERVATIONREQUEST']._serialized_end=993
-  _globals['_RECORDCOMMITMENTREQUEST']._serialized_start=996
-  _globals['_RECORDCOMMITMENTREQUEST']._serialized_end=1171
-  _globals['_MEMORYEVENT']._serialized_start=1173
-  _globals['_MEMORYEVENT']._serialized_end=1273
-  _globals['_INGESTREQUEST']._serialized_start=1275
-  _globals['_INGESTREQUEST']._serialized_end=1349
-  _globals['_INGESTRESPONSE']._serialized_start=1351
-  _globals['_INGESTRESPONSE']._serialized_end=1386
-  _globals['_MEMORYCORE']._serialized_start=1389
-  _globals['_MEMORYCORE']._serialized_end=1695
+  _globals['_COMMITMENTSUMMARY']._serialized_start=645
+  _globals['_COMMITMENTSUMMARY']._serialized_end=802
+  _globals['_GOALSUMMARY']._serialized_start=804
+  _globals['_GOALSUMMARY']._serialized_end=886
+  _globals['_CONVERSATIONSNIPPET']._serialized_start=889
+  _globals['_CONVERSATIONSNIPPET']._serialized_end=1029
+  _globals['_CONTRADICTIONSUMMARY']._serialized_start=1031
+  _globals['_CONTRADICTIONSUMMARY']._serialized_end=1149
+  _globals['_RECALLMETADATA']._serialized_start=1151
+  _globals['_RECALLMETADATA']._serialized_end=1267
+  _globals['_RECALLRESPONSE']._serialized_start=1270
+  _globals['_RECALLRESPONSE']._serialized_end=1706
+  _globals['_RECORDOBSERVATIONREQUEST']._serialized_start=1709
+  _globals['_RECORDOBSERVATIONREQUEST']._serialized_end=1870
+  _globals['_RECORDCOMMITMENTREQUEST']._serialized_start=1873
+  _globals['_RECORDCOMMITMENTREQUEST']._serialized_end=2048
+  _globals['_MEMORYEVENT']._serialized_start=2050
+  _globals['_MEMORYEVENT']._serialized_end=2150
+  _globals['_INGESTREQUEST']._serialized_start=2152
+  _globals['_INGESTREQUEST']._serialized_end=2226
+  _globals['_INGESTRESPONSE']._serialized_start=2228
+  _globals['_INGESTRESPONSE']._serialized_end=2263
+  _globals['_MEMORYCORE']._serialized_start=2266
+  _globals['_MEMORYCORE']._serialized_end=2572
 # @@protoc_insertion_point(module_scope)
