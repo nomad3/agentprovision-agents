@@ -51,7 +51,6 @@ class PostChatMemoryWorkflow:
                 return None
 
         # Activities run sequentially for Phase 1 simplicity
-        await _safe(extract_knowledge, "extract_knowledge")
         await _safe(detect_commitment, "detect_commitment")
         await _safe(update_world_state, "update_world_state")
         await _safe(update_behavioral_signals, "update_behavioral_signals")

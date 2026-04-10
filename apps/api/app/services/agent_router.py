@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.models.tenant_features import TenantFeatures
+from app.models.tenant_branding import TenantBranding
 from app.models.agent import Agent as AgentModel
 from app.services.cli_session_manager import run_agent_session
 from app.services import rl_experience_service
@@ -67,6 +68,18 @@ def _build_memory_context(
         return None
 
 
+def _resolve_primary_agent_slug(db: Session, tenant_id: uuid.UUID) -> str:
+    """Resolve the default agent slug for this tenant from branding or defaults."""
+    try:
+        branding = db.query(TenantBranding).filter(TenantBranding.tenant_id == tenant_id).first()
+        if branding and branding.ai_assistant_name and branding.ai_assistant_name != "AI Assistant":
+            return branding.ai_assistant_name.lower().replace(" ", "-")
+    except Exception:
+        try: db.rollback()
+        except Exception: pass
+    return "luna"
+
+
 def _recall_response_to_legacy_dict(resp) -> dict:
     """Convert typed RecallResponse to the dict shape the CLI prompt builder expects."""
     # Group observations by entity name
@@ -108,12 +121,6 @@ def _recall_response_to_legacy_dict(resp) -> dict:
         "anticipatory_context": "",
         "contradictions": [],
     }
-
-# Default agent for each channel
-CHANNEL_AGENT_MAP = {
-    "whatsapp": "luna",
-    "web": "luna",
-}
 
 # Simple keyword-based task type inference
 _TASK_TYPE_KEYWORDS = {
@@ -211,6 +218,34 @@ def get_platform_performance(db: Session, tenant_id: uuid.UUID) -> List[Dict[str
         return []
 
 
+def dispatch_coalition(
+    tenant_id: uuid.UUID,
+    chat_session_id: str,
+    task_description: str,
+) -> None:
+    """Fire-and-forget CoalitionWorkflow dispatch."""
+    import asyncio
+    import threading
+    from temporalio.client import Client
+    from app.core.config import settings
+
+    def _runner():
+        try:
+            async def _go():
+                client = await Client.connect(settings.TEMPORAL_ADDRESS)
+                await client.start_workflow(
+                    "CoalitionWorkflow",
+                    args=[str(tenant_id), chat_session_id, task_description],
+                    id=f"coalition-{chat_session_id}-{uuid.uuid4().hex[:8]}",
+                    task_queue="servicetsunami-orchestration",
+                )
+            asyncio.run(_go())
+        except Exception as e:
+            logger.warning("CoalitionWorkflow dispatch failed: %s", e)
+
+    threading.Thread(target=_runner, daemon=True).start()
+
+
 def route_and_execute(
     db: Session,
     *,
@@ -228,7 +263,7 @@ def route_and_execute(
 ) -> Tuple[Optional[str], Dict[str, Any]]:
     # Apply channel-based agent default if not explicitly specified
     if not agent_slug:
-        agent_slug = CHANNEL_AGENT_MAP.get(channel, "luna")
+        agent_slug = _resolve_primary_agent_slug(db, tenant_id)
 
     # 1. Load tenant features
     try:
@@ -273,6 +308,11 @@ def route_and_execute(
     # 3. Intent matching
     try:
         intent = match_intent(message)
+        # 3b. Coalition triggering for complex tasks
+        if intent and any(tag in (intent.get("tools") or []) for tag in ["github", "shell", "data", "reports"]):
+            if _presence_sid:
+                logger.info("Triggering CoalitionWorkflow for complex task: %s", intent["name"])
+                dispatch_coalition(tenant_id, _presence_sid, message)
     except Exception as e:
         logger.debug("match_intent failed: %s — defaulting to full tier", e)
         intent = None

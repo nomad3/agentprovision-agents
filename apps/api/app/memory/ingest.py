@@ -9,141 +9,135 @@ PostChatMemoryWorkflow). For each event:
   5. Insert commitments via record_commitment().
   6. Audit each write to memory_activities with workflow_id.
 """
-from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
-from uuid import UUID
 import logging
-
+from dataclasses import dataclass
+from typing import Optional, List
+from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.memory.types import MemoryEvent
-from app.memory.adapters import registry
-from app.memory.record import record_commitment, record_observation, _audit
+from app.memory.adapters.registry import get_adapter
+from app.memory.record import record_observation, record_commitment
 from app.services import knowledge as knowledge_service
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class IngestionResult:
+class IngestResult:
     events_processed: int = 0
     entities_created: int = 0
+    entities_reused: int = 0
     observations_created: int = 0
+    relations_created: int = 0
     commitments_created: int = 0
-    errors: int = 0
+    skipped: int = 0
+    errors: List[str] = None
+
+    def __post_init__(self):
+        if self.errors is None:
+            self.errors = []
 
 
 def ingest_events(
     db: Session,
     tenant_id: UUID,
     events: List[MemoryEvent],
-    workflow_id: str | None = None,
-) -> IngestionResult:
-    """Bulk ingestion of memory events.
-
-    Args:
-        db: SQLAlchemy session.
-        tenant_id: UUID of the tenant.
-        events: List of MemoryEvent instances to process.
-        workflow_id: Optional Temporal workflow type ID for traceability.
-
-    Returns:
-        IngestionResult summary.
-    """
-    result = IngestionResult()
-
-    for event in events:
+    workflow_id: Optional[str] = None,
+) -> IngestResult:
+    result = IngestResult()
+    for ev in events:
+        # 1. Validate source_type — KeyError if unknown
         try:
-            # 1. Validate source_type via adapter registry
-            # Note: During Phase 1, we might not have all adapters registered yet.
-            # If the source is 'workflow' or 'internal', we skip adapter validation.
-            if event.source_type not in ("workflow", "internal"):
-                registry.get_adapter(event.source_type)
+            get_adapter(ev.source_type)
+        except KeyError:
+            # For Phase 1, we might ingest events without an adapter during development
+            # but production events should always have a valid source_type.
+            logger.warning("Ingesting event with unregistered source_type: %s", ev.source_type)
 
+        try:
             # 2. Resolve or create entities
-            entity_map = {}  # name -> entity_id
-            for ent_data in event.proposed_entities:
-                name = ent_data.get("name")
-                if not name:
-                    continue
-                
-                entity, created = knowledge_service.upsert_entity_by_name(
-                    db,
-                    tenant_id=tenant_id,
-                    name=name,
-                    entity_type=ent_data.get("entity_type", "general"),
-                    category=ent_data.get("category"),
-                    description=ent_data.get("description"),
+            entity_lookup = {}
+            for prop in ev.proposed_entities:
+                ent, created = knowledge_service.upsert_entity_by_name(
+                    db, tenant_id=tenant_id,
+                    name=prop["name"],
+                    category=prop.get("category"),
+                    description=prop.get("description"),
                 )
-                entity_map[name] = entity.id
+                entity_lookup[prop["name"]] = ent
                 if created:
                     result.entities_created += 1
-                    _audit(
-                        db, tenant_id=tenant_id,
-                        event_type="entity_created",
-                        description=f"Entity created: {name}",
-                        target_table="knowledge_entities",
-                        target_id=entity.id,
-                        source_type=event.source_type,
-                        source_id=event.source_id,
-                        actor_slug=event.actor_slug,
-                        workflow_id=workflow_id,
-                    )
+                else:
+                    result.entities_reused += 1
 
             # 3. Insert observations
-            for obs_data in event.proposed_observations:
-                entity_id = obs_data.get("entity_id")
-                entity_name = obs_data.get("entity_name")
+            for obs_dict in ev.proposed_observations:
+                ent_name = obs_dict.get("entity_name")
+                ent = entity_lookup.get(ent_name)
+                if not ent and ent_name:
+                    # Try lookup by name if not in proposed_entities
+                    ent = knowledge_service.get_entity_by_name(db, tenant_id, ent_name)
                 
-                if not entity_id and entity_name:
-                    entity_id = entity_map.get(entity_name)
-                    if not entity_id:
-                        # Fallback: look up in DB
-                        entity = knowledge_service.get_entity_by_name(db, tenant_id, entity_name)
-                        if entity:
-                            entity_id = entity.id
-                
-                if not entity_id:
-                    logger.warning("Observation proposed for unknown entity '%s' in event %s", 
-                                   entity_name or "unknown", event.source_id)
+                if not ent:
+                    result.skipped += 1
                     continue
-
+                    
                 record_observation(
-                    db,
-                    tenant_id=tenant_id,
-                    entity_id=entity_id,
-                    content=obs_data["content"],
-                    confidence=obs_data.get("confidence", event.confidence),
-                    source_type=event.source_type,
-                    source_id=event.source_id,
-                    actor_slug=event.actor_slug,
+                    db, tenant_id=tenant_id,
+                    entity_id=ent.id,
+                    content=obs_dict["content"],
+                    confidence=obs_dict.get("confidence", ev.confidence),
+                    source_type=ev.source_type,
+                    source_id=ev.source_id,
+                    actor_slug=ev.actor_slug,
                     workflow_id=workflow_id,
                 )
                 result.observations_created += 1
 
             # 4. Insert commitments
-            for c_data in event.proposed_commitments:
+            for c_dict in ev.proposed_commitments:
                 record_commitment(
-                    db,
-                    tenant_id=tenant_id,
-                    owner_agent_slug=c_data.get("owner_agent_slug") or event.actor_slug or "luna",
-                    title=c_data["title"],
-                    description=c_data.get("description"),
-                    commitment_type=c_data.get("commitment_type", "action"),
-                    due_at=c_data.get("due_at"),
-                    source_type=event.source_type,
-                    source_id=event.source_id,
+                    db, tenant_id=tenant_id,
+                    owner_agent_slug=ev.actor_slug or "system",
+                    title=c_dict["title"],
+                    description=c_dict.get("description"),
+                    commitment_type=c_dict.get("type", "action"),
+                    due_at=c_dict.get("due_at"),
+                    source_type=ev.source_type,
+                    source_id=ev.source_id,
                     workflow_id=workflow_id,
                 )
                 result.commitments_created += 1
 
+            # 5. Insert relations
+            for rel_dict in ev.proposed_relations:
+                from_ent = entity_lookup.get(rel_dict["from_entity"])
+                to_ent = entity_lookup.get(rel_dict["to_entity"])
+                
+                if not from_ent or not to_ent:
+                    # Try lookup if not in local cache
+                    if not from_ent:
+                        from_ent = knowledge_service.get_entity_by_name(db, tenant_id, rel_dict["from_entity"])
+                    if not to_ent:
+                        to_ent = knowledge_service.get_entity_by_name(db, tenant_id, rel_dict["to_entity"])
+                
+                if from_ent and to_ent:
+                    knowledge_service._find_or_create_relation(
+                        db, tenant_id=tenant_id,
+                        from_entity_id=from_ent.id,
+                        to_entity_id=to_ent.id,
+                        relation_type=rel_dict["relation_type"],
+                    )
+                    result.relations_created += 1
+                else:
+                    result.skipped += 1
+
             result.events_processed += 1
-
+            db.commit()
         except Exception as e:
-            logger.exception("Failed to ingest memory event %s: %s", event.source_id, e)
-            result.errors += 1
+            logger.exception("Failed to ingest event %s", ev.source_id)
+            result.errors.append(f"event {ev.source_id}: {e}")
             db.rollback()
-            continue
 
-    db.commit()
     return result

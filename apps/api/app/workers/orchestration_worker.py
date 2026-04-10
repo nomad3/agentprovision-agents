@@ -17,6 +17,7 @@ from app.workflows.post_chat_memory import PostChatMemoryWorkflow
 from app.workflows.episode_workflow import EpisodeWorkflow
 from app.workflows.idle_episode_scan import IdleEpisodeScanWorkflow
 from app.workflows.backfill_embeddings import BackfillEmbeddingsWorkflow
+from app.workflows.coalition_workflow import CoalitionWorkflow
 from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
     dispatch_task,
@@ -145,6 +146,12 @@ from app.workflows.activities.morning_briefing import (
     create_daily_journal_entry,
     create_weekly_journal_summary,
 )
+from app.workflows.activities.coalition_activities import (
+    select_coalition_template,
+    initialize_collaboration,
+    execute_collaboration_step,
+    finalize_collaboration,
+)
 from app.workflows.activities.post_chat_memory_activities import (
     extract_knowledge,
     detect_commitment,
@@ -214,6 +221,7 @@ async def run_orchestration_worker():
             EpisodeWorkflow,
             IdleEpisodeScanWorkflow,
             BackfillEmbeddingsWorkflow,
+            CoalitionWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -336,6 +344,11 @@ async def run_orchestration_worker():
             find_idle_sessions,
             find_unembedded_chat_messages,
             embed_message_batch,
+            # Coalition activities
+            select_coalition_template,
+            initialize_collaboration,
+            execute_collaboration_step,
+            finalize_collaboration,
         ],
     )
 
