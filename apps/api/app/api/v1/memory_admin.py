@@ -14,14 +14,14 @@ async def backfill_embeddings(
     """Trigger the BackfillEmbeddingsWorkflow for a specific tenant."""
     if x_internal_key != settings.API_INTERNAL_KEY:
         raise HTTPException(status_code=401, detail="Invalid internal key")
-        
+
     try:
         client = await Client.connect(settings.TEMPORAL_ADDRESS)
         handle = await client.start_workflow(
             "BackfillEmbeddingsWorkflow",
             args=[tenant_id],
             id=f"backfill-embeddings-{tenant_id}",
-            task_queue="servicetsunami-orchestration",
+            task_queue="agentprovision-orchestration",
         )
         return {
             "status": "triggered",
@@ -30,3 +30,15 @@ async def backfill_embeddings(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to start backfill workflow: {e}")
+
+
+@router.get("/validation-metrics")
+async def get_validation_metrics(
+    x_internal_key: str = Header(..., alias="X-Internal-Key"),
+):
+    """Return dual-read/dual-write validation metrics for Phase 2 cutover monitoring."""
+    if x_internal_key != settings.API_INTERNAL_KEY:
+        raise HTTPException(status_code=401, detail="Invalid internal key")
+
+    from app.memory.validation_metrics import metrics
+    return metrics.report()
