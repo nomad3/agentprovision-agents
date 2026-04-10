@@ -14,6 +14,12 @@ container:
   command:
     - /app/entrypoint.sh
 
+# Worker doesn't serve HTTP — disable health probes
+livenessProbe:
+  enabled: false
+readinessProbe:
+  enabled: false
+
 # Pod security
 podSecurityContext:
   runAsNonRoot: true
@@ -42,17 +48,14 @@ configMap:
     CLAUDE_CODE_MODEL: "sonnet"
     OPENCODE_OLLAMA_URL: "http://host.docker.internal:11434/v1"
     OPENCODE_MODEL: "gemma4"
-    GIT_BRANCH: "feat/memory-first-phase-1"
+    GIT_BRANCH: "main"
     USE_MEMORY_V2: "true"
 
-# Manual secrets for local
-env:
-  - name: TEMPORAL_ADDRESS
-    value: "temporal:7233"
-  - name: GITHUB_TOKEN
-    value: "ghp_placeholder"
-  - name: API_INTERNAL_KEY
-    value: "dev_mcp_key"
+# Secrets loaded from k8s secret
+envFrom:
+  configMapRef: []
+  secretRef:
+    - code-worker-secrets
 
 # Disable GKE specifics
 externalSecret:

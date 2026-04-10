@@ -16,6 +16,12 @@ container:
     - -m
     - app.workers.orchestration_worker
 
+# Worker doesn't serve HTTP — disable health probes
+livenessProbe:
+  enabled: false
+readinessProbe:
+  enabled: false
+
 # Pod security
 podSecurityContext:
   runAsNonRoot: true
@@ -48,6 +54,12 @@ configMap:
     MEMORY_CORE_URL: "memory-core:50052"
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
     TEMPORAL_ADDRESS: "temporal:7233"
+
+# Load secrets from k8s secret
+envFrom:
+  configMapRef: []
+  secretRef:
+    - api-secrets
 
 # Disable GKE specifics
 externalSecret:
