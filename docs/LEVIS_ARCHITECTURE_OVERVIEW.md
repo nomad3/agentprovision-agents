@@ -1,6 +1,6 @@
 # AgentProvision: Enterprise Agentic Orchestration Architecture
 
-**Date:** 2026-04-09
+**Date:** 2026-04-11 (updated)
 **Subject:** Technical Architecture & Protocol Guarantees
 **Prepared for:** Levi Strauss & Co. Engineering Leadership
 
@@ -120,28 +120,56 @@ The platform enforces strict collaboration patterns. A handoff is a state transi
 *   **Short-Lived Access:** Tokens are injected into the agent's environment only for the duration of the specific activity execution and are never stored in plain text in logs.
 
 ### 4.3. Deployment & Hosting
-*   **On-Premise Ready:** The entire stack is containerized (K8s/Docker) and can be deployed inside a private VPC.
-*   **Egress Control:** The platform can run with restricted egress, requiring only a single tunnel (Cloudflare or internal proxy) for user access.
+*   **Kubernetes-Native:** The entire stack runs on Kubernetes (Rancher Desktop locally, any K8s cluster for enterprise). 9 pods: API, Web, Code-Worker, Orchestration-Worker, Embedding-Service (Rust), Memory-Core (Rust), PostgreSQL, Redis, Temporal.
+*   **Helm-Based:** Single reusable Helm chart (`microservice`) with per-service values files. One `helm install` deploys the full platform.
+*   **Cloudflare Tunnel (In-Cluster):** Runs as a K8s pod routing `agentprovision.com` to internal services by DNS name. No port-forwards or external load balancer needed.
+*   **On-Premise Ready:** Each customer runs their own K8s cluster. Data stays in-cluster. No egress except the tunnel endpoint.
+*   **GitOps:** Pushes to main auto-deploy via GitHub Actions to the self-hosted runner.
 
 ---
 
 ## 5. Core Capabilities (MCP Tools)
 
-Agents have access to 100+ tools through the **Model Context Protocol (MCP)**:
+Agents have access to 81+ tools through the **Model Context Protocol (MCP)**:
 *   **Communication:** Gmail, Slack, WhatsApp (integrated).
 *   **Infrastructure:** Jira, GitHub, Jenkins, Nexus, SSH.
-*   **Data:** SQL (DuckDB/Postgres), PostgreSQL Sync, Analytics.
+*   **Data:** SQL (DuckDB/Postgres), Analytics, Reports (Excel/openpyxl).
 *   **Productivity:** Google Calendar, Drive, Sheets.
+*   **Memory:** Knowledge search, entity extraction, lead scoring.
+*   **Marketing:** Meta Ads, Google Ads, TikTok Ads, Competitor monitoring.
 
 ---
 
-## 6. Technical Stack
-*   **Backend:** Python (FastAPI), Rust (Performance-critical memory core).
-*   **Database:** PostgreSQL + pgvector.
-*   **Orchestration:** Temporal.io.
-*   **Inference:** Gemini 1.5 Pro / Claude 3.5 Sonnet (External) + Gemma 4 (Local/On-prem).
+## 6. Memory-First Implementation Status
+
+| Phase | Status | Deliverable |
+|-------|--------|-------------|
+| Phase 0 | Complete | gRPC IDL frozen, gold sets, baseline (p50=47s) |
+| Phase 1 | **Shipped** | Python memory layer, recall/record/ingest, PostChatMemoryWorkflow, Gemma4 commitment classifier, entity extraction |
+| Phase 2 | **In validation** | Rust embedding-service (fastembed/ONNX), memory-core (gRPC), dual-read comparison |
+| Phase 3a | **Shipped** | K8s migration (Rancher Desktop), Helm charts, Cloudflare in-cluster, CI/CD |
+| Phase 3b | Planned | Email/Calendar/Jira/GitHub source ingesters |
+| Phase 4 | Planned | Rust federation daemon, cluster-to-cluster mesh |
+
+**Performance (as of 2026-04-10):**
+| Metric | Pre-Platform | Current | Target (Phase 3a) |
+|--------|-------------|---------|-------------------|
+| Chat p50 | 47.1s | **5.5s** | <2s |
+| API endpoints | unmeasured | **80ms** | <200ms |
+| Memory recall | 2-5s | **<200ms** | <500ms |
+| Timeouts | 5% | **0%** | 0% |
+
+---
+
+## 7. Technical Stack
+*   **Backend:** Python 3.11 (FastAPI), Rust (embedding-service via fastembed/ONNX, memory-core via tonic gRPC + sqlx).
+*   **Database:** PostgreSQL 13 + pgvector (768-dim embeddings). 67 SQL migrations.
+*   **Orchestration:** Temporal.io (4 task queues: orchestration, postgres, code, business).
+*   **Inference:** Gemini CLI (primary, per-tenant OAuth) / Claude Code CLI / Codex CLI (fallbacks) + Gemma 4 via Ollama (local, zero cloud cost for scoring/extraction).
+*   **Embeddings:** nomic-embed-text-v1.5 (768-dim). Rust path: fastembed + ONNX Runtime. Python fallback: sentence-transformers.
+*   **Infrastructure:** Kubernetes (Rancher Desktop), Helm, Cloudflare Tunnel, GitHub Actions CI/CD.
 
 ---
 
 **Next Steps:**
-We invite the Security and Architecture teams to a technical deep-dive where we can demonstrate the Temporal event traces, the Shared Blackboard transitions, and the pgvector search isolation in real-time.
+We invite the Security and Architecture teams to a technical deep-dive where we can demonstrate the Temporal event traces, the Shared Blackboard transitions, the pgvector search isolation, and the new K8s deployment model in real-time.
