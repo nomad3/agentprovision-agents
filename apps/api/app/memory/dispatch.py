@@ -33,7 +33,7 @@ def dispatch_post_chat_memory(
                     str(assistant_message_id)
                 ],
                 id=f"pcm-{session_id}-{int(time.time())}",
-                task_queue="servicetsunami-orchestration",
+                task_queue="agentprovision-orchestration",
             )
             print(f"DEBUG: _dispatch: workflow started successfully.")
             logger.debug("Dispatched PostChatMemoryWorkflow for session %s", str(session_id)[:8])

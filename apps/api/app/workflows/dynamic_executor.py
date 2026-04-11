@@ -154,7 +154,7 @@ class DynamicWorkflowExecutor:
                             "context": params.get("context", ""),
                         },
                         id=f"dyn-cli-{workflow.info().workflow_id}-{step.get('id', '')}",
-                        task_queue="servicetsunami-code",
+                        task_queue="agentprovision-code",
                         execution_timeout=timedelta(minutes=60),
                     )
                     code_result = await code_handle.result()

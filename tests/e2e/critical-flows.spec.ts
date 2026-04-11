@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
 
-const BASE_URL = 'https://servicetsunami.com';
+const BASE_URL = 'https://agentprovision.com';
 const TEST_EMAIL = 'test@example.com';
 const TEST_PASSWORD = 'password';
 
-test.describe('ServiceTsunami Critical Flows', () => {
+test.describe('AgentProvision Critical Flows', () => {
   test.beforeEach(async ({ page }) => {
     // Navigate to the app
     await page.goto(BASE_URL);

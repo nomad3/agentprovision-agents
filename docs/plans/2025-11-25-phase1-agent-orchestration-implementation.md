@@ -1283,7 +1283,7 @@ from app.api.v1 import (
     agent_kits,
     datasets,
     chat,
-    databricks,
+    postgres,
     internal,
     agent_groups,  # NEW
 )

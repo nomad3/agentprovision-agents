@@ -18,7 +18,7 @@ RUN npm run build
 # ===== Production Stage =====
 FROM nginx:1.25-alpine
 
-LABEL maintainer="ServiceTsunami Team" \
+LABEL maintainer="AgentProvision Team" \
       description="Luna Client - PWA"
 
 RUN apk add --no-cache curl

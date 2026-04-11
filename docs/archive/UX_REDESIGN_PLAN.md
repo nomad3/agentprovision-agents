@@ -1,6 +1,6 @@
-# ServiceTsunami UX Redesign for Business Users
+# AgentProvision UX Redesign for Business Users
 
-**Goal**: Make ServiceTsunami intuitive for non-technical business people
+**Goal**: Make AgentProvision intuitive for non-technical business people
 
 **Date**: October 30, 2025
 
@@ -209,7 +209,7 @@ Datasets (?)
 ### New Navigation Structure
 
 ```
-ServiceTsunami
+AgentProvision
 │
 ├─ 🏠 Home
 │   ├─ Quick Actions

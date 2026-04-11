@@ -2,7 +2,7 @@
 
 ## 1. Deployment Summary
 **Status:** ✅ Successful
-**URL:** https://servicetsunami.com
+**URL:** https://agentprovision.com
 **Test Credentials:**
 - **Email:** test@example.com
 - **Password:** password123
@@ -32,6 +32,6 @@
 - **Automated Testing:** The browser automation tool encountered issues verifying internal pages. Manual testing is recommended for this deployment.
 
 ## 5. Manual Verification Instructions
-1. Go to https://servicetsunami.com/auth/login
+1. Go to https://agentprovision.com/auth/login
 2. Log in with `test@example.com` / `password123`
 3. Navigate through the sidebar menu (Dashboard, Teams, Memory, Settings) to verify the dark/glassmorphic styling is applied consistently.

@@ -4,7 +4,7 @@ from datetime import datetime
 import uuid
 
 # Supported connector types
-ConnectorType = Literal["snowflake", "postgres", "mysql", "s3", "gcs", "databricks", "api"]
+ConnectorType = Literal["postgres", "mysql", "s3", "gcs", "api"]
 ConnectorStatus = Literal["pending", "active", "error"]
 
 class ConnectorBase(BaseModel):

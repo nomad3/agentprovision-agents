@@ -108,7 +108,7 @@ jobs:
             "platforms": {
               "darwin-aarch64": {
                 "signature": "$SIG",
-                "url": "https://github.com/nomad3/servicetsunami-agents/releases/download/${TAG}/${DMG_NAME}"
+                "url": "https://github.com/nomad3/agentprovision-agents/releases/download/${TAG}/${DMG_NAME}"
               }
             }
           }

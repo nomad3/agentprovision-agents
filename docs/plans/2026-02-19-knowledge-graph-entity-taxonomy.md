@@ -39,19 +39,19 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_entities_category ON knowledge_entities
 
 **Step 2: Apply migration locally**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/031_add_entity_category.sql`
+Run: `docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/031_add_entity_category.sql`
 
 If using docker-compose, copy file first:
 ```bash
-docker cp apps/api/migrations/031_add_entity_category.sql servicetsunami-agents-db-1:/tmp/031.sql
-docker-compose exec db psql -U postgres servicetsunami -f /tmp/031.sql
+docker cp apps/api/migrations/031_add_entity_category.sql agentprovision-agents-db-1:/tmp/031.sql
+docker-compose exec db psql -U postgres agentprovision -f /tmp/031.sql
 ```
 
 Expected: `ALTER TABLE`, `UPDATE N`, `CREATE INDEX` — no errors.
 
 **Step 3: Verify column exists**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -c "SELECT category, count(*) FROM knowledge_entities GROUP BY category;"`
+Run: `docker-compose exec db psql -U postgres agentprovision -c "SELECT category, count(*) FROM knowledge_entities GROUP BY category;"`
 
 Expected: Rows showing `lead`, `contact`, `organization` with counts.
 
@@ -585,7 +585,7 @@ git commit -m "feat: add category param to create_entity ADK tool"
 ## Task 9: ADK knowledge_manager.py — Taxonomy-aware instructions
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/knowledge_manager.py` (lines 32-61, the `instruction` string)
+- Modify: `apps/adk-server/agentprovision_supervisor/knowledge_manager.py` (lines 32-61, the `instruction` string)
 
 **Step 1: Replace the instruction string**
 
@@ -655,7 +655,7 @@ Guidelines:
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/knowledge_manager.py
+git add apps/adk-server/agentprovision_supervisor/knowledge_manager.py
 git commit -m "feat: update knowledge_manager instructions with entity taxonomy and signal detection"
 ```
 
@@ -664,7 +664,7 @@ git commit -m "feat: update knowledge_manager instructions with entity taxonomy 
 ## Task 10: ADK web_researcher.py — Signal detection instructions
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/web_researcher.py` (lines 135-157, the `instruction` string)
+- Modify: `apps/adk-server/agentprovision_supervisor/web_researcher.py` (lines 135-157, the `instruction` string)
 
 **Step 1: Replace the instruction string**
 
@@ -727,7 +727,7 @@ When researching leads:
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/web_researcher.py
+git add apps/adk-server/agentprovision_supervisor/web_researcher.py
 git commit -m "feat: add signal detection and entity categorization to web_researcher instructions"
 ```
 
@@ -736,12 +736,12 @@ git commit -m "feat: add signal detection and entity categorization to web_resea
 ## Task 11: ADK supervisor agent.py — Signal-aware routing
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py` (lines 19-41, the `instruction` string)
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py` (lines 19-41, the `instruction` string)
 
 **Step 1: Update supervisor instructions**
 
 ```python
-    instruction="""You are the ServiceTsunami AI supervisor - an intelligent orchestrator for data analysis, research, and memory management.
+    instruction="""You are the AgentProvision AI supervisor - an intelligent orchestrator for data analysis, research, and memory management.
 
 You coordinate a team of specialist agents:
 - data_analyst: For data queries, SQL execution, statistical analysis, and generating insights from datasets
@@ -779,7 +779,7 @@ Entity categories in memory:
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/agent.py
+git add apps/adk-server/agentprovision_supervisor/agent.py
 git commit -m "feat: update supervisor routing with entity taxonomy and signal awareness"
 ```
 
@@ -790,7 +790,7 @@ git commit -m "feat: update supervisor routing with entity taxonomy and signal a
 **Step 1: Apply migration on Cloud SQL**
 
 ```bash
-kubectl exec -it deploy/servicetsunami-api -n prod -- python -c "
+kubectl exec -it deploy/agentprovision-api -n prod -- python -c "
 from app.db.session import engine
 from sqlalchemy import text
 with engine.connect() as conn:
@@ -818,6 +818,6 @@ gh workflow run adk-deploy.yaml -f deploy=true -f environment=prod
 
 **Step 3: Verify**
 
-- Check `https://servicetsunami.com/memory` — should show "Memory" title, Category filter dropdown
-- Check API: `curl -H "Authorization: Bearer $TOKEN" https://api.servicetsunami.com/api/v1/knowledge/entities?category=lead`
+- Check `https://agentprovision.com/memory` — should show "Memory" title, Category filter dropdown
+- Check API: `curl -H "Authorization: Bearer $TOKEN" https://api.agentprovision.com/api/v1/knowledge/entities?category=lead`
 - Check ADK: Send "research AI companies and find buying signals" via chat

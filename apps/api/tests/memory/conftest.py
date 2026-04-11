@@ -17,7 +17,7 @@ def db_session():
     """Yield a Session bound to the production DB. Rolls back at teardown."""
     url = os.environ.get(
         "DATABASE_URL",
-        "postgresql://postgres:postgres@localhost:8003/servicetsunami",
+        "postgresql://postgres:postgres@localhost:8003/agentprovision",
     )
     engine = create_engine(url, future=True)
     Session = sessionmaker(bind=engine, expire_on_commit=False)

@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-# ServiceTsunami Production End-to-End Test Suite
-# Tests the production environment at servicetsunami.com
+# AgentProvision Production End-to-End Test Suite
+# Tests the production environment at agentprovision.com
 
-BASE_URL="${BASE_URL:-https://servicetsunami.com}"
+BASE_URL="${BASE_URL:-https://agentprovision.com}"
 API_URL="$BASE_URL/api/v1"
 
 # Colors for output
@@ -76,7 +76,7 @@ extract_json_field() {
 }
 
 echo "========================================="
-echo "ServiceTsunami Production E2E Test Suite"
+echo "AgentProvision Production E2E Test Suite"
 echo "========================================="
 echo "Base URL: $BASE_URL"
 echo "API URL: $API_URL"
@@ -102,7 +102,7 @@ fi
 # Test 2: API root
 info "Testing API root endpoint..."
 response=$(curl -s "$API_URL/")
-if echo "$response" | grep -q "ServiceTsunami API"; then
+if echo "$response" | grep -q "AgentProvision API"; then
     pass "API root endpoint responds correctly"
 else
     fail "API root endpoint" "Unexpected response: $response"

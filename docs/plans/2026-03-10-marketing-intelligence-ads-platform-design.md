@@ -44,7 +44,7 @@ Three OAuth integrations added to the registry (same pattern as Gmail/GitHub):
 
 ### 3. CompetitorMonitorWorkflow (Temporal)
 
-Queue: `servicetsunami-orchestration` (same as InboxMonitor)
+Queue: `agentprovision-orchestration` (same as InboxMonitor)
 Pattern: `continue_as_new` per-tenant, configurable frequency (daily/weekly per competitor)
 
 Each cycle:
@@ -106,7 +106,7 @@ User asks about own campaigns:
 
 - `apps/adk-server/tools/ads_tools.py` — Meta/Google/TikTok API tools (~15 functions)
 - `apps/adk-server/tools/competitor_tools.py` — add/remove/report competitor (~4 functions)
-- `apps/adk-server/servicetsunami_supervisor/marketing_analyst.py` — new sub-agent
+- `apps/adk-server/agentprovision_supervisor/marketing_analyst.py` — new sub-agent
 - `apps/api/app/workflows/competitor_monitor.py` — Temporal workflow + activities
 - Integration registry entries for meta_ads, google_ads, tiktok_ads
 - Helm secrets for new OAuth client IDs/secrets

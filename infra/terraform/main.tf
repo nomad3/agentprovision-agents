@@ -79,7 +79,7 @@ resource "aws_rds_cluster" "postgres" {
   cluster_identifier = "${var.project}-${var.environment}-aurora"
   engine             = "aurora-postgresql"
   engine_version     = var.postgres_engine_version
-  database_name      = "servicetsunami"
+  database_name      = "agentprovision"
   master_username    = var.postgres_master_username
   master_password    = var.postgres_master_password
   backup_retention_period = 5

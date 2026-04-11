@@ -1,4 +1,4 @@
-# ServiceTsunami Ocean Theme Redesign Plan
+# AgentProvision Ocean Theme Redesign Plan
 
 **Date:** 2026-02-14
 **Status:** Ready for implementation

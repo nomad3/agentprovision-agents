@@ -88,10 +88,10 @@ autoscaling:
 httpRoute:
   enabled: false
   # parentRefs:
-  #   - name: servicetsunami-gateway
+  #   - name: agentprovision-gateway
   #     namespace: gateway-system
   # hostnames:
-  #   - "temporal.servicetsunami.com"
+  #   - "temporal.agentprovision.com"
   # rules:
   #   - matches:
   #       - path:

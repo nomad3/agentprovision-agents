@@ -5,13 +5,13 @@
 
 ## What It Is
 
-The orchestration worker (`servicetsunami-orchestration-worker`) is a Temporal worker pod that processes workflows from the `servicetsunami-orchestration` task queue. It shares the same API codebase (`servicetsunami-api` Docker image) but runs a different entrypoint: `python -m app.workers.orchestration_worker`.
+The orchestration worker (`agentprovision-orchestration-worker`) is a Temporal worker pod that processes workflows from the `agentprovision-orchestration` task queue. It shares the same API codebase (`agentprovision-api` Docker image) but runs a different entrypoint: `python -m app.workers.orchestration_worker`.
 
 ## Why It Exists
 
-Previously, all Temporal workflows ran on a single worker (`servicetsunami-worker`) using the `servicetsunami-databricks` queue. When we added the Inbox Monitor and other orchestration workflows that need access to Google OAuth tokens, the Anthropic API, and encrypted credentials, we needed a dedicated worker with the right secrets and permissions.
+Previously, all Temporal workflows ran on a single worker (`agentprovision-worker`) using the `agentprovision-postgres` queue. When we added the Inbox Monitor and other orchestration workflows that need access to Google OAuth tokens, the Anthropic API, and encrypted credentials, we needed a dedicated worker with the right secrets and permissions.
 
-**Key difference**: The databricks worker handles data pipeline workflows (dataset sync, knowledge extraction). The orchestration worker handles real-time business workflows that interact with external services (Gmail, Calendar, WhatsApp).
+**Key difference**: The postgres worker handles data pipeline workflows (dataset sync, knowledge extraction). The orchestration worker handles real-time business workflows that interact with external services (Gmail, Calendar, WhatsApp).
 
 ## Workflows It Runs
 
@@ -25,10 +25,10 @@ Previously, all Temporal workflows ran on a single worker (`servicetsunami-worke
 
 ## Helm Configuration
 
-**File**: `helm/values/servicetsunami-orchestration-worker.yaml`
+**File**: `helm/values/agentprovision-orchestration-worker.yaml`
 
 Key configuration:
-- **Image**: Same as API (`gcr.io/ai-agency-479516/servicetsunami-api`)
+- **Image**: Same as API (`gcr.io/ai-agency-479516/agentprovision-api`)
 - **Command**: `python -m app.workers.orchestration_worker`
 - **Replicas**: 1
 - **Probes**: Disabled (worker doesn't serve HTTP)
@@ -55,13 +55,13 @@ Key configuration:
 ┌─────────────────────────────────────────────────┐
 │  Temporal Server (:7233)                         │
 │  ┌──────────────────────┐  ┌──────────────────┐ │
-│  │ servicetsunami-       │  │ servicetsunami-  │ │
-│  │ orchestration queue   │  │ databricks queue  │ │
+│  │ agentprovision-       │  │ agentprovision-  │ │
+│  │ orchestration queue   │  │ postgres queue  │ │
 │  └──────────┬───────────┘  └────────┬─────────┘ │
 └─────────────┼──────────────────────┼────────────┘
               │                      │
    ┌──────────▼──────────┐  ┌───────▼──────────┐
-   │ orchestration-worker │  │ databricks-worker │
+   │ orchestration-worker │  │ postgres-worker │
    │                      │  │                   │
    │ • TaskExecution      │  │ • DatasetSync     │
    │ • ChannelHealth      │  │ • KnowledgeExtr.  │
@@ -70,7 +70,7 @@ Key configuration:
    │ • AutoAction         │  │                   │
    │                      │  │                   │
    │ Needs: Gmail, Cal,   │  │ Needs: MCP,       │
-   │ Anthropic, Encrypt.  │  │ Databricks        │
+   │ Anthropic, Encrypt.  │  │ PostgreSQL        │
    └──────────────────────┘  └───────────────────┘
 ```
 
@@ -78,7 +78,7 @@ Key configuration:
 
 **File**: `apps/api/app/workers/orchestration_worker.py`
 
-Registers all workflow classes and their activity functions, then starts polling the `servicetsunami-orchestration` task queue.
+Registers all workflow classes and their activity functions, then starts polling the `agentprovision-orchestration` task queue.
 
 ## Monitoring
 
@@ -87,8 +87,8 @@ Registers all workflow classes and their activity functions, then starts polling
 kubectl get pods -n prod | grep orchestration
 
 # View logs
-kubectl logs -n prod -l app=servicetsunami-orchestration-worker -c microservice --tail=100
+kubectl logs -n prod -l app=agentprovision-orchestration-worker -c microservice --tail=100
 
 # Check Temporal workflows
-# Visit temporal-web at https://temporal.servicetsunami.com
+# Visit temporal-web at https://temporal.agentprovision.com
 ```

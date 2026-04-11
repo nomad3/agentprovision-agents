@@ -28,31 +28,31 @@
 | `apps/api/app/api/v1/integration_configs.py` | Add `anthropic_llm` + `gemini_llm` to registry |
 | `apps/api/app/services/chat.py` | Read tenant LLM config, pass `llm_config` in `state_delta` (primary + retry) |
 | `apps/adk-server/requirements.txt` | Add `litellm` |
-| `apps/adk-server/servicetsunami_supervisor/agent.py` | Register `before_model_callback` |
-| `apps/adk-server/servicetsunami_supervisor/personal_assistant.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/code_agent.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/data_team.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/sales_team.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/sales_agent.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/customer_support.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/marketing_team.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/marketing_analyst.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/web_researcher.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/knowledge_manager.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/prospecting_team.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/prospect_researcher.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/prospect_scorer.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/prospect_outreach.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/deal_team.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/deal_analyst.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/deal_researcher.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/outreach_specialist.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/vet_supervisor.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/cardiac_analyst.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/vet_report_generator.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/billing_agent.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/data_analyst.py` | Register callback |
-| `apps/adk-server/servicetsunami_supervisor/report_generator.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/agent.py` | Register `before_model_callback` |
+| `apps/adk-server/agentprovision_supervisor/personal_assistant.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/code_agent.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/data_team.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/sales_team.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/sales_agent.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/customer_support.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/marketing_team.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/marketing_analyst.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/web_researcher.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/knowledge_manager.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/prospecting_team.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/prospect_researcher.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/prospect_scorer.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/prospect_outreach.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/deal_team.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/deal_analyst.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/deal_researcher.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/outreach_specialist.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/vet_supervisor.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/cardiac_analyst.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/vet_report_generator.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/billing_agent.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/data_analyst.py` | Register callback |
+| `apps/adk-server/agentprovision_supervisor/report_generator.py` | Register callback |
 | `apps/web/src/pages/LLMSettingsPage.js` | Redesign to use integration registry + vault |
 | `apps/web/src/i18n/locales/en/common.json` | Add LLM settings translation keys |
 | `apps/web/src/i18n/locales/es/common.json` | Add LLM settings translation keys |
@@ -83,7 +83,7 @@ COMMENT ON COLUMN tenant_features.active_llm_provider IS 'Integration name of th
 
 Run against local DB:
 ```bash
-docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/046_add_active_llm_provider.sql
+docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/046_add_active_llm_provider.sql
 ```
 
 Expected: `ALTER TABLE` with no errors.
@@ -91,7 +91,7 @@ Expected: `ALTER TABLE` with no errors.
 - [ ] **Step 3: Verify column exists**
 
 ```bash
-docker-compose exec db psql -U postgres servicetsunami -c "\d tenant_features" | grep active_llm
+docker-compose exec db psql -U postgres agentprovision -c "\d tenant_features" | grep active_llm
 ```
 
 Expected: `active_llm_provider | character varying(50) | | | 'gemini_llm'`
@@ -343,7 +343,7 @@ git commit -m "feat: add before_model_callback for per-request LLM provider swit
 ### Task 6: Register Callback on All 25 Agent Files
 
 **Files:**
-- Modify: All 25 agent files in `apps/adk-server/servicetsunami_supervisor/`
+- Modify: All 25 agent files in `apps/adk-server/agentprovision_supervisor/`
 
 Each agent file needs two changes:
 1. Add import: `from config.model_callback import llm_model_callback`
@@ -353,7 +353,7 @@ Each agent file needs two changes:
 
 | # | File | Line | Agent Name |
 |---|------|------|------------|
-| 1 | `agent.py` | 22 | servicetsunami_supervisor |
+| 1 | `agent.py` | 22 | agentprovision_supervisor |
 | 2 | `personal_assistant.py` | 69 | personal_assistant |
 | 3 | `code_agent.py` | 12 | code_agent |
 | 4 | `data_team.py` | 13 | data_team |
@@ -393,7 +393,7 @@ Then add `before_model_callback=llm_model_callback,` as a kwarg to the `Agent()`
 Before:
 ```python
 root_agent = Agent(
-    name="servicetsunami_supervisor",
+    name="agentprovision_supervisor",
     model=settings.adk_model,
     instruction="""...""",
 ```
@@ -403,7 +403,7 @@ After:
 from config.model_callback import llm_model_callback
 
 root_agent = Agent(
-    name="servicetsunami_supervisor",
+    name="agentprovision_supervisor",
     model=settings.adk_model,
     before_model_callback=llm_model_callback,
     instruction="""...""",
@@ -414,18 +414,18 @@ Apply this same pattern to all 25 files. Read each file first to find the exact 
 - [ ] **Step 2: Verify ADK server starts without errors**
 
 ```bash
-cd apps/adk-server && python -c "from servicetsunami_supervisor.agent import root_agent; print(f'Root agent: {root_agent.name}, callback: {root_agent.before_model_callback}')"
+cd apps/adk-server && python -c "from agentprovision_supervisor.agent import root_agent; print(f'Root agent: {root_agent.name}, callback: {root_agent.before_model_callback}')"
 ```
 
-Expected: `Root agent: servicetsunami_supervisor, callback: <function llm_model_callback at 0x...>`
+Expected: `Root agent: agentprovision_supervisor, callback: <function llm_model_callback at 0x...>`
 
 - [ ] **Step 3: Spot-check a few sub-agents**
 
 ```bash
 cd apps/adk-server && python -c "
-from servicetsunami_supervisor.personal_assistant import personal_assistant
-from servicetsunami_supervisor.code_agent import code_agent
-from servicetsunami_supervisor.billing_agent import billing_agent
+from agentprovision_supervisor.personal_assistant import personal_assistant
+from agentprovision_supervisor.code_agent import code_agent
+from agentprovision_supervisor.billing_agent import billing_agent
 print(f'personal_assistant callback: {personal_assistant.before_model_callback is not None}')
 print(f'code_agent callback: {code_agent.before_model_callback is not None}')
 print(f'billing_agent callback: {billing_agent.before_model_callback is not None}')
@@ -437,7 +437,7 @@ Expected: All print `True`.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd apps/adk-server && git add servicetsunami_supervisor/*.py
+cd apps/adk-server && git add agentprovision_supervisor/*.py
 git commit -m "feat: register llm_model_callback on all 25 agent definitions"
 ```
 
@@ -923,7 +923,7 @@ Verify ADK server starts without errors and `litellm` is importable.
 - [ ] **Step 3: Run the migration**
 
 ```bash
-docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/046_add_active_llm_provider.sql
+docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/046_add_active_llm_provider.sql
 ```
 
 - [ ] **Step 4: Test end-to-end with Anthropic**

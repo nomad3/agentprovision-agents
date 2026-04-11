@@ -2434,7 +2434,7 @@ Create or modify `apps/web/README.md`:
 ```markdown
 # Web Application
 
-React SPA for ServiceTsunami platform.
+React SPA for AgentProvision platform.
 
 ## Key Features
 

@@ -1,6 +1,6 @@
 # Codex CLI Integration Plan
 
-> Goal: integrate Codex into the existing CLI orchestrator so ServiceTsunami can run agent chat through OpenAI Codex using the same tenant-scoped integration pattern already used for Claude Code.
+> Goal: integrate Codex into the existing CLI orchestrator so AgentProvision can run agent chat through OpenAI Codex using the same tenant-scoped integration pattern already used for Claude Code.
 
 ## Objective
 
@@ -23,7 +23,7 @@ The platform already has the core pattern for Claude Code:
 - integration registry entry: `claude_code`
 - tenant feature flag: `default_cli_platform = "claude_code"`
 - chat routing: `chat.py -> agent_router.py -> cli_session_manager.py`
-- Temporal execution: `ChatCliWorkflow` on `servicetsunami-code`
+- Temporal execution: `ChatCliWorkflow` on `agentprovision-code`
 - worker fetches tenant token from internal API
 - worker invokes `claude -p ... --output-format json --mcp-config ...`
 
@@ -217,7 +217,7 @@ Decision:
 
 ### Phase 6: MCP Compatibility Layer
 
-Codex must be able to use the same ServiceTsunami MCP tools.
+Codex must be able to use the same AgentProvision MCP tools.
 
 Files:
 
@@ -229,7 +229,7 @@ Plan:
 
 1. Test whether Codex can consume the generated MCP config directly.
 2. If yes, reuse the existing MCP path unchanged.
-3. If no, add a worker-side adapter that translates ServiceTsunami tool access into whatever Codex expects.
+3. If no, add a worker-side adapter that translates AgentProvision tool access into whatever Codex expects.
 
 Decision:
 
@@ -368,7 +368,7 @@ Modify if needed:
 
 Deliverable:
 
-- Codex can use the same ServiceTsunami MCP tools
+- Codex can use the same AgentProvision MCP tools
 
 ### Task 7: Add tests and rollout guardrails
 
@@ -439,7 +439,7 @@ The Codex plan is complete when all of the following are true:
 1. Tenant can connect Codex from Integrations.
 2. Tenant can switch `default_cli_platform` to Codex.
 3. Chat requests route to Codex through the same orchestration pipeline.
-4. Codex can use ServiceTsunami MCP tools with tenant scoping.
+4. Codex can use AgentProvision MCP tools with tenant scoping.
 5. Worker authenticates using tenant-owned subscription credentials.
 6. Failures are visible and actionable.
 7. Claude Code continues to work unchanged.

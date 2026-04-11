@@ -2,7 +2,7 @@
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:
-  name: servicetsunami-api-backend
+  name: agentprovision-api-backend
   namespace: prod
 spec:
   healthCheck:
@@ -13,48 +13,48 @@ spec:
     type: HTTP
     requestPath: /api/v1/
 ---
-# Combined Ingress for ServiceTsunami
+# Combined Ingress for AgentProvision
 # Routes traffic to both API and Web services using a single Load Balancer IP
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: servicetsunami-ingress
+  name: agentprovision-ingress
   namespace: prod
   annotations:
     kubernetes.io/ingress.class: gce
-    networking.gke.io/managed-certificates: servicetsunami-cert,agentprovision-cert,healthpets-cert
+    networking.gke.io/managed-certificates: agentprovision-cert,agentprovision-cert,healthpets-cert
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: ingress
 spec:
   rules:
     # Main domain - Web frontend serves root, API serves /api
-    - host: "servicetsunami.com"
+    - host: "agentprovision.com"
       http:
         paths:
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-api
+                name: agentprovision-api
                 port:
                   number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-web
+                name: agentprovision-web
                 port:
                   number: 80
     # www subdomain redirects to main (handled by web frontend)
-    - host: "www.servicetsunami.com"
+    - host: "www.agentprovision.com"
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-web
+                name: agentprovision-web
                 port:
                   number: 80
     # agentprovision.com - development/alternate domain
@@ -65,14 +65,14 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-api
+                name: agentprovision-api
                 port:
                   number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-web
+                name: agentprovision-web
                 port:
                   number: 80
     - host: "www.agentprovision.com"
@@ -82,7 +82,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-web
+                name: agentprovision-web
                 port:
                   number: 80
     # Health Pets - veterinary cardiac monitoring platform
@@ -122,15 +122,15 @@ spec:
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata:
-  name: servicetsunami-cert
+  name: agentprovision-cert
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: certificate
 spec:
   domains:
-    - servicetsunami.com
-    - www.servicetsunami.com
+    - agentprovision.com
+    - www.agentprovision.com
 ---
 # BackendConfig for Health Pets API health check + 300s timeout for agent calls
 apiVersion: cloud.google.com/v1

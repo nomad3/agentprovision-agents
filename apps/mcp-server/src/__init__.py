@@ -1,1 +1,1 @@
-"""ServiceTsunami MCP Server"""
+"""AgentProvision MCP Server"""

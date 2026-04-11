@@ -89,7 +89,7 @@ def seed_demo_data(db: Session) -> None:
 
     data_sources = [
         DataSource(
-            name="Snowflake Revenue Warehouse",
+            name="PostgreSQL Data Warehouse",
             type="warehouse",
             config={},
             tenant_id=demo_tenant.id,

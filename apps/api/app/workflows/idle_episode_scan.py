@@ -29,7 +29,7 @@ class IdleEpisodeScanWorkflow:
                     "idle_timeout",
                 ],
                 id=f"episode-{session['id']}-{session['window_start'][:10]}",
-                task_queue="servicetsunami-orchestration",
+                task_queue="agentprovision-orchestration",
                 parent_close_policy=workflow.ParentClosePolicy.ABANDON,
             )
             

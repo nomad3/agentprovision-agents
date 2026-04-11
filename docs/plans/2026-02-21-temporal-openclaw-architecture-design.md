@@ -5,7 +5,7 @@
 
 ## Overview
 
-ServiceTsunami uses Temporal for durable workflow execution across three domains: agent task orchestration, OpenClaw instance provisioning, and data pipeline sync. Each tenant gets an isolated OpenClaw instance (deployed via Helm) for 50+ skill integrations. The SkillRouter service bridges the API layer to OpenClaw via a WebSocket gateway protocol.
+AgentProvision uses Temporal for durable workflow execution across three domains: agent task orchestration, OpenClaw instance provisioning, and data pipeline sync. Each tenant gets an isolated OpenClaw instance (deployed via Helm) for 50+ skill integrations. The SkillRouter service bridges the API layer to OpenClaw via a WebSocket gateway protocol.
 
 ---
 
@@ -15,8 +15,8 @@ ServiceTsunami uses Temporal for durable workflow execution across three domains
 
 | Worker | Task Queue | File | Workflows | Activities |
 |--------|-----------|------|-----------|------------|
-| **Orchestration** | `servicetsunami-orchestration` | `apps/api/app/workers/orchestration_worker.py` | TaskExecutionWorkflow, OpenClawProvisionWorkflow | dispatch_task, recall_memory, execute_task, persist_entities, evaluate_task, generate_openclaw_values, helm_install_openclaw, wait_pod_ready, health_check_openclaw, register_instance |
-| **Databricks** | `servicetsunami-databricks` | `apps/api/app/workers/databricks_worker.py` | DatasetSyncWorkflow, KnowledgeExtractionWorkflow, AgentKitExecutionWorkflow, DataSourceSyncWorkflow, ScheduledSyncWorkflow | sync_to_bronze, transform_to_silver, update_dataset_metadata, extract_knowledge_from_session, execute_agent_kit_activity, extract_from_connector, load_to_bronze, load_to_silver, update_sync_metadata |
+| **Orchestration** | `agentprovision-orchestration` | `apps/api/app/workers/orchestration_worker.py` | TaskExecutionWorkflow, OpenClawProvisionWorkflow | dispatch_task, recall_memory, execute_task, persist_entities, evaluate_task, generate_openclaw_values, helm_install_openclaw, wait_pod_ready, health_check_openclaw, register_instance |
+| **PostgreSQL** | `agentprovision-postgres` | `apps/api/app/workers/postgres_worker.py` | DatasetSyncWorkflow, KnowledgeExtractionWorkflow, AgentKitExecutionWorkflow, DataSourceSyncWorkflow, ScheduledSyncWorkflow | sync_to_bronze, transform_to_silver, update_dataset_metadata, extract_knowledge_from_session, execute_agent_kit_activity, extract_from_connector, load_to_bronze, load_to_silver, update_sync_metadata |
 | **Scheduler** | N/A (event-driven) | `apps/api/app/workers/scheduler_worker.py` | Triggers ScheduledSyncWorkflow | Polls every 60s, supports cron + interval schedules |
 
 ### Temporal Connection
@@ -35,7 +35,7 @@ ServiceTsunami uses Temporal for durable workflow execution across three domains
 
 **File:** `apps/api/app/workflows/task_execution.py`
 **Activities:** `apps/api/app/workflows/activities/task_execution.py`
-**Queue:** `servicetsunami-orchestration`
+**Queue:** `agentprovision-orchestration`
 **Workflow ID pattern:** Not directly triggered via API (used internally)
 
 ```
@@ -56,7 +56,7 @@ Step 5: evaluate_task       (2min timeout)  → Score results, store memory, upd
 
 **File:** `apps/api/app/workflows/openclaw_provision.py`
 **Activities:** `apps/api/app/workflows/activities/openclaw_provision.py`
-**Queue:** `servicetsunami-orchestration`
+**Queue:** `agentprovision-orchestration`
 **Workflow ID patterns:** `provision-openclaw-{instance_id}`, `upgrade-openclaw-{instance_id}-{timestamp}`
 
 ```
@@ -78,25 +78,25 @@ Step 5: register_instance         (1min timeout)  → Update TenantInstance DB r
 
 ### 3. DatasetSyncWorkflow
 
-**Purpose:** Sync datasets to Databricks Unity Catalog through Bronze/Silver layers.
+**Purpose:** Sync datasets to PostgreSQL Unity Catalog through Bronze/Silver layers.
 
 **File:** `apps/api/app/workflows/dataset_sync.py`
-**Activities:** `apps/api/app/workflows/activities/databricks_sync.py`
-**Queue:** `servicetsunami-databricks`
+**Activities:** `apps/api/app/workflows/activities/postgres_sync.py`
+**Queue:** `agentprovision-postgres`
 
 ```
-Step 1: sync_to_bronze         (5min timeout)  → Upload via MCP server or direct Databricks
+Step 1: sync_to_bronze         (5min timeout)  → Upload via MCP server or direct PostgreSQL
 Step 2: transform_to_silver    (10min timeout) → CTAS from Bronze table
 Step 3: update_dataset_metadata (1min timeout) → Mark sync_status="synced" in DB
 ```
 
 ### 4. DataSourceSyncWorkflow + ScheduledSyncWorkflow
 
-**Purpose:** Extract data from external connectors and load into Databricks layers.
+**Purpose:** Extract data from external connectors and load into PostgreSQL layers.
 
 **File:** `apps/api/app/workflows/data_source_sync.py`
 **Activities:** `apps/api/app/workflows/activities/connectors/extract.py`
-**Queue:** `servicetsunami-databricks`
+**Queue:** `agentprovision-postgres`
 
 ```
 DataSourceSyncWorkflow:
@@ -119,7 +119,7 @@ ScheduledSyncWorkflow:
 
 **File:** `apps/api/app/workflows/knowledge_extraction.py`
 **Activities:** `apps/api/app/workflows/activities/knowledge_extraction.py`
-**Queue:** `servicetsunami-databricks`
+**Queue:** `agentprovision-postgres`
 **Workflow ID pattern:** `knowledge-extraction-{session_id}`
 
 ```
@@ -136,7 +136,7 @@ Step 1: extract_knowledge_from_session → LLM entity extraction with deduplicat
 
 **File:** `apps/api/app/workflows/agent_kit_execution.py`
 **Activities:** `apps/api/app/workflows/activities/agent_kit_execution.py`
-**Queue:** `servicetsunami-databricks`
+**Queue:** `agentprovision-postgres`
 **Workflow ID pattern:** `pipeline-{pipeline_id}-{run_id}`
 
 **Triggered by:**
@@ -405,19 +405,19 @@ Returns all `ExecutionTrace` records for a task, rendered by `TaskTimeline` comp
 
 ### Helm Values
 
-**API service:** `helm/values/servicetsunami-api.yaml`
+**API service:** `helm/values/agentprovision-api.yaml`
 - `TEMPORAL_ADDRESS: temporal:7233` (env var)
 - `OPENCLAW_GATEWAY_TOKEN` from `openclaw-secrets` k8s secret
-- `ADK_BASE_URL: http://servicetsunami-adk` (configMap)
+- `ADK_BASE_URL: http://agentprovision-adk` (configMap)
 
-**Worker:** Deployed as separate pod with same image, runs `orchestration_worker.py` and `databricks_worker.py`.
+**Worker:** Deployed as separate pod with same image, runs `orchestration_worker.py` and `postgres_worker.py`.
 
 ### Secrets
 
 | Secret Name | Key | Used By |
 |-------------|-----|---------|
 | `openclaw-secrets` | `OPENCLAW_GATEWAY_TOKEN` | API → SkillRouter → OpenClaw WebSocket auth |
-| `servicetsunami-api-secret` | `SECRET_KEY`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, `ENCRYPTION_KEY` | API service |
+| `agentprovision-api-secret` | `SECRET_KEY`, `DATABASE_URL`, `ANTHROPIC_API_KEY`, `ENCRYPTION_KEY` | API service |
 
 ### Services
 
@@ -425,8 +425,8 @@ Returns all `ExecutionTrace` records for a task, rendered by `TaskTimeline` comp
 |-------------|------|----------|
 | `temporal` | 7233 | Temporal server gRPC |
 | `openclaw` | 18789 | OpenClaw WebSocket gateway |
-| `servicetsunami-api` | 8000 | FastAPI backend |
-| `servicetsunami-adk` | 8080 | ADK server |
+| `agentprovision-api` | 8000 | FastAPI backend |
+| `agentprovision-adk` | 8080 | ADK server |
 
 ---
 
@@ -443,14 +443,14 @@ Returns all `ExecutionTrace` records for a task, rendered by `TaskTimeline` comp
 ### Activity Implementations
 - `apps/api/app/workflows/activities/task_execution.py` - 5 task execution activities
 - `apps/api/app/workflows/activities/openclaw_provision.py` - 5 provisioning activities
-- `apps/api/app/workflows/activities/databricks_sync.py` - 3 dataset sync activities
+- `apps/api/app/workflows/activities/postgres_sync.py` - 3 dataset sync activities
 - `apps/api/app/workflows/activities/knowledge_extraction.py` - 1 extraction activity
 - `apps/api/app/workflows/activities/agent_kit_execution.py` - 1 kit execution activity
 - `apps/api/app/workflows/activities/connectors/extract.py` - 4 connector activities
 
 ### Workers
 - `apps/api/app/workers/orchestration_worker.py` - Orchestration queue worker
-- `apps/api/app/workers/databricks_worker.py` - Databricks queue worker
+- `apps/api/app/workers/postgres_worker.py` - PostgreSQL queue worker
 - `apps/api/app/workers/scheduler_worker.py` - Scheduled pipeline trigger
 
 ### API Routes
@@ -479,4 +479,4 @@ Returns all `ExecutionTrace` records for a task, rendered by `TaskTimeline` comp
 
 ### Configuration
 - `apps/api/app/core/config.py` - Settings (TEMPORAL_ADDRESS, OPENCLAW_GATEWAY_TOKEN, etc.)
-- `helm/values/servicetsunami-api.yaml` - K8s deployment config
+- `helm/values/agentprovision-api.yaml` - K8s deployment config

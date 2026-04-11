@@ -2,7 +2,7 @@
 
 ## What Was Implemented
 
-We successfully integrated Claude AI (Anthropic) into the ServiceTsunami platform to enable intelligent chat responses for data analysis, with automatic SQL query generation and execution.
+We successfully integrated Claude AI (Anthropic) into the AgentProvision platform to enable intelligent chat responses for data analysis, with automatic SQL query generation and execution.
 
 ### Key Components Added
 
@@ -119,9 +119,9 @@ docker ps
 ```
 
 You should see:
-- `servicetsunami-api-1` on port 8001
-- `servicetsunami-web-1` on port 8002
-- `servicetsunami-db-1` on port 8003
+- `agentprovision-api-1` on port 8001
+- `agentprovision-web-1` on port 8002
+- `agentprovision-db-1` on port 8003
 
 ---
 
@@ -258,7 +258,7 @@ Asia-Pacific at $152,000. Together, these two regions account for
 
 **Check logs:**
 ```bash
-docker logs servicetsunami-api-1
+docker logs agentprovision-api-1
 ```
 
 **Common issues:**
@@ -272,7 +272,7 @@ docker logs servicetsunami-api-1
 2. API key is valid (test at https://console.anthropic.com/)
 3. Container picked up the environment variable:
    ```bash
-   docker exec servicetsunami-api-1 env | grep ANTHROPIC
+   docker exec agentprovision-api-1 env | grep ANTHROPIC
    ```
 
 ### Rate Limiting / API Errors
@@ -375,7 +375,7 @@ curl -X POST http://localhost:8001/api/v1/datasets/{dataset_id}/query \
 ## Support
 
 For issues or questions:
-- Check API logs: `docker logs servicetsunami-api-1`
+- Check API logs: `docker logs agentprovision-api-1`
 - Verify environment variables are set
 - Test API key at Anthropic console
 - Review conversation context in chat response metadata

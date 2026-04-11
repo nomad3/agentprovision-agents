@@ -2,7 +2,7 @@
 
 ## Vision
 
-Rebuild the ServiceTsunami web experience into a cohesive marketing site and operator console that showcases the platform while integrating tightly with the FastAPI backend.
+Rebuild the AgentProvision web experience into a cohesive marketing site and operator console that showcases the platform while integrating tightly with the FastAPI backend.
 
 ## Guiding Principles
 

@@ -1,6 +1,6 @@
-# ServiceTsunami Helm Charts
+# AgentProvision Helm Charts
 
-This directory contains Helm charts for deploying ServiceTsunami to Kubernetes.
+This directory contains Helm charts for deploying AgentProvision to Kubernetes.
 
 ## Structure
 
@@ -12,9 +12,9 @@ helm/
 │       ├── values.yaml
 │       └── templates/
 └── values/
-    ├── servicetsunami-api.yaml    # API service values
-    ├── servicetsunami-web.yaml    # Web frontend values
-    ├── servicetsunami-worker.yaml # Databricks worker values
+    ├── agentprovision-api.yaml    # API service values
+    ├── agentprovision-web.yaml    # Web frontend values
+    ├── agentprovision-worker.yaml # PostgreSQL worker values
     ├── temporal.yaml              # Temporal server values
     ├── temporal-web.yaml          # Temporal Web UI values
     ├── postgresql.yaml            # PostgreSQL values
@@ -39,17 +39,17 @@ export GCP_PROJECT=your-project-id
 sed -i "s/YOUR_GCP_PROJECT/$GCP_PROJECT/g" values/*.yaml
 
 # Deploy API service
-helm upgrade --install servicetsunami-api \
+helm upgrade --install agentprovision-api \
   ./charts/microservice \
   --namespace prod \
   --create-namespace \
-  --values ./values/servicetsunami-api.yaml
+  --values ./values/agentprovision-api.yaml
 
 # Deploy Web frontend
-helm upgrade --install servicetsunami-web \
+helm upgrade --install agentprovision-web \
   ./charts/microservice \
   --namespace prod \
-  --values ./values/servicetsunami-web.yaml
+  --values ./values/agentprovision-web.yaml
 ```
 
 ## DRY Principle
@@ -65,10 +65,10 @@ This setup follows the DRY (Don't Repeat Yourself) principle:
 Each values file only needs to specify what's different from defaults:
 
 ```yaml
-# Example: servicetsunami-api.yaml
-nameOverride: "servicetsunami-api"
+# Example: agentprovision-api.yaml
+nameOverride: "agentprovision-api"
 image:
-  repository: gcr.io/project/servicetsunami-api
+  repository: gcr.io/project/agentprovision-api
 container:
   port: 8000
 resources:
@@ -89,7 +89,7 @@ externalSecret:
   data:
     - secretKey: DATABASE_URL
       remoteRef:
-        key: servicetsunami-database-url
+        key: agentprovision-database-url
 ```
 
 ### Health Checks
@@ -125,10 +125,10 @@ Modern ingress with GKE Gateway:
 httpRoute:
   enabled: true
   parentRefs:
-    - name: servicetsunami-gateway
+    - name: agentprovision-gateway
       namespace: gateway-system
   hostnames:
-    - "servicetsunami.com"
+    - "agentprovision.com"
 ```
 
 ## Template Reference
@@ -197,17 +197,17 @@ externalSecret:
 
 ```bash
 # Render templates without deploying
-helm template servicetsunami-api ./charts/microservice \
-  --values ./values/servicetsunami-api.yaml
+helm template agentprovision-api ./charts/microservice \
+  --values ./values/agentprovision-api.yaml
 
 # Debug installation
-helm upgrade --install servicetsunami-api ./charts/microservice \
-  --values ./values/servicetsunami-api.yaml \
+helm upgrade --install agentprovision-api ./charts/microservice \
+  --values ./values/agentprovision-api.yaml \
   --debug --dry-run
 
 # Check release status
-helm status servicetsunami-api -n prod
+helm status agentprovision-api -n prod
 
 # View release history
-helm history servicetsunami-api -n prod
+helm history agentprovision-api -n prod
 ```

@@ -49,7 +49,7 @@ jobs:
         run: |
           echo "Waiting for Ingress to get an IP address..."
           for i in {1..30}; do
-            IP=$(kubectl get ingress servicetsunami-ingress -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            IP=$(kubectl get ingress agentprovision-ingress -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
             if [ -n "$IP" ]; then
               echo "Ingress IP: $IP"
               break
@@ -61,7 +61,7 @@ jobs:
       - name: Verify deployment
         run: |
           echo "Ingress status:"
-          kubectl get ingress servicetsunami-ingress -n ${{ env.NAMESPACE }}
+          kubectl get ingress agentprovision-ingress -n ${{ env.NAMESPACE }}
           echo ""
           echo "Managed Certificate status:"
           kubectl get managedcertificates -n ${{ env.NAMESPACE }}

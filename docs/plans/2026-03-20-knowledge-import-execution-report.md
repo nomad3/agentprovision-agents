@@ -13,7 +13,7 @@
 - **Source:** `~/.claude/projects/` — 10+ projects, 25K messages
 - **Method:** JSONL parsing → entity extraction + Ollama auto-scoring
 - **Result:** 1,299 observations + 2,521 auto-scored RL experiences
-- **Projects covered:** servicetsunami-agents (1,185), integral (385), pharmapp (238), health-pets (182), infra-control-plane (115), lexsy-test (108), dentalERP (105), + 10 more
+- **Projects covered:** agentprovision-agents (1,185), integral (385), pharmapp (238), health-pets (182), infra-control-plane (115), lexsy-test (108), dentalERP (105), + 10 more
 
 ### 2. Design Documents (COMPLETE)
 - **Source:** `docs/plans/*.md` — 20+ design documents

@@ -1,6 +1,6 @@
 """CoalitionWorkflow — manages structured multi-agent collaboration.
 
-Implements the STP (ServiceTsunami Protocol) orchestration for team-based
+Implements the STP (AgentProvision Protocol) orchestration for team-based
 task execution. Dispatched by the Supervisor (Luna) when a complex task
 requires specialized agents (e.g., Coder + Critic).
 """

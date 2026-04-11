@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "secret"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    DATABASE_URL: str = "postgresql://postgres:postgres@db:5432/servicetsunami"
+    DATABASE_URL: str = "postgresql://postgres:postgres@db:5432/agentprovision"
     DATA_STORAGE_PATH: str = "/app/storage"
     TEMPORAL_ADDRESS: str | None = "localhost:7233"
     TEMPORAL_NAMESPACE: str = "default"
@@ -24,16 +24,10 @@ class Settings(BaseSettings):
     # MCP Server Configuration
     MCP_SERVER_URL: str = "http://localhost:8085"
     MCP_API_KEY: str = "dev_mcp_key"  # Change in production
-    MCP_ENABLED: bool = True  # Feature flag for MCP/Databricks integration
+    MCP_ENABLED: bool = True  # Feature flag for MCP integration
 
     # Internal API Key (for MCP server to access credentials)
     API_INTERNAL_KEY: str = "internal-service-key"
-
-    # Databricks Sync Settings
-    DATABRICKS_SYNC_ENABLED: bool = True
-    DATABRICKS_AUTO_SYNC: bool = True
-    DATABRICKS_RETRY_ATTEMPTS: int = 3
-    DATABRICKS_RETRY_INTERVAL: int = 300  # seconds (5 minutes)
 
     # Google AI (Gemini Embeddings)
     GOOGLE_API_KEY: str = ""

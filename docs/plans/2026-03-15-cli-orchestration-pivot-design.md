@@ -1,6 +1,6 @@
 # CLI Orchestration Pivot — Design Spec
 
-> ServiceTsunami pivots from custom ADK agents to an orchestration layer on top of existing agent platforms (Claude Code CLI, Gemini CLI, Codex CLI).
+> AgentProvision pivots from custom ADK agents to an orchestration layer on top of existing agent platforms (Claude Code CLI, Gemini CLI, Codex CLI).
 
 **Date:** 2026-03-15
 **Status:** Approved
@@ -10,7 +10,7 @@
 
 ## Motivation
 
-Agent platforms (Claude Code, Gemini CLI, Codex) handle context windows, memory, tool calling, and rate limits natively. Building custom agents on top of ADK is expensive (burned $100+ in API credits in one day), fragile (context overflow, rate limit retries), and duplicates work these platforms already do. ServiceTsunami's value is the orchestration layer: routing, multi-tenancy, integrations, knowledge graph, skill marketplace, and RL learning — not the LLM agent itself.
+Agent platforms (Claude Code, Gemini CLI, Codex) handle context windows, memory, tool calling, and rate limits natively. Building custom agents on top of ADK is expensive (burned $100+ in API credits in one day), fragile (context overflow, rate limit retries), and duplicates work these platforms already do. AgentProvision's value is the orchestration layer: routing, multi-tenancy, integrations, knowledge graph, skill marketplace, and RL learning — not the LLM agent itself.
 
 ## Target CLI Platforms
 
@@ -41,7 +41,7 @@ Agent platforms (Claude Code, Gemini CLI, Codex) handle context windows, memory,
 └─────────────────────────┼───────────────────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────────────────┐
-│  Temporal Workers (servicetsunami-agents queue)                   │
+│  Temporal Workers (agentprovision-agents queue)                   │
 │                                                                   │
 │  ┌────────────────┐ ┌────────────────┐ ┌──────────────────┐     │
 │  │ Claude Code    │ │ Gemini CLI     │ │ Codex CLI        │     │
@@ -179,7 +179,7 @@ apps/mcp-server/
 ```python
 from mcp.server.fastmcp import FastMCP, Context
 
-mcp = FastMCP("ServiceTsunami", stateless_http=True, json_response=True)
+mcp = FastMCP("AgentProvision", stateless_http=True, json_response=True)
 
 @mcp.tool()
 async def search_emails(query: str, max_results: int = 10, account_email: str = "", ctx: Context = None) -> dict:
@@ -190,7 +190,7 @@ async def search_emails(query: str, max_results: int = 10, account_email: str = 
 
 **Tenant auth:** CLI sessions connect with headers `X-Tenant-Id` and `X-Internal-Key`. MCP server validates and scopes all operations.
 
-**Existing Databricks tools stay** — new tools added alongside in same server.
+**Existing PostgreSQL tools stay** — new tools added alongside in same server.
 
 ### 3. CLI Session Lifecycle
 
@@ -220,7 +220,7 @@ Two execution modes: **fast path** (conversational) and **async path** (heavy ta
 
 **Stateless CLI invocations (each call is independent):**
 - CLI does NOT manage conversation history across calls
-- ServiceTsunami injects context into each prompt:
+- AgentProvision injects context into each prompt:
   ```
   [Conversation summary from last 6 messages]
   [Relevant knowledge graph entities recalled via embeddings]
@@ -232,7 +232,7 @@ Two execution modes: **fast path** (conversational) and **async path** (heavy ta
 
 **Session rotation:** When injected context exceeds 80% of CLI's context window, summarize and trim. Same cumulative token tracking as current implementation.
 
-**Key principle:** CLIs are stateless tools invoked per-message. ServiceTsunami owns conversation history, memory, and context injection. CLIs own the LLM call, tool execution, and response generation.
+**Key principle:** CLIs are stateless tools invoked per-message. AgentProvision owns conversation history, memory, and context injection. CLIs own the LLM call, tool execution, and response generation.
 
 ### 4. Agent Skill → Platform File Generation
 
@@ -249,7 +249,7 @@ fallback_platform: gemini_cli
 category: personal_assistant
 tags: [whatsapp, copilot, business]
 ---
-You are Luna — AI chief of staff on the ServiceTsunami platform.
+You are Luna — AI chief of staff on the AgentProvision platform.
 ## Personality
 Warm, conversational, brief. Send short messages like texting a friend.
 ## Tools Available
@@ -391,11 +391,11 @@ Phase 1 ships with Claude Code CLI only. Gemini and Codex are added after MCP su
 
 ## Design Decisions (from spec review)
 
-**Stateless CLI invocations over persistent sessions:** Each CLI call is independent. No `--resume`, no session persistence, no pod affinity. ServiceTsunami owns history and injects context per-call. Simplest, most resilient pattern.
+**Stateless CLI invocations over persistent sessions:** Each CLI call is independent. No `--resume`, no session persistence, no pod affinity. AgentProvision owns history and injects context per-call. Simplest, most resilient pattern.
 
 **Fast path + async path over Temporal-only:** Conversational messages use direct subprocess (<15s). Heavy tasks use Temporal workflows (up to 15min). Avoids Temporal dispatch overhead for chat.
 
-**Incremental MCP migration over big-bang rewrite:** Phase 1 adds FastMCP tools alongside existing MCP server. Tools are ported one group at a time. Existing Databricks tools stay untouched.
+**Incremental MCP migration over big-bang rewrite:** Phase 1 adds FastMCP tools alongside existing MCP server. Tools are ported one group at a time. Existing PostgreSQL tools stay untouched.
 
 **Deterministic routing before RL routing:** Phase 1-2 use tenant default + agent affinity. RL exploration added in Phase 3 once baseline metrics exist per platform.
 

@@ -1,0 +1,88 @@
+# AgentProvision Memory Core - Rust/Postgres gRPC Hub
+nameOverride: "memory-core"
+fullnameOverride: "memory-core"
+
+image:
+  repository: agentprovision-memory-core
+  tag: latest
+  pullPolicy: Never # Using local image
+
+replicaCount: 1
+
+container:
+  port: 50052
+
+# Pod security
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Resource allocation
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Health checks - gRPC health probes via tonic-health
+livenessProbe:
+  enabled: true
+  httpGet: null
+  grpc:
+    port: 50052
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet: null
+  grpc:
+    port: 50052
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 50052
+  targetPort: 50052
+
+# ConfigMap with non-sensitive configuration
+configMap:
+  enabled: true
+  data:
+    RUST_LOG: "info"
+    EMBEDDING_SERVICE_URL: "http://embedding-service:50051"
+
+# Environment variables
+env:
+  - name: DATABASE_URL
+    value: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
+
+# Disable GKE specifics
+externalSecret:
+  enabled: false
+backendConfig:
+  enabled: false
+healthCheckPolicy:
+  enabled: false
+ingress:
+  enabled: false
+managedCertificate:
+  enabled: false
+extraContainers: []

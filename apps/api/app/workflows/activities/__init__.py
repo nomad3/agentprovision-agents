@@ -1,3 +1,3 @@
 """
-Temporal activities for ServiceTsunami workflows
+Temporal activities for AgentProvision workflows
 """

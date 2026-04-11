@@ -4,7 +4,7 @@
 
 **Goal:** Replace Claude/Anthropic LLM with Google ADK + Gemini 2.5 Flash, implementing full multi-agent architecture with hybrid memory and knowledge graph.
 
-**Architecture:** New `adk-server` service using Google ADK API server, connected to existing PostgreSQL (via Cloud SQL Proxy), Databricks (via MCP server), and Vertex AI Vector Search for RAG. Frontend calls ADK endpoints directly for chat.
+**Architecture:** New `adk-server` service using Google ADK API server, connected to existing PostgreSQL (via Cloud SQL Proxy), PostgreSQL (via MCP server), and Vertex AI Vector Search for RAG. Frontend calls ADK endpoints directly for chat.
 
 **Tech Stack:** Google ADK 1.21+, Gemini 2.5 Flash, Vertex AI Vector Search, text-embedding-005, PostgreSQL + pgvector, FastAPI (existing), React (existing)
 
@@ -130,10 +130,10 @@ class Settings(BaseSettings):
     adk_model: str = "gemini-2.5-flash"
 
     # Database (shared with FastAPI)
-    database_url: str = "postgresql://postgres:postgres@localhost:5432/servicetsunami"
+    database_url: str = "postgresql://postgres:postgres@localhost:5432/agentprovision"
     database_host: str = "localhost"
     database_port: int = 5432
-    database_name: str = "servicetsunami"
+    database_name: str = "agentprovision"
     database_user: str = "postgres"
     database_password: str = "postgres"
 
@@ -141,7 +141,7 @@ class Settings(BaseSettings):
     secret_key: str = "secret"
     algorithm: str = "HS256"
 
-    # MCP Server (Databricks)
+    # MCP Server (PostgreSQL)
     mcp_server_url: str = "http://mcp-server:8000"
     mcp_api_key: str = "dev_mcp_key"
 
@@ -230,17 +230,17 @@ git commit -m "feat(adk): add Dockerfile"
 ### Task 1.5: Create Helm Values for ADK Service
 
 **Files:**
-- Create: `helm/values/servicetsunami-adk.yaml`
+- Create: `helm/values/agentprovision-adk.yaml`
 
 **Step 1: Create Helm values**
 
 ```yaml
-# ServiceTsunami ADK Service - Google ADK Agent Server
-nameOverride: "servicetsunami-adk"
-fullnameOverride: "servicetsunami-adk"
+# AgentProvision ADK Service - Google ADK Agent Server
+nameOverride: "agentprovision-adk"
+fullnameOverride: "agentprovision-adk"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-adk
+  repository: gcr.io/ai-agency-479516/agentprovision-adk
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -325,7 +325,7 @@ configMap:
     MCP_SERVER_URL: "http://mcp-server:8000"
     DATABASE_HOST: "localhost"
     DATABASE_PORT: "5432"
-    DATABASE_NAME: "servicetsunami"
+    DATABASE_NAME: "agentprovision"
     VERTEX_PROJECT: "ai-agency-479516"
     VERTEX_LOCATION: "us-central1"
     EMBEDDING_MODEL: "text-embedding-005"
@@ -338,21 +338,21 @@ externalSecret:
     name: gcpsm-secret-store
     kind: SecretStore
   target:
-    name: servicetsunami-adk-secret
+    name: agentprovision-adk-secret
     creationPolicy: Owner
   data:
     - secretKey: SECRET_KEY
       remoteRef:
-        key: servicetsunami-secret-key
+        key: agentprovision-secret-key
     - secretKey: DATABASE_URL
       remoteRef:
-        key: servicetsunami-database-url
+        key: agentprovision-database-url
     - secretKey: GOOGLE_API_KEY
       remoteRef:
-        key: servicetsunami-google-api-key
+        key: agentprovision-google-api-key
     - secretKey: MCP_API_KEY
       remoteRef:
-        key: servicetsunami-mcp-api-key
+        key: agentprovision-mcp-api-key
 
 # Cloud SQL Proxy sidecar for secure database connection
 extraContainers:
@@ -394,13 +394,13 @@ ingress:
 
 **Step 2: Verify YAML syntax**
 
-Run: `python3 -c "import yaml; yaml.safe_load(open('helm/values/servicetsunami-adk.yaml'))"`
+Run: `python3 -c "import yaml; yaml.safe_load(open('helm/values/agentprovision-adk.yaml'))"`
 Expected: No output (success)
 
 **Step 3: Commit**
 
 ```bash
-git add helm/values/servicetsunami-adk.yaml
+git add helm/values/agentprovision-adk.yaml
 git commit -m "feat(adk): add Helm values for ADK service"
 ```
 
@@ -425,7 +425,7 @@ Add the following path before `/api` in the rules section:
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-adk
+                name: agentprovision-adk
                 port:
                   number: 80
 ```
@@ -460,7 +460,7 @@ on:
       - main
     paths:
       - 'apps/adk-server/**'
-      - 'helm/values/servicetsunami-adk.yaml'
+      - 'helm/values/agentprovision-adk.yaml'
       - '.github/workflows/adk-deploy.yaml'
   workflow_dispatch:
 
@@ -468,9 +468,9 @@ env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT }}
   GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
   GKE_ZONE: ${{ vars.GKE_ZONE }}
-  IMAGE_NAME: gcr.io/${{ vars.GCP_PROJECT }}/servicetsunami-adk
+  IMAGE_NAME: gcr.io/${{ vars.GCP_PROJECT }}/agentprovision-adk
   NAMESPACE: prod
-  HELM_RELEASE: servicetsunami-adk
+  HELM_RELEASE: agentprovision-adk
   HELM_CHART: ./helm/charts/microservice
 
 jobs:
@@ -516,7 +516,7 @@ jobs:
         run: |
           helm upgrade --install ${{ env.HELM_RELEASE }} ${{ env.HELM_CHART }} \
             --namespace ${{ env.NAMESPACE }} \
-            --values helm/values/servicetsunami-adk.yaml \
+            --values helm/values/agentprovision-adk.yaml \
             --set image.tag=${{ github.sha }} \
             --wait \
             --timeout 10m
@@ -524,7 +524,7 @@ jobs:
       - name: Verify deployment
         run: |
           kubectl rollout status deployment/${{ env.HELM_RELEASE }} -n ${{ env.NAMESPACE }}
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=servicetsunami-adk
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=agentprovision-adk
 ```
 
 **Step 2: Verify YAML syntax**
@@ -551,7 +551,7 @@ git commit -m "feat(adk): add GitHub Actions workflow for ADK deployment"
 **Step 1: Create agent.py (ADK entry point)**
 
 ```python
-"""Root agent definition for ServiceTsunami ADK server.
+"""Root agent definition for AgentProvision ADK server.
 
 This is the main entry point for the ADK API server.
 The root_agent coordinates specialist sub-agents for different tasks.
@@ -566,9 +566,9 @@ from config.settings import settings
 
 # Root supervisor agent - coordinates specialist agents
 root_agent = Agent(
-    name="servicetsunami_supervisor",
+    name="agentprovision_supervisor",
     model=settings.adk_model,
-    instruction="""You are the ServiceTsunami AI supervisor - an intelligent orchestrator for data analysis and insights.
+    instruction="""You are the AgentProvision AI supervisor - an intelligent orchestrator for data analysis and insights.
 
 You coordinate a team of specialist agents:
 - data_analyst: For data queries, SQL execution, statistical analysis, and generating insights from datasets
@@ -618,7 +618,7 @@ git commit -m "feat(adk): add root supervisor agent"
 
 Handles all data-related operations:
 - Dataset discovery and exploration
-- SQL query execution via Databricks
+- SQL query execution via PostgreSQL
 - Statistical analysis and insights
 - Natural language to SQL conversion
 """
@@ -651,7 +651,7 @@ data_analyst = Agent(
 
 Your capabilities:
 - Discover and explore available datasets
-- Write and execute SQL queries on Databricks Unity Catalog
+- Write and execute SQL queries on PostgreSQL Unity Catalog
 - Generate statistical insights and forecasts
 - Answer natural language questions about data
 - Perform calculations and comparisons
@@ -888,7 +888,7 @@ git commit -m "feat(adk): add knowledge manager agent"
 **Step 1: Update __init__.py to export agents**
 
 ```python
-"""Agent definitions for ServiceTsunami ADK server."""
+"""Agent definitions for AgentProvision ADK server."""
 from agents.data_analyst import data_analyst
 from agents.report_generator import report_generator
 from agents.knowledge_manager import knowledge_manager
@@ -916,17 +916,17 @@ git commit -m "feat(adk): export agents from __init__.py"
 
 ## Phase 3: Tools Implementation
 
-### Task 3.1: Create Databricks Client Service
+### Task 3.1: Create PostgreSQL Client Service
 
 **Files:**
-- Create: `apps/adk-server/services/databricks_client.py`
+- Create: `apps/adk-server/services/postgres_client.py`
 
-**Step 1: Create databricks_client.py**
+**Step 1: Create postgres_client.py**
 
 ```python
-"""Databricks client that communicates with MCP server.
+"""PostgreSQL client that communicates with MCP server.
 
-All data operations route through the MCP server to Databricks Unity Catalog.
+All data operations route through the MCP server to PostgreSQL Unity Catalog.
 """
 import httpx
 from typing import Any, Optional
@@ -934,8 +934,8 @@ from typing import Any, Optional
 from config.settings import settings
 
 
-class DatabricksClient:
-    """HTTP client for MCP server (Databricks operations)."""
+class PostgreSQLClient:
+    """HTTP client for MCP server (PostgreSQL operations)."""
 
     def __init__(self):
         self.base_url = settings.mcp_server_url
@@ -952,7 +952,7 @@ class DatabricksClient:
         catalog: Optional[str] = None,
         limit: int = 1000,
     ) -> dict[str, Any]:
-        """Execute SQL query on Databricks."""
+        """Execute SQL query on PostgreSQL."""
         response = await self.client.post(
             "/tools/query_sql",
             json={
@@ -969,7 +969,7 @@ class DatabricksClient:
         catalog: str,
         schema: str = "silver",
     ) -> list[dict[str, Any]]:
-        """List tables in Databricks catalog."""
+        """List tables in PostgreSQL catalog."""
         response = await self.client.post(
             "/tools/list_tables",
             json={
@@ -1004,27 +1004,27 @@ class DatabricksClient:
 
 
 # Singleton instance
-_client: Optional[DatabricksClient] = None
+_client: Optional[PostgreSQLClient] = None
 
 
-def get_databricks_client() -> DatabricksClient:
-    """Get or create Databricks client singleton."""
+def get_postgres_client() -> PostgreSQLClient:
+    """Get or create PostgreSQL client singleton."""
     global _client
     if _client is None:
-        _client = DatabricksClient()
+        _client = PostgreSQLClient()
     return _client
 ```
 
 **Step 2: Verify syntax**
 
-Run: `python3 -m py_compile apps/adk-server/services/databricks_client.py`
+Run: `python3 -m py_compile apps/adk-server/services/postgres_client.py`
 Expected: No output (success)
 
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/services/databricks_client.py
-git commit -m "feat(adk): add Databricks MCP client"
+git add apps/adk-server/services/postgres_client.py
+git commit -m "feat(adk): add PostgreSQL MCP client"
 ```
 
 ---
@@ -1039,12 +1039,12 @@ git commit -m "feat(adk): add Databricks MCP client"
 ```python
 """Data discovery and querying tools.
 
-All data operations route through MCP server to Databricks.
+All data operations route through MCP server to PostgreSQL.
 """
 from google.adk.tools import tool
 from typing import Optional
 
-from services.databricks_client import get_databricks_client
+from services.postgres_client import get_postgres_client
 
 
 @tool
@@ -1061,7 +1061,7 @@ async def discover_datasets(
     Returns:
         List of datasets with name, schema, row count, last updated
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
     # List tables from tenant's catalog
     catalog = f"tenant_{tenant_id.replace('-', '_')}"
     tables = await client.list_tables(catalog=catalog, schema="silver")
@@ -1084,7 +1084,7 @@ async def get_dataset_schema(dataset_id: str) -> dict:
     Returns:
         Schema with columns, types, and sample data
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
     parts = dataset_id.split(".")
     if len(parts) != 3:
         return {"error": "Invalid dataset_id format. Expected: catalog.schema.table"}
@@ -1103,7 +1103,7 @@ async def get_dataset_statistics(dataset_id: str) -> dict:
     Returns:
         Statistical summary including counts, means, distributions
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
 
     # Run DESCRIBE EXTENDED to get table stats
     sql = f"DESCRIBE EXTENDED {dataset_id}"
@@ -1125,7 +1125,7 @@ async def query_sql(
     explanation: str = "",
     limit: int = 1000,
 ) -> dict:
-    """Execute SQL query on Databricks Unity Catalog.
+    """Execute SQL query on PostgreSQL Unity Catalog.
 
     Args:
         sql: The SQL query to execute
@@ -1135,7 +1135,7 @@ async def query_sql(
     Returns:
         Query results with rows, column names, and metadata
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
 
     # Add LIMIT if not present
     sql_upper = sql.upper()
@@ -1190,7 +1190,7 @@ async def generate_insights(
     Returns:
         Key findings, suggested follow-up questions, visualization recommendations
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
 
     # Get basic statistics
     stats_sql = f"""
@@ -1236,7 +1236,7 @@ from google.adk.tools import tool
 from typing import Optional
 import re
 
-from services.databricks_client import get_databricks_client
+from services.postgres_client import get_postgres_client
 
 
 @tool
@@ -1284,7 +1284,7 @@ async def compare_periods(
     Returns:
         Comparison with absolute and percentage changes
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
 
     sql = f"""
     WITH period1_data AS (
@@ -1337,7 +1337,7 @@ async def forecast(
     Returns:
         Historical data and forecasted values with confidence intervals
     """
-    client = get_databricks_client()
+    client = get_postgres_client()
 
     # Get historical data for trend analysis
     sql = f"""
@@ -1957,7 +1957,7 @@ git commit -m "feat(adk): add action and reporting tools"
 **Step 1: Update __init__.py to export tools**
 
 ```python
-"""Tool definitions for ServiceTsunami ADK server."""
+"""Tool definitions for AgentProvision ADK server."""
 from tools.data_tools import (
     discover_datasets,
     get_dataset_schema,
@@ -2870,16 +2870,16 @@ git commit -m "feat(adk): add JWT auth service"
 **Step 1: Update __init__.py**
 
 ```python
-"""Service layer for ServiceTsunami ADK server."""
+"""Service layer for AgentProvision ADK server."""
 from services.auth import (
     decode_token,
     validate_request,
     get_tenant_id_from_token,
     TokenData,
 )
-from services.databricks_client import (
-    DatabricksClient,
-    get_databricks_client,
+from services.postgres_client import (
+    PostgreSQLClient,
+    get_postgres_client,
 )
 from services.knowledge_graph import (
     KnowledgeGraphService,
@@ -2892,9 +2892,9 @@ __all__ = [
     "validate_request",
     "get_tenant_id_from_token",
     "TokenData",
-    # Databricks
-    "DatabricksClient",
-    "get_databricks_client",
+    # PostgreSQL
+    "PostgreSQLClient",
+    "get_postgres_client",
     # Knowledge Graph
     "KnowledgeGraphService",
     "get_knowledge_service",
@@ -3067,18 +3067,18 @@ git commit -m "feat(db): add knowledge graph tables migration"
 **Step 1: Create secret in GCP Secret Manager**
 
 ```bash
-gcloud secrets create servicetsunami-google-api-key \
+gcloud secrets create agentprovision-google-api-key \
     --project=ai-agency-479516 \
     --replication-policy=automatic
 
 # Add the API key value
-echo -n "YOUR_GOOGLE_API_KEY" | gcloud secrets versions add servicetsunami-google-api-key --data-file=-
+echo -n "YOUR_GOOGLE_API_KEY" | gcloud secrets versions add agentprovision-google-api-key --data-file=-
 ```
 
 **Step 2: Grant access to service account**
 
 ```bash
-gcloud secrets add-iam-policy-binding servicetsunami-google-api-key \
+gcloud secrets add-iam-policy-binding agentprovision-google-api-key \
     --project=ai-agency-479516 \
     --member="serviceAccount:dev-backend-app@ai-agency-479516.iam.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor"
@@ -3087,7 +3087,7 @@ gcloud secrets add-iam-policy-binding servicetsunami-google-api-key \
 **Step 3: Verify secret exists**
 
 ```bash
-gcloud secrets describe servicetsunami-google-api-key --project=ai-agency-479516
+gcloud secrets describe agentprovision-google-api-key --project=ai-agency-479516
 ```
 
 ---
@@ -3100,7 +3100,7 @@ gcloud secrets describe servicetsunami-google-api-key --project=ai-agency-479516
 
 ```bash
 git add apps/adk-server/
-git add helm/values/servicetsunami-adk.yaml
+git add helm/values/agentprovision-adk.yaml
 git add kubernetes/ingress.yaml
 git add .github/workflows/adk-deploy.yaml
 ```
@@ -3131,10 +3131,10 @@ git push origin main
 
 After deployment, verify:
 
-1. [ ] ADK pod is running: `kubectl get pods -n prod -l app.kubernetes.io/name=servicetsunami-adk`
-2. [ ] ADK service is healthy: `curl https://servicetsunami.com/adk/list-apps`
-3. [ ] Root agent is available: Check response includes `servicetsunami_supervisor`
-4. [ ] Create session works: Test POST to `/adk/apps/servicetsunami_supervisor/users/test/sessions`
+1. [ ] ADK pod is running: `kubectl get pods -n prod -l app.kubernetes.io/name=agentprovision-adk`
+2. [ ] ADK service is healthy: `curl https://agentprovision.com/adk/list-apps`
+3. [ ] Root agent is available: Check response includes `agentprovision_supervisor`
+4. [ ] Create session works: Test POST to `/adk/apps/agentprovision_supervisor/users/test/sessions`
 5. [ ] Send message works: Test POST to `/adk/run` with test message
 
 ---

@@ -20,7 +20,7 @@
       },
       "agenticAutomation": {
         "title": "Motor de Ejecucion Autonoma",
-        "description": "Workflows durables con Temporal en 4 colas: orquestacion, databricks, codigo y negocios. Desde deal pipelines hasta monitoreo de competidores y coding autonomo — ejecucion confiable con trazabilidad completa."
+        "description": "Workflows durables con Temporal en 4 colas: orquestacion, postgres, codigo y negocios. Desde deal pipelines hasta monitoreo de competidores y coding autonomo — ejecucion confiable con trazabilidad completa."
       }
     }
   },
@@ -156,7 +156,7 @@
     "layers": {
       "dataIntegrationLayer": {
         "title": "Capa de Integracion",
-        "description": "Proveedores OAuth (Google, GitHub, Jira), WhatsApp Business API, servidor MCP para Databricks y vault de credenciales para gestion segura de tokens."
+        "description": "Proveedores OAuth (Google, GitHub, Jira), WhatsApp Business API, servidor MCP para PostgreSQL y vault de credenciales para gestion segura de tokens."
       },
       "semanticGovernanceLayer": {
         "title": "Capa de Orquestacion",
@@ -164,7 +164,7 @@
       },
       "executionLayer": {
         "title": "Capa de Ejecucion",
-        "description": "Workflows durables con Temporal en 4 colas: orquestacion, databricks, codigo y negocios. Monitoreo de inbox, rastreo de competidores, deal pipelines y tareas de codigo."
+        "description": "Workflows durables con Temporal en 4 colas: orquestacion, postgres, codigo y negocios. Monitoreo de inbox, rastreo de competidores, deal pipelines y tareas de codigo."
       },
       "agenticExecutionLayer": {
         "title": "Capa de Inteligencia",

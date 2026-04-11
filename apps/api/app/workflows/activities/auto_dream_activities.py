@@ -9,7 +9,7 @@ the Auto-dream cycle runs nightly (triggered from AutonomousLearningWorkflow) an
   4. consolidate_dream_policies       — update RLPolicyState weights from high-confidence patterns
   5. log_dream_results                — write audit summary
 
-Queue: servicetsunami-orchestration (registered in orchestration_worker.py)
+Queue: agentprovision-orchestration (registered in orchestration_worker.py)
 """
 
 import logging

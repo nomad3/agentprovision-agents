@@ -1,4 +1,4 @@
-# ServiceTsunami MCP Databricks Integration - COMPLETE ✅
+# AgentProvision MCP PostgreSQL Integration - COMPLETE ✅
 
 **Date**: October 30, 2025
 **Status**: Ready for MCP Connector Testing
@@ -31,7 +31,7 @@ Complete HTTP client with **520 lines** of integration code:
 ### 2. **Database Layer** ✅
 
 #### Migration Script
-**File**: `apps/api/migrations/001_add_databricks_metadata.sql`
+**File**: `apps/api/migrations/001_add_postgres_metadata.sql`
 
 - ✅ Added `metadata_` JSONB column to 6 tables
 - ✅ Created GIN indexes for efficient queries
@@ -47,47 +47,47 @@ Complete HTTP client with **520 lines** of integration code:
 
 ### 3. **Service Layer** ✅
 
-#### Dataset Service (Databricks)
-**File**: `apps/api/app/services/datasets_databricks.py`
+#### Dataset Service (PostgreSQL)
+**File**: `apps/api/app/services/datasets_postgres.py`
 
 **Functions**:
-- `ingest_tabular_with_databricks()` - Hybrid local + Databricks storage
-- `query_dataset_databricks()` - SQL queries via Databricks or local fallback
-- `get_dataset_metadata_databricks()` - Combined metadata
-- `delete_dataset_databricks()` - Delete from both sources
+- `ingest_tabular_with_postgres()` - Hybrid local + PostgreSQL storage
+- `query_dataset_postgres()` - SQL queries via PostgreSQL or local fallback
+- `get_dataset_metadata_postgres()` - Combined metadata
+- `delete_dataset_postgres()` - Delete from both sources
 
 **Features**:
 - ✅ Automatic upload to Delta Lake
-- ✅ Fallback to local Parquet if Databricks fails
+- ✅ Fallback to local Parquet if PostgreSQL fails
 - ✅ Metadata tracking (table_path, catalog, schema)
 - ✅ Error handling with graceful degradation
 
-#### Notebook Service (Databricks)
-**File**: `apps/api/app/services/notebook_databricks.py`
+#### Notebook Service (PostgreSQL)
+**File**: `apps/api/app/services/notebook_postgres.py`
 
 **Functions**:
-- `create_databricks_notebook()` - Create in workspace
-- `execute_databricks_notebook()` - Run with parameters
+- `create_postgres_notebook()` - Create in workspace
+- `execute_postgres_notebook()` - Run with parameters
 - `get_notebook_run_status()` - Check execution status
-- `update_databricks_notebook()` - Sync changes
-- `delete_databricks_notebook()` - Remove from workspace
+- `update_postgres_notebook()` - Sync changes
+- `delete_postgres_notebook()` - Remove from workspace
 
 **Features**:
-- ✅ Jupyter-like notebook creation in Databricks
+- ✅ Jupyter-like notebook creation in PostgreSQL
 - ✅ Execution with custom parameters
 - ✅ Real-time status tracking
 - ✅ Bi-directional sync
 
-#### Data Pipeline Service (Databricks)
-**File**: `apps/api/app/services/data_pipeline_databricks.py`
+#### Data Pipeline Service (PostgreSQL)
+**File**: `apps/api/app/services/data_pipeline_postgres.py`
 
 **Functions**:
-- `create_databricks_job()` - Multi-task workflow creation
-- `run_databricks_pipeline()` - Trigger execution
+- `create_postgres_job()` - Multi-task workflow creation
+- `run_postgres_pipeline()` - Trigger execution
 - `get_pipeline_run_status()` - Track progress
 - `list_pipeline_runs()` - Historical runs
 - `cancel_pipeline_run()` - Stop running job
-- `_convert_to_databricks_tasks()` - Config transformer
+- `_convert_to_postgres_tasks()` - Config transformer
 
 **Features**:
 - ✅ Multi-task DAG support
@@ -99,15 +99,15 @@ Complete HTTP client with **520 lines** of integration code:
 
 ### 4. **API Endpoints** ✅
 
-#### Databricks Status Router
-**File**: `apps/api/app/api/v1/databricks.py`
+#### PostgreSQL Status Router
+**File**: `apps/api/app/api/v1/postgres.py`
 
 **Endpoints**:
 ```
-GET  /api/v1/databricks/status         - Integration status
-POST /api/v1/databricks/initialize     - Setup tenant catalog
-GET  /api/v1/databricks/usage          - Resource usage stats
-GET  /api/v1/databricks/health         - Quick health check
+GET  /api/v1/postgres/status         - Integration status
+POST /api/v1/postgres/initialize     - Setup tenant catalog
+GET  /api/v1/postgres/usage          - Resource usage stats
+GET  /api/v1/postgres/health         - Quick health check
 ```
 
 **Features**:
@@ -124,8 +124,8 @@ GET  /api/v1/databricks/health         - Quick health check
 apps/api/
 ├── app/
 │   ├── api/v1/
-│   │   ├── databricks.py          ✨ NEW - Status endpoints
-│   │   └── routes.py               ✅ Updated - Added databricks router
+│   │   ├── postgres.py          ✨ NEW - Status endpoints
+│   │   └── routes.py               ✅ Updated - Added postgres router
 │   ├── core/
 │   │   └── config.py               ✅ Updated - MCP settings
 │   ├── models/
@@ -134,19 +134,19 @@ apps/api/
 │   │   └── data_pipeline.py        ✅ Updated - metadata_ column
 │   ├── services/
 │   │   ├── mcp_client.py           ✨ NEW - MCP HTTP client
-│   │   ├── datasets_databricks.py  ✨ NEW - Enhanced dataset service
-│   │   ├── notebook_databricks.py  ✨ NEW - Enhanced notebook service
-│   │   └── data_pipeline_databricks.py ✨ NEW - Enhanced pipeline service
+│   │   ├── datasets_postgres.py  ✨ NEW - Enhanced dataset service
+│   │   ├── notebook_postgres.py  ✨ NEW - Enhanced notebook service
+│   │   └── data_pipeline_postgres.py ✨ NEW - Enhanced pipeline service
 │   └── utils/
 │       └── logger.py               ✨ NEW - Logging utility
 ├── migrations/
-│   ├── 001_add_databricks_metadata.sql ✨ NEW - Migration script
+│   ├── 001_add_postgres_metadata.sql ✨ NEW - Migration script
 │   └── README.md                   ✨ NEW - Migration docs
 └── .env                            ✅ Updated - MCP configuration
 
 Root:
-├── SERVICETSUNAMI_MCP_INTEGRATION.md ✨ NEW - Integration guide (500+ lines)
-├── DATABRICKS_INTEGRATION_PLAN.md    ✨ NEW - Architecture plan (400+ lines)
+├── AGENTPROVISION_MCP_INTEGRATION.md ✨ NEW - Integration guide (500+ lines)
+├── POSTGRESQL_INTEGRATION_PLAN.md    ✨ NEW - Architecture plan (400+ lines)
 └── INTEGRATION_COMPLETE.md           ✨ NEW - This file
 ```
 
@@ -165,18 +165,18 @@ uvicorn src.main:app --port 8085
 
 ```bash
 # Check health
-curl http://localhost:8001/api/v1/databricks/health
+curl http://localhost:8001/api/v1/postgres/health
 
 # Check status (with auth)
 TOKEN="your_jwt_token"
-curl http://localhost:8001/api/v1/databricks/status \
+curl http://localhost:8001/api/v1/postgres/status \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 ### 3. Initialize Tenant Catalog
 
 ```bash
-curl -X POST http://localhost:8001/api/v1/databricks/initialize \
+curl -X POST http://localhost:8001/api/v1/postgres/initialize \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -184,9 +184,9 @@ curl -X POST http://localhost:8001/api/v1/databricks/initialize \
 
 ```python
 # Using the enhanced service
-from app.services.datasets_databricks import ingest_tabular_with_databricks
+from app.services.datasets_postgres import ingest_tabular_with_postgres
 
-dataset = await ingest_tabular_with_databricks(
+dataset = await ingest_tabular_with_postgres(
     db,
     tenant_id=tenant_id,
     file=uploaded_file,
@@ -194,31 +194,31 @@ dataset = await ingest_tabular_with_databricks(
     description="Quarterly sales report"
 )
 
-# Check if it's in Databricks
-if dataset.metadata_.get("databricks_enabled"):
-    print(f"Table: {dataset.metadata_['databricks_table']}")
+# Check if it's in PostgreSQL
+if dataset.metadata_.get("postgres_enabled"):
+    print(f"Table: {dataset.metadata_['postgres_table']}")
 ```
 
 ### 5. Create and Execute a Notebook
 
 ```python
-from app.services.notebook_databricks import (
-    create_databricks_notebook,
-    execute_databricks_notebook
+from app.services.notebook_postgres import (
+    create_postgres_notebook,
+    execute_postgres_notebook
 )
 
 # Create
-notebook = await create_databricks_notebook(
+notebook = await create_postgres_notebook(
     db,
     tenant_id=tenant_id,
     item_in=NotebookCreate(
         name="Data Analysis",
-        content={"cells": [{"source": "print('Hello Databricks')"}]}
+        content={"cells": [{"source": "print('Hello PostgreSQL')"}]}
     )
 )
 
 # Execute
-run = await execute_databricks_notebook(
+run = await execute_postgres_notebook(
     db,
     notebook_id=notebook.id,
     tenant_id=tenant_id,
@@ -231,9 +231,9 @@ print(f"Run ID: {run['run_id']}")
 ### 6. Create a Data Pipeline
 
 ```python
-from app.services.data_pipeline_databricks import create_databricks_job
+from app.services.data_pipeline_postgres import create_postgres_job
 
-pipeline = await create_databricks_job(
+pipeline = await create_postgres_job(
     db,
     tenant_id=tenant_id,
     pipeline_in=DataPipelineCreate(
@@ -277,9 +277,9 @@ All services use a **fallback pattern**:
 ```python
 1. Store metadata in PostgreSQL (always)
 2. If MCP_ENABLED:
-     Try to sync to Databricks
+     Try to sync to PostgreSQL
      If success:
-         Store Databricks resource ID in metadata_
+         Store PostgreSQL resource ID in metadata_
      If failure:
          Log error, continue with local only
 3. Return resource to user
@@ -289,7 +289,7 @@ All services use a **fallback pattern**:
 - ✅ Graceful degradation
 - ✅ No breaking changes
 - ✅ Easy feature toggle
-- ✅ Resilient to Databricks downtime
+- ✅ Resilient to PostgreSQL downtime
 
 ---
 
@@ -326,10 +326,10 @@ curl -X POST http://localhost:8001/api/v1/datasets/ingest \
   -F "name=Test Dataset"
 ```
 
-### Check Databricks Sync
+### Check PostgreSQL Sync
 
 ```bash
-curl http://localhost:8001/api/v1/databricks/usage \
+curl http://localhost:8001/api/v1/postgres/usage \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -349,11 +349,11 @@ MCP_ENABLED=true
 ### Feature Flags
 
 ```python
-# Disable Databricks integration
+# Disable PostgreSQL integration
 MCP_ENABLED=false
 
 # Enable for specific tenants (future)
-DATABRICKS_ENABLED_TENANTS=tenant-uuid-1,tenant-uuid-2
+POSTGRESQL_ENABLED_TENANTS=tenant-uuid-1,tenant-uuid-2
 ```
 
 ---
@@ -364,14 +364,14 @@ DATABRICKS_ENABLED_TENANTS=tenant-uuid-1,tenant-uuid-2
 
 ```python
 # Check sync status
-GET /api/v1/databricks/usage
+GET /api/v1/postgres/usage
 
 Response:
 {
   "resources": {
-    "datasets": {"total": 10, "in_databricks": 8},
-    "notebooks": {"total": 5, "in_databricks": 5},
-    "pipelines": {"total": 3, "in_databricks": 2}
+    "datasets": {"total": 10, "in_postgres": 8},
+    "notebooks": {"total": 5, "in_postgres": 5},
+    "pipelines": {"total": 3, "in_postgres": 2}
   },
   "sync_percentage": {
     "datasets": 80.0,
@@ -385,10 +385,10 @@ Response:
 
 ```bash
 # Quick health
-curl http://localhost:8001/api/v1/databricks/health
+curl http://localhost:8001/api/v1/postgres/health
 
 # Detailed status
-curl http://localhost:8001/api/v1/databricks/status \
+curl http://localhost:8001/api/v1/postgres/status \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -396,12 +396,12 @@ curl http://localhost:8001/api/v1/databricks/status \
 
 ## 🎯 Next Steps
 
-### 1. **Wait for MCP Databricks Connector** (Other Session)
+### 1. **Wait for MCP PostgreSQL Connector** (Other Session)
 
 The connector endpoints need to be implemented:
-- `POST /servicetsunami/v1/databricks/datasets`
-- `POST /servicetsunami/v1/databricks/notebooks`
-- `POST /servicetsunami/v1/databricks/jobs`
+- `POST /agentprovision/v1/postgres/datasets`
+- `POST /agentprovision/v1/postgres/notebooks`
+- `POST /agentprovision/v1/postgres/jobs`
 - etc.
 
 ### 2. **Integration Testing**
@@ -410,20 +410,20 @@ Once MCP endpoints are ready:
 ```bash
 # Run integration tests
 cd apps/api
-pytest tests/test_databricks_integration.py -v
+pytest tests/test_postgres_integration.py -v
 ```
 
 ### 3. **Frontend Updates**
 
 Update UI components:
-- DatasetsPage: Add "Databricks Status" badge
+- DatasetsPage: Add "PostgreSQL Status" badge
 - NotebooksPage: Add "Execute" button
 - DataPipelinesPage: Add "Run" button
-- Dashboard: Add Databricks usage widget
+- Dashboard: Add PostgreSQL usage widget
 
 ### 4. **Documentation**
 
-- User guide for Databricks features
+- User guide for PostgreSQL features
 - API documentation (OpenAPI/Swagger)
 - Deployment guide
 
@@ -431,8 +431,8 @@ Update UI components:
 
 ## 📚 Documentation
 
-- **Integration Guide**: `SERVICETSUNAMI_MCP_INTEGRATION.md`
-- **Architecture Plan**: `DATABRICKS_INTEGRATION_PLAN.md`
+- **Integration Guide**: `AGENTPROVISION_MCP_INTEGRATION.md`
+- **Architecture Plan**: `POSTGRESQL_INTEGRATION_PLAN.md`
 - **Migration Guide**: `apps/api/migrations/README.md`
 
 ---
@@ -447,14 +447,14 @@ Update UI components:
 - [x] Model updates
 
 **Services**:
-- [x] Dataset service (Databricks)
-- [x] Notebook service (Databricks)
-- [x] Data Pipeline service (Databricks)
-- [ ] Agent service (Databricks) - Planned
-- [ ] Vector Store service (Databricks) - Planned
+- [x] Dataset service (PostgreSQL)
+- [x] Notebook service (PostgreSQL)
+- [x] Data Pipeline service (PostgreSQL)
+- [ ] Agent service (PostgreSQL) - Planned
+- [ ] Vector Store service (PostgreSQL) - Planned
 
 **API**:
-- [x] Databricks status endpoints
+- [x] PostgreSQL status endpoints
 - [x] Router integration
 - [ ] Extended dataset endpoints
 - [ ] Extended notebook endpoints
@@ -466,7 +466,7 @@ Update UI components:
 - [ ] End-to-end workflows
 
 **Frontend**:
-- [ ] Databricks status indicators
+- [ ] PostgreSQL status indicators
 - [ ] Execution controls
 - [ ] Usage dashboard
 
@@ -485,8 +485,8 @@ Update UI components:
 ## 💡 Future Enhancements
 
 1. **Agent Deployment**: Model serving integration
-2. **Vector Search**: RAG support with Databricks Vector Search
-3. **Query Federation**: Cross-system queries (Databricks + Snowflake)
+2. **Vector Search**: RAG support with PostgreSQL Vector Search
+3. **Query Federation**: Cross-system queries (PostgreSQL + Snowflake)
 4. **Cost Tracking**: DBU usage monitoring per tenant
 5. **Auto-scaling**: Dynamic cluster provisioning
 6. **ML Pipelines**: MLflow integration
@@ -496,6 +496,6 @@ Update UI components:
 
 **Integration Status**: ✅ **READY FOR MCP CONNECTOR**
 
-**Next Action**: Test with MCP server once Databricks connector endpoints are implemented.
+**Next Action**: Test with MCP server once PostgreSQL connector endpoints are implemented.
 
-**Questions?** See `SERVICETSUNAMI_MCP_INTEGRATION.md` for detailed integration guide.
+**Questions?** See `AGENTPROVISION_MCP_INTEGRATION.md` for detailed integration guide.

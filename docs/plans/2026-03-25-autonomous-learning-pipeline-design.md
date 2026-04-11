@@ -44,7 +44,7 @@ oversight and course correction — not manual intervention at every step.
 │  └─────────┘                            └──────────┘  └─────────┘ │
 │                                                                     │
 │  Runs daily at 02:00 UTC via Temporal continue_as_new              │
-│  Queue: servicetsunami-orchestration                                │
+│  Queue: agentprovision-orchestration                                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -490,7 +490,7 @@ When learning is stalled globally (no improvement in 14 days):
 ### 12.1 AutonomousLearningWorkflow
 
 ```
-Temporal workflow on servicetsunami-orchestration queue.
+Temporal workflow on agentprovision-orchestration queue.
 One instance per tenant. Runs nightly via continue_as_new.
 Workflow ID: autonomous-learning-{tenant_id}
 

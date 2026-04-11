@@ -153,7 +153,6 @@ from app.workflows.activities.coalition_activities import (
     finalize_collaboration,
 )
 from app.workflows.activities.post_chat_memory_activities import (
-    extract_knowledge,
     detect_commitment,
     update_world_state,
     update_behavioral_signals,
@@ -182,7 +181,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-TASK_QUEUE = "servicetsunami-orchestration"
+TASK_QUEUE = "agentprovision-orchestration"
 
 
 async def run_orchestration_worker():
@@ -193,7 +192,7 @@ async def run_orchestration_worker():
     - DynamicWorkflowExecutor (JSON-defined workflows interpreted at runtime)
     - All activities previously registered by static workflow classes
 
-    Task queue: servicetsunami-orchestration
+    Task queue: agentprovision-orchestration
     """
     # Scan skills so agent activities can find them
     try:
@@ -333,7 +332,6 @@ async def run_orchestration_worker():
             classify_email_as_lead,
             classify_whatsapp_as_lead,
             # Memory activities (Memory-First Phase 1)
-            extract_knowledge,
             detect_commitment,
             update_world_state,
             update_behavioral_signals,

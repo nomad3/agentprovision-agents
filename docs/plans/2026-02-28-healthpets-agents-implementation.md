@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add 3 new ADK agents (cardiac_analyst, billing_agent, vet_supervisor) and 2 new tool modules (vet_tools, billing_tools) to servicetsunami-agents, plus a MonthlyBillingWorkflow (Temporal), to power the HealthPets mobile cardiologist platform.
+**Goal:** Add 3 new ADK agents (cardiac_analyst, billing_agent, vet_supervisor) and 2 new tool modules (vet_tools, billing_tools) to agentprovision-agents, plus a MonthlyBillingWorkflow (Temporal), to power the HealthPets mobile cardiologist platform.
 
 **Architecture:** Extend the existing ADK supervisor hierarchy — vet_supervisor becomes a new team under root_agent, alongside dev_team/data_team/sales_team/marketing_team. cardiac_analyst and billing_agent are new leaf agents. report_generator (existing) gets extended with vet-specific tools. All tools follow the existing async function pattern with `_resolve_tenant_id()` and `_parse_json()` helpers.
 
@@ -569,7 +569,7 @@ git commit -m "feat: add billing_tools with visit records, invoicing, and monthl
 ## Task 3: Create cardiac_analyst Agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/cardiac_analyst.py`
+- Create: `apps/adk-server/agentprovision_supervisor/cardiac_analyst.py`
 
 **Context:** Follow the exact agent definition pattern from `data_analyst.py` and `sales_agent.py`. The agent uses `settings.adk_model` by default but the instruction tells it to prefer Claude vision for ECG analysis.
 
@@ -653,7 +653,7 @@ Return a structured JSON findings object that the report_generator can use to cr
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/cardiac_analyst.py
+git add apps/adk-server/agentprovision_supervisor/cardiac_analyst.py
 git commit -m "feat: add cardiac_analyst agent for ECG vision analysis"
 ```
 
@@ -662,7 +662,7 @@ git commit -m "feat: add cardiac_analyst agent for ECG vision analysis"
 ## Task 4: Create billing_agent Agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/billing_agent.py`
+- Create: `apps/adk-server/agentprovision_supervisor/billing_agent.py`
 
 **Step 1: Create billing_agent.py**
 
@@ -738,7 +738,7 @@ Your capabilities:
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/billing_agent.py
+git add apps/adk-server/agentprovision_supervisor/billing_agent.py
 git commit -m "feat: add billing_agent for visit tracking and invoicing"
 ```
 
@@ -747,9 +747,9 @@ git commit -m "feat: add billing_agent for visit tracking and invoicing"
 ## Task 5: Create vet_supervisor Agent + Wire Into Root Agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/vet_supervisor.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/__init__.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py`
+- Create: `apps/adk-server/agentprovision_supervisor/vet_supervisor.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/__init__.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py`
 
 **Step 1: Create vet_supervisor.py**
 
@@ -811,7 +811,7 @@ For a complete "analyze ECG and create report" request:
 
 **Step 2: Update __init__.py — add new agent imports and exports**
 
-In `apps/adk-server/servicetsunami_supervisor/__init__.py`, add after line 13 (after `from .personal_assistant import personal_assistant`):
+In `apps/adk-server/agentprovision_supervisor/__init__.py`, add after line 13 (after `from .personal_assistant import personal_assistant`):
 
 ```python
 from .cardiac_analyst import cardiac_analyst
@@ -834,7 +834,7 @@ Add to `__all__` list:
 
 **Step 3: Update agent.py — add vet_supervisor to root_agent**
 
-In `apps/adk-server/servicetsunami_supervisor/agent.py`:
+In `apps/adk-server/agentprovision_supervisor/agent.py`:
 
 Add import after line 12 (`from .marketing_team import marketing_team`):
 
@@ -868,9 +868,9 @@ Update sub_agents list to include vet_supervisor:
 **Step 4: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/vet_supervisor.py \
-       apps/adk-server/servicetsunami_supervisor/__init__.py \
-       apps/adk-server/servicetsunami_supervisor/agent.py
+git add apps/adk-server/agentprovision_supervisor/vet_supervisor.py \
+       apps/adk-server/agentprovision_supervisor/__init__.py \
+       apps/adk-server/agentprovision_supervisor/agent.py
 git commit -m "feat: add vet_supervisor team and wire into root agent hierarchy"
 ```
 
@@ -879,7 +879,7 @@ git commit -m "feat: add vet_supervisor team and wire into root agent hierarchy"
 ## Task 6: Extend report_generator with Vet-Specific Tools
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/report_generator.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/report_generator.py`
 
 **Context:** The existing report_generator already has report/chart/export tools. We add `apply_clinic_template` and `send_whatsapp_report` to its tool list, and extend its instruction to handle veterinary cardiac reports.
 
@@ -1003,7 +1003,7 @@ When generating cardiac reports from ECG findings:
 **Step 4: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/report_generator.py
+git add apps/adk-server/agentprovision_supervisor/report_generator.py
 git commit -m "feat: extend report_generator with vet cardiac report tools"
 ```
 
@@ -1238,7 +1238,7 @@ async def schedule_billing_followups(tenant_id: str, invoice_ids: list) -> dict:
                 FollowUpWorkflow.run,
                 follow_up_input,
                 id=f"billing-followup-{invoice_id}",
-                task_queue="servicetsunami-orchestration",
+                task_queue="agentprovision-orchestration",
             )
             count += 1
     except Exception as e:
@@ -1614,7 +1614,7 @@ git commit -m "feat: add MonthlyBillingWorkflow to Workflows page Designs tab"
 **Step 1: Verify ADK server starts locally**
 
 ```bash
-cd apps/adk-server && python -c "from servicetsunami_supervisor import root_agent; print('Agents loaded:', [a.name for a in root_agent.sub_agents])"
+cd apps/adk-server && python -c "from agentprovision_supervisor import root_agent; print('Agents loaded:', [a.name for a in root_agent.sub_agents])"
 ```
 
 Expected: Should list all teams including `vet_supervisor`.

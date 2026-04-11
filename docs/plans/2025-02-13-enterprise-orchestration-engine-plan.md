@@ -650,7 +650,7 @@ git commit -m "feat: add TaskExecutionWorkflow with dispatch, memory, execute, e
 
 **Files:**
 - Create: `apps/api/app/workers/orchestration_worker.py`
-- Create: `helm/values/servicetsunami-orchestration-worker.yaml`
+- Create: `helm/values/agentprovision-orchestration-worker.yaml`
 
 **Step 1: Create the worker**
 
@@ -672,7 +672,7 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-TASK_QUEUE = "servicetsunami-orchestration"
+TASK_QUEUE = "agentprovision-orchestration"
 
 
 async def run_worker():
@@ -709,11 +709,11 @@ if __name__ == "__main__":
 **Step 2: Create Helm values**
 
 ```yaml
-# helm/values/servicetsunami-orchestration-worker.yaml
+# helm/values/agentprovision-orchestration-worker.yaml
 replicaCount: 1
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-api
+  repository: gcr.io/ai-agency-479516/agentprovision-api
   tag: latest
   pullPolicy: Always
 
@@ -723,14 +723,14 @@ env:
   - name: DATABASE_URL
     valueFrom:
       secretKeyRef:
-        name: servicetsunami-api-secret
+        name: agentprovision-api-secret
         key: DATABASE_URL
   - name: TEMPORAL_ADDRESS
-    value: "servicetsunami-temporal:7233"
+    value: "agentprovision-temporal:7233"
   - name: ADK_BASE_URL
-    value: "http://servicetsunami-adk:8080"
+    value: "http://agentprovision-adk:8080"
   - name: ADK_APP_NAME
-    value: "servicetsunami_supervisor"
+    value: "agentprovision_supervisor"
 
 resources:
   requests:
@@ -750,12 +750,12 @@ healthcheck:
 **Step 3: Verify worker starts locally**
 
 Run: `cd apps/api && python -c "from app.workers.orchestration_worker import TASK_QUEUE; print(TASK_QUEUE)"`
-Expected: `servicetsunami-orchestration`
+Expected: `agentprovision-orchestration`
 
 **Step 4: Commit**
 
 ```bash
-git add apps/api/app/workers/orchestration_worker.py helm/values/servicetsunami-orchestration-worker.yaml
+git add apps/api/app/workers/orchestration_worker.py helm/values/agentprovision-orchestration-worker.yaml
 git commit -m "feat: add orchestration worker for Temporal task queue"
 ```
 
@@ -1440,7 +1440,7 @@ All 18 tasks executed via subagent-driven development with spec compliance + cod
 - `src/services/skillConfigService.js` — Skill config API service
 
 **Infrastructure:**
-- `helm/values/servicetsunami-orchestration-worker.yaml` — K8s worker deployment
+- `helm/values/agentprovision-orchestration-worker.yaml` — K8s worker deployment
 
 ### Key Architecture Decisions
 - Temporal workflows for durable task execution and OpenClaw provisioning

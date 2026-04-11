@@ -26,12 +26,12 @@ ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS scored_at TIMESTAMP;
 
 **Step 2: Run the migration against local DB**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/032_add_lead_scoring.sql`
+Run: `docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/032_add_lead_scoring.sql`
 Expected: ALTER TABLE (x2)
 
 **Step 3: Run against prod Cloud SQL**
 
-Run: `kubectl exec -n prod deploy/servicetsunami-api -c cloud-sql-proxy -- psql "$DATABASE_URL" -c "ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS score INTEGER; ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS scored_at TIMESTAMP;"`
+Run: `kubectl exec -n prod deploy/agentprovision-api -c cloud-sql-proxy -- psql "$DATABASE_URL" -c "ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS score INTEGER; ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS scored_at TIMESTAMP;"`
 
 **Step 4: Commit**
 
@@ -350,7 +350,7 @@ git commit -m "feat: add POST /knowledge/entities/{id}/score endpoint"
 ### Task 6: Add score_entity tool to ADK knowledge_manager
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/knowledge_manager.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/knowledge_manager.py`
 
 **Step 1: Add the score_entity function tool**
 
@@ -423,7 +423,7 @@ Do NOT create separate signal entities. Instead, store raw intelligence
 **Step 4: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/knowledge_manager.py
+git add apps/adk-server/agentprovision_supervisor/knowledge_manager.py
 git commit -m "feat: add score_entity tool to ADK knowledge_manager"
 ```
 
@@ -432,7 +432,7 @@ git commit -m "feat: add score_entity tool to ADK knowledge_manager"
 ### Task 7: Update web_researcher to stop creating signals
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/web_researcher.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/web_researcher.py`
 
 **Step 1: Update web_researcher instructions**
 
@@ -456,7 +456,7 @@ After enriching an entity, ask knowledge_manager to score it using score_entity.
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/web_researcher.py
+git add apps/adk-server/agentprovision_supervisor/web_researcher.py
 git commit -m "refactor: web_researcher stores raw intel in properties instead of signal entities"
 ```
 
@@ -593,7 +593,7 @@ git push origin main
 **Step 2: Run migration on prod**
 
 ```bash
-kubectl exec -n prod deploy/servicetsunami-api -c cloud-sql-proxy -- psql "$DATABASE_URL" -c "ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS score INTEGER; ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS scored_at TIMESTAMP;"
+kubectl exec -n prod deploy/agentprovision-api -c cloud-sql-proxy -- psql "$DATABASE_URL" -c "ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS score INTEGER; ALTER TABLE knowledge_entities ADD COLUMN IF NOT EXISTS scored_at TIMESTAMP;"
 ```
 
 **Step 3: Verify ADK deploy**
@@ -606,10 +606,10 @@ gh run list --limit 3 --json workflowName,status,headSha
 
 ```bash
 # Get an existing entity ID
-curl -s https://servicetsunami.com/api/v1/knowledge/entities -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; entities=json.load(sys.stdin); print(entities[0]['id'], entities[0]['name'])"
+curl -s https://agentprovision.com/api/v1/knowledge/entities -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; entities=json.load(sys.stdin); print(entities[0]['id'], entities[0]['name'])"
 
 # Score it
-curl -X POST https://servicetsunami.com/api/v1/knowledge/entities/{ENTITY_ID}/score -H "Authorization: Bearer $TOKEN"
+curl -X POST https://agentprovision.com/api/v1/knowledge/entities/{ENTITY_ID}/score -H "Authorization: Bearer $TOKEN"
 ```
 
 **Step 5: Test via chat**

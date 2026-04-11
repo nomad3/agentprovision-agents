@@ -32,7 +32,7 @@
 
 ### Task 1.4 — Deploy PWA via existing Cloudflare Tunnel
 - Add `luna-client` build to Docker Compose as static file server (nginx)
-- Route `luna.servicetsunami.com` (or subfolder) via Cloudflare Tunnel
+- Route `luna.agentprovision.com` (or subfolder) via Cloudflare Tunnel
 - PWA installable from phone browser ("Add to Home Screen")
 
 **Deliverable**: Luna PWA on phone/desktop with avatar face reacting to responses

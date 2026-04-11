@@ -19,7 +19,7 @@ RUN chown -R mcpuser:mcpuser /app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8086/servicetsunami/v1/health || exit 1
+    CMD curl -f http://localhost:8086/agentprovision/v1/health || exit 1
 
 # Expose MCP port
 EXPOSE 8086

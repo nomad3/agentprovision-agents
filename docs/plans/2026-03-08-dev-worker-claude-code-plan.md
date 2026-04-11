@@ -236,7 +236,7 @@ logger = logging.getLogger(__name__)
 WORKSPACE = "/workspace"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 API_INTERNAL_KEY = os.environ.get("API_INTERNAL_KEY", "")
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://servicetsunami-api:8000")
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://agentprovision-api:8000")
 
 
 @dataclass
@@ -424,7 +424,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
-TASK_QUEUE = "servicetsunami-code"
+TASK_QUEUE = "agentprovision-code"
 
 
 async def main():
@@ -508,15 +508,15 @@ set -euo pipefail
 
 echo "[code-worker] Cloning repository..."
 if [ ! -d /workspace/.git ]; then
-    git clone "https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git" /workspace
+    git clone "https://${GITHUB_TOKEN}@github.com/nomad3/agentprovision-agents.git" /workspace
 else
     cd /workspace && git fetch origin && git checkout main && git pull origin main
 fi
 
 # Configure git identity for commits
 cd /workspace
-git config user.email "code-worker@servicetsunami.com"
-git config user.name "ServiceTsunami Code Worker"
+git config user.email "code-worker@agentprovision.com"
+git config user.name "AgentProvision Code Worker"
 
 # Configure gh CLI
 echo "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
@@ -543,18 +543,18 @@ git commit -m "feat: add Dockerfile and entrypoint for code-worker"
 ## Task 7: Create Helm values for code-worker
 
 **Files:**
-- Create: `helm/values/servicetsunami-code-worker.yaml`
+- Create: `helm/values/agentprovision-code-worker.yaml`
 
 **Step 1: Create Helm values file**
 
-`helm/values/servicetsunami-code-worker.yaml`:
+`helm/values/agentprovision-code-worker.yaml`:
 ```yaml
-# ServiceTsunami Code Worker - Claude Code CLI Temporal Worker
-nameOverride: "servicetsunami-code-worker"
-fullnameOverride: "servicetsunami-code-worker"
+# AgentProvision Code Worker - Claude Code CLI Temporal Worker
+nameOverride: "agentprovision-code-worker"
+fullnameOverride: "agentprovision-code-worker"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-code-worker
+  repository: gcr.io/ai-agency-479516/agentprovision-code-worker
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -611,7 +611,7 @@ configMap:
   enabled: true
   data:
     TEMPORAL_NAMESPACE: "default"
-    API_BASE_URL: "http://servicetsunami-api:8000"
+    API_BASE_URL: "http://agentprovision-api:8000"
 
 # External Secrets — GitHub token + API internal key only (no DB access)
 externalSecret:
@@ -621,15 +621,15 @@ externalSecret:
     name: gcpsm-secret-store
     kind: SecretStore
   target:
-    name: servicetsunami-code-worker-secret
+    name: agentprovision-code-worker-secret
     creationPolicy: Owner
   data:
     - secretKey: GITHUB_TOKEN
       remoteRef:
-        key: servicetsunami-github-token
+        key: agentprovision-github-token
     - secretKey: API_INTERNAL_KEY
       remoteRef:
-        key: servicetsunami-api-internal-key
+        key: agentprovision-api-internal-key
 
 # Additional environment variables
 env:
@@ -667,7 +667,7 @@ httpRoute:
 **Step 2: Commit**
 
 ```bash
-git add helm/values/servicetsunami-code-worker.yaml
+git add helm/values/agentprovision-code-worker.yaml
 git commit -m "feat: add Helm values for code-worker deployment"
 ```
 
@@ -690,7 +690,7 @@ on:
       - main
     paths:
       - 'apps/code-worker/**'
-      - 'helm/values/servicetsunami-code-worker.yaml'
+      - 'helm/values/agentprovision-code-worker.yaml'
       - '.github/workflows/code-worker-deploy.yaml'
   workflow_dispatch:
 
@@ -698,9 +698,9 @@ env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT }}
   GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
   GKE_ZONE: ${{ vars.GKE_ZONE }}
-  IMAGE_NAME: gcr.io/${{ vars.GCP_PROJECT }}/servicetsunami-code-worker
+  IMAGE_NAME: gcr.io/${{ vars.GCP_PROJECT }}/agentprovision-code-worker
   NAMESPACE: prod
-  HELM_RELEASE: servicetsunami-code-worker
+  HELM_RELEASE: agentprovision-code-worker
   HELM_CHART: ./helm/charts/microservice
 
 jobs:
@@ -746,7 +746,7 @@ jobs:
         run: |
           helm upgrade --install ${{ env.HELM_RELEASE }} ${{ env.HELM_CHART }} \
             --namespace ${{ env.NAMESPACE }} \
-            --values helm/values/servicetsunami-code-worker.yaml \
+            --values helm/values/agentprovision-code-worker.yaml \
             --set image.tag=${{ github.sha }} \
             --wait \
             --timeout 10m
@@ -754,7 +754,7 @@ jobs:
       - name: Verify deployment
         run: |
           kubectl rollout status deployment/${{ env.HELM_RELEASE }} -n ${{ env.NAMESPACE }}
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=servicetsunami-code-worker
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=agentprovision-code-worker
 ```
 
 **Step 2: Commit**
@@ -771,7 +771,7 @@ git commit -m "ci: add GitHub Actions workflow for code-worker deploy"
 Replace the 5-agent dev team with a single `code_agent` leaf agent that starts a `CodeTaskWorkflow` via Temporal.
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/code_agent.py`
+- Create: `apps/adk-server/agentprovision_supervisor/code_agent.py`
 - Create: `apps/adk-server/tools/code_tools.py`
 
 **Step 1: Create code_tools.py**
@@ -790,7 +790,7 @@ from google.adk.tools import FunctionTool
 logger = logging.getLogger(__name__)
 
 TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
-TASK_QUEUE = "servicetsunami-code"
+TASK_QUEUE = "agentprovision-code"
 
 
 async def _start_code_workflow(task_description: str, tenant_id: str, context: str = "") -> dict:
@@ -862,7 +862,7 @@ start_code_task_tool = FunctionTool(start_code_task)
 
 **Step 2: Create code_agent.py**
 
-`apps/adk-server/servicetsunami_supervisor/code_agent.py`:
+`apps/adk-server/agentprovision_supervisor/code_agent.py`:
 ```python
 """Code Agent — autonomous coding agent powered by Claude Code CLI.
 
@@ -910,7 +910,7 @@ When a user asks you to build, fix, or modify code, you delegate the task to Cla
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/tools/code_tools.py apps/adk-server/servicetsunami_supervisor/code_agent.py
+git add apps/adk-server/tools/code_tools.py apps/adk-server/agentprovision_supervisor/code_agent.py
 git commit -m "feat: create code_agent with Temporal-based Claude Code tool"
 ```
 
@@ -921,18 +921,18 @@ git commit -m "feat: create code_agent with Temporal-based Claude Code tool"
 Replace `code_agent` with `code_agent` in the root supervisor, update `__init__.py`, and remove old agent files.
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/__init__.py`
-- Delete: `apps/adk-server/servicetsunami_supervisor/architect.py`
-- Delete: `apps/adk-server/servicetsunami_supervisor/coder.py`
-- Delete: `apps/adk-server/servicetsunami_supervisor/tester.py`
-- Delete: `apps/adk-server/servicetsunami_supervisor/dev_ops.py`
-- Delete: `apps/adk-server/servicetsunami_supervisor/user_agent.py`
-- Delete: `apps/adk-server/servicetsunami_supervisor/code_agent.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/__init__.py`
+- Delete: `apps/adk-server/agentprovision_supervisor/architect.py`
+- Delete: `apps/adk-server/agentprovision_supervisor/coder.py`
+- Delete: `apps/adk-server/agentprovision_supervisor/tester.py`
+- Delete: `apps/adk-server/agentprovision_supervisor/dev_ops.py`
+- Delete: `apps/adk-server/agentprovision_supervisor/user_agent.py`
+- Delete: `apps/adk-server/agentprovision_supervisor/code_agent.py`
 
 **Step 1: Update agent.py (root supervisor)**
 
-In `apps/adk-server/servicetsunami_supervisor/agent.py`:
+In `apps/adk-server/agentprovision_supervisor/agent.py`:
 
 Replace line 9: `from .code_agent import code_agent` → `from .code_agent import code_agent`
 
@@ -960,7 +960,7 @@ In `sub_agents` list (line 107): replace `code_agent` with `code_agent`.
 
 **Step 2: Update __init__.py**
 
-In `apps/adk-server/servicetsunami_supervisor/__init__.py`:
+In `apps/adk-server/agentprovision_supervisor/__init__.py`:
 
 Remove imports:
 ```python
@@ -984,18 +984,18 @@ Update `__all__`:
 **Step 3: Delete old agent files**
 
 ```bash
-rm apps/adk-server/servicetsunami_supervisor/architect.py
-rm apps/adk-server/servicetsunami_supervisor/coder.py
-rm apps/adk-server/servicetsunami_supervisor/tester.py
-rm apps/adk-server/servicetsunami_supervisor/dev_ops.py
-rm apps/adk-server/servicetsunami_supervisor/user_agent.py
-rm apps/adk-server/servicetsunami_supervisor/code_agent.py
+rm apps/adk-server/agentprovision_supervisor/architect.py
+rm apps/adk-server/agentprovision_supervisor/coder.py
+rm apps/adk-server/agentprovision_supervisor/tester.py
+rm apps/adk-server/agentprovision_supervisor/dev_ops.py
+rm apps/adk-server/agentprovision_supervisor/user_agent.py
+rm apps/adk-server/agentprovision_supervisor/code_agent.py
 ```
 
 **Step 4: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/
+git add apps/adk-server/agentprovision_supervisor/
 git commit -m "feat: replace 5-agent dev team with single code_agent using Claude Code"
 ```
 
@@ -1060,7 +1060,7 @@ With:
 
 Add to the Temporal workflows section:
 ```
-- `servicetsunami-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated pod).
+- `agentprovision-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated pod).
 ```
 
 Add to the What Gets Removed section (or "Architecture" section):
@@ -1071,7 +1071,7 @@ Add to the What Gets Removed section (or "Architecture" section):
 **Step 2: Verify all imports work**
 
 Run: `cd apps/api && python -c "from app.models import *; print('Models OK')"`
-Run: `cd apps/adk-server && python -c "from servicetsunami_supervisor import root_agent; print('ADK OK')"`
+Run: `cd apps/adk-server && python -c "from agentprovision_supervisor import root_agent; print('ADK OK')"`
 
 **Step 3: Commit**
 

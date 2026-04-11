@@ -1,4 +1,4 @@
-# ServiceTsunami Platform Usage Report
+# AgentProvision Platform Usage Report
 
 **Generated**: 2026-03-11
 **Source**: Production database (all tenants)
@@ -9,7 +9,7 @@
 
 | Tenant | Users | ID |
 |--------|-------|----|
-| servicetsunami | 1 | `a009ccf9-8bfb-41cb-bc66-41353701a896` |
+| agentprovision | 1 | `a009ccf9-8bfb-41cb-bc66-41353701a896` |
 | Demo Enterprise | 1 | `c024fddd-cfc6-401a-a6cf-e738d001484e` |
 | Web | 1 | `e3abd6a9-bda9-4f87-94ca-b0eaaf1ab492` |
 | Aremko (x2) | 2 | `80b0fbbc...`, `27a2d0db...` |
@@ -30,7 +30,7 @@
 
 | Tenant | Sessions | Messages | Tokens Used |
 |--------|----------|----------|-------------|
-| servicetsunami | 27 | 607 | 47,091,010 |
+| agentprovision | 27 | 607 | 47,091,010 |
 | Demo Enterprise | 40 | 291 | 3,551,909 |
 | Carol Cubillos | 3 | 56 | 1,181,000 |
 | Web | 3 | 92 | 1,146,810 |
@@ -88,7 +88,7 @@
 
 ## Token Usage Concentration
 
-- **servicetsunami** tenant: 87% of all chat tokens (47M of 54M)
+- **agentprovision** tenant: 87% of all chat tokens (47M of 54M)
 - Top 3 tenants: 96% of all tokens
 - Average tokens per message: ~48,000 (includes ADK multi-agent traces)
 - Total platform cost across all tenants: **$7.77**
@@ -100,6 +100,6 @@
 1. **Code Agent** has 100% success rate (14/14 workflows completed, all PRs created)
 2. **Chat failure rate** is 21% (20/96) — primarily auth/timeout issues during development
 3. **InboxMonitorWorkflow** has 22 long-running instances (continue_as_new pattern, expected)
-4. **Token usage is heavily concentrated** — one tenant (servicetsunami) drives 87% of consumption
+4. **Token usage is heavily concentrated** — one tenant (agentprovision) drives 87% of consumption
 5. **Knowledge graph** has 379 entities and 69 relations across all tenants
 6. **20 integrations** are enabled across the platform (Gmail, GitHub, Jira, etc.)

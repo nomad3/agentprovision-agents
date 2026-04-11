@@ -297,7 +297,7 @@ ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES s
 ### Task 11: Create prospect_researcher agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/prospect_researcher.py`
+- Create: `apps/adk-server/agentprovision_supervisor/prospect_researcher.py`
 
 **Step 1:** Create the agent following the pattern in `web_researcher.py`:
 - Import web scraping tools from `web_researcher.py` (scrape_webpage, scrape_structured_data, search_and_scrape, login_google, login_linkedin)
@@ -316,7 +316,7 @@ ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES s
 ### Task 12: Create prospect_scorer agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/prospect_scorer.py`
+- Create: `apps/adk-server/agentprovision_supervisor/prospect_scorer.py`
 
 **Step 1:** Create the agent:
 - Import KG tools: `find_entities`, `get_entity`, `update_entity`, `get_neighborhood` from `tools.knowledge_tools`
@@ -337,7 +337,7 @@ ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES s
 ### Task 13: Create prospect_outreach agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/prospect_outreach.py`
+- Create: `apps/adk-server/agentprovision_supervisor/prospect_outreach.py`
 
 **Step 1:** Create the agent:
 - Import sales tools: `draft_outreach`, `update_pipeline_stage`, `get_pipeline_summary`, `generate_proposal`, `schedule_followup` from `tools.sales_tools`
@@ -355,7 +355,7 @@ ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES s
 ### Task 14: Create prospecting_team supervisor
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/prospecting_team.py`
+- Create: `apps/adk-server/agentprovision_supervisor/prospecting_team.py`
 
 **Step 1:** Create supervisor following the pattern in `marketing_team.py`:
 - Import sub-agents: `prospect_researcher`, `prospect_scorer`, `prospect_outreach` (relative imports)
@@ -377,9 +377,9 @@ ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES s
 ### Task 15: Update sales_team, root agent, and __init__.py
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/sales_team.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/__init__.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/sales_team.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/__init__.py`
 
 **Step 1:** In `sales_team.py`:
 - Remove `sales_agent` from imports
@@ -496,7 +496,7 @@ ALTER TABLE execution_traces ADD COLUMN IF NOT EXISTS skill_id UUID REFERENCES s
   id: 'prospecting-pipeline',
   name: 'Prospecting Pipeline',
   description: 'Automated prospect research, scoring, qualification, and outreach',
-  queue: 'servicetsunami-orchestration',
+  queue: 'agentprovision-orchestration',
   icon: FaBullseye,
   color: '#34d399',
   steps: [
@@ -548,7 +548,7 @@ rubric_updated:   { icon: FaEdit,    color: '#60a5fa', label: 'Rubric Updated' }
 
 **Step 1:** Create the workflow following the pattern in `deal_pipeline.py`:
 - Workflow class: `ProspectingPipelineWorkflow`
-- Queue: `servicetsunami-orchestration`
+- Queue: `agentprovision-orchestration`
 - 5 activities as steps:
   1. `prospect_research(tenant_id, entity_ids, params)` — enrichment step
   2. `prospect_score(tenant_id, entity_ids, rubric_id)` — scoring via execute_skill

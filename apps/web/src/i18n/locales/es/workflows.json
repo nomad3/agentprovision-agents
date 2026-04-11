@@ -88,7 +88,6 @@
   "designs": {
     "description": "Estructura visual de todos los workflows de Temporal. Haz clic en un workflow para expandir su diagrama paso a paso.",
     "orchestrationQueue": "cola de orchestration",
-    "databricksQueue": "cola de databricks",
     "codeQueue": "cola de code",
     "workflows": "{{count}} workflow",
     "workflows_plural": "{{count}} workflows",

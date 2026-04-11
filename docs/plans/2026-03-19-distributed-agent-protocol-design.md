@@ -1,4 +1,4 @@
-# ServiceTsunami Protocol (STP) — Distributed Agent Network
+# AgentProvision Protocol (STP) — Distributed Agent Network
 
 > An open protocol where AI agents are owned digital assets that earn revenue, running on a distributed compute network powered by anyone's hardware and LLM subscriptions.
 
@@ -23,10 +23,10 @@ Meanwhile, millions of people pay for LLM subscriptions (Claude Pro/Max, ChatGPT
 
 ## 2. Vision
 
-ServiceTsunami Protocol is a **B2B2C** network:
+AgentProvision Protocol is a **B2B2C** network:
 
 ```
-Protocol (ServiceTsunami)
+Protocol (AgentProvision)
     ↕
 Operators (hardware + LLM subscriptions)
     ↕
@@ -277,7 +277,7 @@ For user-facing traffic:
 - Cloudflare load balances across multiple tunnel origins
 
 ```
-Internet → Cloudflare DNS (servicetsunami.com)
+Internet → Cloudflare DNS (agentprovision.com)
     → Tunnel Origin 1 (MacBook — primary)
     → Tunnel Origin 2 (Gaming PC — secondary)
     → Tunnel Origin 3 (Server — tertiary)
@@ -303,7 +303,7 @@ Internet → Cloudflare DNS (servicetsunami.com)
 
 ```
 1. Creator writes agent (skill.md + agent.yaml)
-   - Can use ServiceTsunami web UI (existing skill editor)
+   - Can use AgentProvision web UI (existing skill editor)
    - Or write locally and push via CLI: stp agent publish ./my-agent/
 2. Agent gets signed with creator's key
 3. Package uploaded to registry (content-addressed)
@@ -441,7 +441,7 @@ Agents that perform better earn more traffic, which earns more revenue for their
 
 ### Phase 1: Multi-Node Foundation (Weeks 1-4)
 
-**Goal:** ServiceTsunami runs across your MacBook + gaming laptops with automatic failover. No marketplace yet — just distributed infra.
+**Goal:** AgentProvision runs across your MacBook + gaming laptops with automatic failover. No marketplace yet — just distributed infra.
 
 - K3s cluster across 2-3 machines with Tailscale
 - Migrate existing Docker Compose services to K3s (Helm charts exist)

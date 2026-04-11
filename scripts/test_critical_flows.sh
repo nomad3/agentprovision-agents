@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# ServiceTsunami Critical Flows Test Script
+# AgentProvision Critical Flows Test Script
 # Tests all major user flows via API endpoints
 
 set -e
 
-BASE_URL="https://servicetsunami.com/api/v1"
+BASE_URL="https://agentprovision.com/api/v1"
 TEST_EMAIL="test@example.com"
 TEST_PASSWORD="password"
 
-echo "🧪 Testing ServiceTsunami Critical Flows"
+echo "🧪 Testing AgentProvision Critical Flows"
 echo "=========================================="
 echo ""
 
@@ -155,10 +155,10 @@ echo "----------------------"
 test_endpoint "Get Dashboard Analytics" "GET" "/analytics/dashboard" "" "200" "$AUTH_HEADER"
 
 echo ""
-echo "8️⃣  Databricks Integration"
+echo "8️⃣  PostgreSQL Integration"
 echo "-------------------------"
 
-test_endpoint "Get Databricks Status" "GET" "/databricks/status" "" "200" "$AUTH_HEADER"
+test_endpoint "Get PostgreSQL Status" "GET" "/postgres/status" "" "200" "$AUTH_HEADER"
 
 echo ""
 echo "=========================================="

@@ -4,7 +4,7 @@ Data extraction activities for the data source sync workflow.
 These activities handle:
 1. Extracting data from various connector types
 2. Staging data to cloud storage
-3. Loading to Databricks Bronze/Silver layers
+3. Loading to PostgreSQL Bronze/Silver layers
 4. Updating sync metadata
 """
 
@@ -37,68 +37,6 @@ def _get_connector_config(db, connector_id: str, tenant_id: str) -> Dict[str, An
         "config": connector.config,
         "name": connector.name
     }
-
-
-async def _extract_from_snowflake(config: Dict, sync_config: Dict) -> Dict[str, Any]:
-    """Extract data from Snowflake."""
-    try:
-        import snowflake.connector
-        import pandas as pd
-
-        conn = snowflake.connector.connect(
-            account=config.get("account"),
-            user=config.get("user"),
-            password=config.get("password"),
-            warehouse=config.get("warehouse"),
-            database=config.get("database"),
-            schema=config.get("schema", "PUBLIC"),
-        )
-
-        table_name = sync_config.get("table_name")
-        mode = sync_config.get("mode", "full")
-        watermark_column = sync_config.get("watermark_column")
-        last_watermark = sync_config.get("last_watermark")
-
-        # Build query
-        if mode == "incremental" and watermark_column and last_watermark:
-            query = f"SELECT * FROM {table_name} WHERE {watermark_column} > '{last_watermark}'"
-        else:
-            query = f"SELECT * FROM {table_name}"
-
-        cursor = conn.cursor()
-        cursor.execute(query)
-
-        # Get schema
-        columns = [desc[0] for desc in cursor.description]
-        schema = [{"name": col, "type": "string"} for col in columns]
-
-        # Fetch data
-        rows = cursor.fetchall()
-        df = pd.DataFrame(rows, columns=columns)
-
-        # Get new watermark if incremental
-        new_watermark = None
-        if watermark_column and len(df) > 0:
-            new_watermark = str(df[watermark_column].max())
-
-        cursor.close()
-        conn.close()
-
-        # Save to temp parquet file
-        temp_dir = tempfile.mkdtemp()
-        parquet_path = os.path.join(temp_dir, f"{uuid.uuid4()}.parquet")
-        df.to_parquet(parquet_path, index=False)
-
-        return {
-            "success": True,
-            "staging_path": parquet_path,
-            "row_count": len(df),
-            "schema": schema,
-            "new_watermark": new_watermark
-        }
-
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 async def _extract_from_postgres(config: Dict, sync_config: Dict) -> Dict[str, Any]:
@@ -359,7 +297,6 @@ async def _extract_from_api(config: Dict, sync_config: Dict) -> Dict[str, Any]:
 
 # Extraction registry
 EXTRACTORS = {
-    "snowflake": _extract_from_snowflake,
     "postgres": _extract_from_postgres,
     "mysql": _extract_from_mysql,
     "s3": _extract_from_s3,
@@ -416,7 +353,7 @@ async def load_to_bronze(
     schema: List[Dict[str, str]]
 ) -> Dict[str, Any]:
     """
-    Load staged data to Databricks Bronze layer.
+    Load staged data to PostgreSQL Bronze layer.
 
     Args:
         tenant_id: UUID of tenant
@@ -435,7 +372,7 @@ async def load_to_bronze(
     # For now, just return the expected table name
     # In production, this would upload to DBFS and create the table
     table_name = f"bronze_{dataset_name.replace('-', '_').replace(' ', '_').lower()}"
-    catalog = f"servicetsunami_{tenant_id.replace('-', '_')}"
+    catalog = f"agentprovision_{tenant_id.replace('-', '_')}"
 
     bronze_table = f"{catalog}.default.{table_name}"
 

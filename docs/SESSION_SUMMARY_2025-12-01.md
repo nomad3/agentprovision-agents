@@ -1,11 +1,11 @@
-# Session Summary: Databricks MCP Integration & Documentation
+# Session Summary: PostgreSQL MCP Integration & Documentation
 
 **Date**: 2025-12-01
-**Objective**: Fix Databricks MCP connection status and update documentation with screenshots
+**Objective**: Fix PostgreSQL MCP connection status and update documentation with screenshots
 
 ## ✅ Completed Tasks
 
-### 1. Fixed Databricks MCP Server Connection
+### 1. Fixed PostgreSQL MCP Server Connection
 
 **Problem**: Settings page showed "Pending Setup" for MCP Server Connection with "Not Found" error.
 
@@ -24,7 +24,7 @@
 **Implementation**:
 - ✅ Created `KnowledgeExtractionWorkflow` in `apps/api/app/workflows/knowledge_extraction.py`
 - ✅ Created `extract_knowledge_from_session` activity in `apps/api/app/workflows/activities/knowledge_extraction.py`
-- ✅ Registered workflow and activity in `databricks_worker.py`
+- ✅ Registered workflow and activity in `postgres_worker.py`
 - ✅ Updated `integrations.py` to use Temporal instead of FastAPI BackgroundTasks
 - ✅ Both ChatGPT and Claude imports now trigger reliable Temporal workflows
 
@@ -44,29 +44,29 @@
 - ✅ Added delegation flow examples for agent teams
 
 **New Documentation Files**:
-- ✅ `docs/DATABRICKS_MCP_STATUS.md` - Complete status and configuration guide
-- ✅ `docs/images/databricks_integration_connected.png` - Settings page mockup
+- ✅ `docs/POSTGRESQL_MCP_STATUS.md` - Complete status and configuration guide
+- ✅ `docs/images/postgres_integration_connected.png` - Settings page mockup
 - ✅ `docs/images/dataset_upload_flow.png` - Dataset sync flow visualization
 
 **Updated Testing Checklist**:
-- ✅ `docs/MANUAL_BROWSER_TESTING_CHECKLIST.md` - Added Databricks integration verification section
+- ✅ `docs/MANUAL_BROWSER_TESTING_CHECKLIST.md` - Added PostgreSQL integration verification section
 
 ### 4. Visual Assets Created
 
 Generated professional mockups for:
-- ✅ Databricks Integration settings page showing "Connected" status
+- ✅ PostgreSQL Integration settings page showing "Connected" status
 - ✅ Dataset upload and sync flow (Bronze → Silver transformation)
 
 ## 📊 Current System Status
 
 ### Services Running
 ```
-✅ servicetsunami_web_1                 Up 3 minutes
-✅ servicetsunami_mcp-server_1          Up 3 minutes
-✅ servicetsunami_api_1                 Up 3 minutes
-✅ servicetsunami_databricks-worker_1   Up 3 minutes
-✅ servicetsunami_temporal_1            Up 3 minutes
-✅ servicetsunami_db_1                  Up 3 minutes
+✅ agentprovision_web_1                 Up 3 minutes
+✅ agentprovision_mcp-server_1          Up 3 minutes
+✅ agentprovision_api_1                 Up 3 minutes
+✅ agentprovision_postgres-worker_1   Up 3 minutes
+✅ agentprovision_temporal_1            Up 3 minutes
+✅ agentprovision_db_1                  Up 3 minutes
 ```
 
 ### Health Check Results
@@ -75,14 +75,14 @@ Generated professional mockups for:
   "status": "healthy",
   "mcp_enabled": true,
   "mcp_server": "http://mcp-server:8000",
-  "databricks_connected": false
+  "postgres_connected": false
 }
 ```
 
-**Note**: `databricks_connected: false` is expected when Databricks credentials are not configured. The MCP server itself is healthy.
+**Note**: `postgres_connected: false` is expected when PostgreSQL credentials are not configured. The MCP server itself is healthy.
 
 ### Temporal Workflows Registered
-1. **DatasetSyncWorkflow** - Syncs datasets to Databricks Bronze/Silver layers
+1. **DatasetSyncWorkflow** - Syncs datasets to PostgreSQL Bronze/Silver layers
 2. **KnowledgeExtractionWorkflow** - Extracts entities from imported chat sessions
 
 ## 📝 Code Changes Summary
@@ -91,21 +91,21 @@ Generated professional mockups for:
 1. `docker-compose.yml` - Added MCP_SERVER_URL environment variables
 2. `apps/mcp-server/src/server.py` - Converted to FastAPI
 3. `apps/mcp-server/pyproject.toml` - Added FastAPI dependencies
-4. `apps/api/app/workers/databricks_worker.py` - Registered Knowledge Extraction workflow
+4. `apps/api/app/workers/postgres_worker.py` - Registered Knowledge Extraction workflow
 5. `apps/api/app/api/v1/integrations.py` - Migrated to Temporal workflows
 6. `README.md` - Added comprehensive feature documentation
-7. `docs/MANUAL_BROWSER_TESTING_CHECKLIST.md` - Added Databricks verification
+7. `docs/MANUAL_BROWSER_TESTING_CHECKLIST.md` - Added PostgreSQL verification
 
 ### Files Created
 1. `apps/api/app/workflows/knowledge_extraction.py` - Workflow definition
 2. `apps/api/app/workflows/activities/knowledge_extraction.py` - Activity implementation
-3. `docs/DATABRICKS_MCP_STATUS.md` - Status documentation
-4. `docs/images/databricks_integration_connected.png` - Visual mockup
+3. `docs/POSTGRESQL_MCP_STATUS.md` - Status documentation
+4. `docs/images/postgres_integration_connected.png` - Visual mockup
 5. `docs/images/dataset_upload_flow.png` - Flow diagram
 
 ## 🎯 Key Features Documented
 
-### 1. Databricks Integration
+### 1. PostgreSQL Integration
 - Automatic dataset sync to Unity Catalog
 - Medallion architecture (Bronze → Silver → Gold)
 - Real-time status monitoring
@@ -147,7 +147,7 @@ Generated professional mockups for:
 
 ## 🔄 Deployment Status
 
-**Production URL**: https://servicetsunami.com
+**Production URL**: https://agentprovision.com
 
 **Deployment Method**: Git push → VM pull → Docker Compose rebuild
 
@@ -158,7 +158,7 @@ Generated professional mockups for:
 2. `1245389` - Refactor MCP server to FastAPI
 3. `1ee925f` - Add fastapi dependencies to mcp-server
 4. `d14e19a` - Migrate knowledge extraction to Temporal
-5. `e00a1b4` - Document Databricks MCP integration status
+5. `e00a1b4` - Document PostgreSQL MCP integration status
 6. `df4238d` - Add comprehensive feature documentation with visuals
 
 ## 🐛 Known Issues
@@ -173,17 +173,17 @@ Generated professional mockups for:
    - Workaround: Use API verification instead
 
 ### Configuration Needed
-1. **Databricks Credentials**: For full integration testing
-   - `DATABRICKS_HOST`
-   - `DATABRICKS_TOKEN`
-   - `DATABRICKS_WAREHOUSE_ID`
+1. **PostgreSQL Credentials**: For full integration testing
+   - `POSTGRESQL_HOST`
+   - `POSTGRESQL_TOKEN`
+   - `POSTGRESQL_WAREHOUSE_ID`
 
 ## 📋 Next Steps
 
 ### Immediate
 - [ ] Fix workflow memo error in `workflows.py`
-- [ ] Add Databricks credentials for full integration testing
-- [ ] Test end-to-end dataset sync with real Databricks instance
+- [ ] Add PostgreSQL credentials for full integration testing
+- [ ] Test end-to-end dataset sync with real PostgreSQL instance
 
 ### Short-term
 - [ ] Create video walkthrough of key features
@@ -209,9 +209,9 @@ Generated professional mockups for:
 ## 📚 Documentation Links
 
 - **Main README**: [README.md](../README.md)
-- **MCP Status**: [DATABRICKS_MCP_STATUS.md](DATABRICKS_MCP_STATUS.md)
+- **MCP Status**: [POSTGRESQL_MCP_STATUS.md](POSTGRESQL_MCP_STATUS.md)
 - **Testing Checklist**: [MANUAL_BROWSER_TESTING_CHECKLIST.md](MANUAL_BROWSER_TESTING_CHECKLIST.md)
-- **Temporal UI**: http://localhost:8233 (local) or https://servicetsunami.com:8233 (production)
+- **Temporal UI**: http://localhost:8233 (local) or https://agentprovision.com:8233 (production)
 
 ---
 

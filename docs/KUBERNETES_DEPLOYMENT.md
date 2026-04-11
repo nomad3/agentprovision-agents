@@ -1,6 +1,6 @@
-# ServiceTsunami Kubernetes Deployment Guide
+# AgentProvision Kubernetes Deployment Guide
 
-This guide covers deploying ServiceTsunami to Google Kubernetes Engine (GKE) using Helm charts and GitHub Actions.
+This guide covers deploying AgentProvision to Google Kubernetes Engine (GKE) using Helm charts and GitHub Actions.
 
 ## Architecture Overview
 
@@ -49,7 +49,7 @@ Ensure you have a GKE cluster with:
 
 ```bash
 # Create cluster (if needed)
-gcloud container clusters create servicetsunami-cluster \
+gcloud container clusters create agentprovision-cluster \
   --zone us-central1-a \
   --num-nodes 3 \
   --machine-type e2-medium \
@@ -79,20 +79,20 @@ Create secrets in GCP Secret Manager:
 
 ```bash
 # Required secrets
-gcloud secrets create servicetsunami-secret-key --data-file=<(echo -n "your-jwt-secret")
-gcloud secrets create servicetsunami-database-url --data-file=<(echo -n "postgresql://...")
-gcloud secrets create servicetsunami-anthropic-api-key --data-file=<(echo -n "sk-ant-...")
-gcloud secrets create servicetsunami-mcp-api-key --data-file=<(echo -n "your-mcp-key")
-gcloud secrets create servicetsunami-api-internal-key --data-file=<(echo -n "your-internal-key")
-gcloud secrets create servicetsunami-postgres-password --data-file=<(echo -n "your-db-password")
+gcloud secrets create agentprovision-secret-key --data-file=<(echo -n "your-jwt-secret")
+gcloud secrets create agentprovision-database-url --data-file=<(echo -n "postgresql://...")
+gcloud secrets create agentprovision-anthropic-api-key --data-file=<(echo -n "sk-ant-...")
+gcloud secrets create agentprovision-mcp-api-key --data-file=<(echo -n "your-mcp-key")
+gcloud secrets create agentprovision-api-internal-key --data-file=<(echo -n "your-internal-key")
+gcloud secrets create agentprovision-postgres-password --data-file=<(echo -n "your-db-password")
 ```
 
 ### 4. DNS Configuration
 
 After deploying infrastructure, configure DNS A records:
-- `servicetsunami.com` → Gateway IP
-- `www.servicetsunami.com` → Gateway IP
-- `api.servicetsunami.com` → Gateway IP
+- `agentprovision.com` → Gateway IP
+- `www.agentprovision.com` → Gateway IP
+- `api.agentprovision.com` → Gateway IP
 
 ## Deployment
 
@@ -113,13 +113,13 @@ After deploying infrastructure, configure DNS A records:
 4. **Watch rollout status** directly from the cluster:
    ```bash
    kubectl get pods -n prod -w
-   kubectl rollout status deployment/servicetsunami-api -n prod
-   kubectl rollout status deployment/servicetsunami-adk -n prod
+   kubectl rollout status deployment/agentprovision-api -n prod
+   kubectl rollout status deployment/agentprovision-adk -n prod
    ```
 5. **Validate Helm releases** for all microservices:
    ```bash
-   helm list -n prod | grep servicetsunami
-   helm status servicetsunami-adk -n prod
+   helm list -n prod | grep agentprovision
+   helm status agentprovision-adk -n prod
    ```
 
 These commands ensure the same artifacts built in CI/CD are promoted to the cluster via the Helm chart definitions checked into `helm/`.
@@ -171,13 +171,13 @@ Services are automatically deployed on push to `main`:
 Manual deployment:
 ```bash
 # Deploy API
-gh workflow run servicetsunami-api.yaml -f deploy=true
+gh workflow run agentprovision-api.yaml -f deploy=true
 
 # Deploy Web
-gh workflow run servicetsunami-web.yaml -f deploy=true
+gh workflow run agentprovision-web.yaml -f deploy=true
 
 # Deploy Worker
-gh workflow run servicetsunami-worker.yaml -f deploy=true
+gh workflow run agentprovision-worker.yaml -f deploy=true
 ```
 
 ## Helm Chart Structure
@@ -204,9 +204,9 @@ helm/
 │           ├── managed-cert.yaml
 │           └── health-check-policy.yaml
 └── values/
-    ├── servicetsunami-api.yaml
-    ├── servicetsunami-web.yaml
-    ├── servicetsunami-worker.yaml
+    ├── agentprovision-api.yaml
+    ├── agentprovision-web.yaml
+    ├── agentprovision-worker.yaml
     ├── temporal.yaml
     ├── temporal-web.yaml
     ├── postgresql.yaml
@@ -233,10 +233,10 @@ export GCP_PROJECT=your-project-id
 sed -i "s/YOUR_GCP_PROJECT/$GCP_PROJECT/g" helm/values/*.yaml
 
 # Deploy a service
-helm upgrade --install servicetsunami-api \
+helm upgrade --install agentprovision-api \
   ./helm/charts/microservice \
   --namespace prod \
-  --values ./helm/values/servicetsunami-api.yaml \
+  --values ./helm/values/agentprovision-api.yaml \
   --set image.tag=latest \
   --dry-run  # Remove for actual deployment
 ```
@@ -251,14 +251,14 @@ kubectl get deployments -n prod
 kubectl get pods -n prod
 
 # View logs
-kubectl logs -n prod -l app.kubernetes.io/name=servicetsunami-api -f
+kubectl logs -n prod -l app.kubernetes.io/name=agentprovision-api -f
 
 # Describe pod
-kubectl describe pod -n prod -l app.kubernetes.io/name=servicetsunami-api
+kubectl describe pod -n prod -l app.kubernetes.io/name=agentprovision-api
 
 # Check External Secrets
 kubectl get externalsecrets -n prod
-kubectl describe externalsecret servicetsunami-api -n prod
+kubectl describe externalsecret agentprovision-api -n prod
 ```
 
 ## Monitoring
@@ -274,13 +274,13 @@ Each service exposes health endpoints:
 
 ```bash
 # API logs
-kubectl logs -n prod -l app.kubernetes.io/name=servicetsunami-api -f
+kubectl logs -n prod -l app.kubernetes.io/name=agentprovision-api -f
 
 # Web logs
-kubectl logs -n prod -l app.kubernetes.io/name=servicetsunami-web -f
+kubectl logs -n prod -l app.kubernetes.io/name=agentprovision-web -f
 
 # Worker logs
-kubectl logs -n prod -l app.kubernetes.io/name=servicetsunami-worker -f
+kubectl logs -n prod -l app.kubernetes.io/name=agentprovision-worker -f
 ```
 
 ### Metrics
@@ -312,10 +312,10 @@ HPA is configured for API and Web services:
 
 ```bash
 # Scale API
-kubectl scale deployment servicetsunami-api -n prod --replicas=5
+kubectl scale deployment agentprovision-api -n prod --replicas=5
 
 # Or update HPA
-kubectl patch hpa servicetsunami-api -n prod -p '{"spec":{"minReplicas":3}}'
+kubectl patch hpa agentprovision-api -n prod -p '{"spec":{"minReplicas":3}}'
 ```
 
 ## Troubleshooting
@@ -325,11 +325,11 @@ kubectl patch hpa servicetsunami-api -n prod -p '{"spec":{"minReplicas":3}}'
 ```bash
 # Check Gateway status
 kubectl get gateway -n gateway-system
-kubectl describe gateway servicetsunami-gateway -n gateway-system
+kubectl describe gateway agentprovision-gateway -n gateway-system
 
 # Check HTTPRoutes
 kubectl get httproutes -A
-kubectl describe httproute servicetsunami-web -n prod
+kubectl describe httproute agentprovision-web -n prod
 ```
 
 ### Secret Issues
@@ -341,23 +341,23 @@ kubectl describe secretstore gcp-secret-store -n prod
 
 # Check ExternalSecret sync
 kubectl get externalsecrets -n prod
-kubectl describe externalsecret servicetsunami-api -n prod
+kubectl describe externalsecret agentprovision-api -n prod
 
 # View synced secret
-kubectl get secret servicetsunami-api-secret -n prod -o yaml
+kubectl get secret agentprovision-api-secret -n prod -o yaml
 ```
 
 ### Pod Crashes
 
 ```bash
 # Check pod events
-kubectl describe pod -n prod -l app.kubernetes.io/name=servicetsunami-api
+kubectl describe pod -n prod -l app.kubernetes.io/name=agentprovision-api
 
 # Check previous logs
-kubectl logs -n prod -l app.kubernetes.io/name=servicetsunami-api --previous
+kubectl logs -n prod -l app.kubernetes.io/name=agentprovision-api --previous
 
 # Exec into pod
-kubectl exec -it -n prod deployment/servicetsunami-api -- /bin/bash
+kubectl exec -it -n prod deployment/agentprovision-api -- /bin/bash
 ```
 
 ## Security
@@ -391,13 +391,13 @@ Services use Workload Identity for GCP authentication:
 
 ```bash
 # List release history
-helm history servicetsunami-api -n prod
+helm history agentprovision-api -n prod
 
 # Rollback to previous release
-helm rollback servicetsunami-api -n prod
+helm rollback agentprovision-api -n prod
 
 # Rollback to specific revision
-helm rollback servicetsunami-api 2 -n prod
+helm rollback agentprovision-api 2 -n prod
 ```
 
 ## Cost Optimization

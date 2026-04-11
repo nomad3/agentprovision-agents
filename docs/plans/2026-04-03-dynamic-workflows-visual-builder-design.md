@@ -374,7 +374,7 @@ Deepest platform integration. Need `cli_execute` and `internal_api` step types. 
 - `ProviderReviewWorkflow` (in `apps/code-worker/workflows.py`) — internal quality review infrastructure, not user-facing
 - `ScheduledSyncWorkflow` (in `data_source_sync.py`) — secondary class, migrates alongside `data_source_sync`
 
-**Note on `code_task`:** `CodeTaskWorkflow` also lives in `apps/code-worker/workflows.py`, but unlike `ChatCliWorkflow` and `ProviderReviewWorkflow`, it IS user-facing — users explicitly dispatch code tasks via chat. It's included in Tier 4 and migrated using the `cli_execute` step type, which dispatches a child workflow to the `servicetsunami-code` queue.
+**Note on `code_task`:** `CodeTaskWorkflow` also lives in `apps/code-worker/workflows.py`, but unlike `ChatCliWorkflow` and `ProviderReviewWorkflow`, it IS user-facing — users explicitly dispatch code tasks via chat. It's included in Tier 4 and migrated using the `cli_execute` step type, which dispatches a child workflow to the `agentprovision-code` queue.
 
 **Total: 20 workflows across 4 tiers (5 + 4 + 7 + 4)**
 
@@ -383,7 +383,7 @@ Deepest platform integration. Need `cli_execute` and `internal_api` step types. 
 | Step Type | Purpose | Used By | Details |
 |-----------|---------|---------|---------|
 | `continue_as_new` | Infinite-duration workflows that restart periodically | Tier 3 (7 workflows) | The dynamic executor detects this step type at the end of a definition and calls `workflow.continue_as_new()` with the current context, resetting the Temporal history. Config: `interval_seconds` (restart period), `max_iterations` (optional safety limit). |
-| `cli_execute` | Run Claude Code CLI in isolated code-worker pod | code_task | Dispatches a **child workflow** on the `servicetsunami-code` task queue (not an activity on `servicetsunami-orchestration`). The child workflow's first activity fetches the tenant's OAuth token via `GET /api/v1/oauth/internal/token/claude_code?tenant_id=<uuid>`, sets it as `CLAUDE_CODE_OAUTH_TOKEN` env var, then runs `claude -p` subprocess. Returns: commit log, files changed, PR URL. |
+| `cli_execute` | Run Claude Code CLI in isolated code-worker pod | code_task | Dispatches a **child workflow** on the `agentprovision-code` task queue (not an activity on `agentprovision-orchestration`). The child workflow's first activity fetches the tenant's OAuth token via `GET /api/v1/oauth/internal/token/claude_code?tenant_id=<uuid>`, sets it as `CLAUDE_CODE_OAUTH_TOKEN` env var, then runs `claude -p` subprocess. Returns: commit log, files changed, PR URL. |
 | `internal_api` | Call internal API endpoints directly (not MCP) | task_execution, knowledge_extraction | For steps that need internal service calls: memory recall, entity persistence, RL scoring, evaluation. Config: `method` (GET/POST/PUT), `path` (internal API path), `body` (template-resolved JSON). Example for task_execution migration: step 1 = `internal_api` (recall memory), step 2 = `agent` (execute task), step 3 = `internal_api` (persist entities), step 4 = `internal_api` (log RL score). |
 
 ### 9.3 Migration Process (Per Workflow)
@@ -485,7 +485,7 @@ Surfaced as notifications, Luna proactive suggestions, and inline builder hints 
 ### Backend (New — Migration)
 - 3 new step types: `continue_as_new`, `cli_execute`, `internal_api`
 - Feature flag system (`USE_DYNAMIC_EXECUTOR_{name}`) for per-workflow rollback
-- `cli_execute` child workflow dispatch to `servicetsunami-code` queue
+- `cli_execute` child workflow dispatch to `agentprovision-code` queue
 
 ---
 

@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - 'apps/code-worker/**'
-      - 'helm/values/servicetsunami-code-worker.yaml'
+      - 'helm/values/agentprovision-code-worker.yaml'
       - '.github/workflows/code-worker-deploy.yaml'
   workflow_dispatch:
 
@@ -14,9 +14,9 @@ env:
   GCP_PROJECT: ${{ vars.GCP_PROJECT }}
   GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
   GKE_ZONE: ${{ vars.GKE_ZONE }}
-  IMAGE_NAME: gcr.io/${{ vars.GCP_PROJECT }}/servicetsunami-code-worker
+  IMAGE_NAME: gcr.io/${{ vars.GCP_PROJECT }}/agentprovision-code-worker
   NAMESPACE: prod
-  HELM_RELEASE: servicetsunami-code-worker
+  HELM_RELEASE: agentprovision-code-worker
   HELM_CHART: ./helm/charts/microservice
 
 jobs:
@@ -62,7 +62,7 @@ jobs:
         run: |
           helm upgrade --install ${{ env.HELM_RELEASE }} ${{ env.HELM_CHART }} \
             --namespace ${{ env.NAMESPACE }} \
-            --values helm/values/servicetsunami-code-worker.yaml \
+            --values helm/values/agentprovision-code-worker.yaml \
             --set image.tag=${{ github.sha }} \
             --wait \
             --timeout 10m
@@ -70,4 +70,4 @@ jobs:
       - name: Verify deployment
         run: |
           kubectl rollout status deployment/${{ env.HELM_RELEASE }} -n ${{ env.NAMESPACE }}
-          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=servicetsunami-code-worker
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app.kubernetes.io/name=agentprovision-code-worker

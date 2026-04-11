@@ -38,7 +38,7 @@ Luna lives inside a screen today. The Desk Robot gives her a physical body — s
 │  │   - Wake word detection (local, Porcupine) │     │
 │  │   - Audio capture + compression            │     │
 │  │   - Vision frame capture                   │     │
-│  │   - WebSocket → ServiceTsunami API         │     │
+│  │   - WebSocket → AgentProvision API         │     │
 │  │   - Servo control (head tracking)          │     │
 │  └──────────────────┬─────────────────────────┘     │
 │                     │                               │
@@ -58,7 +58,7 @@ Luna lives inside a screen today. The Desk Robot gives her a physical body — s
                           │  WiFi
                           ▼
          ┌────────────────────────────────┐
-         │    ServiceTsunami API (Luna)   │
+         │    AgentProvision API (Luna)   │
          │  - STT (Whisper local/cloud)   │
          │  - LLM reasoning (Claude CLI)  │
          │  - TTS (ElevenLabs / Piper)    │
@@ -147,7 +147,7 @@ luna-robot/
 └── requirements.txt
 ```
 
-### API Extensions (ServiceTsunami)
+### API Extensions (AgentProvision)
 
 New endpoint: `POST /api/v1/robot/interact`
 - Input: `{audio_b64, image_b64 (optional), session_id, tenant_id}`

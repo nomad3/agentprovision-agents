@@ -13,17 +13,40 @@ from datetime import datetime
 from typing import Dict, Optional
 
 import segno
-from neonize.aioze.client import NewAClient
-from neonize.aioze.events import (
-    ConnectedEv,
-    DisconnectedEv,
-    LoggedOutEv,
-    MessageEv,
-    PairStatusEv,
-)
-from neonize.utils import build_jid
-from neonize.utils.enum import ChatPresence, ChatPresenceMedia
 from sqlalchemy.orm import Session
+
+# Lazy neonize imports — neonize requires protobuf>=7 which conflicts with
+# temporalio (protobuf<7). Import at use-time only.
+NewAClient = None
+ConnectedEv = DisconnectedEv = LoggedOutEv = MessageEv = PairStatusEv = None
+build_jid = None
+ChatPresence = ChatPresenceMedia = None
+
+def _ensure_neonize():
+    """Lazy-load neonize on first use. Raises ImportError if unavailable."""
+    global NewAClient, ConnectedEv, DisconnectedEv, LoggedOutEv, MessageEv, PairStatusEv
+    global build_jid, ChatPresence, ChatPresenceMedia
+    if NewAClient is not None:
+        return
+    from neonize.aioze.client import NewAClient as _NewAClient
+    from neonize.aioze.events import (
+        ConnectedEv as _ConnectedEv,
+        DisconnectedEv as _DisconnectedEv,
+        LoggedOutEv as _LoggedOutEv,
+        MessageEv as _MessageEv,
+        PairStatusEv as _PairStatusEv,
+    )
+    from neonize.utils import build_jid as _build_jid
+    from neonize.utils.enum import ChatPresence as _ChatPresence, ChatPresenceMedia as _ChatPresenceMedia
+    NewAClient = _NewAClient
+    ConnectedEv = _ConnectedEv
+    DisconnectedEv = _DisconnectedEv
+    LoggedOutEv = _LoggedOutEv
+    MessageEv = _MessageEv
+    PairStatusEv = _PairStatusEv
+    build_jid = _build_jid
+    ChatPresence = _ChatPresence
+    ChatPresenceMedia = _ChatPresenceMedia
 
 from app.core.config import settings
 from app.db.session import SessionLocal
@@ -127,6 +150,7 @@ class WhatsAppService:
     RECONNECT_BASE_DELAY = 2  # seconds, doubles each attempt
 
     def __init__(self, db_url: str):
+        _ensure_neonize()
         self._clients: Dict[str, NewAClient] = {}
         self._tasks: Dict[str, asyncio.Task] = {}
         self._watchdog_tasks: Dict[str, asyncio.Task] = {}
@@ -1419,5 +1443,19 @@ class WhatsAppService:
             db.close()
 
 
-# Singleton instance — initialized with DATABASE_URL
-whatsapp_service = WhatsAppService(db_url=settings.DATABASE_URL)
+# Lazy singleton — only initialized when first accessed to avoid
+# neonize/protobuf import at module load time (protobuf 7.x vs 6.x conflict).
+_whatsapp_service_instance = None
+
+def _get_whatsapp_service():
+    global _whatsapp_service_instance
+    if _whatsapp_service_instance is None:
+        _whatsapp_service_instance = WhatsAppService(db_url=settings.DATABASE_URL)
+    return _whatsapp_service_instance
+
+class _LazyWhatsAppService:
+    """Proxy that defers WhatsAppService instantiation until first attribute access."""
+    def __getattr__(self, name):
+        return getattr(_get_whatsapp_service(), name)
+
+whatsapp_service = _LazyWhatsAppService()

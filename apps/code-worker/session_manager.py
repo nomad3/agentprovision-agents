@@ -22,7 +22,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "http://servicetsunami-api").strip()
+API_BASE_URL = os.environ.get("API_BASE_URL", "http://agentprovision-api").strip()
 API_INTERNAL_KEY = os.environ.get("API_INTERNAL_KEY", "dev_mcp_key").strip()
 
 # Max idle time before killing a session (seconds)
@@ -175,8 +175,8 @@ class SessionManager:
                 tool_prefix = f"mcp__{server_key}__*"
                 base_tools.append(tool_prefix)
         except Exception:
-            # Fallback to just servicetsunami
-            base_tools.append("mcp__servicetsunami__*")
+            # Fallback to just agentprovision
+            base_tools.append("mcp__agentprovision__*")
         return ",".join(base_tools)
 
     async def _create_session(self, tenant_id: str, config: SessionConfig) -> Optional[ActiveSession]:

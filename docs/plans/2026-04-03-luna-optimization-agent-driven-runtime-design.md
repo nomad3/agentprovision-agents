@@ -174,7 +174,7 @@ An agent with `tool_groups: ["calendar", "email"]` loads ~10 tools instead of 81
 ```bash
 # Booking agent with tool_groups: ["calendar", "email"]
 claude -p --model claude-haiku-4-5-20251001 \
-  --allowedTools "mcp__servicetsunami__list_calendar_events,mcp__servicetsunami__create_calendar_event,mcp__servicetsunami__search_emails,mcp__servicetsunami__send_email,mcp__servicetsunami__read_email,mcp__servicetsunami__download_attachment"
+  --allowedTools "mcp__agentprovision__list_calendar_events,mcp__agentprovision__create_calendar_event,mcp__agentprovision__search_emails,mcp__agentprovision__send_email,mcp__agentprovision__read_email,mcp__agentprovision__download_attachment"
 ```
 
 The tool group registry (cached at startup) maps group keys to MCP tool names. The `ChatCliInput` dataclass gets a new `allowed_tools` field containing the resolved tool name list. For Codex and Gemini CLI, equivalent tool filtering flags will be used (or all tools loaded if no filtering flag is available for that platform).

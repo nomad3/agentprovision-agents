@@ -4,13 +4,13 @@
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata:
-  name: servicetsunami-cert
+  name: agentprovision-cert
   namespace: gateway-system
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: gateway
 spec:
   domains:
-    - servicetsunami.com
-    - www.servicetsunami.com
-    - api.servicetsunami.com
+    - agentprovision.com
+    - www.agentprovision.com
+    - api.agentprovision.com

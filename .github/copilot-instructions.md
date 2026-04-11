@@ -1,6 +1,6 @@
-# Copilot Instructions for ServiceTsunami
+# Copilot Instructions for AgentProvision
 
-ServiceTsunami is an **AI agent orchestration platform** that routes tasks to Claude Code CLI, Codex, and Gemini CLI via Temporal workflows. It serves 81 MCP tools, maintains a knowledge graph with pgvector, and auto-scores responses with local Qwen models for reinforcement learning.
+AgentProvision is an **AI agent orchestration platform** that routes tasks to Claude Code CLI, Codex, and Gemini CLI via Temporal workflows. It serves 81 MCP tools, maintains a knowledge graph with pgvector, and auto-scores responses with local Qwen models for reinforcement learning.
 
 ## Quick Start
 
@@ -81,7 +81,7 @@ pnpm install && pnpm build && pnpm lint
 - **Orchestration**: Temporal at port 7233
 - **Database**: PostgreSQL with pgvector at port 8003
 - **Local ML**: Ollama at port 11434 (Qwen models for scoring, extraction, summarization)
-- **Tunneling**: Cloudflare Tunnel (servicetsunami.com + agentprovision.com)
+- **Tunneling**: Cloudflare Tunnel (agentprovision.com + agentprovision.com)
 
 ### Request Flow
 
@@ -120,7 +120,7 @@ Response → Auto Quality Scorer (local Qwen, 6-dim rubric) → RL Experience
 - Autonomous Python/Node.js agent
 - Executes `claude` commands with tenant's OAuth token (subscription-based, not API credits)
 - Creates feature branches, commits, and opens PRs with full audit trail
-- Task queue: `servicetsunami-code`
+- Task queue: `agentprovision-code`
 
 **`apps/mcp-server`** (MCP protocol):
 - 81 tools across 15 categories: Knowledge, Email, Calendar, Jira, GitHub, Ads, Data, Sales, Competitor, Monitor, Reports, Analytics, Skills, Shell, Drive
@@ -262,9 +262,9 @@ Manual SQL scripts in `apps/api/migrations/` (not Alembic). See `migrations/READ
 ### Temporal Workflows
 
 **Task Queues**:
-- `servicetsunami-orchestration`: TaskExecution, ChannelHealthMonitor, FollowUp, InboxMonitor, CompetitorMonitor
-- `servicetsunami-code`: Code-worker (Claude Code CLI execution)
-- `servicetsunami-databricks`: DatasetSync, KnowledgeExtraction, AgentKitExecution
+- `agentprovision-orchestration`: TaskExecution, ChannelHealthMonitor, FollowUp, InboxMonitor, CompetitorMonitor
+- `agentprovision-code`: Code-worker (Claude Code CLI execution)
+- `agentprovision-postgres`: DatasetSync, KnowledgeExtraction, AgentKitExecution
 
 Workflow structure:
 ```python
@@ -311,7 +311,7 @@ MCP_PORT=8086      # MCP server
 
 ```bash
 ANTHROPIC_API_KEY=sk-ant-...
-DATABASE_URL=postgresql://postgres:postgres@db:5432/servicetsunami
+DATABASE_URL=postgresql://postgres:postgres@db:5432/agentprovision
 SECRET_KEY=<your-jwt-secret>
 TEMPORAL_ADDRESS=temporal:7233
 MCP_SERVER_URL=http://mcp-server:8000
@@ -331,7 +331,7 @@ REACT_APP_API_BASE_URL=http://localhost:8001
 ```bash
 GITHUB_TOKEN=ghp_xxxxx                      # GitHub PAT
 API_INTERNAL_KEY=xxxxx                      # Internal API auth
-API_BASE_URL=http://servicetsunami-api      # Internal service URL
+API_BASE_URL=http://agentprovision-api      # Internal service URL
 TEMPORAL_ADDRESS=temporal:7233
 # CLAUDE_CODE_OAUTH_TOKEN set dynamically per-task from tenant's vault
 ```

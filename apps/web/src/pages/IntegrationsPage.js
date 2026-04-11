@@ -45,7 +45,6 @@ import Layout from '../components/Layout';
 import IntegrationsPanel from '../components/IntegrationsPanel';
 
 import WhatsAppChannelCard from '../components/WhatsAppChannelCard';
-import SyncStatusBadge from '../components/SyncStatusBadge';
 import connectorService from '../services/connector';
 import dataPipelineService from '../services/dataPipeline';
 import dataSourceService from '../services/dataSource';
@@ -57,24 +56,14 @@ import './IntegrationsPage.css';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const CONNECTOR_TYPES = {
-  snowflake: { label: 'Snowflake', icon: '❄️', color: '#29B5E8' },
   postgres: { label: 'PostgreSQL', icon: '🐘', color: '#336791' },
   mysql: { label: 'MySQL', icon: '🐬', color: '#00758F' },
-  databricks: { label: 'Databricks', icon: '⚡', color: '#FF3621' },
   s3: { label: 'Amazon S3', icon: '📦', color: '#FF9900' },
   gcs: { label: 'Google Cloud Storage', icon: '☁️', color: '#4285F4' },
   api: { label: 'REST API', icon: '🔗', color: '#6C757D' }
 };
 
 const CONNECTOR_FIELDS = {
-  snowflake: [
-    { name: 'account', label: 'Account', type: 'text', placeholder: 'xy12345.us-east-1', required: true },
-    { name: 'user', label: 'Username', type: 'text', required: true },
-    { name: 'password', label: 'Password', type: 'password', required: true },
-    { name: 'warehouse', label: 'Warehouse', type: 'text', required: true },
-    { name: 'database', label: 'Database', type: 'text', required: true },
-    { name: 'schema', label: 'Schema', type: 'text', placeholder: 'PUBLIC' }
-  ],
   postgres: [
     { name: 'host', label: 'Host', type: 'text', required: true },
     { name: 'port', label: 'Port', type: 'number', placeholder: '5432' },
@@ -88,11 +77,6 @@ const CONNECTOR_FIELDS = {
     { name: 'database', label: 'Database', type: 'text', required: true },
     { name: 'user', label: 'Username', type: 'text', required: true },
     { name: 'password', label: 'Password', type: 'password', required: true }
-  ],
-  databricks: [
-    { name: 'host', label: 'Workspace URL', type: 'text', required: true },
-    { name: 'token', label: 'Access Token', type: 'password', required: true },
-    { name: 'http_path', label: 'SQL Warehouse Path', type: 'text', required: true }
   ],
   s3: [
     { name: 'bucket', label: 'Bucket Name', type: 'text', required: true },
@@ -132,7 +116,7 @@ const IntegrationsPage = () => {
   const [showConnectorModal, setShowConnectorModal] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [editingConnector, setEditingConnector] = useState(null);
-  const [connectorForm, setConnectorForm] = useState({ name: '', description: '', type: 'snowflake', config: {} });
+  const [connectorForm, setConnectorForm] = useState({ name: '', description: '', type: 'postgres', config: {} });
   const [syncForm, setSyncForm] = useState({ connector_id: '', table_name: '', frequency: 'daily', mode: 'full' });
   const [testing, setTesting] = useState(null);
   const [syncing, setSyncing] = useState(null);
@@ -144,7 +128,7 @@ const IntegrationsPage = () => {
   const [dsLoading, setDsLoading] = useState(true);
   const [showDsModal, setShowDsModal] = useState(false);
   const [editingDsId, setEditingDsId] = useState(null);
-  const [dsForm, setDsForm] = useState({ name: '', type: 'databricks', config: {} });
+  const [dsForm, setDsForm] = useState({ name: '', type: 'postgres', config: {} });
   const [dsSubmitting, setDsSubmitting] = useState(false);
 
   // ── Datasets state ──
@@ -352,7 +336,7 @@ const IntegrationsPage = () => {
       setDsForm({ name: dataSource.name, type: dataSource.type, config: dataSource.config || {} });
     } else {
       setEditingDsId(null);
-      setDsForm({ name: '', type: 'databricks', config: {} });
+      setDsForm({ name: '', type: 'postgres', config: {} });
     }
     setShowDsModal(true);
   };
@@ -398,7 +382,6 @@ const IntegrationsPage = () => {
 
   const getDsTypeIcon = (type) => {
     switch (type) {
-      case 'databricks': return <FaCloud size={24} className="text-info" />;
       case 'postgres': return <FaDatabase size={24} className="text-primary" />;
       case 'rest_api': case 'api': return <FaNetworkWired size={24} className="text-success" />;
       default: return <FaServer size={24} className="text-secondary" />;
@@ -407,23 +390,6 @@ const IntegrationsPage = () => {
 
   const renderDsConfigFields = () => {
     switch (dsForm.type) {
-      case 'databricks':
-        return (
-          <>
-            <Form.Group className="mb-3">
-              <Form.Label>{t('dataSources.fields.databricksHost')}</Form.Label>
-              <Form.Control type="text" placeholder="https://adb-xxxx.xx.azuredatabricks.net" value={dsForm.config.host || ''} onChange={(e) => handleDsConfigChange('host', e.target.value)} required />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>{t('dataSources.fields.accessToken')}</Form.Label>
-              <Form.Control type="password" placeholder="dapi..." value={dsForm.config.token || ''} onChange={(e) => handleDsConfigChange('token', e.target.value)} required />
-            </Form.Group>
-            <Form.Group className="mb-3">
-              <Form.Label>{t('dataSources.fields.httpPath')}</Form.Label>
-              <Form.Control type="text" placeholder="/sql/1.0/warehouses/..." value={dsForm.config.http_path || ''} onChange={(e) => handleDsConfigChange('http_path', e.target.value)} />
-            </Form.Group>
-          </>
-        );
       case 'postgres':
         return (
           <>
@@ -931,7 +897,7 @@ const IntegrationsPage = () => {
                     <td>{dataset.name}</td>
                     <td>{dataset.description}</td>
                     <td>{dataset.row_count}</td>
-                    <td><SyncStatusBadge status={dataset.metadata?.sync_status} /></td>
+                    <td><Badge bg="secondary">{dataset.metadata?.sync_status || 'unknown'}</Badge></td>
                     <td>{dataset.created_at ? new Date(dataset.created_at).toLocaleString() : '...'}</td>
                     <td>
                       <Button variant="info" size="sm" onClick={() => openPreview(dataset)} className="me-2">{t('datasets.preview')}</Button>
@@ -1217,7 +1183,6 @@ const IntegrationsPage = () => {
                   <Form.Group className="mb-3">
                     <Form.Label>{t('dataSources.modal.type')}</Form.Label>
                     <Form.Select value={dsForm.type} onChange={(e) => setDsForm({ ...dsForm, type: e.target.value, config: {} })}>
-                      <option value="databricks">Databricks</option>
                       <option value="postgres">PostgreSQL</option>
                       <option value="s3">Amazon S3</option>
                       <option value="api">REST API</option>

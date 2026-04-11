@@ -17,7 +17,7 @@
 ### i18n Architecture
 - **Initialization**: create `apps/web/src/i18n/i18n.ts` exporting the configured instance. Load resources via `resources/index.ts` to keep imports tree-shakeable.
 - **Provider**: wrap `BrowserRouter` inside an `I18nextProvider` from `react-i18next` in `apps/web/src/App.js` (convert to `.tsx` when convenient).
-- **Locale persistence**: use language detector order `localStorage -> navigator -> html tag -> fallback`. Store manual overrides with key `servicetsunami.lang`.
+- **Locale persistence**: use language detector order `localStorage -> navigator -> html tag -> fallback`. Store manual overrides with key `agentprovision.lang`.
 - **Async loading**: keep initial locales bundled statically; enable code-splitting later if a third language is added.
 
 ### Namespace Layout

@@ -134,7 +134,7 @@ fn resolve_app_context(app_name: &str, window_title: &str) -> String {
     if matches!(app_name, "Electron" | "Code" | "Code - Insiders" | "Cursor") {
         // Extract the first segment before " — " or " - " (that's the project)
         let project = if let Some(pos) = window_title.find(" \u{2014} ") {
-            // em dash (—) separator: "servicetsunami-agents — file.md"
+            // em dash (—) separator: "agentprovision-agents — file.md"
             window_title[..pos].trim()
         } else if let Some(pos) = window_title.find(" - ") {
             window_title[..pos].trim()

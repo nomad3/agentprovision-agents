@@ -4,7 +4,7 @@
 
 **Goal:** Replace the 5-agent ADK dev team (architect → coder → tester → dev_ops → user_agent) with a single `code_agent` that delegates coding tasks to Claude Code CLI running in an isolated Kubernetes pod, communicating via Temporal workflows.
 
-**Architecture:** A dedicated code worker pod runs Claude Code CLI authenticated via Claude Pro/Max subscription token. The ADK `code_agent` starts a `CodeTaskWorkflow` on a `servicetsunami-code` Temporal queue. Claude Code handles the full development cycle autonomously — reads code, implements, tests, commits to a feature branch, and creates a PR. The user reviews and merges.
+**Architecture:** A dedicated code worker pod runs Claude Code CLI authenticated via Claude Pro/Max subscription token. The ADK `code_agent` starts a `CodeTaskWorkflow` on a `agentprovision-code` Temporal queue. Claude Code handles the full development cycle autonomously — reads code, implements, tests, commits to a feature branch, and creates a PR. The user reviews and merges.
 
 **Tech Stack:** Claude Code CLI (Node.js), Python 3.11 (Temporal worker), Temporal, Kubernetes, Helm, GitHub Actions.
 
@@ -16,7 +16,7 @@
 User (chat/WhatsApp)
   → Root Supervisor (ADK)
     → code_agent (ADK leaf agent)
-      → starts CodeTaskWorkflow (Temporal, queue: servicetsunami-code)
+      → starts CodeTaskWorkflow (Temporal, queue: agentprovision-code)
         → code-worker pod picks up task
           → git pull origin main
           → git checkout -b code/task-<short-id>
@@ -39,8 +39,8 @@ User (chat/WhatsApp)
 - Entrypoint: `python -m worker`
 
 **Startup sequence:**
-1. `git clone https://<GITHUB_TOKEN>@github.com/nomad3/servicetsunami-agents.git /workspace`
-2. Start Temporal worker on `servicetsunami-code` queue
+1. `git clone https://<GITHUB_TOKEN>@github.com/nomad3/agentprovision-agents.git /workspace`
+2. Start Temporal worker on `agentprovision-code` queue
 3. Per-task: fetch tenant's Claude session token via internal API → `claude setup-token` → execute
 
 **Worker code (`apps/code-worker/worker.py`):**
@@ -61,7 +61,7 @@ User (chat/WhatsApp)
 
 ### 2. ADK code_agent (replaces 5 agents)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/code_agent.py`
+**File:** `apps/adk-server/agentprovision_supervisor/code_agent.py`
 
 Single leaf agent with one tool: `start_code_task(task_description: str) -> dict`
 
@@ -74,7 +74,7 @@ The tool:
 
 ### 3. Root Supervisor Update
 
-**File:** `apps/adk-server/servicetsunami_supervisor/agent.py`
+**File:** `apps/adk-server/agentprovision_supervisor/agent.py`
 
 - Remove `code_agent` import, replace with `code_agent`
 - Update routing: "code_agent" handles all code/tool/feature requests
@@ -82,7 +82,7 @@ The tool:
 
 ### 4. Temporal Integration
 
-**Queue:** `servicetsunami-code` (new dedicated queue)
+**Queue:** `agentprovision-code` (new dedicated queue)
 
 **Workflow:** `CodeTaskWorkflow`
 - Input: `CodeTaskInput(task_description: str, tenant_id: str, context: Optional[str])`
@@ -99,8 +99,8 @@ The tool:
 - Each tenant provides their own Claude Pro/Max subscription token
 
 **GCP Secret Manager (infrastructure only):**
-- `servicetsunami-github-token` — already exists (for git clone + push + gh CLI)
-- `servicetsunami-api-internal-key` — already exists (for code worker → API auth)
+- `agentprovision-github-token` — already exists (for git clone + push + gh CLI)
+- `agentprovision-api-internal-key` — already exists (for code worker → API auth)
 
 **ExternalSecrets in Helm values:**
 ```yaml
@@ -108,10 +108,10 @@ externalSecret:
   data:
     - secretKey: GITHUB_TOKEN
       remoteRef:
-        key: servicetsunami-github-token
+        key: agentprovision-github-token
     - secretKey: API_INTERNAL_KEY
       remoteRef:
-        key: servicetsunami-api-internal-key
+        key: agentprovision-api-internal-key
 ```
 
 **Token refresh:** Claude subscription tokens last weeks. User pastes a new one in the Integrations page when expired. The card shows connection status (connected/expired).
@@ -126,11 +126,11 @@ externalSecret:
 6. User reviews and merges to main
 7. Deploy triggers on merge (existing CI/CD)
 
-### 7. Helm Values (`helm/values/servicetsunami-code-worker.yaml`)
+### 7. Helm Values (`helm/values/agentprovision-code-worker.yaml`)
 
 Follows the worker pattern (no HTTP service, no probes):
 ```yaml
-nameOverride: "servicetsunami-code-worker"
+nameOverride: "agentprovision-code-worker"
 container:
   command: ["python", "-m", "worker"]
 replicaCount: 1
@@ -147,9 +147,9 @@ No Cloud SQL proxy needed (code worker doesn't access the database).
 ### 8. GitHub Actions (`code-worker-deploy.yaml`)
 
 Follows the ADK deploy pattern:
-- Triggers on push to `apps/code-worker/**`, `helm/values/servicetsunami-code-worker.yaml`
+- Triggers on push to `apps/code-worker/**`, `helm/values/agentprovision-code-worker.yaml`
 - Builds Docker image → pushes to GCR → deploys via Helm
-- Image: `gcr.io/ai-agency-479516/servicetsunami-code-worker`
+- Image: `gcr.io/ai-agency-479516/agentprovision-code-worker`
 
 ### 9. Integrations Page — Claude Code Card
 
@@ -186,7 +186,7 @@ Claude Code appears on the Integrations page as a token-paste integration (like 
 - ~~GCP Secret Manager for `CLAUDE_SESSION_TOKEN`~~ — no longer needed
 - Token comes from the integration_credentials table via the internal API
 - Code worker only needs `API_INTERNAL_KEY` to call the token endpoint
-- Helm values simplified: no `servicetsunami-claude-session-token` external secret
+- Helm values simplified: no `agentprovision-claude-session-token` external secret
 
 ## Prerequisite: Consolidate skill_config → integration_config
 
@@ -216,12 +216,12 @@ The codebase has a partial rename from the old `skill_config`/`skill_credential`
 - `apps/api/app/services/skill_configs.py` (merged into integration service)
 - `apps/web/src/components/SkillsConfigPanel.js` (replaced by `IntegrationsPanel.js`)
 - `apps/web/src/services/skillConfigService.js` (replaced by `integrationConfigService.js`)
-- `apps/adk-server/servicetsunami_supervisor/architect.py`
-- `apps/adk-server/servicetsunami_supervisor/coder.py`
-- `apps/adk-server/servicetsunami_supervisor/tester.py`
-- `apps/adk-server/servicetsunami_supervisor/dev_ops.py`
-- `apps/adk-server/servicetsunami_supervisor/user_agent.py`
-- `apps/adk-server/servicetsunami_supervisor/code_agent.py`
+- `apps/adk-server/agentprovision_supervisor/architect.py`
+- `apps/adk-server/agentprovision_supervisor/coder.py`
+- `apps/adk-server/agentprovision_supervisor/tester.py`
+- `apps/adk-server/agentprovision_supervisor/dev_ops.py`
+- `apps/adk-server/agentprovision_supervisor/user_agent.py`
+- `apps/adk-server/agentprovision_supervisor/code_agent.py`
 - Imports/references from `__init__.py` and `agent.py`
 
 ## What Stays

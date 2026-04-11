@@ -85,7 +85,7 @@ No new tables. Signals are entities with `category = 'signal'` linked via `knowl
 
 ### Analytics Integration
 
-Analytics dashboard at analytics.servicetsunami.com queries knowledge graph API for:
+Analytics dashboard at analytics.agentprovision.com queries knowledge graph API for:
 - `GET /knowledge/entities?category=signal` - all detected signals
 - `GET /knowledge/entities?category=lead&status=verified` - verified leads
 - Signal-to-lead ratio, signal strength distribution, signals by source
@@ -98,7 +98,7 @@ Analytics dashboard at analytics.servicetsunami.com queries knowledge graph API 
 4. `apps/api/app/api/v1/knowledge.py` - add category query param
 5. `apps/api/migrations/031_add_entity_category.sql` - migration
 6. `apps/web/src/pages/MemoryPage.js` - category filter, signal badges
-7. `apps/adk-server/servicetsunami_supervisor/knowledge_manager.py` - taxonomy instructions
-8. `apps/adk-server/servicetsunami_supervisor/web_researcher.py` - signal detection instructions
-9. `apps/adk-server/servicetsunami_supervisor/agent.py` - supervisor routing
+7. `apps/adk-server/agentprovision_supervisor/knowledge_manager.py` - taxonomy instructions
+8. `apps/adk-server/agentprovision_supervisor/web_researcher.py` - signal detection instructions
+9. `apps/adk-server/agentprovision_supervisor/agent.py` - supervisor routing
 10. `apps/adk-server/services/knowledge_graph.py` - category param in create_entity

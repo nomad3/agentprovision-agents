@@ -1,8 +1,8 @@
 """
-ServiceTsunami MCP Server (REST API + MCP)
+AgentProvision MCP Server (REST API + MCP)
 
-This server exposes REST endpoints for the ServiceTsunami API to consume,
-acting as a bridge to Databricks and other integrations.
+This server exposes REST endpoints for the AgentProvision API to consume,
+acting as a bridge to PostgreSQL and other integrations.
 """
 import os
 import logging
@@ -15,8 +15,8 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 from src.config import settings
-from src.clients.databricks_client import DatabricksClient
-from src.tools import databricks_tools, ingestion
+from src.clients.postgres_client import PostgreSQLClient
+from src.tools import postgres_tools, ingestion
 from src.services.browser_service import get_browser_service
 from src.tools.web_scraper import scrape_webpage, scrape_structured_data, search_and_scrape
 from src.mcp_app import mcp as mcp_server
@@ -37,7 +37,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ServiceTsunami MCP Server",
+    title="AgentProvision MCP Server",
     docs_url="/docs",
     openapi_url="/openapi.json",
     lifespan=lifespan,
@@ -45,7 +45,7 @@ app = FastAPI(
 # NOTE: FastMCP streamable HTTP requires its own ASGI lifecycle.
 # It runs as a separate process on port 8001 (see Dockerfile CMD).
 # Do NOT mount it here — app.mount() breaks the task group initialization.
-databricks = DatabricksClient()
+postgres = PostgreSQLClient()
 
 # ==================== Models ====================
 
@@ -100,7 +100,7 @@ class LinkedInLoginRequest(BaseModel):
 
 # ==================== Health ====================
 
-@app.get("/servicetsunami/v1/health")
+@app.get("/agentprovision/v1/health")
 async def health_check():
     """Health check endpoint with real connectivity tests."""
     db_status = "not_configured"
@@ -117,8 +117,8 @@ async def health_check():
         except Exception as e:
             db_status = f"error: {str(e)[:100]}"
 
-    # Check Databricks connection if configured
-    databricks_connected = bool(settings.DATABRICKS_HOST)
+    # Check PostgreSQL connection if configured
+    postgres_connected = bool(settings.POSTGRESQL_HOST)
 
     # Check browser service
     try:
@@ -135,14 +135,14 @@ async def health_check():
     return {
         "status": status,
         "database": db_status,
-        "databricks_connected": databricks_connected,
+        "postgres_connected": postgres_connected,
         "browser": browser_status,
         "version": "1.1.0",
     }
 
 # ==================== Scraper Endpoints ====================
 
-@app.post("/servicetsunami/v1/scrape")
+@app.post("/agentprovision/v1/scrape")
 async def scrape_endpoint(request: ScrapeRequest):
     """Scrape a webpage and extract content."""
     try:
@@ -159,7 +159,7 @@ async def scrape_endpoint(request: ScrapeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/servicetsunami/v1/scrape/structured")
+@app.post("/agentprovision/v1/scrape/structured")
 async def scrape_structured_endpoint(request: ScrapeStructuredRequest):
     """Scrape a webpage and extract structured data using CSS selectors."""
     try:
@@ -175,7 +175,7 @@ async def scrape_structured_endpoint(request: ScrapeStructuredRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/servicetsunami/v1/search-and-scrape")
+@app.post("/agentprovision/v1/search-and-scrape")
 async def search_and_scrape_endpoint(request: SearchAndScrapeRequest):
     """Search the web and scrape top results."""
     try:
@@ -191,7 +191,7 @@ async def search_and_scrape_endpoint(request: SearchAndScrapeRequest):
 
 # ==================== Cookie Auth ====================
 
-@app.post("/servicetsunami/v1/auth/cookies")
+@app.post("/agentprovision/v1/auth/cookies")
 async def import_cookies(request: CookieImportRequest):
     """Import browser cookies for authenticated scraping (Google, LinkedIn, etc.)."""
     bs = get_browser_service()
@@ -208,7 +208,7 @@ async def import_cookies(request: CookieImportRequest):
     }
 
 
-@app.get("/servicetsunami/v1/auth/cookies")
+@app.get("/agentprovision/v1/auth/cookies")
 async def get_cookie_status():
     """Check what cookies are stored."""
     bs = get_browser_service()
@@ -224,7 +224,7 @@ async def get_cookie_status():
     }
 
 
-@app.post("/servicetsunami/v1/auth/google/login")
+@app.post("/agentprovision/v1/auth/google/login")
 async def google_login(request: GoogleLoginRequest):
     """Login to Google via Playwright browser.
 
@@ -240,7 +240,7 @@ async def google_login(request: GoogleLoginRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/servicetsunami/v1/auth/linkedin/login")
+@app.post("/agentprovision/v1/auth/linkedin/login")
 async def linkedin_login(request: LinkedInLoginRequest):
     """Login to LinkedIn via Playwright browser.
 
@@ -256,11 +256,11 @@ async def linkedin_login(request: LinkedInLoginRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== Databricks Routes ====================
+# ==================== PostgreSQL Routes ====================
 
-# --- Databricks Catalogs ---
+# --- PostgreSQL Catalogs ---
 
-@app.post("/servicetsunami/v1/databricks/catalogs")
+@app.post("/agentprovision/v1/postgres/catalogs")
 async def create_catalog(request: CreateCatalogRequest):
     try:
         return {
@@ -271,10 +271,10 @@ async def create_catalog(request: CreateCatalogRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/servicetsunami/v1/databricks/catalogs/{tenant_id}")
+@app.get("/agentprovision/v1/postgres/catalogs/{tenant_id}")
 async def get_catalog_status(tenant_id: str):
     try:
-        catalog_name = f"servicetsunami_{tenant_id.replace('-', '_')}"
+        catalog_name = f"agentprovision_{tenant_id.replace('-', '_')}"
         return {
             "exists": True,
             "catalog_name": catalog_name,
@@ -283,13 +283,13 @@ async def get_catalog_status(tenant_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Databricks Datasets ---
+# --- PostgreSQL Datasets ---
 
-@app.post("/servicetsunami/v1/databricks/datasets")
+@app.post("/agentprovision/v1/postgres/datasets")
 async def create_dataset(request: CreateDatasetRequest):
     return {"status": "created", "table": f"{request.name}"}
 
-@app.post("/servicetsunami/v1/databricks/datasets/upload")
+@app.post("/agentprovision/v1/postgres/datasets/upload")
 async def upload_dataset(
     tenant_id: str,
     dataset_name: str,
@@ -299,26 +299,26 @@ async def upload_dataset(
     content = await file.read()
     return {"status": "uploaded", "size": len(content)}
 
-@app.post("/servicetsunami/v1/databricks/datasets/query")
+@app.post("/agentprovision/v1/postgres/datasets/query")
 async def query_dataset(request: QueryDatasetRequest):
     try:
-        result = await databricks_tools.query_sql(request.sql, request.tenant_id)
+        result = await postgres_tools.query_sql(request.sql, request.tenant_id)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/servicetsunami/v1/databricks/datasets/{tenant_id}/{dataset_name}")
+@app.get("/agentprovision/v1/postgres/datasets/{tenant_id}/{dataset_name}")
 async def get_dataset(tenant_id: str, dataset_name: str):
     try:
-        result = await databricks_tools.describe_table(dataset_name, tenant_id)
+        result = await postgres_tools.describe_table(dataset_name, tenant_id)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/servicetsunami/v1/databricks/transformations/silver")
+@app.post("/agentprovision/v1/postgres/transformations/silver")
 async def transform_silver(request: TransformSilverRequest):
     try:
-        result = await databricks_tools.transform_to_silver(request.bronze_table, request.tenant_id)
+        result = await postgres_tools.transform_to_silver(request.bronze_table, request.tenant_id)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
