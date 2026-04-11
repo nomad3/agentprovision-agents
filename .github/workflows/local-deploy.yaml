@@ -89,19 +89,19 @@ jobs:
             docker build -t "$name:latest" "$path" --quiet && echo "  OK: $name" || echo "  FAILED: $name"
           }
 
-          echo "$SERVICES" | grep -q "api" && {
+          if echo "$SERVICES" | grep -q "api"; then
             build_img agentprovision-api ./apps/api
             docker tag agentprovision-api:latest agentprovision-orchestration-worker:latest
             echo "  Tagged orchestration-worker from api"
-          }
+          fi
 
-          echo "$SERVICES" | grep -q "web" && build_img agentprovision-web ./apps/web
+          if echo "$SERVICES" | grep -q "web"; then build_img agentprovision-web ./apps/web; fi
 
-          echo "$SERVICES" | grep -q "code-worker" && build_img agentprovision-code-worker ./apps/code-worker
+          if echo "$SERVICES" | grep -q "code-worker"; then build_img agentprovision-code-worker ./apps/code-worker; fi
 
-          echo "$SERVICES" | grep -q "embedding-service" && build_img agentprovision-embedding-service ./apps/embedding-service
+          if echo "$SERVICES" | grep -q "embedding-service"; then build_img agentprovision-embedding-service ./apps/embedding-service; fi
 
-          echo "$SERVICES" | grep -q "memory-core" && build_img agentprovision-memory-core ./apps/memory-core
+          if echo "$SERVICES" | grep -q "memory-core"; then build_img agentprovision-memory-core ./apps/memory-core; fi
 
       # ── Deploy via Helm ──────────────────────────────────────
       - name: Deploy services (Helm)
@@ -123,23 +123,12 @@ jobs:
           deploy temporal "-f $V/temporal-local.yaml"
 
           # Application services (only if changed)
-          echo "$SERVICES" | grep -q "api" && \
-            deploy api "-f $V/agentprovision-api-local.yaml"
-
-          echo "$SERVICES" | grep -q "orchestration-worker" && \
-            deploy orchestration-worker "-f $V/agentprovision-orchestration-worker-local.yaml"
-
-          echo "$SERVICES" | grep -q "web" && \
-            deploy web "-f $V/agentprovision-web-local.yaml"
-
-          echo "$SERVICES" | grep -q "code-worker" && \
-            deploy code-worker "-f $V/agentprovision-code-worker-local.yaml"
-
-          echo "$SERVICES" | grep -q "embedding-service" && \
-            deploy embedding-service "-f $V/embedding-service.yaml -f $V/embedding-service-local.yaml"
-
-          echo "$SERVICES" | grep -q "memory-core" && \
-            deploy memory-core "-f $V/memory-core.yaml -f $V/memory-core-local.yaml"
+          if echo "$SERVICES" | grep -q "api"; then deploy api "-f $V/agentprovision-api-local.yaml"; fi
+          if echo "$SERVICES" | grep -q "orchestration-worker"; then deploy orchestration-worker "-f $V/agentprovision-orchestration-worker-local.yaml"; fi
+          if echo "$SERVICES" | grep -q "web"; then deploy web "-f $V/agentprovision-web-local.yaml"; fi
+          if echo "$SERVICES" | grep -q "code-worker"; then deploy code-worker "-f $V/agentprovision-code-worker-local.yaml"; fi
+          if echo "$SERVICES" | grep -q "embedding-service"; then deploy embedding-service "-f $V/embedding-service.yaml -f $V/embedding-service-local.yaml"; fi
+          if echo "$SERVICES" | grep -q "memory-core"; then deploy memory-core "-f $V/memory-core.yaml -f $V/memory-core-local.yaml"; fi
 
           # Restart workers if API image changed (they share the image)
           if echo "$SERVICES" | grep -q "api"; then
