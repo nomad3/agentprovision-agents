@@ -4,25 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AgentProvision is an AI agent orchestration platform that routes tasks to **Claude Code CLI** (Sonnet by default, configurable via `CLAUDE_CODE_MODEL`) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Runs from a laptop via **Cloudflare Tunnel** serving both `agentprovision.com` and `agentprovision.com`.
+AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration platform. Routes tasks to **Gemini CLI** (primary, configurable per-tenant via `tenant_features.default_cli_platform`) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Deployed on **Rancher Desktop K8s** with **Cloudflare Tunnel** (in-cluster pod) serving `agentprovision.com`.
 
-**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Temporal → code-worker (Claude Code CLI with `--model sonnet`) → MCP tools (FastMCP, 81 tools) → response. Every response is auto-scored by a local Gemma 4 council (3 reviewers, 6-dimension rubric) and selectively reviewed by a multi-provider council (Claude + Codex + Gemma 4 in parallel via Temporal). All scores logged as RL experiences for continuous improvement and platform routing optimization.
+**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Memory Recall (pre-loaded context, pgvector) → Temporal → code-worker (Gemini CLI / Claude Code CLI / Codex CLI) → MCP tools (FastMCP, 81 tools) → response → PostChatMemoryWorkflow (async entity extraction via Gemma 4). Every response is auto-scored by a local Gemma 4 council. All scores logged as RL experiences.
+
+**Memory-First Design** (Phase 1 shipped, Phase 2 in validation):
+- `apps/api/app/memory/` package: `recall()`, `record_*()`, `ingest_events()`
+- Pre-loaded memory context injected into CLAUDE.md before every chat turn (no recall tool needed)
+- PostChatMemoryWorkflow extracts entities, observations, commitments via Gemma 4 (async, non-blocking)
+- Rust gRPC services (`embedding-service` on :50051, `memory-core` on :50052) — scaffolded, dual-read validation enabled
+- Embedding service uses fastembed (ONNX Runtime) for nomic-embed-text-v1.5 (768-dim)
+- Phase 2 dual-read: Python primary, Rust shadow comparison for cutover validation
+- Feature flag: `USE_MEMORY_V2=true` enables the memory-first path
+
+**Performance** (as of 2026-04-10): API endpoints ~80ms, chat p50 ~5.5s (88% improvement from pre-Phase-1 baseline of 47s).
 
 ## Architecture
 
 ### Monorepo Structure
 
-Docker Compose stack with Cloudflare Tunnel:
+**Kubernetes on Rancher Desktop** (migrated from Docker Compose 2026-04-10). All services deployed via Helm (`helm/charts/microservice` base chart). Cloudflare tunnel runs as an in-cluster pod.
 
-- **`apps/api`** (port 8001): FastAPI backend — chat service, agent router, RL, knowledge graph, skill marketplace
-- **`apps/code-worker`**: Claude Code CLI execution via Temporal. Has git, gh, claude, node. Fetches GitHub + Claude Code tokens from vault per-session.
-- **`apps/mcp-server`** (port 8086): Original REST MCP server (PostgreSQL/scraping)
-- **`mcp-tools`** (port 8087): FastMCP with 81 tools (email, calendar, knowledge, jira, github, data, ads, competitor, monitor, sales, reports, shell, analytics, skills, drive)
-- **`apps/web`** (port 8002): React SPA with markdown rendering (react-markdown), Ocean theme
-- **`cloudflared`**: Cloudflare Tunnel — routes agentprovision.com + agentprovision.com to local stack
-- **`temporal`** (port 7233): Workflow engine for durable task execution
-- **`ollama`** (native host, port 11434): Local LLM runtime — runs **natively on the host Mac** (not in Docker) for full M4 GPU acceleration (~57 tok/s). Hosts Gemma 4 for auto-scoring, RL, knowledge extraction, conversation summarization, free-tier fallback, and OpenCode chat. Containers reach it via `host.docker.internal:11434`.
-- **`db`** (port 8003): PostgreSQL + pgvector
+- **`apps/api`**: FastAPI backend — chat service, agent router, memory layer, RL, knowledge graph, skill marketplace. K8s: `api` deployment, 2Gi memory limit.
+- **`apps/code-worker`**: CLI execution via Temporal (Gemini CLI primary, Claude Code + Codex fallbacks). Has git, gh, gemini, claude, node. Fetches per-tenant OAuth tokens at runtime. K8s: `code-worker` deployment on `agentprovision-code` queue.
+- **`apps/embedding-service`**: Rust gRPC service for fast vector embeddings. Uses fastembed (ONNX Runtime) with nomic-embed-text-v1.5 (768-dim). K8s: `embedding-service` on port 50051, 2Gi limit, 120s probe delay for model download.
+- **`apps/memory-core`**: Rust gRPC service for memory operations (Recall, RecordObservation, RecordCommitment, IngestEvents). Talks to embedding-service + PostgreSQL via pgvector. K8s: `memory-core` on port 50052.
+- **`apps/web`**: React SPA with nginx. Proxies `/api/*` to api service, `/ws/*` for WebSocket. K8s: `web` deployment.
+- **`apps/mcp-server`**: **Deprecated** — was the old Databricks/Playwright MCP server. Replaced by FastMCP tools integrated in the API.
+- **`cloudflared`**: Runs as K8s pod (`kubernetes/cloudflared-deployment.yaml`), routes `agentprovision.com` to internal services by DNS name (`http://api:80`, `http://web:80`). No port-forwards needed.
+- **`temporal`**: Workflow engine (auto-setup image). K8s: `temporal` deployment on port 7233.
+- **`postgresql`**: pgvector/pgvector:pg13 with PVC protected by `helm.sh/resource-policy: keep`. 67 SQL migrations tracked in `_migrations` table.
+- **`redis`**: Session cache. K8s: `redis` deployment.
+- **`ollama`** (native host, port 11434): Runs natively on Mac M4 for GPU acceleration (~57 tok/s). Hosts Gemma 4 for auto-scoring, entity extraction, commitment classification. K8s pods reach it via `host.docker.internal:11434`.
 
 Previously a Turborepo monorepo managed with `pnpm` workspaces:
 
@@ -46,10 +59,16 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
   - PR body includes: task description, Claude Code output summary, commit log, files changed
   - Temporal worker on `agentprovision-code` queue
 
-- **`apps/mcp-server`**: Model Context Protocol server for data integration (Python 3.11)
-  - MCP-compliant server following Anthropic's specification
-  - 9 tools: PostgreSQL connections, data ingestion, PostgreSQL queries
-  - Bronze/Silver/Gold data layer architecture via PostgreSQL Unity Catalog
+- **`apps/mcp-server`**: **Deprecated** — legacy MCP server (Databricks/Playwright). Not deployed in K8s.
+
+- **`apps/api/app/memory/`**: Memory-First package (Phase 1 shipped)
+  - `recall.py`: Pre-loads context for chat hot path. 1500ms hard timeout, pgvector semantic search, token budget enforcement. Dual-read mode compares Python vs Rust (gRPC) results.
+  - `record.py`: Sync writes for observations, commitments, goals. Dual-write validation (probe-only, no duplicate data).
+  - `ingest.py`: Bulk event ingestion from source adapters.
+  - `types.py`: Dataclass contracts matching gRPC IDL (RecallRequest/Response, EntitySummary, etc.)
+  - `dispatch.py`: Fires PostChatMemoryWorkflow via Temporal after each chat turn.
+  - `feature_flag.py`: `USE_MEMORY_V2` gate.
+  - `validation_metrics.py`: Dual-read/write metrics for Phase 2 cutover tracking.
 
 - **`helm/`**: Kubernetes Helm charts
   - `charts/microservice/`: Reusable base chart for all services
@@ -58,7 +77,7 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - **`infra/terraform`**: Infrastructure as Code for AWS deployment (EKS, Aurora PostgreSQL, VPC)
 
 - **`scripts`**: Utility scripts
-  - `deploy.sh`: Legacy VM deployment (deprecated, use Kubernetes)
+  - `deploy_k8s_local.sh`: Rancher Desktop K8s deployment (builds images, Helm deploy, migrations, cloudflare tunnel). Flags: `--skip-build`, `--infra-only`.
   - `e2e_test_production.sh`: End-to-end test suite (22 test cases)
 
 ### Key Architectural Patterns
@@ -91,7 +110,10 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 
 **Knowledge Graph + Vector Search**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph with pgvector-powered semantic search (768-dim embeddings via nomic-embed-text-v1.5). Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. Observations table (`knowledge_observations`) stores facts and insights. Entity history tracked in `knowledge_entity_history`. **Memory Activity** audit log (`memory_activities` table) tracks entity_created, entity_updated, relation_created, memory_created, and action_triggered events.
 
-**Embedding System**: Local open-source embeddings via `nomic-ai/nomic-embed-text-v1.5` (768-dim, sentence-transformers). No API key needed — runs locally in API and MCP containers. Centralized in `embedding_service.py`. Used by: knowledge graph, chat messages, memory activities, RL experiences, skill registry (auto-trigger matching), and email attachment content. Email attachments downloaded via Gmail API are automatically embedded for semantic search (`content_type='email_attachment'`).
+**Embedding System**: `nomic-ai/nomic-embed-text-v1.5` (768-dim). Two paths:
+- **Rust** (`apps/embedding-service`): fastembed + ONNX Runtime gRPC service on port 50051. 2-5x faster than Python. Enabled via `USE_RUST_EMBEDDING=true` + `EMBEDDING_SERVICE_URL` env var.
+- **Python fallback** (`embedding_service.py`): sentence-transformers, runs locally in API pod. Auto-fallback if Rust service unavailable.
+Used by: knowledge graph, chat messages, memory activities, RL experiences, skill registry (auto-trigger matching), email attachments. Centralized via `embed_text()` in `embedding_service.py` which routes to Rust or Python based on config.
 
 **Auto Quality Scoring & RL**: Every agent response is automatically scored by a local Gemma 4 model (`gemma4` via Ollama) across a 6-dimension rubric (100 points total):
 - **Accuracy** (25pts): Factual correctness, no hallucinations
@@ -325,7 +347,25 @@ Organized in 3-section navigation:
 
 ## Environment Configuration
 
-### Docker Compose Ports (root `.env`)
+### Kubernetes Services (Rancher Desktop)
+
+All services in `agentprovision` namespace. Access via Cloudflare tunnel (in-cluster pod) at `agentprovision.com`.
+
+```
+api              ClusterIP   port 80   → container 8000 (FastAPI)
+web              ClusterIP   port 80   → container 80 (nginx)
+postgresql       ClusterIP   port 5432
+redis            ClusterIP   port 6379
+temporal         ClusterIP   port 7233
+embedding-service ClusterIP  port 50051 (gRPC)
+memory-core      ClusterIP   port 50052 (gRPC)
+code-worker      ClusterIP   port 80 (Temporal worker, no HTTP)
+orchestration-worker ClusterIP port 80 (Temporal worker, no HTTP)
+```
+
+Secrets: `api-secrets` (from `apps/api/.env`), `code-worker-secrets` (GITHUB_TOKEN), `cloudflared-creds` (tunnel credentials).
+
+### Legacy Docker Compose Ports (root `.env` — no longer used)
 
 ```
 API_PORT=8001    # FastAPI backend
@@ -395,24 +435,38 @@ TEMPORAL_ADDRESS=temporal:7233          # Temporal server address
 
 ## Deployment
 
-### Kubernetes (Production - GKE)
-
-Production deploys exclusively via Kubernetes using Helm charts and GitHub Actions.
+### Local Development (Rancher Desktop K8s — Primary)
 
 ```bash
-# Deploy all services
-gh workflow run deploy-all.yaml -f deploy_infrastructure=false -f environment=prod
+# Full deploy: build images + Helm install + migrations + cloudflare tunnel
+./scripts/deploy_k8s_local.sh
 
-# Watch rollout status
-kubectl get pods -n prod -w
-kubectl rollout status deployment/agentprovision-api -n prod
+# Skip Docker builds (just redeploy Helm)
+./scripts/deploy_k8s_local.sh --skip-build
 
-# Validate Helm releases
-helm list -n prod | grep agentprovision
+# Infrastructure only (postgres, redis, temporal)
+./scripts/deploy_k8s_local.sh --infra-only
 
-# Rollback if needed
-helm rollback agentprovision-api -n prod
+# CI/CD: pushes to main auto-deploy via GitHub Actions
+# .github/workflows/local-deploy.yaml (self-hosted runner)
+
+# Docker cleanup: daily cron
+# .github/workflows/docker-cleanup.yaml (4am UTC)
+
+# Manual pod access
+kubectl get pods -n agentprovision
+kubectl logs -n agentprovision deploy/api --tail 50
+kubectl exec -n agentprovision deploy/api -- printenv | grep MEMORY
+
+# Migrations (applied via kubectl, not docker exec)
+PG_POD=$(kubectl get pod -n agentprovision -l app.kubernetes.io/name=postgresql -o jsonpath='{.items[0].metadata.name}')
+kubectl cp apps/api/migrations/090_new_migration.sql agentprovision/$PG_POD:/tmp/migration.sql
+kubectl exec -n agentprovision $PG_POD -- psql -U postgres agentprovision -f /tmp/migration.sql
 ```
+
+### Kubernetes (Production - GKE) — DISABLED
+
+GKE workflows renamed to `.yaml.disabled`. Production runs on local K8s via Rancher Desktop with Cloudflare tunnel.
 
 **GitHub Actions Workflows** (`.github/workflows/`):
 - `deploy-all.yaml`: Full stack deployment (API, Web, Worker, Code-Worker, Temporal, Redis, PostgreSQL)
