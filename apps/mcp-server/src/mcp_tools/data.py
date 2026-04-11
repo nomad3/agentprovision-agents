@@ -1,7 +1,7 @@
 """Data discovery and querying MCP tools.
 
-Data discovery and querying tools for Databricks.
-All data operations route through the MCP server's Databricks client.
+Data discovery and querying tools for PostgreSQL.
+All data operations route through the MCP server's PostgreSQL client.
 """
 import logging
 from typing import Optional
@@ -15,26 +15,26 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Databricks client helper
+# PostgreSQL client helper
 # ---------------------------------------------------------------------------
 
-def _get_databricks_client():
-    """Return a Databricks client from config."""
+def _get_postgres_client():
+    """Return a PostgreSQL client from config."""
     from src.config import settings
-    # Import the MCP server's own Databricks client (tools/databricks.py or similar)
+    # Import the MCP server's own PostgreSQL client (tools/postgres.py or similar)
     # Fallback: construct a minimal client using settings
     try:
-        from src.databricks_client import get_databricks_client
-        return get_databricks_client()
+        from src.postgres_client import get_postgres_client
+        return get_postgres_client()
     except ImportError:
-        # Lazy import — MCP server may have its own Databricks integration
+        # Lazy import — MCP server may have its own PostgreSQL integration
         class _FallbackClient:
             async def query_sql(self, sql: str, limit: int = 1000) -> dict:
-                return {"error": "Databricks client not available in this MCP deployment."}
+                return {"error": "PostgreSQL client not available in this MCP deployment."}
             async def list_tables(self, catalog: str, schema: str) -> list:
                 return []
             async def describe_table(self, catalog: str, schema: str, table: str) -> dict:
-                return {"error": "Databricks client not available."}
+                return {"error": "PostgreSQL client not available."}
         return _FallbackClient()
 
 
@@ -49,7 +49,7 @@ async def discover_datasets(
     search_query: str = "",
     ctx: Context = None,
 ) -> dict:
-    """Find available datasets in the tenant's Databricks catalog.
+    """Find available datasets in the tenant's PostgreSQL catalog.
 
     Args:
         tenant_id: Tenant UUID (resolved from session if omitted).
@@ -63,7 +63,7 @@ async def discover_datasets(
     if not tid:
         return {"error": "tenant_id is required."}
 
-    client = _get_databricks_client()
+    client = _get_postgres_client()
     catalog = f"tenant_{tid.replace('-', '_')}"
 
     try:
@@ -109,7 +109,7 @@ async def get_dataset_schema(
         return {"error": "Invalid dataset_id format. Expected: catalog.schema.table"}
 
     catalog, schema, table = parts
-    client = _get_databricks_client()
+    client = _get_postgres_client()
 
     try:
         result = await client.describe_table(catalog=catalog, schema=schema, table=table)
@@ -127,7 +127,7 @@ async def query_sql(
     tenant_id: str = "",
     ctx: Context = None,
 ) -> dict:
-    """Execute a SQL query on Databricks Unity Catalog.
+    """Execute a SQL query on PostgreSQL Unity Catalog.
 
     Args:
         sql: The SQL query to execute. Required.
@@ -143,7 +143,7 @@ async def query_sql(
     if not sql:
         return {"error": "sql is required."}
 
-    client = _get_databricks_client()
+    client = _get_postgres_client()
 
     # Add LIMIT if not present
     sql_upper = sql.upper()
@@ -188,7 +188,7 @@ async def generate_insights(
     if not dataset_id:
         return {"error": "dataset_id is required."}
 
-    client = _get_databricks_client()
+    client = _get_postgres_client()
     focus_list = [f.strip() for f in focus_areas.split(",") if f.strip()] if focus_areas else ["general"]
 
     try:

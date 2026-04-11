@@ -1,5 +1,5 @@
 {
-  "name": "servicetsunami",
+  "name": "agentprovision",
   "private": true,
   "scripts": {
     "build": "turbo build",

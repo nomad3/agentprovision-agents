@@ -78,7 +78,7 @@ Weight target: < 15g
             │  HTTPS / WebSocket
             ▼
    ┌────────────────────────────────┐
-   │    ServiceTsunami API (Luna)   │
+   │    AgentProvision API (Luna)   │
    │  - STT (Whisper)               │
    │  - Reasoning (Claude CLI)      │
    │  - Knowledge graph update      │
@@ -178,7 +178,7 @@ New to the Luna mobile app:
 - **Ambient Uploader**: buffer ambient captures → POST to `/api/v1/ambient/ingest`
 - **Privacy controls**: UI to review/delete ambient captures before they're processed
 
-### API Extensions (ServiceTsunami)
+### API Extensions (AgentProvision)
 
 New endpoint: `POST /api/v1/ambient/ingest`
 - Input: `{audio_b64, duration_s, captured_at, tenant_id}`
@@ -301,5 +301,5 @@ Privacy is non-negotiable for a always-worn mic device.
 - Voice in earbuds vs haptic-only response (for silent environments)?
 - Should ambient capture require explicit hold every time, or can there be a "meeting mode" toggle in app?
 - Gold vs silver vs black variants — which to prototype first?
-- Luna app: standalone or integrated into existing ServiceTsunami mobile experience?
+- Luna app: standalone or integrated into existing AgentProvision mobile experience?
 - Should the necklace work without a phone nearby (e.g. direct WiFi via ESP32 variant)?

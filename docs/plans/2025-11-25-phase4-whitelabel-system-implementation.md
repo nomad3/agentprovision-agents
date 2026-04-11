@@ -236,7 +236,7 @@ def test_tenant_features_model():
     assert hasattr(TenantFeatures, 'monthly_token_limit')
     assert hasattr(TenantFeatures, 'storage_limit_gb')
     # UI
-    assert hasattr(TenantFeatures, 'hide_servicetsunami_branding')
+    assert hasattr(TenantFeatures, 'hide_agentprovision_branding')
 ```
 
 **Step 2: Run test to verify it fails**
@@ -285,7 +285,7 @@ class TenantFeatures(Base):
     storage_limit_gb = Column(Float, default=10.0)
 
     # UI Customization
-    hide_servicetsunami_branding = Column(Boolean, default=False)
+    hide_agentprovision_branding = Column(Boolean, default=False)
 
     # Plan Type
     plan_type = Column(String, default="starter")  # starter, professional, enterprise
@@ -326,7 +326,7 @@ class TenantFeaturesBase(BaseModel):
     monthly_token_limit: int = 1000000
     storage_limit_gb: float = 10.0
     # UI
-    hide_servicetsunami_branding: bool = False
+    hide_agentprovision_branding: bool = False
     plan_type: str = "starter"
 
 
@@ -348,7 +348,7 @@ class TenantFeaturesUpdate(BaseModel):
     max_agent_groups: Optional[int] = None
     monthly_token_limit: Optional[int] = None
     storage_limit_gb: Optional[float] = None
-    hide_servicetsunami_branding: Optional[bool] = None
+    hide_agentprovision_branding: Optional[bool] = None
     plan_type: Optional[str] = None
 
 

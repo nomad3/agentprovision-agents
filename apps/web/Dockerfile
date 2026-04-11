@@ -1,4 +1,4 @@
-# ServiceTsunami Web - Production Dockerfile
+# AgentProvision Web - Production Dockerfile
 # Multi-stage build for optimal image size
 
 # ===== Build Stage =====
@@ -7,7 +7,7 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Build arguments for environment configuration
-ARG REACT_APP_API_BASE_URL=https://servicetsunami.com
+ARG REACT_APP_API_BASE_URL=https://agentprovision.com
 ENV REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
 
 # Copy package files
@@ -26,9 +26,9 @@ RUN npm run build
 FROM nginx:1.25-alpine
 
 # Labels
-LABEL maintainer="ServiceTsunami Team" \
+LABEL maintainer="AgentProvision Team" \
       version="1.0.0" \
-      description="ServiceTsunami Web - React Frontend"
+      description="AgentProvision Web - React Frontend"
 
 # Install curl for health checks
 RUN apk add --no-cache curl

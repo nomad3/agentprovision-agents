@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
-TASK_QUEUE = "servicetsunami-code"
+TASK_QUEUE = "agentprovision-code"
 
 
 async def main():

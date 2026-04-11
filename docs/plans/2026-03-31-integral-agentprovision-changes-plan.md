@@ -84,7 +84,7 @@ You have access to Integral's SRE MCP tools via the `integral-sre` MCP server:
 
 - [ ] **Step 2: Verify skill loads**
 
-Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents && python -c "
+Run: `cd /Users/nomade/Documents/GitHub/agentprovision-agents && python -c "
 from pathlib import Path
 from apps.api.app.services.skill_manager import _parse_skill_md
 skill = _parse_skill_md(Path('apps/api/app/skills/native/integral-sre'), tier='native')
@@ -305,7 +305,7 @@ git commit -m "feat: add integral-business-support agent skill definition"
 **Files:**
 - Modify: `apps/api/app/services/cli_session_manager.py:272-288` (the `generate_mcp_config` function)
 
-This is the key integration point. The function currently returns a static config with only the built-in ServiceTsunami MCP server. We extend it to also query the tenant's `MCPServerConnector` entries and add them.
+This is the key integration point. The function currently returns a static config with only the built-in AgentProvision MCP server. We extend it to also query the tenant's `MCPServerConnector` entries and add them.
 
 - [ ] **Step 1: Add import for MCPServerConnector model**
 
@@ -323,7 +323,7 @@ Replace the current `generate_mcp_config` function at line 272:
 def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -> dict:
     """Generate MCP config JSON for a CLI session.
 
-    Includes the built-in ServiceTsunami MCP server plus any external MCP servers
+    Includes the built-in AgentProvision MCP server plus any external MCP servers
     connected to this tenant via MCPServerConnector.
     """
     mcp_tools_url = os.environ.get("MCP_TOOLS_URL", "http://mcp-tools:8000")
@@ -331,7 +331,7 @@ def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -
 
     config = {
         "mcpServers": {
-            "servicetsunami": {
+            "agentprovision": {
                 "type": "http",
                 "url": mcp_url,
                 "headers": {
@@ -403,7 +403,7 @@ mcp_config = generate_mcp_config(str(tenant_id), internal_key, db=db)
 
 - [ ] **Step 4: Verify no import errors**
 
-Run: `cd /Users/nomade/Documents/GitHub/servicetsunami-agents && python -c "from apps.api.app.services.cli_session_manager import generate_mcp_config; print('OK')"`
+Run: `cd /Users/nomade/Documents/GitHub/agentprovision-agents && python -c "from apps.api.app.services.cli_session_manager import generate_mcp_config; print('OK')"`
 
 - [ ] **Step 5: Commit**
 

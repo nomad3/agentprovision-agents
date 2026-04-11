@@ -59,7 +59,7 @@ service:
 configMap:
   enabled: true
   data:
-    POSTGRES_DB: "servicetsunami"
+    POSTGRES_DB: "agentprovision"
     POSTGRES_USER: "postgres"
 
 # External Secrets for database password
@@ -75,7 +75,7 @@ externalSecret:
   data:
     - secretKey: POSTGRES_PASSWORD
       remoteRef:
-        key: servicetsunami-postgres-password
+        key: agentprovision-postgres-password
 
 # Persistent storage for PostgreSQL data
 persistence:

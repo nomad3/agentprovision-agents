@@ -130,7 +130,7 @@ The platform enforces strict collaboration patterns. A handoff is a state transi
 Agents have access to 100+ tools through the **Model Context Protocol (MCP)**:
 *   **Communication:** Gmail, Slack, WhatsApp (integrated).
 *   **Infrastructure:** Jira, GitHub, Jenkins, Nexus, SSH.
-*   **Data:** SQL (DuckDB/Postgres), Databricks Sync, Analytics.
+*   **Data:** SQL (DuckDB/Postgres), PostgreSQL Sync, Analytics.
 *   **Productivity:** Google Calendar, Drive, Sheets.
 
 ---

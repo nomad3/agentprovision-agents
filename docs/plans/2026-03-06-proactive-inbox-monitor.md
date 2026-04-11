@@ -107,7 +107,7 @@ from .notification import Notification
 **Step 4: Run migration on production**
 
 ```bash
-kubectl exec -it deploy/servicetsunami-api -n prod -- psql "$DATABASE_URL" -f /app/migrations/038_add_notifications.sql
+kubectl exec -it deploy/agentprovision-api -n prod -- psql "$DATABASE_URL" -f /app/migrations/038_add_notifications.sql
 ```
 
 **Step 5: Commit**
@@ -922,7 +922,7 @@ def _dispatch_email_action_triggers(db, tid: uuid.UUID, triggers: List[Dict], te
                         message=description,
                     ),
                     id=f"email-trigger-{tenant_id_str[:8]}-{entity_name[:20]}-{int(time.time())}",
-                    task_queue="servicetsunami-orchestration",
+                    task_queue="agentprovision-orchestration",
                 )
 
             asyncio.get_event_loop().run_until_complete(_start())
@@ -1198,7 +1198,7 @@ async def start_inbox_monitor(
             InboxMonitorWorkflow.run,
             args=[tenant_id, interval],
             id=workflow_id,
-            task_queue="servicetsunami-orchestration",
+            task_queue="agentprovision-orchestration",
         )
         return {
             "status": "started",
@@ -1292,7 +1292,7 @@ In `apps/api/app/api/v1/oauth.py`, after the token storage loop (around line 462
                     InboxMonitorWorkflow.run,
                     args=[str(tenant_id), 900],  # 15 min interval
                     id=wf_id,
-                    task_queue="servicetsunami-orchestration",
+                    task_queue="agentprovision-orchestration",
                 )
                 logger.info("Auto-started inbox monitor for tenant=%s", tenant_id)
 
@@ -1322,7 +1322,7 @@ git commit -m "feat: auto-start inbox monitor when Google OAuth connects"
 
 **Files:**
 - Create: `apps/adk-server/tools/monitor_tools.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/personal_assistant.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/personal_assistant.py`
 
 Luna should be able to say "I'll start monitoring your inbox" or respond to "stop monitoring my email".
 
@@ -1471,7 +1471,7 @@ async def check_inbox_monitor_status(
 
 **Step 2: Register tools in personal_assistant.py**
 
-In `apps/adk-server/servicetsunami_supervisor/personal_assistant.py`, add the tools to Luna's tool list:
+In `apps/adk-server/agentprovision_supervisor/personal_assistant.py`, add the tools to Luna's tool list:
 
 ```python
 from tools.monitor_tools import (
@@ -1499,7 +1499,7 @@ Add to Luna's instructions:
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/tools/monitor_tools.py apps/adk-server/servicetsunami_supervisor/personal_assistant.py
+git add apps/adk-server/tools/monitor_tools.py apps/adk-server/agentprovision_supervisor/personal_assistant.py
 git commit -m "feat: add ADK monitor tools so Luna can control inbox monitoring"
 ```
 
@@ -1964,26 +1964,26 @@ Wait for api, web, worker, and ADK workflows.
 **Step 3: Run migration**
 
 ```bash
-kubectl exec -it deploy/servicetsunami-api -n prod -- psql "$DATABASE_URL" -f /app/migrations/038_add_notifications.sql
+kubectl exec -it deploy/agentprovision-api -n prod -- psql "$DATABASE_URL" -f /app/migrations/038_add_notifications.sql
 ```
 
 **Step 4: Verify API**
 
 ```bash
-TOKEN=$(curl -s -X POST https://servicetsunami.com/api/v1/auth/login \
+TOKEN=$(curl -s -X POST https://agentprovision.com/api/v1/auth/login \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "username=saguilera1608@gmail.com&password=@SebaSofi.2k25!!" | jq -r '.access_token')
 
 # Notification count
-curl -s https://servicetsunami.com/api/v1/notifications/count \
+curl -s https://agentprovision.com/api/v1/notifications/count \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # Start monitor
-curl -s -X POST "https://servicetsunami.com/api/v1/workflows/inbox-monitor/start?check_interval_minutes=15" \
+curl -s -X POST "https://agentprovision.com/api/v1/workflows/inbox-monitor/start?check_interval_minutes=15" \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # Status
-curl -s https://servicetsunami.com/api/v1/workflows/inbox-monitor/status \
+curl -s https://agentprovision.com/api/v1/workflows/inbox-monitor/status \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
@@ -1991,15 +1991,15 @@ curl -s https://servicetsunami.com/api/v1/workflows/inbox-monitor/status \
 
 ```bash
 # Check notifications
-curl -s https://servicetsunami.com/api/v1/notifications \
+curl -s https://agentprovision.com/api/v1/notifications \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # Check activity feed for gmail source
-curl -s "https://servicetsunami.com/api/v1/memories/activity?source=gmail" \
+curl -s "https://agentprovision.com/api/v1/memories/activity?source=gmail" \
   -H "Authorization: Bearer $TOKEN" | jq .
 
 # Check activity feed for inbox_monitor source
-curl -s "https://servicetsunami.com/api/v1/memories/activity?source=inbox_monitor" \
+curl -s "https://agentprovision.com/api/v1/memories/activity?source=inbox_monitor" \
   -H "Authorization: Bearer $TOKEN" | jq .
 ```
 

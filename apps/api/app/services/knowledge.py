@@ -736,7 +736,7 @@ def store_git_context(
 
     Args:
         commits: List of dicts with keys: hash, author, email, date, subject, files_changed
-        repo_name: Repository name (e.g. 'nomad3/servicetsunami-agents')
+        repo_name: Repository name (e.g. 'nomad3/agentprovision-agents')
 
     Returns:
         Dict with counts: contributors_created, commits_stored, relations_created

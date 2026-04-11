@@ -1,6 +1,6 @@
 # STP Implementation Plan — From Orchestration Layer to Distributed Agent Network
 
-> Master plan covering Gemini CLI integration, Wolfpoint.ai rebrand, and the full ServiceTsunami Protocol (STP) build-out — incorporating all recent code changes as foundation.
+> Master plan covering Gemini CLI integration, Wolfpoint.ai rebrand, and the full AgentProvision Protocol (STP) build-out — incorporating all recent code changes as foundation.
 
 **Date:** 2026-03-20
 **Status:** Plan
@@ -95,18 +95,18 @@
 
 ## Phase 1: Wolfpoint.ai Rebrand (Week 1-2, parallel with Phase 0)
 
-> **Goal:** Platform identity transitions from ServiceTsunami to Wolfpoint.ai.
+> **Goal:** Platform identity transitions from AgentProvision to Wolfpoint.ai.
 
 ### Tasks
 
 #### 1.1 — Domain & Tunnel Configuration
 - Add `wolfpoint.ai` to Cloudflare Tunnel config
-- Keep `servicetsunami.com` as redirect/alias during transition
+- Keep `agentprovision.com` as redirect/alias during transition
 - Update DNS records
 
 #### 1.2 — Frontend Rebrand
 **Files:** `apps/web/src/`
-- Replace ServiceTsunami logo/branding with Wolfpoint wolf + wave identity
+- Replace AgentProvision logo/branding with Wolfpoint wolf + wave identity
 - Update `<title>`, favicon, meta tags
 - Update marketing landing page copy
 - Apply to both light and dark mode variants
@@ -128,7 +128,7 @@
 - Update Helm chart metadata
 - Update Cloudflare Tunnel routes
 
-**Deliverable:** `wolfpoint.ai` serves the platform. `servicetsunami.com` redirects.
+**Deliverable:** `wolfpoint.ai` serves the platform. `agentprovision.com` redirects.
 
 ---
 

@@ -1,5 +1,5 @@
 """
-ServiceTsunami API Client
+AgentProvision API Client
 
 Handles communication with the main API for:
 - Credential storage and retrieval
@@ -17,9 +17,9 @@ class APIClientError(Exception):
     pass
 
 
-class ServiceTsunamiAPI:
+class AgentProvisionAPI:
     """
-    Client for ServiceTsunami API.
+    Client for AgentProvision API.
 
     Used by MCP server to:
     - Store/retrieve encrypted credentials
@@ -145,7 +145,7 @@ class ServiceTsunamiAPI:
         """
         Create dataset metadata record.
 
-        Called after data is synced to Databricks to record
+        Called after data is synced to PostgreSQL to record
         the bronze/silver table locations.
         """
         return await self._request(

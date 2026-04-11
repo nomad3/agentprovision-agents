@@ -608,8 +608,8 @@ git commit -m "feat: add file upload UI for chat messages"
 ### Task 7: Luna Agent Instructions Update
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/personal_assistant.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/personal_assistant.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py`
 
 **Step 1: Add multimedia awareness to Luna's instructions**
 
@@ -628,7 +628,7 @@ When receiving media, acknowledge the type of content ("I can see your image", "
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/personal_assistant.py apps/adk-server/servicetsunami_supervisor/agent.py
+git add apps/adk-server/agentprovision_supervisor/personal_assistant.py apps/adk-server/agentprovision_supervisor/agent.py
 git commit -m "feat: add multimedia message instructions to Luna"
 ```
 

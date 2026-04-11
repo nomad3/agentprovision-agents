@@ -151,9 +151,9 @@ Agents pass context through:
 - Add `entrypoint.sh` for git config at runtime
 - Change CMD to use entrypoint
 
-### Helm Values (`servicetsunami-adk.yaml`)
+### Helm Values (`agentprovision-adk.yaml`)
 - ConfigMap: `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`
-- ExternalSecret: `GITHUB_TOKEN` from GCP Secret Manager (`servicetsunami-github-token`)
+- ExternalSecret: `GITHUB_TOKEN` from GCP Secret Manager (`agentprovision-github-token`)
 
 ### Git Configuration (entrypoint.sh)
 ```bash
@@ -210,22 +210,22 @@ exec python server.py
 | File | Type |
 |------|------|
 | `tools/shell_tools.py` | `execute_shell` + `deploy_changes` |
-| `servicetsunami_supervisor/personal_assistant.py` | Luna PA agent |
-| `servicetsunami_supervisor/dev_team.py` | Dev team sub-supervisor |
-| `servicetsunami_supervisor/architect.py` | Architect agent |
-| `servicetsunami_supervisor/coder.py` | Coder agent |
-| `servicetsunami_supervisor/tester.py` | Tester agent |
-| `servicetsunami_supervisor/dev_ops.py` | DevOps agent |
-| `servicetsunami_supervisor/user_agent.py` | User validation agent |
-| `servicetsunami_supervisor/data_team.py` | Data team sub-supervisor |
-| `servicetsunami_supervisor/sales_team.py` | Sales team sub-supervisor |
-| `servicetsunami_supervisor/marketing_team.py` | Marketing team sub-supervisor |
+| `agentprovision_supervisor/personal_assistant.py` | Luna PA agent |
+| `agentprovision_supervisor/dev_team.py` | Dev team sub-supervisor |
+| `agentprovision_supervisor/architect.py` | Architect agent |
+| `agentprovision_supervisor/coder.py` | Coder agent |
+| `agentprovision_supervisor/tester.py` | Tester agent |
+| `agentprovision_supervisor/dev_ops.py` | DevOps agent |
+| `agentprovision_supervisor/user_agent.py` | User validation agent |
+| `agentprovision_supervisor/data_team.py` | Data team sub-supervisor |
+| `agentprovision_supervisor/sales_team.py` | Sales team sub-supervisor |
+| `agentprovision_supervisor/marketing_team.py` | Marketing team sub-supervisor |
 | `apps/adk-server/entrypoint.sh` | Git config entrypoint |
 
 ### Modified Files
 | File | Change |
 |------|--------|
 | `apps/adk-server/Dockerfile` | Add `git`, use `entrypoint.sh` |
-| `helm/values/servicetsunami-adk.yaml` | Git credential env vars + secret |
-| `servicetsunami_supervisor/agent.py` | Replace 6 direct sub-agents with 5 top-level entities |
-| `servicetsunami_supervisor/__init__.py` | Update exports for new hierarchy |
+| `helm/values/agentprovision-adk.yaml` | Git credential env vars + secret |
+| `agentprovision_supervisor/agent.py` | Replace 6 direct sub-agents with 5 top-level entities |
+| `agentprovision_supervisor/__init__.py` | Update exports for new hierarchy |

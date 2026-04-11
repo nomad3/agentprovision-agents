@@ -1,19 +1,19 @@
-"""Tests for ServiceTsunami API client"""
+"""Tests for AgentProvision API client"""
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.clients.api_client import ServiceTsunamiAPI
+from src.clients.api_client import AgentProvisionAPI
 
 
 @pytest.fixture
 def api():
-    return ServiceTsunamiAPI()
+    return AgentProvisionAPI()
 
 
 @pytest.mark.asyncio
 async def test_api_client_creates_data_source():
     """Test creating a data source via API"""
-    api = ServiceTsunamiAPI()
+    api = AgentProvisionAPI()
 
     with patch.object(api, '_request', new_callable=AsyncMock) as mock_request:
         mock_request.return_value = {
@@ -38,7 +38,7 @@ async def test_api_client_creates_data_source():
 @pytest.mark.asyncio
 async def test_api_client_gets_data_source():
     """Test fetching a data source with decrypted credentials"""
-    api = ServiceTsunamiAPI()
+    api = AgentProvisionAPI()
 
     with patch.object(api, '_request', new_callable=AsyncMock) as mock_request:
         mock_request.return_value = {
@@ -57,7 +57,7 @@ async def test_api_client_gets_data_source():
 @pytest.mark.asyncio
 async def test_api_client_creates_dataset():
     """Test creating dataset metadata"""
-    api = ServiceTsunamiAPI()
+    api = AgentProvisionAPI()
 
     with patch.object(api, '_request', new_callable=AsyncMock) as mock_request:
         mock_request.return_value = {"id": "dataset-789", "name": "customers"}

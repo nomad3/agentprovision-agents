@@ -24,8 +24,8 @@ fi
 
 # Configure git identity for commits
 cd /workspace
-git config user.email "code-worker@servicetsunami.com"
-git config user.name "ServiceTsunami Code Worker"
+git config user.email "code-worker@agentprovision.com"
+git config user.name "AgentProvision Code Worker"
 
 # Configure gh CLI
 echo -n "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true

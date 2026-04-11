@@ -2,12 +2,12 @@
 # This file documents the expected resource name
 #
 # Create the global IP address with:
-# gcloud compute addresses create servicetsunami-gateway-ip --global --project=YOUR_PROJECT
+# gcloud compute addresses create agentprovision-gateway-ip --global --project=YOUR_PROJECT
 #
 # Then configure DNS A records for:
-# - servicetsunami.com -> <IP_ADDRESS>
-# - www.servicetsunami.com -> <IP_ADDRESS>
-# - api.servicetsunami.com -> <IP_ADDRESS>
+# - agentprovision.com -> <IP_ADDRESS>
+# - www.agentprovision.com -> <IP_ADDRESS>
+# - api.agentprovision.com -> <IP_ADDRESS>
 #
 # Verify with:
-# gcloud compute addresses describe servicetsunami-gateway-ip --global --project=YOUR_PROJECT
+# gcloud compute addresses describe agentprovision-gateway-ip --global --project=YOUR_PROJECT

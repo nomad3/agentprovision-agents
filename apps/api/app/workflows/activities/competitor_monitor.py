@@ -96,7 +96,7 @@ async def scrape_competitor_activity(
             if website_url:
                 try:
                     resp = await client.post(
-                        f"{mcp_base}/servicetsunami/v1/scrape",
+                        f"{mcp_base}/agentprovision/v1/scrape",
                         json={"url": website_url, "max_length": 5000},
                         timeout=20.0,
                     )
@@ -110,7 +110,7 @@ async def scrape_competitor_activity(
             # Search for news
             try:
                 resp = await client.post(
-                    f"{mcp_base}/servicetsunami/v1/search-and-scrape",
+                    f"{mcp_base}/agentprovision/v1/search-and-scrape",
                     json={
                         "query": f"{comp_name} news latest updates",
                         "max_results": 3,

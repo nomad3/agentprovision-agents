@@ -8,7 +8,7 @@
 
 ## 1. Problem Statement
 
-ServiceTsunami has the data models for enterprise agent orchestration (AgentTask, AgentRelationship, AgentSkill, AgentMemory, AgentMessage, AgentGroup) but no execution logic. Only ~5-8% of platform operations use Temporal. The UI is PE/roll-up specific and needs to be industry-agnostic. OpenClaw provides 50+ external service integrations but lacks enterprise controls.
+AgentProvision has the data models for enterprise agent orchestration (AgentTask, AgentRelationship, AgentSkill, AgentMemory, AgentMessage, AgentGroup) but no execution logic. Only ~5-8% of platform operations use Temporal. The UI is PE/roll-up specific and needs to be industry-agnostic. OpenClaw provides 50+ external service integrations but lacks enterprise controls.
 
 ### Goals
 
@@ -25,7 +25,7 @@ ServiceTsunami has the data models for enterprise agent orchestration (AgentTask
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    SERVICETSUNAMI PLATFORM                        │
+│                    AGENTPROVISION PLATFORM                        │
 │                                                                  │
 │  ┌─ Frontend ─────────────────────────────────────────────────┐ │
 │  │ Operations Command Center  │  Task Execution Console       │ │
@@ -97,7 +97,7 @@ AgentTask created (status: queued)
   │     Route to execution backend:
   │     ├─ ADK: AI reasoning, data analysis
   │     ├─ OpenClaw: External service actions (via tenant's instance)
-  │     └─ MCP: Data operations (Databricks)
+  │     └─ MCP: Data operations (PostgreSQL)
   │     Status → "executing"
   │     Log AgentMessages for each step
   │
@@ -119,8 +119,8 @@ AgentTask created (status: queued)
 
 ### 3.2 Configuration
 
-- **Task queue:** `servicetsunami-orchestration` (new, separate from `servicetsunami-databricks`)
-- **Worker:** `orchestration_worker.py` (new file alongside existing `databricks_worker.py`)
+- **Task queue:** `agentprovision-orchestration` (new, separate from `agentprovision-postgres`)
+- **Worker:** `orchestration_worker.py` (new file alongside existing `postgres_worker.py`)
 - **Retry policy:** 3 attempts, exponential backoff (initial 30s, max 5min)
 - **Timeouts:** 10 minutes per task, 30 minutes for delegated chains
 - **Approval gate:** If `requires_approval=true`, workflow signals and waits for human approval via Temporal signal
@@ -195,7 +195,7 @@ Each tenant gets a fully isolated OpenClaw instance deployed via the existing He
 - **Service** — ClusterIP on port 18789 (internal only)
 - **PVC** — 10Gi at `/root/.openclaw` for config, memory, workspace, sessions
 - **Secret** — tenant's API keys (Anthropic, OpenAI, Gemini, GitHub, etc.)
-- **NetworkPolicy** — only accepts connections from `servicetsunami-api` pods
+- **NetworkPolicy** — only accepts connections from `agentprovision-api` pods
 
 Instance naming: `openclaw-{tenant_short_id}` (first 8 chars of tenant UUID)
 Service URL: `ws://openclaw-{tenant_short_id}:18789` (cluster-internal)
@@ -600,7 +600,7 @@ src/services/
 ### Helm
 
 ```
-helm/values/servicetsunami-orchestration-worker.yaml  # New worker Helm values
+helm/values/agentprovision-orchestration-worker.yaml  # New worker Helm values
 ```
 
 ### Infrastructure
@@ -661,7 +661,7 @@ helm/charts/microservice/templates/networkpolicy.yaml  # Template for OpenClaw p
 AgentTask: "Send Q4 summary to #finance channel on Slack"
   │
   ▼
-TaskExecutionWorkflow (Temporal, queue: servicetsunami-orchestration)
+TaskExecutionWorkflow (Temporal, queue: agentprovision-orchestration)
   │
   ├─ 1. DISPATCH
   │     TaskDispatcher.find_best_agent(capabilities=["data_analysis", "slack"])
@@ -722,4 +722,4 @@ TaskExecutionWorkflow (Temporal, queue: servicetsunami-orchestration)
 | Skill access control | `SkillConfig.enabled` + `allowed_scopes` + `requires_approval` |
 | Rate limiting | `SkillConfig.rate_limit` enforced by Skill Router |
 | Audit trail | `ExecutionTrace` records every action with masked credentials |
-| Pod network access | NetworkPolicy restricts ingress to `servicetsunami-api` pods only |
+| Pod network access | NetworkPolicy restricts ingress to `agentprovision-api` pods only |

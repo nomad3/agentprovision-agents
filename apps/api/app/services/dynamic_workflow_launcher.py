@@ -16,7 +16,7 @@ from app.models.dynamic_workflow import DynamicWorkflow
 
 logger = logging.getLogger(__name__)
 
-TASK_QUEUE = "servicetsunami-orchestration"
+TASK_QUEUE = "agentprovision-orchestration"
 
 
 async def start_dynamic_workflow(

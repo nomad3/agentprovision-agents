@@ -1,4 +1,4 @@
-"""Logging utility for ServiceTsunami API"""
+"""Logging utility for AgentProvision API"""
 
 import logging
 import sys

@@ -2,9 +2,9 @@
 name = "luna"
 version = "0.1.0"
 description = "Luna — AI Assistant for desktop, mobile, and IoT"
-authors = ["ServiceTsunami"]
+authors = ["AgentProvision"]
 license = "MIT"
-repository = "https://github.com/nomad3/servicetsunami-agents"
+repository = "https://github.com/nomad3/agentprovision-agents"
 edition = "2021"
 rust-version = "1.77.2"
 

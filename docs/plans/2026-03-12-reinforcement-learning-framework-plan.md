@@ -110,12 +110,12 @@ ALTER TABLE notifications
 
 - [ ] **Step 2: Run the migration**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -f /dev/stdin < apps/api/migrations/045_add_rl_framework.sql`
+Run: `docker-compose exec db psql -U postgres agentprovision -f /dev/stdin < apps/api/migrations/045_add_rl_framework.sql`
 Expected: Tables created, indexes added, columns altered. No errors.
 
 - [ ] **Step 3: Verify tables exist**
 
-Run: `docker-compose exec db psql -U postgres servicetsunami -c "\dt rl_*"`
+Run: `docker-compose exec db psql -U postgres agentprovision -c "\dt rl_*"`
 Expected: `rl_experiences` and `rl_policy_states` tables listed.
 
 - [ ] **Step 4: Commit**

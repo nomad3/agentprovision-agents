@@ -12,7 +12,7 @@ class Connector(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, index=True)
     description = Column(String, nullable=True)
-    type = Column(String, index=True)  # snowflake, postgres, mysql, s3, gcs, databricks, api
+    type = Column(String, index=True)  # postgres, mysql, s3, gcs, api
     config = Column(JSON)
     status = Column(String, default="pending")  # pending, active, error
     last_test_at = Column(DateTime, nullable=True)

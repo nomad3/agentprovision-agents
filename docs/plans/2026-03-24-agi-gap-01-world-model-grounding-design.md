@@ -6,7 +6,7 @@
 
 ## 1. Why this exists
 
-ServiceTsunami already has persistent memory, semantic recall, tool access, and a growing distributed execution model. What it does **not** have is a durable, queryable model of the world that agents can treat as the current state of reality rather than a bag of loosely related memories.
+AgentProvision already has persistent memory, semantic recall, tool access, and a growing distributed execution model. What it does **not** have is a durable, queryable model of the world that agents can treat as the current state of reality rather than a bag of loosely related memories.
 
 That gap is one of the main reasons the platform is still "strong narrow intelligence" instead of anything AGI-adjacent. The system can retrieve facts, but it cannot reliably maintain:
 

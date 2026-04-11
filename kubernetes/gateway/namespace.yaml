@@ -5,6 +5,6 @@ kind: Namespace
 metadata:
   name: gateway-system
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: gateway
     environment: production

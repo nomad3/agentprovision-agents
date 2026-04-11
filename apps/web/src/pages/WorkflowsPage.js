@@ -80,33 +80,6 @@ const WORKFLOW_DEFINITIONS = [
     ],
   },
   {
-    id: 'agent-kit-execution',
-    name: 'Platform · Agent Kit Execution',
-    temporalName: 'AgentKitExecutionWorkflow',
-    description: 'Execute an agent kit task bundle as a durable workflow',
-    category: 'platform',
-    queue: 'databricks',
-    icon: FaRobot,
-    color: '#60a5fa',
-    steps: [
-      { name: 'execute_agent_kit_activity', timeout: '10m', type: 'start', description: 'Run agent kit execution' },
-    ],
-  },
-  {
-    id: 'knowledge-extraction',
-    name: 'Platform · Knowledge Extraction',
-    temporalName: 'KnowledgeExtractionWorkflow',
-    description: 'Extract knowledge entities from chat sessions using LLM analysis',
-    category: 'platform',
-    queue: 'databricks',
-    icon: FaBrain,
-    color: '#38bdf8',
-    steps: [
-      { name: 'extract_knowledge_from_session', timeout: '5m', type: 'start', description: 'LLM entity extraction from chat transcript' },
-    ],
-    note: 'Skips if: session not found, empty transcript, or LLM not configured',
-  },
-  {
     id: 'inbox-monitor',
     name: 'Platform · Inbox Monitor',
     temporalName: 'InboxMonitorWorkflow',
@@ -192,13 +165,13 @@ const WORKFLOW_DEFINITIONS = [
     id: 'dataset-sync',
     name: 'Data · Dataset Sync',
     temporalName: 'DatasetSyncWorkflow',
-    description: 'Sync datasets through Bronze/Silver/Gold data layers via MCP or direct Databricks SQL',
+    description: 'Sync datasets through Bronze/Silver/Gold data layers via MCP or direct PostgreSQL SQL',
     category: 'data',
-    queue: 'databricks',
+    queue: 'postgres',
     icon: FaDatabase,
     color: '#34d399',
     steps: [
-      { name: 'sync_to_bronze', timeout: '5m', retry: '3x / 5m', type: 'start', description: 'Upload raw data to bronze layer (MCP → Databricks fallback)' },
+      { name: 'sync_to_bronze', timeout: '5m', retry: '3x / 5m', type: 'start', description: 'Upload raw data to bronze layer (MCP → PostgreSQL fallback)' },
       { name: 'transform_to_silver', timeout: '10m', retry: '3x / 2m', description: 'Clean and transform to silver layer' },
       { name: 'update_dataset_metadata', timeout: '1m', retry: '5x', type: 'end', description: 'Update sync status and metadata' },
     ],
@@ -209,7 +182,7 @@ const WORKFLOW_DEFINITIONS = [
     temporalName: 'DataSourceSyncWorkflow',
     description: 'Extract data from connectors (Postgres, Snowflake, MySQL, S3, GCS, API) and load through data layers',
     category: 'data',
-    queue: 'databricks',
+    queue: 'postgres',
     icon: FaSyncAlt,
     color: '#fbbf24',
     steps: [
@@ -225,7 +198,7 @@ const WORKFLOW_DEFINITIONS = [
     temporalName: 'ScheduledSyncWorkflow',
     description: 'Parent workflow that runs Data Source Sync for each table in a scheduled sync job',
     category: 'data',
-    queue: 'databricks',
+    queue: 'postgres',
     icon: FaLayerGroup,
     color: '#a78bfa',
     steps: [
@@ -469,18 +442,6 @@ const DesignsTab = () => {
       }}>
         <FaServer size={10} style={{ marginRight: '0.3rem' }} />
         {t('designs.orchestrationQueue')} — {WORKFLOW_DEFINITIONS.filter(w => w.queue === 'orchestration').length} workflows
-      </div>
-      <div style={{
-        padding: '0.5rem 0.85rem',
-        borderRadius: '8px',
-        background: 'rgba(52, 211, 153, 0.06)',
-        border: '1px solid rgba(52, 211, 153, 0.15)',
-        fontSize: '0.72rem',
-        color: '#34d399',
-        fontWeight: 600,
-      }}>
-        <FaServer size={10} style={{ marginRight: '0.3rem' }} />
-        {t('designs.databricksQueue')} — {WORKFLOW_DEFINITIONS.filter(w => w.queue === 'databricks').length} workflows
       </div>
       <div style={{
         padding: '0.5rem 0.85rem',

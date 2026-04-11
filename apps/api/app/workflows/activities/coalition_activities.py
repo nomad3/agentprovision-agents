@@ -44,14 +44,8 @@ async def select_coalition_template(tenant_id: str, chat_session_id: str, task_d
 
         # 3. Resolve agents from the kit or tenant defaults
         role_agent_map = {}
-        primary_slug = "luna"
-        try:
-            from app.models.tenant_branding import TenantBranding
-            branding = db.query(TenantBranding).filter(TenantBranding.tenant_id == UUID(tenant_id)).first()
-            if branding and branding.ai_assistant_name and branding.ai_assistant_name != "AI Assistant":
-                primary_slug = branding.ai_assistant_name.lower().replace(" ", "-")
-        except Exception:
-            pass
+        from app.services.agent_identity import resolve_primary_agent_slug
+        primary_slug = resolve_primary_agent_slug(db, UUID(tenant_id))
 
         # Try to find agents in the current tenant matching the required roles
         agents = db.query(Agent).filter(Agent.tenant_id == UUID(tenant_id)).all()

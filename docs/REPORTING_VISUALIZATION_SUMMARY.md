@@ -145,7 +145,7 @@ Interactive Chart + Export Buttons
 
 ### 6.2 Deployment
 - **Target**: GCP VM (`dental-erp-vm`)
-- **URL**: `https://servicetsunami.com`
+- **URL**: `https://agentprovision.com`
 - **Status**: In progress (building frontend)
 - **Command ID**: `8fe17b72-e6d9-436b-b735-c354d714010d`
 

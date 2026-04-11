@@ -2,7 +2,7 @@
 set -e
 
 echo "========================================="
-echo "ServiceTsunami Production Health Check"
+echo "AgentProvision Production Health Check"
 echo "========================================="
 echo ""
 
@@ -34,7 +34,7 @@ print_section() {
 
 # Check if we're in the right directory
 if [ ! -f "docker-compose.yml" ]; then
-    print_error "Not in servicetsunami directory. Please cd to /opt/servicetsunami"
+    print_error "Not in agentprovision directory. Please cd to /opt/agentprovision"
     exit 1
 fi
 
@@ -101,26 +101,26 @@ fi
 
 print_section "4. Container Status"
 echo "Running containers:"
-docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep servicetsunami || echo "No servicetsunami containers running"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep agentprovision || echo "No agentprovision containers running"
 
 echo ""
-echo "All servicetsunami containers (including stopped):"
-docker ps -a --format "table {{.Names}}\t{{.Status}}" | grep servicetsunami || echo "No servicetsunami containers found"
+echo "All agentprovision containers (including stopped):"
+docker ps -a --format "table {{.Names}}\t{{.Status}}" | grep agentprovision || echo "No agentprovision containers found"
 
 print_section "5. Container Logs (Last 20 lines each)"
 
 # Check API logs
 echo "--- API Container Logs ---"
-if docker ps -a | grep -q servicetsunami_api; then
-    docker logs --tail=20 servicetsunami_api_1 2>&1 || echo "Could not fetch API logs"
+if docker ps -a | grep -q agentprovision_api; then
+    docker logs --tail=20 agentprovision_api_1 2>&1 || echo "Could not fetch API logs"
 else
     print_warning "API container not found"
 fi
 
 echo ""
 echo "--- Temporal Container Logs ---"
-if docker ps -a | grep -q servicetsunami_temporal; then
-    docker logs --tail=20 servicetsunami_temporal_1 2>&1 || echo "Could not fetch Temporal logs"
+if docker ps -a | grep -q agentprovision_temporal; then
+    docker logs --tail=20 agentprovision_temporal_1 2>&1 || echo "Could not fetch Temporal logs"
 else
     print_warning "Temporal container not found"
 fi
@@ -137,7 +137,7 @@ done
 
 print_section "7. API Health Check"
 echo "Testing API endpoint..."
-HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://servicetsunami.com/api/v1/ 2>/dev/null || echo "000")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://agentprovision.com/api/v1/ 2>/dev/null || echo "000")
 
 if [ "$HTTP_CODE" = "200" ]; then
     print_success "API is responding (HTTP $HTTP_CODE)"
@@ -169,6 +169,6 @@ echo ""
 echo "Next steps:"
 echo "1. If API key is truncated: Run /tmp/fix_env.sh to recreate .env files"
 echo "2. If containers are down: Run ./deploy.sh"
-echo "3. If API container is crashing: Check 'docker logs servicetsunami_api_1' for errors"
+echo "3. If API container is crashing: Check 'docker logs agentprovision_api_1' for errors"
 echo "4. If all looks good: Run ./scripts/e2e_test_production.sh"
 echo ""

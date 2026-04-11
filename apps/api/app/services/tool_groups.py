@@ -221,6 +221,6 @@ def resolve_tool_names(tool_groups: list[str] | None) -> list[str] | None:
 def format_allowed_tools(tool_names: list[str]) -> str:
     """Format tool names for --allowedTools CLI flag.
 
-    Prefixes each tool with 'mcp__servicetsunami__' for MCP tool matching.
+    Prefixes each tool with 'mcp__agentprovision__' for MCP tool matching.
     """
-    return ",".join(f"mcp__servicetsunami__{name}" for name in tool_names)
+    return ",".join(f"mcp__agentprovision__{name}" for name in tool_names)

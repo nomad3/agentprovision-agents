@@ -2,7 +2,7 @@
 
 Allows agents to connect, manage, discover tools from, and call
 external MCP servers — bringing third-party tool ecosystems into
-ServiceTsunami.
+AgentProvision.
 """
 import json
 import logging
@@ -56,7 +56,7 @@ async def connect_mcp_server(
     tenant_id: str = "",
     ctx: Context = None,
 ) -> dict:
-    """Connect a new external MCP server to ServiceTsunami.
+    """Connect a new external MCP server to AgentProvision.
 
     Registers an external MCP server so we can discover its tools and
     proxy calls through it. Supports SSE, streamable-http, and stdio transports.

@@ -1,8 +1,8 @@
-# PharmApp ↔ ServiceTsunami WhatsApp Integration Design
+# PharmApp ↔ AgentProvision WhatsApp Integration Design
 
-**Goal:** Connect ServiceTsunami's AI agents to PharmApp (Remedia), a Chilean medication marketplace, enabling WhatsApp-based customer engagement for medication search, ordering, and retention.
+**Goal:** Connect AgentProvision's AI agents to PharmApp (Remedia), a Chilean medication marketplace, enabling WhatsApp-based customer engagement for medication search, ordering, and retention.
 
-**Architecture:** PharmApp handles domain logic (medication search, orders, payments). ServiceTsunami handles AI orchestration (conversational agents, knowledge graph, WhatsApp channel). Communication flows bidirectionally: PharmApp creates WhatsApp tasks for outbound messages, ServiceTsunami agents handle inbound conversational AI with PharmApp domain knowledge.
+**Architecture:** PharmApp handles domain logic (medication search, orders, payments). AgentProvision handles AI orchestration (conversational agents, knowledge graph, WhatsApp channel). Communication flows bidirectionally: PharmApp creates WhatsApp tasks for outbound messages, AgentProvision agents handle inbound conversational AI with PharmApp domain knowledge.
 
 ## Integration Architecture
 
@@ -14,13 +14,13 @@
 │  Outbound: send_otp, order_confirmation, price_alert,     │
 │            refill_reminder, delivery_update                │
 │  Inbound:  medication search, order status (local handler) │
-│            → fallback to ServiceTsunami chat for AI        │
+│            → fallback to AgentProvision chat for AI        │
 └────────────────────────┬─────────────────────────────────┘
                          │ POST /api/v1/tasks (task_type=whatsapp)
                          │ POST /api/v1/chat/sessions/.../messages
                          ▼
 ┌──────────────────────────────────────────────────────────┐
-│                   ServiceTsunami API                      │
+│                   AgentProvision API                      │
 │                                                            │
 │  Task Handler: auto-execute WhatsApp tasks on creation    │
 │  Chat Service: route messages through ADK supervisor       │
@@ -53,7 +53,7 @@ This avoids the full TaskExecutionWorkflow (dispatch→recall→execute→persis
 
 ### 2. PharmApp-Aware Sales Agent (ADK)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/sales_agent.py`
+**File:** `apps/adk-server/agentprovision_supervisor/sales_agent.py`
 
 Add PharmApp domain context to the sales agent instruction:
 - Medication marketplace for Chile (Remedia brand)
@@ -65,7 +65,7 @@ Add PharmApp domain context to the sales agent instruction:
 
 ### 3. PharmApp-Aware Customer Support (ADK)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/customer_support.py`
+**File:** `apps/adk-server/agentprovision_supervisor/customer_support.py`
 
 Add PharmApp context for inbound WhatsApp conversations:
 - Medication FAQ (dosage, interactions, availability)
@@ -77,7 +77,7 @@ Add PharmApp context for inbound WhatsApp conversations:
 
 ### 4. Updated Supervisor Routing (ADK)
 
-**File:** `apps/adk-server/servicetsunami_supervisor/agent.py`
+**File:** `apps/adk-server/agentprovision_supervisor/agent.py`
 
 Add PharmApp-specific routing:
 - Medication queries, order help, pharmacy info → customer_support
@@ -99,8 +99,8 @@ users (id, phone_number, name, comuna, role)
 ## Flow: PharmApp Outbound WhatsApp
 
 1. PharmApp event (OTP, order, payment, price alert, refill)
-2. PharmApp's WhatsApp service calls `servicetsunami_client.send_whatsapp(phone, message)`
-3. ServiceTsunami `POST /api/v1/tasks` creates task with `task_type="whatsapp"`
+2. PharmApp's WhatsApp service calls `agentprovision_client.send_whatsapp(phone, message)`
+3. AgentProvision `POST /api/v1/tasks` creates task with `task_type="whatsapp"`
 4. Auto-execution: `whatsapp_service.send_message()` sends via neonize
 5. Task updated to "completed" with message_id
 

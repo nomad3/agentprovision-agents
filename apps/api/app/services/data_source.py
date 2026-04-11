@@ -75,38 +75,6 @@ def execute_query(db: Session, data_source_id: uuid.UUID, query: str,
         except Exception as e:
             raise ValueError(f"Query execution failed: {str(e)}")
 
-    elif data_source.type == 'databricks':
-        try:
-            from databricks import sql
-        except ImportError:
-            raise ImportError("databricks-sql-connector is not installed")
-
-        config = data_source.config
-        host = config.get('host')
-        http_path = config.get('http_path')
-        token = config.get('token')
-
-        # Clean up host if needed (remove https://)
-        if host and host.startswith('https://'):
-            host = host.replace('https://', '')
-        if host and host.endswith('/'):
-            host = host[:-1]
-
-        if not all([host, http_path, token]):
-             raise ValueError("Missing Databricks configuration (host, http_path, token)")
-
-        try:
-            with sql.connect(server_hostname=host, http_path=http_path, access_token=token) as connection:
-                with connection.cursor() as cursor:
-                    cursor.execute(query)
-                    # Fetch results
-                    if cursor.description:
-                        columns = [desc[0] for desc in cursor.description]
-                        return [dict(zip(columns, row)) for row in cursor.fetchall()]
-                    return []
-        except Exception as e:
-            raise ValueError(f"Databricks query execution failed: {str(e)}")
-
     elif data_source.type in ('rest_api', 'api'):
         import httpx
 

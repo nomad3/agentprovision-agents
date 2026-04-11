@@ -6,7 +6,7 @@ metadata:
   name: default-deny-ingress
   namespace: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector: {}
@@ -20,7 +20,7 @@ metadata:
   name: default-deny-ingress
   namespace: database
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: network-policy
 spec:
   podSelector: {}

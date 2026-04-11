@@ -1,8 +1,8 @@
 # WhatsApp Agent Integration Platform Design
 
-**Goal:** Enable external applications (ai-marketing-platform, PharmApp, future SaaS products) to create AI agents on ServiceTsunami and expose them to end-users via WhatsApp, using the OpenClaw WhatsApp skill as the messaging bridge. External apps integrate through a REST API — they don't need to manage agent infrastructure, LLM providers, or WhatsApp Business API complexity.
+**Goal:** Enable external applications (ai-marketing-platform, PharmApp, future SaaS products) to create AI agents on AgentProvision and expose them to end-users via WhatsApp, using the OpenClaw WhatsApp skill as the messaging bridge. External apps integrate through a REST API — they don't need to manage agent infrastructure, LLM providers, or WhatsApp Business API complexity.
 
-**Architecture:** ServiceTsunami becomes an "Agents-as-a-Service" backend. External apps register as integration partners, provision agents with specific skills and rubrics, and connect them to WhatsApp phone numbers. Inbound WhatsApp messages route through a webhook handler to the correct tenant's agent, which processes them using the knowledge graph, scoring rubrics, and configured skills, then responds back through WhatsApp.
+**Architecture:** AgentProvision becomes an "Agents-as-a-Service" backend. External apps register as integration partners, provision agents with specific skills and rubrics, and connect them to WhatsApp phone numbers. Inbound WhatsApp messages route through a webhook handler to the correct tenant's agent, which processes them using the knowledge graph, scoring rubrics, and configured skills, then responds back through WhatsApp.
 
 **Tech Stack:** FastAPI (webhook receiver + partner API), OpenClaw (WhatsApp Business API bridge), Temporal (async message processing), Meta Cloud API (WhatsApp), existing SkillRouter + CredentialVault
 
@@ -24,7 +24,7 @@
                                   │  (API key auth)  │
                                   ▼                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     ServiceTsunami Platform                         │
+│                     AgentProvision Platform                         │
 │                                                                     │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
 │  │ Partner API   │  │ Webhook      │  │ Agent Orchestration      │  │
@@ -66,7 +66,7 @@
 
 ### Integration Partner
 
-An external application that consumes ServiceTsunami's agent infrastructure. Each partner:
+An external application that consumes AgentProvision's agent infrastructure. Each partner:
 - Gets a dedicated tenant (multi-tenant isolation)
 - Authenticates with an API key (not JWT — long-lived, server-to-server)
 - Can create agents, configure skills, store credentials, trigger actions
@@ -331,7 +331,7 @@ Meta sends delivery status updates (sent → delivered → read). Update `messag
 
 ### Webhook Callbacks to Partner
 
-ServiceTsunami sends events back to the partner's webhook URL:
+AgentProvision sends events back to the partner's webhook URL:
 
 ```json
 {
@@ -435,7 +435,7 @@ Per-partner rate limits tracked in Redis:
 Processes inbound WhatsApp messages asynchronously.
 
 ```
-Queue: servicetsunami-whatsapp
+Queue: agentprovision-whatsapp
 Timeout: 30 seconds
 
 Activities:
@@ -458,7 +458,7 @@ Activities:
 Processes batch outbound messages (e.g., marketing campaigns).
 
 ```
-Queue: servicetsunami-whatsapp
+Queue: agentprovision-whatsapp
 Timeout: 5 minutes
 
 Input: { agent_id, template_name, recipients: [{phone, params}], rate_limit_per_second: 10 }

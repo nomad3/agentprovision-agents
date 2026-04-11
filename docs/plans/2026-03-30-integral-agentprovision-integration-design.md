@@ -191,7 +191,7 @@ All Jenkins tools accept a `region` parameter (NY4, LD4, SG, TY3, UAT) that reso
 1. **3 agent skill files** — `apps/api/app/skills/native/integral-{sre,devops,business-support}/skill.md` (top-level under `native/`, one level deep for scanner compatibility)
 
 2. **CLI session MCP config injection** — `apps/api/app/services/cli_session_manager.py`:
-   - `generate_mcp_config()` is currently static (only includes built-in ServiceTsunami MCP server). Must be extended to:
+   - `generate_mcp_config()` is currently static (only includes built-in AgentProvision MCP server). Must be extended to:
      - Accept `db: Session` and `tenant_id: UUID` parameters
      - Query `MCPServerConnector` entries for the tenant
      - For each connected server, add an entry to the MCP config with the server's URL and transport type
@@ -272,7 +272,7 @@ Admin creates user accounts via seed script. Multiple Integral users can have in
 - Handler routing in mcp_server.py
 - Environment variable additions
 
-### AgentProvision Project (`servicetsunami-agents`)
+### AgentProvision Project (`agentprovision-agents`)
 - 3 skill.md files (under `apps/api/app/skills/native/`)
 - CLI session manager: extend `generate_mcp_config()` to inject tenant's MCPServerConnector entries
 - One-time seed script (`apps/api/scripts/seed_integral_tenant.py`)

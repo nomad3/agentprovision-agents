@@ -18,9 +18,9 @@ Full migration from Claude/Anthropic to Google Agent Development Kit (ADK) with 
 | Memory | Hybrid: ADK session + Vertex Vector + PostgreSQL KG |
 | Vector store | Vertex AI Vector Search |
 | Embeddings | text-embedding-005 (768 dims) |
-| Data operations | Databricks via MCP server (all queries) |
+| Data operations | PostgreSQL via MCP server (all queries) |
 | API exposure | ADK API server (separate service) |
-| Deployment | New Helm service `servicetsunami-adk` |
+| Deployment | New Helm service `agentprovision-adk` |
 | Auth | Shared JWT validation |
 | Knowledge Graph | Extended schema with 30 entity types, 30 relation types |
 
@@ -34,9 +34,9 @@ Full migration from Claude/Anthropic to Google Agent Development Kit (ADK) with 
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐ │
-│  │ servicetsunami- │    │ servicetsunami- │    │    mcp-     │ │
+│  │ agentprovision- │    │ agentprovision- │    │    mcp-     │ │
 │  │      web        │    │      api        │    │   server    │ │
-│  │   (React SPA)   │    │   (FastAPI)     │    │ (Databricks)│ │
+│  │   (React SPA)   │    │   (FastAPI)     │    │ (PostgreSQL)│ │
 │  └────────┬────────┘    └────────┬────────┘    └──────┬──────┘ │
 │           │                      │                     │        │
 │           │              ┌───────┴───────┐             │        │
@@ -46,7 +46,7 @@ Full migration from Claude/Anthropic to Google Agent Development Kit (ADK) with 
 │           │              └───────────────┘             │        │
 │           │                                            │        │
 │           │    ┌─────────────────────────────┐        │        │
-│           └───►│    servicetsunami-adk       │◄───────┘        │
+│           └───►│    agentprovision-adk       │◄───────┘        │
 │                │    (ADK API Server)         │                  │
 │                │                             │                  │
 │                │  • Gemini 2.5 Flash         │                  │
@@ -58,7 +58,7 @@ Full migration from Claude/Anthropic to Google Agent Development Kit (ADK) with 
 │         ┌─────────────────────┼─────────────────────┐          │
 │         ▼                     ▼                     ▼          │
 │  ┌─────────────┐    ┌─────────────────┐    ┌─────────────┐    │
-│  │ PostgreSQL  │    │  Vertex AI      │    │ Databricks  │    │
+│  │ PostgreSQL  │    │  Vertex AI      │    │ PostgreSQL  │    │
 │  │ (metadata)  │    │  Vector Search  │    │ Unity       │    │
 │  │             │    │  (RAG)          │    │ Catalog     │    │
 │  └─────────────┘    └─────────────────┘    └─────────────┘    │
@@ -67,9 +67,9 @@ Full migration from Claude/Anthropic to Google Agent Development Kit (ADK) with 
 ```
 
 **Key changes:**
-- New `servicetsunami-adk` service handles all agent/chat operations
+- New `agentprovision-adk` service handles all agent/chat operations
 - Frontend calls ADK server directly for chat, FastAPI for datasets/auth
-- ADK connects to Databricks via MCP server for all data operations
+- ADK connects to PostgreSQL via MCP server for all data operations
 - Vertex AI Vector Search for RAG embeddings (text-embedding-005)
 - Hybrid memory: ADK session for hot, PostgreSQL for long-term
 
@@ -102,7 +102,7 @@ sales_analyst = Agent(
     Primary objective: Analyze sales data and provide insights.
     Metrics to track: revenue, conversion_rate.
     Constraints: Only query datasets user has access to.""",
-    tools=[databricks_query, data_summary, calculate],
+    tools=[postgres_query, data_summary, calculate],
 )
 ```
 
@@ -149,7 +149,7 @@ def get_data_lineage(dataset_id: str) -> dict:
 ```python
 @tool
 def query_sql(sql: str, explanation: str, limit: int = 1000) -> dict:
-    """Execute SQL on Databricks Unity Catalog."""
+    """Execute SQL on PostgreSQL Unity Catalog."""
 
 @tool
 def query_natural_language(question: str, dataset_ids: list) -> dict:
@@ -560,7 +560,7 @@ def deprecate_knowledge(entity_id=None, relation_id=None, reason=None) -> bool
 apps/
 ├── api/                    # Existing FastAPI (auth, datasets, tenants)
 ├── web/                    # Existing React frontend
-├── mcp-server/             # Existing Databricks connector
+├── mcp-server/             # Existing PostgreSQL connector
 └── adk-server/             # NEW - Google ADK agent service
     ├── Dockerfile
     ├── requirements.txt
@@ -585,7 +585,7 @@ apps/
     ├── services/
     │   ├── __init__.py
     │   ├── knowledge_graph.py
-    │   ├── databricks_client.py
+    │   ├── postgres_client.py
     │   └── auth.py          # JWT validation (shared SECRET_KEY)
     ├── models/
     │   ├── __init__.py
@@ -604,9 +604,9 @@ from agents.report_generator import report_generator
 from agents.knowledge_manager import knowledge_manager
 
 root_agent = Agent(
-    name="servicetsunami_supervisor",
+    name="agentprovision_supervisor",
     model="gemini-2.5-flash",
-    instruction="""You are the ServiceTsunami AI supervisor.
+    instruction="""You are the AgentProvision AI supervisor.
 
     You coordinate a team of specialist agents:
     - data_analyst: For data queries, analysis, and insights
@@ -636,14 +636,14 @@ psycopg2-binary>=2.9.0
 pgvector>=0.2.0
 ```
 
-### Helm Values (`helm/values/servicetsunami-adk.yaml`)
+### Helm Values (`helm/values/agentprovision-adk.yaml`)
 
 ```yaml
-nameOverride: "servicetsunami-adk"
-fullnameOverride: "servicetsunami-adk"
+nameOverride: "agentprovision-adk"
+fullnameOverride: "agentprovision-adk"
 
 image:
-  repository: gcr.io/ai-agency-479516/servicetsunami-adk
+  repository: gcr.io/ai-agency-479516/agentprovision-adk
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -679,7 +679,7 @@ configMap:
     MCP_SERVER_URL: "http://mcp-server:8000"
     DATABASE_HOST: "localhost"
     DATABASE_PORT: "5432"
-    DATABASE_NAME: "servicetsunami"
+    DATABASE_NAME: "agentprovision"
 
 externalSecret:
   enabled: true
@@ -688,21 +688,21 @@ externalSecret:
     name: gcpsm-secret-store
     kind: SecretStore
   target:
-    name: servicetsunami-adk-secret
+    name: agentprovision-adk-secret
     creationPolicy: Owner
   data:
     - secretKey: SECRET_KEY
       remoteRef:
-        key: servicetsunami-secret-key
+        key: agentprovision-secret-key
     - secretKey: DATABASE_URL
       remoteRef:
-        key: servicetsunami-database-url
+        key: agentprovision-database-url
     - secretKey: GOOGLE_API_KEY
       remoteRef:
-        key: servicetsunami-google-api-key
+        key: agentprovision-google-api-key
     - secretKey: MCP_API_KEY
       remoteRef:
-        key: servicetsunami-mcp-api-key
+        key: agentprovision-mcp-api-key
 
 extraContainers:
   - name: cloud-sql-proxy
@@ -724,35 +724,35 @@ extraContainers:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: servicetsunami-ingress
+  name: agentprovision-ingress
   namespace: prod
   annotations:
     kubernetes.io/ingress.class: gce
-    networking.gke.io/managed-certificates: servicetsunami-cert
+    networking.gke.io/managed-certificates: agentprovision-cert
 spec:
   rules:
-    - host: "servicetsunami.com"
+    - host: "agentprovision.com"
       http:
         paths:
           - path: /adk
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-adk
+                name: agentprovision-adk
                 port:
                   number: 80
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-api
+                name: agentprovision-api
                 port:
                   number: 80
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: servicetsunami-web
+                name: agentprovision-web
                 port:
                   number: 80
 ```
@@ -766,13 +766,13 @@ const ADK_BASE = '/adk';
 
 export const agentApi = {
   createSession: (agentId, datasetId) =>
-    axios.post(`${ADK_BASE}/apps/servicetsunami_supervisor/users/${userId}/sessions`, {
+    axios.post(`${ADK_BASE}/apps/agentprovision_supervisor/users/${userId}/sessions`, {
       state: { agent_id: agentId, dataset_id: datasetId }
     }),
 
   sendMessage: (sessionId, message) =>
     axios.post(`${ADK_BASE}/run`, {
-      app_name: 'servicetsunami_supervisor',
+      app_name: 'agentprovision_supervisor',
       user_id: userId,
       session_id: sessionId,
       new_message: { role: 'user', parts: [{ text: message }] }
@@ -780,7 +780,7 @@ export const agentApi = {
 
   streamMessage: (sessionId, message) =>
     axios.post(`${ADK_BASE}/run_sse`, {
-      app_name: 'servicetsunami_supervisor',
+      app_name: 'agentprovision_supervisor',
       user_id: userId,
       session_id: sessionId,
       new_message: { role: 'user', parts: [{ text: message }] }
@@ -874,7 +874,7 @@ apps/web/src/pages/
    - Implement root agent with supervisor pattern
    - Create specialist agents (data_analyst, report_generator, knowledge_manager)
    - Implement JWT auth middleware
-   - Add Databricks client (MCP server integration)
+   - Add PostgreSQL client (MCP server integration)
 
 3. **Tools Implementation**
    - Data discovery tools

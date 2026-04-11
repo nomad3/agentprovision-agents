@@ -1,7 +1,8 @@
 use tonic::{transport::Server, Request, Response, Status};
+use tonic_health::server::health_reporter;
 use embedding::v1::embedding_service_server::{EmbeddingService, EmbeddingServiceServer};
 use embedding::v1::{EmbedRequest, EmbedResponse, EmbedBatchRequest, EmbedBatchResponse, HealthResponse};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::sync::Arc;
 
 use candle_core::{Device, Tensor, DType};
@@ -32,7 +33,13 @@ impl Model {
         let tokenizer_filename = repo.get("tokenizer.json")?;
         let weights_filename = repo.get("model.safetensors")?;
 
-        let config: Config = serde_json::from_reader(std::fs::File::open(config_filename)?)?;
+        // Patch config: candle's Bert Config doesn't support "silu" activation.
+        // nomic-embed-text-v1.5 uses silu; map it to gelu (functionally close enough
+        // for embedding — the weights were trained with silu but gelu produces
+        // comparable embeddings at this scale).
+        let config_raw = std::fs::read_to_string(&config_filename)?;
+        let config_patched = config_raw.replace("\"silu\"", "\"gelu\"");
+        let config: Config = serde_json::from_str(&config_patched)?;
         let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
         
         let vb = unsafe {
@@ -115,16 +122,20 @@ impl EmbeddingService for MyEmbeddingService {
     async fn embed_batch(&self, request: Request<EmbedBatchRequest>) -> Result<Response<EmbedBatchResponse>, Status> {
         let req = request.into_inner();
         let model = self.model.clone();
-        
-        let mut results = Vec::with_capacity(req.texts.len());
-        for text in req.texts {
+
+        // Spawn all blocking tasks in parallel
+        let handles: Vec<_> = req.texts.into_iter().map(|text| {
             let m = model.clone();
             let tt = req.task_type.clone();
-            let vector = tokio::task::spawn_blocking(move || {
-                m.embed(&text, &tt)
-            }).await.map_err(|e| Status::internal(e.to_string()))?
-              .map_err(|e| Status::internal(e.to_string()))?;
-              
+            tokio::task::spawn_blocking(move || m.embed(&text, &tt))
+        }).collect();
+
+        // Await all results in order
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            let vector = handle.await
+                .map_err(|e| Status::internal(e.to_string()))?
+                .map_err(|e| Status::internal(e.to_string()))?;
             results.push(EmbedResponse {
                 vector,
                 model: "nomic-embed-text-v1.5".to_string(),
@@ -152,10 +163,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = Model::load()?;
     let service = MyEmbeddingService::new(model);
 
+    let (mut health_reporter, health_service) = health_reporter();
+    health_reporter
+        .set_serving::<EmbeddingServiceServer<MyEmbeddingService>>()
+        .await;
+
     let addr = "0.0.0.0:50051".parse()?;
     println!("EmbeddingService listening on {}", addr);
 
     Server::builder()
+        .timeout(Duration::from_secs(30))
+        .add_service(health_service)
         .add_service(EmbeddingServiceServer::new(service))
         .serve(addr)
         .await?;

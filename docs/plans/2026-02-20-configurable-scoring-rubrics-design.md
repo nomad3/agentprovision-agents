@@ -261,7 +261,7 @@ Three templates pre-configure the `scoring_rubric` field:
 
 The `marketing_signal` rubric is designed to integrate with the ai-marketing-platform project. The integration path:
 
-1. **ai-marketing-platform** pushes engagement events (page visits, email clicks, demo requests) to ServiceTsunami via API
+1. **ai-marketing-platform** pushes engagement events (page visits, email clicks, demo requests) to AgentProvision via API
 2. Events are stored as entity `properties` or `enrichment_data` on lead entities
 3. `marketing_signal` rubric scores entities using these engagement signals
 4. Scores flow back to ai-marketing-platform for campaign prioritization

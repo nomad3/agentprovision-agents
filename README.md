@@ -1,4 +1,4 @@
-<h1 align="center">ServiceTsunami / AgentProvision</h1>
+<h1 align="center">AgentProvision / AgentProvision</h1>
 
 <p align="center"><strong>The Orchestration Layer for AI Agents</strong></p>
 
@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  Don't build agents — orchestrate them. ServiceTsunami routes tasks to existing AI agent platforms (Claude Code, Codex, Gemini CLI), serves 81 MCP tools, maintains a knowledge graph, auto-scores every response with a local LLM, and learns which platform performs best via RL. Each tenant uses their own subscription — zero API credits.
+  Don't build agents — orchestrate them. AgentProvision routes tasks to existing AI agent platforms (Claude Code, Codex, Gemini CLI), serves 81 MCP tools, maintains a knowledge graph, auto-scores every response with a local LLM, and learns which platform performs best via RL. Each tenant uses their own subscription — zero API credits.
 </p>
 
 ---
@@ -35,7 +35,7 @@ Luna is the native presence layer for AgentProvision. A 4.9MB Tauri 2.0 desktop 
 | Memory panel (episodic recall, cross-shell context) | Shipped |
 | Trust model + action approval for local actions | Shipped |
 | PWA fallback (installable from browser, offline) | Shipped |
-| Docker + Cloudflare Tunnel (`luna.servicetsunami.com`) | Shipped |
+| Docker + Cloudflare Tunnel (`luna.agentprovision.com`) | Shipped |
 | iOS / Android (Tauri mobile builds) | Planned |
 | BLE wearable relay (necklace, glasses) | Planned |
 | Device bridge (camera, desk robot, IoT) | Planned |
@@ -57,9 +57,9 @@ VITE_API_BASE_URL=http://localhost:8000 cargo tauri dev
 
 ```
 Internet -> Cloudflare Tunnel
-  +--> servicetsunami.com
   +--> agentprovision.com
-  +--> luna.servicetsunami.com  (Luna PWA)
+  +--> agentprovision.com
+  +--> luna.agentprovision.com  (Luna PWA)
 
 +------------------------------------------------------------------+
 |  Channels: WhatsApp (Neonize) . Web Chat . Luna Desktop . API     |
@@ -291,8 +291,8 @@ Each CLI platform uses subscription-based OAuth — zero API credits:
 ## Quick Start
 
 ```bash
-git clone https://github.com/nomad3/servicetsunami-agents.git
-cd servicetsunami-agents
+git clone https://github.com/nomad3/agentprovision-agents.git
+cd agentprovision-agents
 DB_PORT=8003 API_PORT=8001 WEB_PORT=8002 docker-compose up --build
 
 # Web:           http://localhost:8002

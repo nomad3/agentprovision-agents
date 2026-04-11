@@ -73,7 +73,7 @@ ALTER TABLE knowledge_observations ADD COLUMN IF NOT EXISTS source_agent VARCHAR
 
 | Source | Location | Messages | Approach |
 |--------|----------|----------|----------|
-| servicetsunami-agents | `~/.claude/projects/...-servicetsunami-agents/` | 14,240 user + 20,941 assistant | Full extraction |
+| agentprovision-agents | `~/.claude/projects/...-agentprovision-agents/` | 14,240 user + 20,941 assistant | Full extraction |
 | integral | `~/.claude/projects/...-integral/` | ~2,270 per session | Full extraction |
 | pharmapp | `~/.claude/projects/...-pharmapp/` | ~1,300 total | Full extraction |
 | health-pets | `~/.claude/projects/...-health-pets/` | ~877 per session | Full extraction |

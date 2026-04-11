@@ -43,14 +43,7 @@ async def detect_commitment(
             owner = "user"
             if msg.role == "assistant":
                 # Default to tenant branding or luna
-                owner = "luna"
-                try:
-                    from app.models.tenant_branding import TenantBranding
-                    branding = db.query(TenantBranding).filter(TenantBranding.tenant_id == UUID(tenant_id)).first()
-                    if branding and branding.ai_assistant_name and branding.ai_assistant_name != "AI Assistant":
-                        owner = branding.ai_assistant_name.lower().replace(" ", "-")
-                except Exception:
-                    pass
+                owner = resolve_primary_agent_slug(db, UUID(tenant_id))
                 
                 if msg.context and isinstance(msg.context, dict):
                     owner = msg.context.get("agent_slug") or owner
@@ -94,6 +87,7 @@ async def update_world_state(
     from app.models.chat import ChatMessage
     from app.services.knowledge_extraction import KnowledgeExtractionService
     from app.memory.ingest import ingest_events, MemoryEvent
+    from app.services.agent_identity import resolve_primary_agent_slug
 
     db = SessionLocal()
     try:

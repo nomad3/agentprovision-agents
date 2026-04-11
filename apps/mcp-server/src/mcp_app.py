@@ -1,4 +1,4 @@
-"""Unified MCP server for ServiceTsunami tools."""
+"""Unified MCP server for AgentProvision tools."""
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 

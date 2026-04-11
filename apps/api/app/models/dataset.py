@@ -23,7 +23,7 @@ class Dataset(Base):
     connector_id = Column(UUID(as_uuid=True), ForeignKey("connectors.id"), nullable=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    metadata_ = Column(JSON, nullable=True, default=dict)  # Databricks metadata
+    metadata_ = Column(JSON, nullable=True, default=dict)
 
     tenant = relationship("Tenant")
     connector = relationship("Connector", foreign_keys=[connector_id])

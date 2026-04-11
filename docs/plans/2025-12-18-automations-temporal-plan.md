@@ -5,10 +5,10 @@
 ### ✅ What's Already Implemented
 
 **Backend (API):**
-- `DatasetSyncWorkflow` - Syncs datasets to Databricks (Bronze → Silver)
+- `DatasetSyncWorkflow` - Syncs datasets to PostgreSQL (Bronze → Silver)
 - `KnowledgeExtractionWorkflow` - Extracts knowledge from chat sessions
 - `AgentKitExecutionWorkflow` - Executes agent kit workflows
-- Temporal Worker (`databricks_worker.py`) - Running and connected
+- Temporal Worker (`postgres_worker.py`) - Running and connected
 - Connector CRUD API (`/api/v1/connectors/`)
 - Data Pipeline CRUD API and execute endpoint
 
@@ -25,7 +25,7 @@
    - Frontend ConnectorsPage is just a stub
 
 2. **Data Source Sync Workflows**
-   - DatasetSync only works for Databricks
+   - DatasetSync only works for PostgreSQL
    - Need general sync workflow for any connector type
    - No incremental sync (only full refresh)
    - No sync scheduling
@@ -92,7 +92,7 @@ class DataSourceSyncWorkflow:
     1. Connect to source
     2. Extract data (full or incremental)
     3. Upload to staging (S3/GCS)
-    4. Sync to Databricks (Bronze/Silver)
+    4. Sync to PostgreSQL (Bronze/Silver)
     5. Update metadata
     """
 ```

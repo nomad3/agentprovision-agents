@@ -1,8 +1,8 @@
-# ServiceTsunami UX Improvements for C-Level Executives
+# AgentProvision UX Improvements for C-Level Executives
 
 ## Executive Summary
 
-This document outlines UX improvements to make ServiceTsunami more intuitive and valuable for CEOs and C-level executives. The focus is on **simplification, visual clarity, and business-relevant insights**.
+This document outlines UX improvements to make AgentProvision more intuitive and valuable for CEOs and C-level executives. The focus is on **simplification, visual clarity, and business-relevant insights**.
 
 ---
 
@@ -49,12 +49,12 @@ This document outlines UX improvements to make ServiceTsunami more intuitive and
 - ✅ Clean table layout
 - ✅ Clear "Upload new dataset" action
 - ⚠️ "Rows" column shows small numbers (e.g., "5")
-- ⚠️ "Databricks Status: Local Only" is technical
+- ⚠️ "PostgreSQL Status: Local Only" is technical
 - ⚠️ Missing data freshness indicator
 
 **Recommended Improvements:**
 
-1. **Replace "Databricks Status" with "Status"**
+1. **Replace "PostgreSQL Status" with "Status"**
    - Values: `✓ Ready`, `⟳ Syncing`, `⚠ Local Only`
    - Color-coded badges
 

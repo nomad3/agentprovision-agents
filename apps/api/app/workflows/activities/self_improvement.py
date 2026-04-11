@@ -44,7 +44,7 @@ async def dispatch_self_improvement_task(
             "CodeTaskWorkflow",
             task_input,
             id=f"self-improve-{uuid.uuid4().hex[:12]}",
-            task_queue="servicetsunami-code",
+            task_queue="agentprovision-code",
             execution_timeout=timedelta(minutes=60),
         )
 

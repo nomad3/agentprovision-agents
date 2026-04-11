@@ -15,7 +15,7 @@ from app.models.mcp_server_connector import MCPServerConnector
 from app.services.memory_recall import build_memory_context_with_git
 from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 from app.services.skill_manager import skill_manager
-from app.services.agent_router import _resolve_primary_agent_slug
+from app.services.agent_identity import resolve_primary_agent_slug
 from app.services.tool_groups import TIER_LIMITS, TIER_MODEL_MAP, format_allowed_tools, resolve_tool_names
 
 logger = logging.getLogger(__name__)
@@ -345,7 +345,7 @@ def generate_cli_instructions(
 def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -> dict:
     """Generate MCP config JSON for a CLI session.
 
-    Includes the built-in ServiceTsunami MCP server plus any external MCP servers
+    Includes the built-in AgentProvision MCP server plus any external MCP servers
     connected to this tenant via MCPServerConnector.
     """
     mcp_tools_url = os.environ.get("MCP_TOOLS_URL", "http://mcp-tools:8000")
@@ -353,7 +353,7 @@ def generate_mcp_config(tenant_id: str, internal_key: str, db: Session = None) -
 
     config = {
         "mcpServers": {
-            "servicetsunami": {
+            "agentprovision": {
                 "type": "http",
                 "url": mcp_url,
                 "headers": {
@@ -500,7 +500,7 @@ def run_agent_session(
         metadata["error"] = err
         return None, metadata
 
-    primary_slug = _resolve_primary_agent_slug(db, tenant_id)
+    primary_slug = resolve_primary_agent_slug(db, tenant_id)
     skill = skill_manager.get_skill_by_slug(agent_slug, str(tenant_id))
     if not skill and agent_slug != primary_slug:
         logger.info("Skill '%s' not found, falling back to primary '%s'", agent_slug, primary_slug)
@@ -797,7 +797,7 @@ def run_agent_session(
                 "ChatCliWorkflow",
                 task_input,
                 id=f"chat-cli-{uuid.uuid4()}",
-                task_queue="servicetsunami-code",
+                task_queue="agentprovision-code",
                 execution_timeout=timedelta(minutes=180),
             )
 

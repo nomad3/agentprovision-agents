@@ -1,7 +1,7 @@
 variable "project" {
   description = "Name of the project used for resource tags"
   type        = string
-  default     = "servicetsunami"
+  default     = "agentprovision"
 }
 
 variable "environment" {

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ServiceTsunami is an AI agent orchestration platform that routes tasks to **Claude Code CLI** (Sonnet by default, configurable via `CLAUDE_CODE_MODEL`) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Runs from a laptop via **Cloudflare Tunnel** serving both `servicetsunami.com` and `agentprovision.com`.
+AgentProvision is an AI agent orchestration platform that routes tasks to **Claude Code CLI** (Sonnet by default, configurable via `CLAUDE_CODE_MODEL`) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Runs from a laptop via **Cloudflare Tunnel** serving both `agentprovision.com` and `agentprovision.com`.
 
 **Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Temporal → code-worker (Claude Code CLI with `--model sonnet`) → MCP tools (FastMCP, 81 tools) → response. Every response is auto-scored by a local Gemma 4 council (3 reviewers, 6-dimension rubric) and selectively reviewed by a multi-provider council (Claude + Codex + Gemma 4 in parallel via Temporal). All scores logged as RL experiences for continuous improvement and platform routing optimization.
 
@@ -16,10 +16,10 @@ Docker Compose stack with Cloudflare Tunnel:
 
 - **`apps/api`** (port 8001): FastAPI backend — chat service, agent router, RL, knowledge graph, skill marketplace
 - **`apps/code-worker`**: Claude Code CLI execution via Temporal. Has git, gh, claude, node. Fetches GitHub + Claude Code tokens from vault per-session.
-- **`apps/mcp-server`** (port 8086): Original REST MCP server (Databricks/scraping)
+- **`apps/mcp-server`** (port 8086): Original REST MCP server (PostgreSQL/scraping)
 - **`mcp-tools`** (port 8087): FastMCP with 81 tools (email, calendar, knowledge, jira, github, data, ads, competitor, monitor, sales, reports, shell, analytics, skills, drive)
 - **`apps/web`** (port 8002): React SPA with markdown rendering (react-markdown), Ocean theme
-- **`cloudflared`**: Cloudflare Tunnel — routes servicetsunami.com + agentprovision.com to local stack
+- **`cloudflared`**: Cloudflare Tunnel — routes agentprovision.com + agentprovision.com to local stack
 - **`temporal`** (port 7233): Workflow engine for durable task execution
 - **`ollama`** (native host, port 11434): Local LLM runtime — runs **natively on the host Mac** (not in Docker) for full M4 GPU acceleration (~57 tok/s). Hosts Gemma 4 for auto-scoring, RL, knowledge extraction, conversation summarization, free-tier fallback, and OpenCode chat. Containers reach it via `host.docker.internal:11434`.
 - **`db`** (port 8003): PostgreSQL + pgvector
@@ -44,12 +44,12 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
   - Token fetched at runtime from API's internal endpoint (`/api/v1/oauth/internal/token/claude_code`)
   - Creates feature branches, commits changes, and opens PRs with full traceability
   - PR body includes: task description, Claude Code output summary, commit log, files changed
-  - Temporal worker on `servicetsunami-code` queue
+  - Temporal worker on `agentprovision-code` queue
 
 - **`apps/mcp-server`**: Model Context Protocol server for data integration (Python 3.11)
   - MCP-compliant server following Anthropic's specification
-  - 9 tools: PostgreSQL connections, data ingestion, Databricks queries
-  - Bronze/Silver/Gold data layer architecture via Databricks Unity Catalog
+  - 9 tools: PostgreSQL connections, data ingestion, PostgreSQL queries
+  - Bronze/Silver/Gold data layer architecture via PostgreSQL Unity Catalog
 
 - **`helm/`**: Kubernetes Helm charts
   - `charts/microservice/`: Reusable base chart for all services
@@ -77,7 +77,7 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 
 **Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default "Luna Supervisor" AgentKit on registration.
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
-- **Code Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`servicetsunami-code` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
+- **Code Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`agentprovision-code` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
 - **Data Team**: **Data Analyst**, **Report Generator**, **Knowledge Manager**. Handles SQL, analytics, and knowledge graph.
 - **Sales Team**: **Sales Agent** (deal management), **Customer Support** (inquiry handling).
 - **Marketing Team**: **Web Researcher** for market intelligence and prospect discovery. **Marketing Analyst** for ad campaign management (Meta/Google/TikTok), competitor monitoring, and cross-platform ad intelligence. **Knowledge Manager** for entity CRUD and knowledge graph.
@@ -102,7 +102,7 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - **Context Awareness** (10pts): Conversation continuity, history usage
 Scores are logged as RL experiences (`rl_experience` table) with reward components, cost tracking (tokens/cost per quality point), and platform recommendation. The scoring runs async after each response via `auto_quality_scorer.py` using the `agent_response_quality` rubric from `scoring_rubrics.py`. Zero cloud cost — fully local inference. Includes leave-one-out fragility detection (flags when removing one reviewer would flip consensus).
 
-**Multi-Provider Review Council**: Async Temporal workflow (`ProviderReviewWorkflow` on `servicetsunami-code` queue) where Claude, Codex, and Gemma 4 each independently review the same response. Triggers on: side-effect tools, fragile local consensus, low scores (<40), or 5% random sample (`PROVIDER_COUNCIL_SAMPLE_RATE` env var). Each provider returns score (0-100), verdict, issues, suggestions. Meta-adjudicator computes agreement (over ALL reviewers including failed), detects disagreements, and recommends best platform. Results merged into RL experience via `POST /api/v1/rl/internal/provider-council`. Provider failures are isolated (`_safe_review` wrapper) — one timeout doesn't abort the others.
+**Multi-Provider Review Council**: Async Temporal workflow (`ProviderReviewWorkflow` on `agentprovision-code` queue) where Claude, Codex, and Gemma 4 each independently review the same response. Triggers on: side-effect tools, fragile local consensus, low scores (<40), or 5% random sample (`PROVIDER_COUNCIL_SAMPLE_RATE` env var). Each provider returns score (0-100), verdict, issues, suggestions. Meta-adjudicator computes agreement (over ALL reviewers including failed), detects disagreements, and recommends best platform. Results merged into RL experience via `POST /api/v1/rl/internal/provider-council`. Provider failures are isolated (`_safe_review` wrapper) — one timeout doesn't abort the others.
 
 **Inference Bulkhead**: Foreground (user-blocking) and background (scoring/consensus) Ollama calls are isolated via `_foreground_active` threading.Event. Background scoring skips when foreground is active — degrade scorer first, never the user path. Local tool agent is read-only (search tools only, no mutations). Pre-execution safety gate blocks side-effect tools for local model.
 
@@ -133,15 +133,15 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 
 **Notifications System**: `notification.py` model with sources (gmail, calendar, whatsapp, system), priorities (high/medium/low), read/dismissed tracking. API endpoints at `/api/v1/notifications`. Frontend `NotificationBell` component in Layout.
 
-**Proactive Inbox Monitor**: `InboxMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` every 15 minutes. Monitors Gmail + Calendar, triages items with LLM + memory context, creates notifications, and extracts knowledge entities from important emails. Auto-starts when Google OAuth is connected. Queue: `servicetsunami-orchestration`. Activities: fetch_new_emails, fetch_upcoming_events, triage_items, create_notifications, extract_from_emails, log_monitor_cycle.
+**Proactive Inbox Monitor**: `InboxMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` every 15 minutes. Monitors Gmail + Calendar, triages items with LLM + memory context, creates notifications, and extracts knowledge entities from important emails. Auto-starts when Google OAuth is connected. Queue: `agentprovision-orchestration`. Activities: fetch_new_emails, fetch_upcoming_events, triage_items, create_notifications, extract_from_emails, log_monitor_cycle.
 
-**Competitor Monitor**: `CompetitorMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` (default 24h cycle). Monitors competitor entities (category="competitor" in knowledge graph) by scraping websites/news via MCP scraper, checking public ad libraries (Meta Ad Library), analyzing changes, storing observations, and creating notifications. Queue: `servicetsunami-orchestration`. Activities: fetch_competitors, scrape_competitor_activity, check_ad_libraries, analyze_competitor_changes, store_competitor_observations, create_competitor_notifications.
+**Competitor Monitor**: `CompetitorMonitorWorkflow` — long-running per-tenant workflow using `continue_as_new` (default 24h cycle). Monitors competitor entities (category="competitor" in knowledge graph) by scraping websites/news via MCP scraper, checking public ad libraries (Meta Ad Library), analyzing changes, storing observations, and creating notifications. Queue: `agentprovision-orchestration`. Activities: fetch_competitors, scrape_competitor_activity, check_ad_libraries, analyze_competitor_changes, store_competitor_observations, create_competitor_notifications.
 
 **Marketing Intelligence & Ads Platform**: Integrates with Meta Ads, Google Ads, and TikTok Ads via manual API tokens stored in the integration registry. MCP tools in `apps/mcp-server/src/mcp_tools/ads.py` (12 tools) manage campaigns (list, insights, pause) and search public ad libraries. Competitor tools in `competitor.py` (5 tools) manage competitor entities in the knowledge graph.
 
 **Dynamic Workflows System**: JSON-defined workflows interpreted at runtime by a single `DynamicWorkflowExecutor` Temporal workflow. No per-workflow Python code needed — the executor walks a JSON `definition.steps[]` array and dispatches each step as a Temporal activity.
 - **Visual Builder**: ReactFlow tree canvas at `/workflows/builder/:id` with drag-and-drop step palette, node inspector panel, test console (dry_run validation), integration awareness layer. 6 custom node types: Trigger, Step, Condition (diamond with then/else), ForEach, Parallel, Approval.
-- **Step types**: `mcp_tool`, `agent`, `condition`, `for_each`, `parallel`, `wait`, `transform`, `human_approval`, `webhook_trigger`, `workflow`, `continue_as_new` (infinite-duration), `cli_execute` (dispatches CodeTaskWorkflow on servicetsunami-code queue), `internal_api` (calls internal API endpoints).
+- **Step types**: `mcp_tool`, `agent`, `condition`, `for_each`, `parallel`, `wait`, `transform`, `human_approval`, `webhook_trigger`, `workflow`, `continue_as_new` (infinite-duration), `cli_execute` (dispatches CodeTaskWorkflow on agentprovision-code queue), `internal_api` (calls internal API endpoints).
 - **Triggers**: `cron`, `interval`, `webhook`, `event`, `manual`, `agent`.
 - **25 native templates**: 5 original + 20 migrated from static workflows across 4 tiers (linear, branching, continue_as_new, infrastructure).
 - **Luna full CRUD**: 8 MCP tools for workflow management via chat (create, list, update, delete, run, get_status, activate, install_template).
@@ -151,10 +151,10 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - **Internal auth**: MCP tools use `/internal/*` endpoints with `X-Internal-Key` + `X-Tenant-Id` headers (accepts both `API_INTERNAL_KEY` and `MCP_API_KEY`).
 
 **Temporal workflows** (static — being migrated to dynamic): Durable workflow execution across four task queues:
-- `servicetsunami-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `DynamicWorkflowExecutor`.
-- `servicetsunami-databricks`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
-- `servicetsunami-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated code-worker pod).
-- `servicetsunami-business`: Industry-specific flows:
+- `agentprovision-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `DynamicWorkflowExecutor`.
+- `agentprovision-postgres`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
+- `agentprovision-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated code-worker pod).
+- `agentprovision-business`: Industry-specific flows:
   - `DealPipelineWorkflow`: Discover → Score → Research → Outreach → Advance → Sync (6 steps).
   - `RemediaOrderWorkflow`: Create order → Confirm (WhatsApp) → Monitor payment → Notify delivery.
   - `MonthlyBillingWorkflow`: Process usage → Generate invoices → Trigger payments (HealthPets).
@@ -162,26 +162,21 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 
 **Pipeline Run Tracking**: `pipeline_run.py` model tracks pipeline execution history with status, duration, and error details. The scheduler worker handles automated pipeline execution.
 
-**Databricks Integration**: Datasets sync to Unity Catalog via MCP server (Bronze/Silver/Gold layers). Status tracked in dataset metadata (`sync_status`: pending/syncing/synced/failed).
+**PostgreSQL Integration**: Datasets sync to Unity Catalog via MCP server (Bronze/Silver/Gold layers). Status tracked in dataset metadata (`sync_status`: pending/syncing/synced/failed).
 
 **Database Migrations**: Manual SQL scripts in `apps/api/migrations/` (not Alembic). See `migrations/README.md` for instructions.
 
 ## Development Commands
 
-### Local Development (Docker Compose)
+### Local Development (Kubernetes / Rancher Desktop)
 
 ```bash
-# Start all services with custom ports
-DB_PORT=8003 API_PORT=8001 WEB_PORT=8002 docker-compose up --build
+# Run the local deployment script
+./scripts/deploy_k8s_local.sh
 
-# Services: API (8001), Web (8002), DB (8003), MCP (8086/8087), Temporal (7233/8233)
-
-# View logs
-docker-compose logs -f api
-docker-compose logs -f web
-
-# Connect to PostgreSQL
-docker-compose exec db psql -U postgres servicetsunami
+# Namespace: agentprovision
+# Charts: helm/charts/microservice
+# Values: helm/values/*-local.yaml
 ```
 
 ### API Development
@@ -290,8 +285,8 @@ Business logic layer (one service per model):
 ### Workers (`apps/api/app/workers/`)
 
 Temporal workers for async processing:
-- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow (queue: `servicetsunami-orchestration`)
-- `databricks_worker.py`: DatasetSync, KnowledgeExtraction, AgentKitExecution, DataSourceSync workflows (queue: `servicetsunami-databricks`)
+- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow (queue: `agentprovision-orchestration`)
+- `postgres_worker.py`: DatasetSync, KnowledgeExtraction, AgentKitExecution, DataSourceSync workflows (queue: `agentprovision-postgres`)
 - `scheduler_worker.py`: Automated pipeline execution (cron/interval scheduling, polls every 60s)
 
 ### Routes (`apps/api/app/api/v1/`)
@@ -336,7 +331,7 @@ Organized in 3-section navigation:
 API_PORT=8001    # FastAPI backend
 WEB_PORT=8002    # React frontend
 DB_PORT=8003     # PostgreSQL
-MCP_PORT=8086    # MCP server (Databricks)
+MCP_PORT=8086    # MCP server (PostgreSQL)
                  # MCP tools on 8087 (FastMCP, 81 tools)
 ```
 
@@ -347,15 +342,14 @@ Loaded via pydantic-settings. See `apps/api/app/core/config.py`:
 ```bash
 # Required
 ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxx
-DATABASE_URL=postgresql://postgres:postgres@db:5432/servicetsunami
+DATABASE_URL=postgresql://postgres:postgres@db:5432/agentprovision
 SECRET_KEY=your-jwt-secret
 
 # Temporal
 TEMPORAL_ADDRESS=temporal:7233  # Use localhost:7233 for local dev
 
-# MCP/Databricks
+# MCP/PostgreSQL
 MCP_SERVER_URL=http://mcp-server:8000
-DATABRICKS_SYNC_ENABLED=true
 
 # Credential Vault
 ENCRYPTION_KEY=<fernet-key>  # Generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -385,7 +379,7 @@ GITHUB_TOKEN=ghp_xxxxx              # GitHub PAT for git operations and PR creat
 API_INTERNAL_KEY=xxxxx              # Key for internal API endpoints (token fetch)
 
 # Set by ConfigMap
-API_BASE_URL=http://servicetsunami-api  # Internal API service URL
+API_BASE_URL=http://agentprovision-api  # Internal API service URL
 TEMPORAL_ADDRESS=temporal:7233          # Temporal server address
 
 # Set dynamically per-task (not in pod env)
@@ -393,7 +387,7 @@ TEMPORAL_ADDRESS=temporal:7233          # Temporal server address
 ```
 
 **Authentication flow:**
-1. Chat service dispatches code task → Temporal workflow starts on `servicetsunami-code` queue
+1. Chat service dispatches code task → Temporal workflow starts on `agentprovision-code` queue
 2. Code-worker activity fetches tenant's OAuth token: `GET /api/v1/oauth/internal/token/claude_code?tenant_id=<uuid>`
 3. Token passed as `CLAUDE_CODE_OAUTH_TOKEN` env var to `claude -p` subprocess
 4. Claude Code CLI runs with tenant's subscription (Pro/Max), not API credits
@@ -411,27 +405,27 @@ gh workflow run deploy-all.yaml -f deploy_infrastructure=false -f environment=pr
 
 # Watch rollout status
 kubectl get pods -n prod -w
-kubectl rollout status deployment/servicetsunami-api -n prod
+kubectl rollout status deployment/agentprovision-api -n prod
 
 # Validate Helm releases
-helm list -n prod | grep servicetsunami
+helm list -n prod | grep agentprovision
 
 # Rollback if needed
-helm rollback servicetsunami-api -n prod
+helm rollback agentprovision-api -n prod
 ```
 
 **GitHub Actions Workflows** (`.github/workflows/`):
 - `deploy-all.yaml`: Full stack deployment (API, Web, Worker, Code-Worker, Temporal, Redis, PostgreSQL)
 - `code-worker-deploy.yaml`: Code-worker only (auto-triggers on push to `apps/code-worker/**`)
-- `servicetsunami-api.yaml`: API service
-- `servicetsunami-web.yaml`: Web frontend
-- `servicetsunami-worker.yaml`: Temporal worker
+- `agentprovision-api.yaml`: API service
+- `agentprovision-web.yaml`: Web frontend
+- `agentprovision-worker.yaml`: Temporal worker
 - `kubernetes-infrastructure.yaml`: Initial infra setup
 - `kubernetes-shared.yaml`: Shared resources (Ingress, ManagedCertificates)
 
 **Required GCP Secrets** (Secret Manager):
-- `servicetsunami-secret-key`, `servicetsunami-database-url`
-- `servicetsunami-anthropic-api-key`, `servicetsunami-mcp-api-key`
+- `agentprovision-secret-key`, `agentprovision-database-url`
+- `agentprovision-anthropic-api-key`, `agentprovision-mcp-api-key`
 
 See `docs/KUBERNETES_DEPLOYMENT.md` for full runbook.
 
@@ -440,7 +434,7 @@ See `docs/KUBERNETES_DEPLOYMENT.md` for full runbook.
 ```bash
 # Test against any environment
 BASE_URL=http://localhost:8001 ./scripts/e2e_test_production.sh
-BASE_URL=https://servicetsunami.com ./scripts/e2e_test_production.sh
+BASE_URL=https://agentprovision.com ./scripts/e2e_test_production.sh
 ```
 
 
@@ -475,7 +469,7 @@ PRs created by the code agent include structured body with full audit trail:
 - **Claude Code Output**: Summary of what Claude Code did
 - **Commits**: Full commit log with short hashes
 - **Files Changed**: Bulleted list of modified files
-- **Footer**: ServiceTsunami Code Agent attribution
+- **Footer**: AgentProvision Code Agent attribution
 
 ## Additional Documentation
 
@@ -496,4 +490,3 @@ PRs created by the code agent include structured body with full audit trail:
   - `2026-03-22-local-ollama-mcp-bridge-plan.md`: Local Gemma 4 → Ollama tool calling → MCP bridge for free-tier tenants
   - `2026-04-03-dynamic-workflows-visual-builder-design.md`: Dynamic workflows visual builder, migration strategy, RL lifecycle design
   - `2026-04-03-dynamic-workflows-visual-builder-plan.md`: 25-task implementation plan for visual builder + migration
-- `LLM_INTEGRATION_README.md`, `TOOL_FRAMEWORK_README.md`, `DATABRICKS_SYNC_README.md`: Feature docs

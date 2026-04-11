@@ -6,7 +6,7 @@ metadata:
   name: allow-prod-routes
   namespace: gateway-system
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: gateway
 spec:
   from:

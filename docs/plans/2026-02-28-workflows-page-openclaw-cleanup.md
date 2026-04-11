@@ -27,11 +27,11 @@ Each workflow gets a card with:
 Workflow data is hardcoded as a static JSON structure in the component (not from API — these are code-defined structures that don't change at runtime). The 8 workflows:
 
 1. **TaskExecutionWorkflow** — 5 sequential steps: dispatch → recall_memory → execute → persist_entities → evaluate (queue: orchestration)
-2. **DatasetSyncWorkflow** — 3 steps: sync_to_bronze → transform_to_silver → update_metadata (queue: databricks)
-3. **DataSourceSyncWorkflow** — 4 steps: extract → load_bronze → load_silver → update_metadata (queue: databricks)
-4. **ScheduledSyncWorkflow** — Parent: loops DataSourceSyncWorkflow per table (queue: databricks)
-5. **KnowledgeExtractionWorkflow** — 1 step: extract_knowledge_from_session (queue: databricks)
-6. **AgentKitExecutionWorkflow** — 1 step: execute_agent_kit_activity (queue: databricks)
+2. **DatasetSyncWorkflow** — 3 steps: sync_to_bronze → transform_to_silver → update_metadata (queue: postgres)
+3. **DataSourceSyncWorkflow** — 4 steps: extract → load_bronze → load_silver → update_metadata (queue: postgres)
+4. **ScheduledSyncWorkflow** — Parent: loops DataSourceSyncWorkflow per table (queue: postgres)
+5. **KnowledgeExtractionWorkflow** — 1 step: extract_knowledge_from_session (queue: postgres)
+6. **AgentKitExecutionWorkflow** — 1 step: execute_agent_kit_activity (queue: postgres)
 7. **ChannelHealthMonitorWorkflow** — 3 steps + reconnect loop + continue_as_new (queue: orchestration)
 8. **FollowUpWorkflow** — sleep(delay) → execute_followup_action with action branching (queue: orchestration)
 

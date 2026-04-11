@@ -1,5 +1,5 @@
 # Patent Disclosure Document
-## ServiceTsunami AI Agent Orchestration Platform
+## AgentProvision AI Agent Orchestration Platform
 ### Confidential — Attorney-Client Privileged
 
 **Inventors:** [To be completed by legal counsel]
@@ -543,7 +543,7 @@ This is a *degrade-background, protect-foreground* architecture distinct from st
 
 #### 7.1 Architecture
 
-For high-value or at-risk responses, a `ProviderReviewWorkflow` runs on the `servicetsunami-code` Temporal task queue, dispatching Claude, Codex, and Qwen simultaneously as independent reviewers:
+For high-value or at-risk responses, a `ProviderReviewWorkflow` runs on the `agentprovision-code` Temporal task queue, dispatching Claude, Codex, and Qwen simultaneously as independent reviewers:
 
 ```python
 _SIDE_EFFECT_TOOLS = {"send_email", "create_jira_issue", "deploy_changes", "execute_shell"}
@@ -747,4 +747,4 @@ Triggers: (1) side-effect tools used, (2) fragile local consensus, (3) low score
 
 ---
 
-*This disclosure was prepared on 2026-04-04 based on code analysis of the ServiceTsunami AI Agent Orchestration Platform codebase. All claims, prior art analysis, and technical descriptions should be reviewed by registered patent counsel before filing.*
+*This disclosure was prepared on 2026-04-04 based on code analysis of the AgentProvision AI Agent Orchestration Platform codebase. All claims, prior art analysis, and technical descriptions should be reviewed by registered patent counsel before filing.*

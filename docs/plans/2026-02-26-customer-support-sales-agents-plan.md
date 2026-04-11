@@ -111,7 +111,7 @@ async def query_data_source(
         query: SQL SELECT query for databases, or search term for REST APIs.
         connector_id: Specific connector UUID to query. If omitted, uses the
             first active connector matching connector_type (or any active one).
-        connector_type: Filter by type: postgres, mysql, snowflake, databricks, api.
+        connector_type: Filter by type: postgres, mysql, snowflake, postgres, api.
             Ignored if connector_id is provided.
 
     Returns:
@@ -636,7 +636,7 @@ All operate on knowledge graph entities."
 ### Task 4: Create customer_support agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/customer_support.py`
+- Create: `apps/adk-server/agentprovision_supervisor/customer_support.py`
 
 **Step 1: Write the agent**
 
@@ -703,7 +703,7 @@ If you cannot resolve an issue after 2 attempts, tell the customer you're connec
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/customer_support.py
+git add apps/adk-server/agentprovision_supervisor/customer_support.py
 git commit -m "feat: add customer_support ADK sub-agent
 
 Handles inbound customer interactions via knowledge graph lookup,
@@ -715,7 +715,7 @@ connected data source queries, and natural conversation."
 ### Task 5: Create sales_agent
 
 **Files:**
-- Create: `apps/adk-server/servicetsunami_supervisor/sales_agent.py`
+- Create: `apps/adk-server/agentprovision_supervisor/sales_agent.py`
 
 **Step 1: Write the agent**
 
@@ -822,7 +822,7 @@ Always be data-driven in your recommendations. Back up qualification and scoring
 **Step 2: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/sales_agent.py
+git add apps/adk-server/agentprovision_supervisor/sales_agent.py
 git commit -m "feat: add sales_agent ADK sub-agent
 
 Full sales automation: BANT qualification, outreach drafting,
@@ -835,8 +835,8 @@ Reuses knowledge graph and connector tools."
 ### Task 6: Wire agents into supervisor
 
 **Files:**
-- Modify: `apps/adk-server/servicetsunami_supervisor/agent.py`
-- Modify: `apps/adk-server/servicetsunami_supervisor/__init__.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/agent.py`
+- Modify: `apps/adk-server/agentprovision_supervisor/__init__.py`
 
 **Step 1: Update agent.py**
 
@@ -896,7 +896,7 @@ __all__ = [
 **Step 3: Commit**
 
 ```bash
-git add apps/adk-server/servicetsunami_supervisor/agent.py apps/adk-server/servicetsunami_supervisor/__init__.py
+git add apps/adk-server/agentprovision_supervisor/agent.py apps/adk-server/agentprovision_supervisor/__init__.py
 git commit -m "feat: wire customer_support and sales_agent into supervisor
 
 Add routing rules for customer inquiries, general conversation,
@@ -1180,7 +1180,7 @@ gh workflow run adk-deploy.yaml -f deploy=true -f environment=prod
 Once the ADK pod is running, check that the new agents are loaded:
 
 ```bash
-kubectl logs -n prod deployment/servicetsunami-adk --tail=50
+kubectl logs -n prod deployment/agentprovision-adk --tail=50
 ```
 
 Look for: supervisor loading with 6 sub-agents (previously 4).

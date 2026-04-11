@@ -135,7 +135,7 @@ Timeline visibility:
 ## Workflow Integration
 
 ### New: `ProspectingPipelineWorkflow`
-Queue: `servicetsunami-orchestration`
+Queue: `agentprovision-orchestration`
 
 Steps:
 1. **Research** — web scrape, enrich entity properties

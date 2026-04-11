@@ -4,7 +4,7 @@
 
 **Goal:** Replace the scattered chat hot path memory operations with a single `apps/api/app/memory/` package that pre-loads recall context, runs post-chat consolidation via Temporal, and ships a Gemma4-based commitment classifier — without touching Rust, K8s, or Claude CLI subprocess management (those are Phase 2/3).
 
-**Architecture:** New `memory/` package exposes `recall()`, `record_*()`, `ingest_events()` as Python functions designed around the eventual gRPC contract (Phase 2 reimplements the same API in Rust). All post-chat side effects (knowledge extraction, episode generation, commitment detection, behavioral signals) move from in-process daemon threads into a `PostChatMemoryWorkflow` Temporal workflow on the existing `servicetsunami-orchestration` queue. The `conversation_episodes` table is reused (not replaced); `session_journals` stays as the weekly rollup table. Embeddings stay in the existing generic `embeddings` table — no new per-table columns.
+**Architecture:** New `memory/` package exposes `recall()`, `record_*()`, `ingest_events()` as Python functions designed around the eventual gRPC contract (Phase 2 reimplements the same API in Rust). All post-chat side effects (knowledge extraction, episode generation, commitment detection, behavioral signals) move from in-process daemon threads into a `PostChatMemoryWorkflow` Temporal workflow on the existing `agentprovision-orchestration` queue. The `conversation_episodes` table is reused (not replaced); `session_journals` stays as the weekly rollup table. Embeddings stay in the existing generic `embeddings` table — no new per-table columns.
 
 **Tech Stack:** Python 3.11, FastAPI, SQLAlchemy, Temporal Python SDK, pgvector, nomic-embed-text-v1.5 (existing local embedding service), Gemma4 via Ollama (existing local inference), pytest.
 
@@ -217,7 +217,7 @@ print(f"Wrote 100 unlabeled rows")
 
 Run:
 ```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:8003/servicetsunami \
+DATABASE_URL=postgresql://postgres:postgres@localhost:8003/agentprovision \
   python apps/api/scripts/sample_chat_corpus.py
 ```
 
@@ -874,7 +874,7 @@ def test_conversation_episodes_unique_window_constraint(engine):
 - [ ] **Step 2: Run to verify it fails**
 
 ```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:8003/servicetsunami \
+DATABASE_URL=postgresql://postgres:postgres@localhost:8003/agentprovision \
   pytest tests/migrations/test_086_extend_conversation_episodes.py -v
 ```
 
@@ -2419,7 +2419,7 @@ git commit -m "gate(memory-first): commitment classifier F1 decision recorded"
 
 **Pattern:** Model on `Gap1JournalSynthesis` workflow (already in repo). One main workflow (`PostChatMemoryWorkflow`) with N independent activities. Each activity manages its own DB session via `SessionLocal`. Failures in one activity do NOT block the others.
 
-**Queue:** All workflows run on the existing `servicetsunami-orchestration` queue. We do NOT create a new `servicetsunami-memory` queue in Phase 1 — that's Phase 3a when we have K8s. Phase 1 reuses the existing orchestration worker.
+**Queue:** All workflows run on the existing `agentprovision-orchestration` queue. We do NOT create a new `agentprovision-memory` queue in Phase 1 — that's Phase 3a when we have K8s. Phase 1 reuses the existing orchestration worker.
 
 ### Task 20: `PostChatMemoryWorkflow` skeleton + dispatch from chat hot path
 
@@ -2997,7 +2997,7 @@ class PostChatMemoryWorkflow:
                     args=[tenant_id, chat_session_id, window_start, window_end,
                           episode_signal.get("trigger_reason", "n_30")],
                     id=f"episode-{chat_session_id}-{window_start}",
-                    task_queue="servicetsunami-orchestration",
+                    task_queue="agentprovision-orchestration",
                     parent_close_policy=ParentClosePolicy.ABANDON,
                 )
                 results["episode_dispatched"] = True
@@ -3265,7 +3265,7 @@ class IdleEpisodeScanWorkflow:
                     "idle_timeout",
                 ],
                 id=f"episode-{session['id']}-{session['window_start']}",
-                task_queue="servicetsunami-orchestration",
+                task_queue="agentprovision-orchestration",
             )
         # Sleep one hour, then continue_as_new
         await workflow.sleep(timedelta(hours=1))
@@ -3283,7 +3283,7 @@ await client.start_workflow(
     IdleEpisodeScanWorkflow.run,
     str(tenant.id),
     id=f"idle-episode-scan-{tenant.id}",
-    task_queue="servicetsunami-orchestration",
+    task_queue="agentprovision-orchestration",
     id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
 )
 ```
@@ -3525,7 +3525,7 @@ def dispatch_post_chat_memory(
                     args=[str(tenant_id), str(chat_session_id),
                           str(user_message_id), str(assistant_message_id)],
                     id=f"post-chat-{user_message_id}",
-                    task_queue="servicetsunami-orchestration",
+                    task_queue="agentprovision-orchestration",
                 )
             asyncio.run(_go())
         except Exception as e:
@@ -3782,7 +3782,7 @@ async def backfill_embeddings(
         "BackfillEmbeddingsWorkflow",
         args=[tenant_id],
         id=f"backfill-embeddings-{tenant_id}",
-        task_queue="servicetsunami-orchestration",
+        task_queue="agentprovision-orchestration",
     )
     return {"workflow_id": handle.id, "tenant_id": tenant_id}
 ```

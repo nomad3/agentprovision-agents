@@ -8,22 +8,22 @@ import './SettingsPage.css';
 
 const SettingsPage = () => {
   const { t } = useTranslation('settings');
-  const [databricksStatus, setDatabricksStatus] = useState(null);
+  const [postgresStatus, setPostgreSQLStatus] = useState(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [initializing, setInitializing] = useState(false);
   const [message, setMessage] = useState(null);
 
   useEffect(() => {
-    fetchDatabricksStatus();
+    fetchPostgreSQLStatus();
   }, []);
 
-  const fetchDatabricksStatus = async () => {
+  const fetchPostgreSQLStatus = async () => {
     try {
       setLoadingStatus(true);
-      const response = await api.get('/databricks/status');
-      setDatabricksStatus(response.data);
+      const response = await api.get('/postgres/status');
+      setPostgreSQLStatus(response.data);
     } catch (err) {
-      console.error('Error fetching Databricks status:', err);
+      console.error('Error fetching PostgreSQL status:', err);
     } finally {
       setLoadingStatus(false);
     }
@@ -33,13 +33,13 @@ const SettingsPage = () => {
     try {
       setInitializing(true);
       setMessage(null);
-      const response = await api.post('/databricks/initialize');
-      setMessage({ type: 'success', text: t('databricks.initSuccess') });
-      fetchDatabricksStatus(); // Refresh status
+      const response = await api.post('/postgres/initialize');
+      setMessage({ type: 'success', text: t('postgres.initSuccess') });
+      fetchPostgreSQLStatus(); // Refresh status
     } catch (err) {
       setMessage({
         type: 'danger',
-        text: err.response?.data?.detail || t('databricks.initFailed')
+        text: err.response?.data?.detail || t('postgres.initFailed')
       });
     } finally {
       setInitializing(false);
@@ -160,121 +160,6 @@ const SettingsPage = () => {
                   </div>
                   <Button variant="outline-primary" size="sm">{t('security.enable2FA')}</Button>
                 </div>
-              </Card.Body>
-            </Card>
-          </Col>
-
-          {/* Databricks Integration */}
-          <Col md={12}>
-            <Card className="settings-card">
-              <Card.Body>
-                <div className="settings-section-header">
-                  <FaCloud className="section-icon" />
-                  <h3 className="section-title">{t('databricks.title')}</h3>
-                </div>
-
-                {message && (
-                  <Alert variant={message.type} dismissible onClose={() => setMessage(null)} className="mb-3">
-                    {message.text}
-                  </Alert>
-                )}
-
-                {loadingStatus ? (
-                  <div className="text-center py-3">
-                    <Spinner animation="border" size="sm" /> {t('databricks.loading')}
-                  </div>
-                ) : databricksStatus ? (
-                  <>
-                    <div className="security-item">
-                      <div className="security-info">
-                        <strong>{t('databricks.mcpServer')}</strong>
-                        <p className="security-text">
-                          {databricksStatus.enabled ? (
-                            <>
-                              {databricksStatus.mcp_server?.healthy ? (
-                                <Badge bg="success">{t('databricks.connected')}</Badge>
-                              ) : (
-                                <Badge bg="warning">{t('databricks.pendingSetup')}</Badge>
-                              )}
-                              {' '}{t('databricks.server', { url: databricksStatus.mcp_server?.url })}
-                            </>
-                          ) : (
-                            <Badge bg="secondary">{t('databricks.disabled')}</Badge>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-
-                    {databricksStatus.enabled && (
-                      <>
-                        <div className="security-item">
-                          <div className="security-info">
-                            <strong>{t('databricks.unityCatalog')}</strong>
-                            <p className="security-text">
-                              {databricksStatus.tenant_catalog?.exists ? (
-                                <>
-                                  <Badge bg="success">{t('databricks.initialized')}</Badge>
-                                  {' '}{t('databricks.catalog', { name: databricksStatus.tenant_catalog?.catalog_name })}
-                                  {databricksStatus.tenant_catalog?.schemas &&
-                                    ` (${t('databricks.schemas', { count: databricksStatus.tenant_catalog.schemas.length })})`}
-                                </>
-                              ) : (
-                                <>
-                                  <Badge bg="warning">{t('databricks.notInitialized')}</Badge>
-                                  {' '}{t('databricks.setupWorkspace')}
-                                </>
-                              )}
-                            </p>
-                          </div>
-                          {!databricksStatus.tenant_catalog?.exists && (
-                            <Button
-                              variant="outline-primary"
-                              size="sm"
-                              onClick={handleInitialize}
-                              disabled={initializing}
-                            >
-                              {initializing ? (
-                                <>
-                                  <Spinner animation="border" size="sm" className="me-2" />
-                                  {t('databricks.initializing')}
-                                </>
-                              ) : (
-                                t('databricks.initializeCatalog')
-                              )}
-                            </Button>
-                          )}
-                        </div>
-
-                        <div className="security-item">
-                          <div className="security-info">
-                            <strong>{t('databricks.capabilities')}</strong>
-                            <p className="security-text">
-                              {databricksStatus.capabilities && (
-                                <div className="d-flex gap-2 flex-wrap mt-2">
-                                  {databricksStatus.capabilities.datasets && <Badge bg="info">Datasets</Badge>}
-                                  {databricksStatus.capabilities.notebooks && <Badge bg="info">Notebooks</Badge>}
-                                  {databricksStatus.capabilities.jobs && <Badge bg="info">Jobs</Badge>}
-                                  {databricksStatus.capabilities.model_serving && <Badge bg="info">Model Serving</Badge>}
-                                  {databricksStatus.capabilities.vector_search && <Badge bg="info">Vector Search</Badge>}
-                                </div>
-                              )}
-                            </p>
-                          </div>
-                        </div>
-
-                        {databricksStatus.mcp_server?.error && (
-                          <Alert variant="warning" className="mb-0 mt-3">
-                            <strong>{t('databricks.connectionIssue')}</strong> {databricksStatus.mcp_server.error}
-                            <br />
-                            <small>{t('databricks.contactSupport')}</small>
-                          </Alert>
-                        )}
-                      </>
-                    )}
-                  </>
-                ) : (
-                  <Alert variant="info">{t('databricks.unableToLoad')}</Alert>
-                )}
               </Card.Body>
             </Card>
           </Col>

@@ -7,18 +7,18 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     """MCP Server settings loaded from environment"""
 
-    # ServiceTsunami API
+    # AgentProvision API
     API_BASE_URL: str = "http://localhost:8001"
     API_INTERNAL_KEY: str = "internal-service-key"
 
     # PostgreSQL (shared with API — needed for knowledge tools)
     DATABASE_URL: str = ""
 
-    # Databricks
-    DATABRICKS_HOST: str = ""
-    DATABRICKS_TOKEN: str = ""
-    DATABRICKS_WAREHOUSE_ID: str = ""
-    DATABRICKS_CATALOG_PREFIX: str = "tenant_"
+    # PostgreSQL
+    POSTGRESQL_HOST: str = ""
+    POSTGRESQL_TOKEN: str = ""
+    POSTGRESQL_WAREHOUSE_ID: str = ""
+    POSTGRESQL_CATALOG_PREFIX: str = "tenant_"
 
     # MCP Server (port 8086 to avoid conflict with dental-erp MCP on 8085)
     MCP_PORT: int = 8086

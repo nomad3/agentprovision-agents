@@ -8,7 +8,7 @@
 
 ## Overview
 
-ServiceTsunami has proto-RL infrastructure scattered across the platform — skill proficiency tracking (+0.02 fixed increments), memory access counts, execution traces, lead scoring rubrics — but none of it forms a coherent learning loop. This design formalizes reinforcement learning as a first-class architectural capability, enabling the platform to learn from every decision it makes and improve over time.
+AgentProvision has proto-RL infrastructure scattered across the platform — skill proficiency tracking (+0.02 fixed increments), memory access counts, execution traces, lead scoring rubrics — but none of it forms a coherent learning loop. This design formalizes reinforcement learning as a first-class architectural capability, enabling the platform to learn from every decision it makes and improve over time.
 
 ### High-Level Architecture
 
@@ -478,7 +478,7 @@ At decision time, the engine populates the `explanation` field:
 
 ### Global Baseline Training
 
-New Temporal workflow: `RLPolicyUpdateWorkflow` on `servicetsunami-orchestration` queue, runs nightly:
+New Temporal workflow: `RLPolicyUpdateWorkflow` on `agentprovision-orchestration` queue, runs nightly:
 
 1. **Collect:** Query `rl_experiences` for tenants where `opt_in_global_learning = true`
 2. **Anonymize:** Strip tenant_id, user references, entity-specific content. Keep only structural features (task_type, capability_match_ratio, memory_type, skill_category)

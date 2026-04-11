@@ -269,52 +269,8 @@ NATIVE_TEMPLATES = [
         },
     },
     {
-        "name": "Dataset Sync (Bronze/Silver)",
-        "description": "Sync a dataset to Databricks Unity Catalog: create Bronze external table, transform to Silver managed table, update metadata",
-        "tier": "native",
-        "public": True,
-        "tags": ["data", "databricks", "etl", "sync"],
-        "trigger_config": {"type": "manual"},
-        "definition": {
-            "steps": [
-                {
-                    "id": "sync_bronze",
-                    "type": "internal_api",
-                    "method": "POST",
-                    "path": "/api/v1/datasets/{{input.dataset_id}}/sync-bronze",
-                    "body": {"tenant_id": "{{input.tenant_id}}"},
-                    "output": "bronze_result",
-                },
-                {
-                    "id": "transform_silver",
-                    "type": "internal_api",
-                    "method": "POST",
-                    "path": "/api/v1/datasets/{{input.dataset_id}}/transform-silver",
-                    "body": {
-                        "bronze_table": "{{bronze_result.bronze_table}}",
-                        "tenant_id": "{{input.tenant_id}}",
-                    },
-                    "output": "silver_result",
-                },
-                {
-                    "id": "update_metadata",
-                    "type": "internal_api",
-                    "method": "PATCH",
-                    "path": "/api/v1/datasets/{{input.dataset_id}}",
-                    "body": {
-                        "sync_status": "synced",
-                        "bronze_table": "{{bronze_result.bronze_table}}",
-                        "silver_table": "{{silver_result.silver_table}}",
-                        "row_count": "{{bronze_result.row_count}}",
-                    },
-                    "output": "metadata_updated",
-                },
-            ],
-        },
-    },
-    {
         "name": "Data Source Sync",
-        "description": "Extract data from any connector, load to Databricks Bronze and Silver layers, update sync metadata",
+        "description": "Extract data from any connector, load to PostgreSQL Bronze and Silver layers, update sync metadata",
         "tier": "native",
         "public": True,
         "tags": ["data", "connectors", "etl", "sync"],

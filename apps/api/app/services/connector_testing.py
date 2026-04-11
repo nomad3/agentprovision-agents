@@ -4,32 +4,6 @@ Service for testing connector configurations and establishing connections.
 from typing import Dict, Any
 
 
-async def test_snowflake_connection(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Test Snowflake connection."""
-    try:
-        import snowflake.connector
-        conn = snowflake.connector.connect(
-            account=config.get("account"),
-            user=config.get("user"),
-            password=config.get("password"),
-            warehouse=config.get("warehouse"),
-            database=config.get("database"),
-            schema=config.get("schema", "PUBLIC"),
-        )
-        cursor = conn.cursor()
-        cursor.execute("SELECT CURRENT_VERSION()")
-        version = cursor.fetchone()[0]
-        cursor.close()
-        conn.close()
-        return {
-            "success": True,
-            "message": "Connected to Snowflake successfully",
-            "metadata": {"version": version}
-        }
-    except Exception as e:
-        return {"success": False, "message": str(e), "metadata": None}
-
-
 async def test_postgres_connection(config: Dict[str, Any]) -> Dict[str, Any]:
     """Test PostgreSQL connection."""
     try:
@@ -119,26 +93,6 @@ async def test_gcs_connection(config: Dict[str, Any]) -> Dict[str, Any]:
         return {"success": False, "message": str(e), "metadata": None}
 
 
-async def test_databricks_connection(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Test Databricks connection."""
-    try:
-        from databricks import sql
-        host = config.get("host", "").replace("https://", "").rstrip("/")
-        with sql.connect(
-            server_hostname=host,
-            http_path=config.get("http_path"),
-            access_token=config.get("token"),
-        ) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("SELECT current_version()")
-                version = cursor.fetchone()[0]
-        return {
-            "success": True,
-            "message": "Connected to Databricks successfully",
-            "metadata": {"version": version, "host": host}
-        }
-    except Exception as e:
-        return {"success": False, "message": str(e), "metadata": None}
 
 
 async def test_api_connection(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,12 +124,10 @@ async def test_api_connection(config: Dict[str, Any]) -> Dict[str, Any]:
 
 # Registry of test functions per connector type
 CONNECTOR_TESTERS = {
-    "snowflake": test_snowflake_connection,
     "postgres": test_postgres_connection,
     "mysql": test_mysql_connection,
     "s3": test_s3_connection,
     "gcs": test_gcs_connection,
-    "databricks": test_databricks_connection,
     "api": test_api_connection,
 }
 
@@ -185,7 +137,7 @@ async def test_connector(connector_type: str, config: Dict[str, Any]) -> Dict[st
     Test a connector configuration.
 
     Args:
-        connector_type: Type of connector (snowflake, postgres, etc.)
+        connector_type: Type of connector (postgres, postgres, etc.)
         config: Configuration dictionary for the connector
 
     Returns:

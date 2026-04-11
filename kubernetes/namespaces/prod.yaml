@@ -1,11 +1,11 @@
 ---
-# Production namespace for ServiceTsunami services
+# Production namespace for AgentProvision services
 apiVersion: v1
 kind: Namespace
 metadata:
   name: prod
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: namespace
     environment: production
     # Pod Security Standards - restrict to secure defaults
@@ -22,7 +22,7 @@ kind: Namespace
 metadata:
   name: database
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: database
     environment: production
     # Baseline security for database workloads
@@ -39,7 +39,7 @@ kind: Namespace
 metadata:
   name: monitoring
   labels:
-    app.kubernetes.io/name: servicetsunami
+    app.kubernetes.io/name: agentprovision
     app.kubernetes.io/component: monitoring
     environment: production
     pod-security.kubernetes.io/enforce: baseline

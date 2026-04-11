@@ -6,9 +6,9 @@ Tools for connecting to and extracting data from PostgreSQL databases.
 import asyncpg
 from typing import Dict, Any
 
-from src.clients.api_client import ServiceTsunamiAPI
+from src.clients.api_client import AgentProvisionAPI
 
-api = ServiceTsunamiAPI()
+api = AgentProvisionAPI()
 
 
 async def connect_postgres(

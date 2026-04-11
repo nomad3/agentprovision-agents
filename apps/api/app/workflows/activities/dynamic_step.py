@@ -70,7 +70,7 @@ async def execute_dynamic_step(
         elif step_type == "cli_execute":
             activity.heartbeat("Delegating to CLI execution")
             params = step.get("params", {})
-            result = {"delegated_to": "servicetsunami-code", "task": params.get("task", step.get("task", ""))}
+            result = {"delegated_to": "agentprovision-code", "task": params.get("task", step.get("task", ""))}
         else:
             result = {"error": f"Unknown step type: {step_type}"}
 

@@ -30,7 +30,7 @@ pnpm install && pnpm build && pnpm lint
 
 ## Agent Hierarchy (ADK)
 
-The project uses a hierarchical multi-team structure in `apps/adk-server/servicetsunami_supervisor/`.
+The project uses a hierarchical multi-team structure in `apps/adk-server/agentprovision_supervisor/`.
 
 ### 1. Root Supervisor
 Routes user requests to the appropriate team supervisor. It does not have tools of its own.
@@ -39,7 +39,7 @@ Routes user requests to the appropriate team supervisor. It does not have tools 
 - **personal_assistant**: WhatsApp-native business co-pilot. Handles high-level scheduling, reminders, and general business inquiries.
 
 ### 3. Code Agent
-- **code_agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`servicetsunami-code` queue). Creates feature branches and PRs automatically.
+- **code_agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`agentprovision-code` queue). Creates feature branches and PRs automatically.
 
 ### 4. Data Team
 - **data_analyst**: Performs SQL queries and data analysis via MCP server.
@@ -83,7 +83,7 @@ Routes user requests to the appropriate team supervisor. It does not have tools 
 ### Python (API & ADK)
 
 - SQLAlchemy models with UUID primary keys, always include `tenant_id`.
-- ADK agents should be defined in `apps/adk-server/servicetsunami_supervisor/`.
+- ADK agents should be defined in `apps/adk-server/agentprovision_supervisor/`.
 - Tools should be modularized in `apps/adk-server/tools/`.
 - Import order: stdlib → third-party → local app.
 - Pydantic schemas for API validation.
@@ -106,7 +106,7 @@ When running as Luna via OpenCode with local Gemma 4:
 
 ### Required Tool Parameters
 
-ALL servicetsunami MCP tool calls MUST include:
+ALL agentprovision MCP tool calls MUST include:
 - `tenant_id`: `"0728db77-504d-452d-8c5d-9c26993b1829"`
 
 Never omit tenant_id — tools will fail without it.

@@ -1,6 +1,6 @@
 # ADK Removal Plan
 
-> Remove the Google ADK server from ServiceTsunami. All agent execution now runs via CLI orchestration (Claude Code CLI → MCP tools). ADK is fully redundant.
+> Remove the Google ADK server from AgentProvision. All agent execution now runs via CLI orchestration (Claude Code CLI → MCP tools). ADK is fully redundant.
 
 **Date:** 2026-03-16
 **Status:** Ready to execute
@@ -19,7 +19,7 @@
 
 ```
 apps/adk-server/                          # ENTIRE directory
-├── servicetsunami_supervisor/            # 25 agent Python files
+├── agentprovision_supervisor/            # 25 agent Python files
 │   ├── agent.py                         # Root supervisor
 │   ├── personal_assistant.py            # Luna (replaced by skill.md)
 │   ├── code_agent.py                    # Replaced by native Claude Code

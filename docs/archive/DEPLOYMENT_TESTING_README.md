@@ -1,4 +1,4 @@
-# Automated Deployment Testing for ServiceTsunami
+# Automated Deployment Testing for AgentProvision
 
 This document describes the automated testing integrated into the deployment process.
 
@@ -14,7 +14,7 @@ The `deploy.sh` script now includes automatic end-to-end testing that runs immed
 2. **Build & start containers** (API, Web, DB, Temporal)
 3. **Configure Nginx** with SSL
 4. **Wait for API to be ready** ⭐ NEW
-   - Polls `https://servicetsunami.com/api/v1/` for up to 60 seconds
+   - Polls `https://agentprovision.com/api/v1/` for up to 60 seconds
    - Ensures services are fully started before testing
 5. **Run E2E tests automatically** ⭐ NEW
    - Executes `scripts/e2e_test_production.sh`
@@ -104,7 +104,7 @@ You can run tests manually anytime:
 ./scripts/e2e_test_production.sh
 
 # Test against staging
-BASE_URL=https://staging.servicetsunami.com ./scripts/e2e_test_production.sh
+BASE_URL=https://staging.agentprovision.com ./scripts/e2e_test_production.sh
 
 # Test local development
 BASE_URL=http://localhost:8001 ./scripts/e2e_test_production.sh
@@ -149,7 +149,7 @@ docker-compose logs -f api
 sudo tail -f /var/log/nginx/error.log
 
 # Test API directly
-curl https://servicetsunami.com/api/v1/
+curl https://agentprovision.com/api/v1/
 ```
 
 ### Tests Pass Locally but Fail in Production

@@ -6,7 +6,7 @@
 
 ## Goal
 
-Integrate Gemma 4 into ServiceTsunami without inventing a fake new platform. The repo already has two valid seams for this work:
+Integrate Gemma 4 into AgentProvision without inventing a fake new platform. The repo already has two valid seams for this work:
 
 1. `gemini_llm` and the generic LLM model registry for hosted model selection
 2. Local/self-hosted inference services for open-weight execution
@@ -20,7 +20,7 @@ As of **April 2, 2026**, Google publicly announced Gemma 4 availability and Andr
 - Gemma can be invoked through the Gemini API as a managed path.
 - Gemma function calling is prompt-structured rather than token-native, so tool execution must remain application-controlled.
 
-That matters here because ServiceTsunami currently depends on structured tool usage, MCP execution, routing, and multi-provider abstractions.
+That matters here because AgentProvision currently depends on structured tool usage, MCP execution, routing, and multi-provider abstractions.
 
 ## Current Repo Fit
 

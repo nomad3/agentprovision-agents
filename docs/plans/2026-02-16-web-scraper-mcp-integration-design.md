@@ -2,13 +2,13 @@
 
 ## Overview
 
-Add Playwright-based web scraping to the ServiceTsunami MCP server for lead generation, market signals, and knowledge graph enrichment. Fix the MCP server to be production-ready (Helm chart, working endpoints, Playwright Docker image) and add generic scraping tools that the ADK web_researcher agent can use.
+Add Playwright-based web scraping to the AgentProvision MCP server for lead generation, market signals, and knowledge graph enrichment. Fix the MCP server to be production-ready (Helm chart, working endpoints, Playwright Docker image) and add generic scraping tools that the ADK web_researcher agent can use.
 
 ## Architecture
 
 ```
 ADK Server (port 8080)
-  ├── servicetsunami_supervisor (root agent)
+  ├── agentprovision_supervisor (root agent)
   │   ├── data_analyst
   │   ├── report_generator
   │   ├── knowledge_manager
@@ -18,7 +18,7 @@ ADK Server (port 8080)
   ↓ httpx (X-API-Key + X-Tenant-ID)
   │
 MCP Server (port 8000, exposed 8086)
-  ├── /tools/databricks_tools.py   (existing - Databricks queries)
+  ├── /tools/postgres_tools.py   (existing - PostgreSQL queries)
   ├── /tools/postgres.py           (existing - PostgreSQL connections)
   ├── /tools/ingestion.py          (existing - data ingestion)
   └── /tools/web_scraper.py        (NEW - Playwright scraping)
@@ -56,7 +56,7 @@ Lead scoring agents can query the graph for ranked prospects
 ### 1. MCP Server Fixes (make production-ready)
 
 - **Dockerfile**: Switch to `mcr.microsoft.com/playwright/python:v1.41.0-jammy` base
-- **Helm chart**: Create `helm/values/servicetsunami-mcp.yaml` (matches ADK pattern)
+- **Helm chart**: Create `helm/values/agentprovision-mcp.yaml` (matches ADK pattern)
 - **server.py**: Fix stub endpoints, add real health check
 - **deploy-all.yaml**: Add MCP build+deploy job
 
@@ -96,7 +96,7 @@ New generic capabilities:
 
 ### 4. ADK Web Researcher Agent
 
-New sub-agent in `servicetsunami_supervisor/web_researcher.py`:
+New sub-agent in `agentprovision_supervisor/web_researcher.py`:
 - Model: gemini-2.5-flash
 - Tools: scrape_webpage, scrape_structured_data, search_and_scrape
 - Also has access to knowledge tools (create_entity, find_entities) for storing results
@@ -129,15 +129,15 @@ New sub-agent in `servicetsunami_supervisor/web_researcher.py`:
 3. `apps/mcp-server/src/scrapers/__init__.py`
 4. `apps/mcp-server/src/scrapers/base_page.py` - Generic page object
 5. `apps/mcp-server/src/utils/retry.py` - Retry + circuit breaker (from dentalerp)
-6. `apps/adk-server/servicetsunami_supervisor/web_researcher.py` - New agent
+6. `apps/adk-server/agentprovision_supervisor/web_researcher.py` - New agent
 7. `apps/adk-server/tools/web_tools.py` - ADK tool wrappers calling MCP
-8. `helm/values/servicetsunami-mcp.yaml` - Helm values
+8. `helm/values/agentprovision-mcp.yaml` - Helm values
 
 ### Modified Files
 1. `apps/mcp-server/Dockerfile` - Playwright base image
 2. `apps/mcp-server/pyproject.toml` - Add playwright dependency
 3. `apps/mcp-server/src/server.py` - Fix stubs, add scraper endpoints
-4. `apps/adk-server/servicetsunami_supervisor/agent.py` - Add web_researcher sub-agent
-5. `apps/adk-server/services/databricks_client.py` - Add web scraper client methods
+4. `apps/adk-server/agentprovision_supervisor/agent.py` - Add web_researcher sub-agent
+5. `apps/adk-server/services/postgres_client.py` - Add web scraper client methods
 6. `apps/adk-server/requirements.txt` - No changes needed (uses httpx)
 7. `.github/workflows/deploy-all.yaml` - Add MCP build+deploy
