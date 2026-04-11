@@ -200,32 +200,13 @@ jobs:
           echo "Migrations: $APPLIED applied, $SKIPPED already applied"
           exit 0
 
-      # ── Ensure port-forwards and tunnel ──────────────────────
-      - name: Setup access (port-forward + cloudflare tunnel)
+      # ── Cloudflare Tunnel (in-cluster) ──────────────────────
+      - name: Deploy Cloudflare tunnel
         run: |
-          NS=$NAMESPACE
-
-          # Kill old port-forwards
-          pkill -f "kubectl port-forward" 2>/dev/null || true
-          sleep 1
-
-          # Start fresh port-forwards
-          kubectl port-forward -n $NS svc/api 8000:80 &>/dev/null &
-          kubectl port-forward -n $NS svc/web 8002:80 &>/dev/null &
-          sleep 3
-
-          # Restart cloudflare tunnel (picks up new port-forwards)
-          pkill -f "cloudflared tunnel" 2>/dev/null || true
-          sleep 2
-          cloudflared tunnel run agentprovision &>/tmp/cloudflared.log &
-          sleep 5
-
-          # Verify
-          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/api/v1/ 2>/dev/null || echo "000")
-          echo "API local: $API_STATUS"
-
-          TUNNEL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://agentprovision.com/api/v1/ 2>/dev/null || echo "000")
-          echo "API tunnel: $TUNNEL_STATUS"
+          kubectl apply -f kubernetes/cloudflared-deployment.yaml 2>/dev/null || true
+          sleep 10
+          TUNNEL=$(curl -s -o /dev/null -w "%{http_code}" https://agentprovision.com/api/v1/ 2>/dev/null || echo "000")
+          echo "Tunnel status: $TUNNEL"
 
       # ── Cleanup & Summary ────────────────────────────────────
       - name: Post-deploy cleanup
