@@ -30,10 +30,10 @@ securityContext:
 resources:
   requests:
     cpu: 200m
-    memory: 512Mi
-  limits:
-    cpu: 1000m
     memory: 1Gi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
 
 # Health checks - gRPC health probes via tonic-health
 livenessProbe:
@@ -41,19 +41,19 @@ livenessProbe:
   httpGet: null
   grpc:
     port: 50051
-  initialDelaySeconds: 30
+  initialDelaySeconds: 120
   periodSeconds: 15
-  timeoutSeconds: 5
-  failureThreshold: 3
+  timeoutSeconds: 10
+  failureThreshold: 5
 
 readinessProbe:
   enabled: true
   httpGet: null
   grpc:
     port: 50051
-  initialDelaySeconds: 10
+  initialDelaySeconds: 90
   periodSeconds: 10
-  timeoutSeconds: 5
+  timeoutSeconds: 10
   failureThreshold: 3
 
 # Service configuration

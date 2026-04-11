@@ -2,14 +2,11 @@ use tonic::{transport::Server, Request, Response, Status};
 use tonic_health::server::health_reporter;
 use embedding::v1::embedding_service_server::{EmbeddingService, EmbeddingServiceServer};
 use embedding::v1::{EmbedRequest, EmbedResponse, EmbedBatchRequest, EmbedBatchResponse, HealthResponse};
-use std::time::{Duration, Instant};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use candle_core::{Device, Tensor, DType};
-use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config};
-use hf_hub::{api::sync::Api, Repo};
-use tokenizers::Tokenizer;
+use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
+use tokio::sync::Mutex;
 
 pub mod embedding {
     pub mod v1 {
@@ -17,85 +14,18 @@ pub mod embedding {
     }
 }
 
-pub struct Model {
-    model: BertModel,
-    tokenizer: Tokenizer,
-    device: Device,
-}
-
-impl Model {
-    pub fn load() -> anyhow::Result<Self> {
-        let device = Device::Cpu; // Default to CPU for now
-        let api = Api::new()?;
-        let repo = api.repo(Repo::model("nomic-ai/nomic-embed-text-v1.5".to_string()));
-        
-        let config_filename = repo.get("config.json")?;
-        let tokenizer_filename = repo.get("tokenizer.json")?;
-        let weights_filename = repo.get("model.safetensors")?;
-
-        // Patch config: candle's Bert Config doesn't support "silu" activation.
-        // nomic-embed-text-v1.5 uses silu; map it to gelu (functionally close enough
-        // for embedding — the weights were trained with silu but gelu produces
-        // comparable embeddings at this scale).
-        let config_raw = std::fs::read_to_string(&config_filename)?;
-        let config_patched = config_raw.replace("\"silu\"", "\"gelu\"");
-        let config: Config = serde_json::from_str(&config_patched)?;
-        let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
-        
-        let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[weights_filename], DType::F32, &device)?
-        };
-        let model = BertModel::load(vb, &config)?;
-
-        Ok(Self {
-            model,
-            tokenizer,
-            device,
-        })
-    }
-
-    pub fn embed(&self, text: &str, task_type: &str) -> anyhow::Result<Vec<f32>> {
-        let prefix = match task_type {
-            "search_query" => "search_query: ",
-            "search_document" => "search_document: ",
-            "classification" => "classification: ",
-            "clustering" => "clustering: ",
-            _ => "",
-        };
-        let full_text = format!("{}{}", prefix, text);
-
-        let tokens = self.tokenizer.encode(full_text, true).map_err(anyhow::Error::msg)?;
-        let token_ids = tokens.get_ids();
-        let input_ids = Tensor::new(token_ids, &self.device)?.unsqueeze(0)?;
-        let token_type_ids = Tensor::new(vec![0u32; token_ids.len()], &self.device)?.unsqueeze(0)?;
-        
-        // Attention mask: 1 for tokens, 0 for padding
-        let attention_mask = Tensor::new(vec![1u32; token_ids.len()], &self.device)?.unsqueeze(0)?;
-        
-        let embeddings = self.model.forward(&input_ids, &token_type_ids, Some(&attention_mask))?;
-        
-        // Mean pooling
-        let (_n_batch, n_tokens, _hidden_size) = embeddings.dims3()?;
-        let embeddings = (embeddings.sum(1)? / (n_tokens as f64))?;
-        let embeddings = embeddings.get(0)?;
-        
-        // L2 normalization
-        let norm = embeddings.sqr()?.sum_all()?.sqrt()?;
-        let embeddings = (embeddings / norm)?;
-        
-        Ok(embeddings.to_vec1()?)
-    }
-}
-
+/// Wraps fastembed::TextEmbedding (which uses ONNX Runtime internally).
+/// fastembed handles model download, tokenization, ONNX inference, and
+/// normalization — we just call embed() and get 768-dim vectors back.
 pub struct MyEmbeddingService {
-    model: Arc<Model>,
+    model: Arc<Mutex<TextEmbedding>>,
     start_time: Instant,
 }
 
 impl MyEmbeddingService {
-    pub fn new(model: Model) -> Self {
+    pub fn new(model: TextEmbedding) -> Self {
         Self {
-            model: Arc::new(model),
+            model: Arc::new(Mutex::new(model)),
             start_time: Instant::now(),
         }
     }
@@ -105,15 +35,28 @@ impl MyEmbeddingService {
 impl EmbeddingService for MyEmbeddingService {
     async fn embed(&self, request: Request<EmbedRequest>) -> Result<Response<EmbedResponse>, Status> {
         let req = request.into_inner();
+        let prefix = match req.task_type.as_str() {
+            "search_query" => "search_query: ",
+            "search_document" => "search_document: ",
+            "classification" => "classification: ",
+            "clustering" => "clustering: ",
+            _ => "",
+        };
+        let text = format!("{}{}", prefix, req.text);
+
         let model = self.model.clone();
-        
         let vector = tokio::task::spawn_blocking(move || {
-            model.embed(&req.text, &req.task_type)
-        }).await.map_err(|e| Status::internal(e.to_string()))?
-          .map_err(|e| Status::internal(e.to_string()))?;
+            let m = model.blocking_lock();
+            m.embed(vec![text], None)
+        }).await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(|e| Status::internal(format!("embed error: {}", e)))?;
+
+        let vec = vector.into_iter().next()
+            .ok_or_else(|| Status::internal("no embedding returned"))?;
 
         Ok(Response::new(EmbedResponse {
-            vector,
+            vector: vec,
             model: "nomic-embed-text-v1.5".to_string(),
             dimensions: 768,
         }))
@@ -121,27 +64,32 @@ impl EmbeddingService for MyEmbeddingService {
 
     async fn embed_batch(&self, request: Request<EmbedBatchRequest>) -> Result<Response<EmbedBatchResponse>, Status> {
         let req = request.into_inner();
+        let task_type = req.task_type.clone();
+        let prefix = match task_type.as_str() {
+            "search_query" => "search_query: ",
+            "search_document" => "search_document: ",
+            "classification" => "classification: ",
+            "clustering" => "clustering: ",
+            _ => "",
+        };
+
+        let texts: Vec<String> = req.texts.iter()
+            .map(|t| format!("{}{}", prefix, t))
+            .collect();
+
         let model = self.model.clone();
+        let vectors = tokio::task::spawn_blocking(move || {
+            let m = model.blocking_lock();
+            m.embed(texts, None)
+        }).await
+            .map_err(|e| Status::internal(format!("join error: {}", e)))?
+            .map_err(|e| Status::internal(format!("batch embed error: {}", e)))?;
 
-        // Spawn all blocking tasks in parallel
-        let handles: Vec<_> = req.texts.into_iter().map(|text| {
-            let m = model.clone();
-            let tt = req.task_type.clone();
-            tokio::task::spawn_blocking(move || m.embed(&text, &tt))
+        let results = vectors.into_iter().map(|v| EmbedResponse {
+            vector: v,
+            model: "nomic-embed-text-v1.5".to_string(),
+            dimensions: 768,
         }).collect();
-
-        // Await all results in order
-        let mut results = Vec::with_capacity(handles.len());
-        for handle in handles {
-            let vector = handle.await
-                .map_err(|e| Status::internal(e.to_string()))?
-                .map_err(|e| Status::internal(e.to_string()))?;
-            results.push(EmbedResponse {
-                vector,
-                model: "nomic-embed-text-v1.5".to_string(),
-                dimensions: 768,
-            });
-        }
 
         Ok(Response::new(EmbedBatchResponse { results }))
     }
@@ -159,8 +107,17 @@ impl EmbeddingService for MyEmbeddingService {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    println!("Loading model...");
-    let model = Model::load()?;
+    tracing::info!("Loading nomic-embed-text-v1.5 via fastembed (ONNX Runtime)...");
+    let model = TextEmbedding::try_new(
+        InitOptions::new(EmbeddingModel::NomicEmbedTextV15)
+            .with_show_download_progress(true)
+    )?;
+
+    // Warmup
+    tracing::info!("Warming up...");
+    let test = model.embed(vec!["warmup"], None)?;
+    tracing::info!("Warmup: {} dimensions", test[0].len());
+
     let service = MyEmbeddingService::new(model);
 
     let (mut health_reporter, health_service) = health_reporter();
@@ -169,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
     let addr = "0.0.0.0:50051".parse()?;
-    println!("EmbeddingService listening on {}", addr);
+    tracing::info!("EmbeddingService listening on {}", addr);
 
     Server::builder()
         .timeout(Duration::from_secs(30))
