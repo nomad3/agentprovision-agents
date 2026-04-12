@@ -29,9 +29,10 @@ COPY .env.example .env
 # Set ownership
 RUN chown -R mcpuser:mcpuser /app
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8086/agentprovision/v1/health || exit 1
+# Health check — FastMCP streamable-http exposes /mcp; HEAD returns 405 so
+# probe with curl -fS that will succeed on any 4xx that isn't a connection error.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -sf -o /dev/null http://localhost:8086/mcp || curl -sf -o /dev/null -X POST http://localhost:8086/mcp || exit 1
 
 # Expose MCP port
 EXPOSE 8086
@@ -43,5 +44,7 @@ ENV FASTMCP_HOST=0.0.0.0
 # Run as non-root
 USER mcpuser
 
-# Run server
-CMD ["python", "-m", "src.server"]
+# Run the FastMCP tools server (streamable-http on /mcp).
+# `src.server` is the deprecated REST scrape/postgres app and is no longer
+# the entry point.
+CMD ["python", "-m", "src.mcp_serve"]

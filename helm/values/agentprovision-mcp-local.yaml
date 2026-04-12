@@ -11,7 +11,9 @@ replicaCount: 1
 
 container:
   port: 8086
-  command: ["python", "-m", "src.server"]
+  # Run the FastMCP tools server (streamable-http on /mcp).
+  # `src.server` is the deprecated REST scrape/postgres app.
+  command: ["python", "-m", "src.mcp_serve"]
 
 podSecurityContext:
   runAsNonRoot: false

@@ -7,7 +7,7 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
     host="0.0.0.0",
-    port=8000,
+    port=8086,
     # Disable DNS rebinding protection for Docker internal networking
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=False,

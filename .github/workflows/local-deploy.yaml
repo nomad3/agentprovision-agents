@@ -62,7 +62,7 @@ jobs:
 
       - name: Verify K8s context
         run: |
-          kubectl config use-context docker-desktop
+          kubectl config use-context k3d-agentprovision
           kubectl get ns $NAMESPACE 2>/dev/null || kubectl create ns $NAMESPACE
 
       - name: Clean Docker disk (threshold-based)
@@ -89,19 +89,45 @@ jobs:
             docker build -t "$name:latest" "$path" --quiet && echo "  OK: $name" || echo "  FAILED: $name"
           }
 
+          BUILT_IMAGES=""
           if echo "$SERVICES" | grep -q "api"; then
             build_img agentprovision-api ./apps/api
             docker tag agentprovision-api:latest agentprovision-orchestration-worker:latest
             echo "  Tagged orchestration-worker from api"
+            BUILT_IMAGES="$BUILT_IMAGES agentprovision-api:latest agentprovision-orchestration-worker:latest"
           fi
 
-          if echo "$SERVICES" | grep -q "web"; then build_img agentprovision-web ./apps/web; fi
+          if echo "$SERVICES" | grep -q "web"; then
+            build_img agentprovision-web ./apps/web
+            BUILT_IMAGES="$BUILT_IMAGES agentprovision-web:latest"
+          fi
 
-          if echo "$SERVICES" | grep -q "code-worker"; then build_img agentprovision-code-worker ./apps/code-worker; fi
+          if echo "$SERVICES" | grep -q "code-worker"; then
+            build_img agentprovision-code-worker ./apps/code-worker
+            BUILT_IMAGES="$BUILT_IMAGES agentprovision-code-worker:latest"
+          fi
 
-          if echo "$SERVICES" | grep -q "embedding-service"; then build_img agentprovision-embedding-service ./apps/embedding-service; fi
+          if echo "$SERVICES" | grep -q "embedding-service"; then
+            build_img agentprovision-embedding-service ./apps/embedding-service
+            BUILT_IMAGES="$BUILT_IMAGES agentprovision-embedding-service:latest"
+          fi
 
-          if echo "$SERVICES" | grep -q "memory-core"; then build_img agentprovision-memory-core ./apps/memory-core; fi
+          if echo "$SERVICES" | grep -q "memory-core"; then
+            build_img agentprovision-memory-core ./apps/memory-core
+            BUILT_IMAGES="$BUILT_IMAGES agentprovision-memory-core:latest"
+          fi
+
+          echo "BUILT_IMAGES=$BUILT_IMAGES" >> $GITHUB_ENV
+
+      # ── Import images into k3d cluster ───────────────────────
+      # k3d nodes don't see host docker images. We must import explicitly.
+      # Without this, the cluster runs stale images even after a successful
+      # docker build.
+      - name: Import images into k3d
+        if: env.BUILT_IMAGES != ''
+        run: |
+          echo "Importing into k3d-agentprovision: $BUILT_IMAGES"
+          k3d image import $BUILT_IMAGES --cluster agentprovision --mode direct 2>&1 | tail -10
 
       # ── Deploy via Helm ──────────────────────────────────────
       - name: Deploy services (Helm)
@@ -123,12 +149,41 @@ jobs:
           deploy temporal "-f $V/temporal-local.yaml"
 
           # Application services (only if changed)
-          if echo "$SERVICES" | grep -q "api"; then deploy api "-f $V/agentprovision-api-local.yaml"; fi
-          if echo "$SERVICES" | grep -q "orchestration-worker"; then deploy orchestration-worker "-f $V/agentprovision-orchestration-worker-local.yaml"; fi
-          if echo "$SERVICES" | grep -q "web"; then deploy web "-f $V/agentprovision-web-local.yaml"; fi
-          if echo "$SERVICES" | grep -q "code-worker"; then deploy code-worker "-f $V/agentprovision-code-worker-local.yaml"; fi
-          if echo "$SERVICES" | grep -q "embedding-service"; then deploy embedding-service "-f $V/embedding-service.yaml -f $V/embedding-service-local.yaml"; fi
-          if echo "$SERVICES" | grep -q "memory-core"; then deploy memory-core "-f $V/memory-core.yaml -f $V/memory-core-local.yaml"; fi
+          ROLLOUT_DEPLOYS=""
+          if echo "$SERVICES" | grep -q "api"; then
+            deploy api "-f $V/agentprovision-api-local.yaml"
+            ROLLOUT_DEPLOYS="$ROLLOUT_DEPLOYS api orchestration-worker"
+          fi
+          if echo "$SERVICES" | grep -q "orchestration-worker"; then
+            deploy orchestration-worker "-f $V/agentprovision-orchestration-worker-local.yaml"
+            ROLLOUT_DEPLOYS="$ROLLOUT_DEPLOYS orchestration-worker"
+          fi
+          if echo "$SERVICES" | grep -q "web"; then
+            deploy web "-f $V/agentprovision-web-local.yaml"
+            ROLLOUT_DEPLOYS="$ROLLOUT_DEPLOYS web"
+          fi
+          if echo "$SERVICES" | grep -q "code-worker"; then
+            deploy code-worker "-f $V/agentprovision-code-worker-local.yaml"
+            ROLLOUT_DEPLOYS="$ROLLOUT_DEPLOYS code-worker"
+          fi
+          if echo "$SERVICES" | grep -q "embedding-service"; then
+            deploy embedding-service "-f $V/embedding-service.yaml -f $V/embedding-service-local.yaml"
+            ROLLOUT_DEPLOYS="$ROLLOUT_DEPLOYS embedding-service"
+          fi
+          if echo "$SERVICES" | grep -q "memory-core"; then
+            deploy memory-core "-f $V/memory-core.yaml -f $V/memory-core-local.yaml"
+            ROLLOUT_DEPLOYS="$ROLLOUT_DEPLOYS memory-core"
+          fi
+
+          # Force a rollout on every deploy whose image changed.
+          # `helm upgrade --install` is a no-op when neither values nor chart
+          # changed, but the underlying image content DID change (we just
+          # imported it). Without this, pods keep running the previous image.
+          for d in $(echo "$ROLLOUT_DEPLOYS" | tr ' ' '\n' | sort -u); do
+            [ -z "$d" ] && continue
+            echo "--- Rolling out $d ---"
+            kubectl rollout restart deploy/$d -n $NS 2>/dev/null || true
+          done
 
           # Restart workers if API image changed (they share the image)
           if echo "$SERVICES" | grep -q "api"; then

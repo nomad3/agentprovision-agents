@@ -282,7 +282,7 @@ Each CLI platform uses subscription-based OAuth — zero API credits:
 |----------|------|--------|
 | Claude Code | OAuth token via vault | **Live** |
 | Codex (OpenAI) | auth.json via vault | **Live** |
-| Gemini CLI | Google OAuth | Integrated, untested |
+| Gemini CLI | Manual OAuth (via Web UI) | **Live** |
 | GitHub | OAuth via agentprovision.com | **Live** |
 | Gmail/Calendar | Google OAuth with auto-refresh | **Live** |
 | Microsoft/Outlook | Microsoft OAuth | Wired |
@@ -293,20 +293,27 @@ Each CLI platform uses subscription-based OAuth — zero API credits:
 ```bash
 git clone https://github.com/nomad3/agentprovision-agents.git
 cd agentprovision-agents
-DB_PORT=8003 API_PORT=8001 WEB_PORT=8002 docker-compose up --build
 
-# Web:           http://localhost:8002
-# API:           http://localhost:8001
-# Luna Client:   http://localhost:8009
-# MCP Tools:     http://localhost:8087
-# Temporal UI:   http://localhost:8233
-# Demo login:    test@example.com / password
+# 1. Create local K8s cluster (requires k3d)
+k3d cluster create agentprovision --servers 1 --agents 2 \
+  --port "8000:80@loadbalancer" \
+  --port "8002:8002@loadbalancer" \
+  --port "5432:5432@loadbalancer"
+
+# 2. Build and deploy all services via Helm
+./scripts/deploy_k8s_local.sh
+
+# Web:           https://agentprovision.com (local tunnel) or http://localhost:8002
+# API:           https://agentprovision.com/api/v1/
+# Luna Client:   https://luna.agentprovision.com
+# Demo login:    saguilera1608@gmail.com / password
 ```
 
 ### Connect Your Agent
-1. **Integrations** -> Claude Code -> run `claude setup-token` -> paste token
-2. Chat via web, WhatsApp, or Luna desktop — Luna responds via your subscription
-3. Every response auto-scored and logged for RL improvement
+1. **Claude Code**: Integrations -> Claude Code -> run `claude setup-token` -> paste token
+2. **Gemini CLI**: Integrations -> Connect Gemini CLI -> follow link -> paste code
+3. Chat via web, WhatsApp, or Luna desktop — Luna responds via your subscription
+4. Every response auto-scored and logged for RL improvement
 
 ## Luna OS Roadmap
 
@@ -325,7 +332,7 @@ See `docs/plans/2026-03-29-luna-native-operating-system-plan.md` for the full ma
 
 ## Stack
 
-FastAPI . React 18 . Tauri 2.0 (Rust) . PostgreSQL + pgvector . Temporal . FastMCP . Ollama (Gemma 4) . Neonize (WhatsApp) . Cloudflare Tunnel . Docker Compose . nomic-embed-text-v1.5
+FastAPI . React 18 . Tauri 2.0 (Rust) . PostgreSQL + pgvector . Temporal . FastMCP . Ollama (Gemma 4) . Neonize (WhatsApp) . Cloudflare Tunnel . Kubernetes (k3d) . Helm . nomic-embed-text-v1.5
 
 ## Documentation
 

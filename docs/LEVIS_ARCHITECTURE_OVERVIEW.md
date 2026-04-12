@@ -120,7 +120,7 @@ The platform enforces strict collaboration patterns. A handoff is a state transi
 *   **Short-Lived Access:** Tokens are injected into the agent's environment only for the duration of the specific activity execution and are never stored in plain text in logs.
 
 ### 4.3. Deployment & Hosting
-*   **Kubernetes-Native:** The entire stack runs on Kubernetes (Rancher Desktop locally, any K8s cluster for enterprise). 9 pods: API, Web, Code-Worker, Orchestration-Worker, Embedding-Service (Rust), Memory-Core (Rust), PostgreSQL, Redis, Temporal.
+*   **Kubernetes-Native:** The entire stack runs on Kubernetes (Rancher Desktop locally, any K8s cluster for enterprise). 11 pods: API, Web, Luna-Client, Code-Worker, Orchestration-Worker, Embedding-Service (Rust), Memory-Core (Rust), PostgreSQL, Redis, Temporal, Cloudflared.
 *   **Helm-Based:** Single reusable Helm chart (`microservice`) with per-service values files. One `helm install` deploys the full platform.
 *   **Cloudflare Tunnel (In-Cluster):** Runs as a K8s pod routing `agentprovision.com` to internal services by DNS name. No port-forwards or external load balancer needed.
 *   **On-Premise Ready:** Each customer runs their own K8s cluster. Data stays in-cluster. No egress except the tunnel endpoint.
