@@ -29,11 +29,19 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Start browser service on startup, shut down on exit."""
     browser_service = get_browser_service()
-    await browser_service.start()
-    logger.info("Browser service started during lifespan")
+    try:
+        await browser_service.start()
+        logger.info("Browser service started during lifespan")
+    except Exception as e:
+        logger.warning(f"Browser service failed to start (scraping will be disabled): {e}")
+    
     yield
-    await browser_service.stop()
-    logger.info("Browser service stopped during lifespan")
+    
+    try:
+        await browser_service.stop()
+        logger.info("Browser service stopped during lifespan")
+    except Exception:
+        pass
 
 
 app = FastAPI(

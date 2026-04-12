@@ -30,8 +30,8 @@ neonize>=0.3.14
 segno
 pdfplumber>=0.10.0
 pgvector>=0.3.6
-sentence-transformers>=3.0.0
-einops
+# sentence-transformers (Moved to embedding-service)
+# einops (Moved to embedding-service)
 protobuf>=5.26.1,<7.0.0
 grpcio>=1.62.0
 grpcio-tools>=1.62.0

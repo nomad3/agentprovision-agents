@@ -1463,6 +1463,8 @@ def _execute_gemini_chat(task_input: ChatCliInput, session_dir: str, image_path:
 
     cmd = [
         "gemini",
+        "--auth",
+        "oauth-personal",
         "-p",
         prompt,
         "-y",
@@ -1489,6 +1491,7 @@ def _execute_gemini_chat(task_input: ChatCliInput, session_dir: str, image_path:
     if api_key:
         env["GEMINI_API_KEY"] = api_key
     else:
+        env["GEMINI_AUTH_TOKEN"] = auth_payload.get("access_token")
         env.pop("GOOGLE_APPLICATION_CREDENTIALS", None)
 
     logger.info("GEMINI_HOME: %s", gemini_home)
@@ -1576,31 +1579,46 @@ def _prepare_gemini_home(session_dir: str, auth_payload: dict, mcp_config_json: 
         oauth_creds = {
             "access_token": auth_payload.get("access_token"),
             "refresh_token": auth_payload.get("refresh_token"),
-            "scope": "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
+            "scope": "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile openid",
             "token_type": "Bearer",
             "expiry_date": expiry_ms,
+            "client_id": os.environ.get("GOOGLE_CLIENT_ID", ""),
+            "client_secret": os.environ.get("GOOGLE_CLIENT_SECRET", ""),
         }
 
-    # Write the credentials file with the exact filename Gemini CLI 0.37.1 reads
-    with open(os.path.join(gemini_home, "oauth_creds.json"), "w") as f:
-        json.dump(oauth_creds, f, indent=2)
+    # Write BOTH names as different versions/platforms look for different files
+    for fname in ["credentials.json", "oauth_creds.json"]:
+        with open(os.path.join(gemini_home, fname), "w") as f:
+            json.dump(oauth_creds, f, indent=2)
 
     # Pre-create projects.json (avoids rename ENOENT errors on startup)
     with open(os.path.join(gemini_home, "projects.json"), "w") as f:
         json.dump({"projects": {}}, f, indent=2)
 
-    # Pre-set the active Google account (avoids "set Auth method in settings.json")
-    active_email = auth_payload.get("email") or "user@gemini"
+    # Pre-set the active Google account
+    active_email = auth_payload.get("email") or "personal"
     with open(os.path.join(gemini_home, "google_accounts.json"), "w") as f:
-        json.dump({"active": active_email, "old": []}, f, indent=2)
+        json.dump({
+            "activeAccount": "personal",
+            "accounts": {
+                "personal": {
+                    "email": active_email,
+                    "access_token": auth_payload.get("access_token"),
+                    "refresh_token": auth_payload.get("refresh_token")
+                }
+            }
+        }, f, indent=2)
 
-    # settings.json with selectedType: oauth-personal so the CLI doesn't
-    # prompt for an auth method on first run
+    # settings.json for auth enforcement and feature disabling
     settings = {
         "security": {
             "auth": {
+                "enforcedType": "oauth-personal",
                 "selectedType": "oauth-personal"
             }
+        },
+        "cloudCodeAssist": {
+            "enabled": False
         },
         "telemetry": {
             "enabled": False

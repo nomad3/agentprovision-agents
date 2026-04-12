@@ -1,8 +1,8 @@
 """Embedding service — generate, store, and search vector embeddings.
 
-Uses nomic-embed-text-v1.5 (768-dim) via sentence-transformers for local,
-API-key-free embedding generation. All functions are module-level, matching
-the service pattern used elsewhere.
+Uses Rust gRPC service (fastembed/ONNX) for local, API-key-free embedding 
+generation. All functions are module-level, matching the service pattern 
+used elsewhere.
 """
 import logging
 import os
@@ -18,14 +18,12 @@ from app.models.embedding import Embedding
 
 logger = logging.getLogger(__name__)
 
-# Lazy-initialized sentence-transformers model
-_model = None
 _grpc_channel = None
 _grpc_stub = None
 
-_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 _DIMENSIONS = 768
 _MAX_INPUT_CHARS = 8000
+_MODEL_NAME = "nomic-ai/nomic-embed-text-v1.5"
 
 try:
     import grpc as _grpc
@@ -69,7 +67,6 @@ def _get_grpc_stub():
 
 
 # Canonical intent definitions for tier routing
-# Language-agnostic via nomic multilingual embeddings
 INTENT_DEFINITIONS = [
     {"name": "greeting or small talk", "tier": "light", "tools": [], "mutation": False},
     {"name": "check calendar or schedule or upcoming events", "tier": "light", "tools": ["calendar"], "mutation": False},
@@ -104,118 +101,6 @@ INTENT_DEFINITIONS = [
 # In-memory intent embedding cache (populated at startup)
 _intent_cache: list | None = None
 
-_model_loading = False
-_model_load_failures = 0
-_MAX_LOAD_RETRIES = 3
-
-
-def _expand_intents_with_translations() -> list:
-    """Use local Ollama to translate intent definitions for multilingual matching."""
-    from app.services.local_inference import generate_sync  # deferred: avoids circular import
-
-    languages_str = os.environ.get("INTENT_EXPANSION_LANGUAGES", "").strip()
-    if not languages_str:
-        return []
-
-    languages = [lang.strip() for lang in languages_str.split(",") if lang.strip()]
-    if not languages:
-        return []
-
-    logger.info("Expanding intent embeddings for languages: %s", languages)
-    additional: list = []
-
-    for intent_def in INTENT_DEFINITIONS:
-        for language in languages:
-            try:
-                translation = generate_sync(
-                    prompt=(
-                        f'Translate this phrase to {language}: "{intent_def["name"]}"\n'
-                        f"Return ONLY the translated phrase, nothing else."
-                    ),
-                    temperature=0.1,
-                    max_tokens=60,
-                    timeout=8.0,
-                )
-                if translation and translation.strip():
-                    cleaned = translation.strip().strip('"').strip("'")
-                    additional.append({**intent_def, "name": cleaned})
-            except Exception as exc:
-                logger.debug(
-                    "Translation failed for '%s' → %s: %s",
-                    intent_def["name"], language, exc,
-                )
-
-    logger.info(
-        "Intent expansion: %d translations (%d intents × %d languages)",
-        len(additional), len(INTENT_DEFINITIONS), len(languages),
-    )
-    return additional
-
-
-def _get_model():
-    """Lazy-init the sentence-transformers model with retry and timeout protection."""
-    global _model, _model_loading, _model_load_failures
-    if _model is not None:
-        return _model
-    if _model_loading:
-        return None  # Another thread is loading — skip
-    if _model_load_failures >= _MAX_LOAD_RETRIES:
-        return None  # Too many failures — stop trying until restart
-
-    _model_loading = True
-    try:
-        import signal
-        import threading
-        from sentence_transformers import SentenceTransformer
-
-        # Load model with a timeout (120s) to prevent hanging on HF download
-        loaded = [None]
-        error = [None]
-
-        def _load():
-            try:
-                from sentence_transformers import SentenceTransformer, models
-                # Attempt standard load
-                try:
-                    loaded[0] = SentenceTransformer(_MODEL_NAME, trust_remote_code=True)
-                except TypeError as te:
-                    if "word_embedding_dimension" in str(te):
-                        logger.info("Nomic pooling bug detected — applying manual layer fix")
-                        # Manual assembly to bypass the broken __init__ in some ST versions
-                        word_embedding_model = models.Transformer(_MODEL_NAME, max_seq_length=2048)
-                        pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
-                        loaded[0] = SentenceTransformer(modules=[word_embedding_model, pooling_model])
-                    else:
-                        raise
-            except Exception as e:
-                error[0] = e
-
-        t = threading.Thread(target=_load, daemon=True)
-        t.start()
-        t.join(timeout=120)
-
-        if t.is_alive():
-            logger.warning("Embedding model load timed out (120s) — API continues without embeddings")
-            _model_load_failures += 1
-            return None
-
-        if error[0]:
-            logger.warning("Embedding model load failed: %s (attempt %d/%d)",
-                          error[0], _model_load_failures + 1, _MAX_LOAD_RETRIES)
-            _model_load_failures += 1
-            return None
-
-        _model = loaded[0]
-        _model_load_failures = 0
-        logger.info("Loaded embedding model: %s", _MODEL_NAME)
-        return _model
-    except Exception:
-        logger.exception("Failed to load embedding model %s", _MODEL_NAME)
-        _model_load_failures += 1
-        return None
-    finally:
-        _model_loading = False
-
 
 # ------------------------------------------------------------------
 # Core: embed text
@@ -225,52 +110,30 @@ def embed_text(
     text_content: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
 ) -> Optional[List[float]]:
-    """Generate a 768-dim embedding for *text_content*.
-
-    Tries Rust gRPC service first if USE_RUST_EMBEDDING=true.
-    Falls back to local sentence-transformers on error or if disabled.
-    """
-    use_rust = os.environ.get("USE_RUST_EMBEDDING", "false").lower() == "true"
-    if use_rust:
-        stub = _get_grpc_stub()
-        if stub:
-            try:
-                from app.generated import embedding_pb2
-                # Map Python task types to Proto task types
-                rust_task = "search_document"
-                if task_type == "RETRIEVAL_QUERY":
-                    rust_task = "search_query"
-                
-                req = embedding_pb2.EmbedRequest(
-                    text=text_content[:_MAX_INPUT_CHARS],
-                    task_type=rust_task
-                )
-                resp = stub.Embed(req, timeout=5.0)
-                return list(resp.vector)
-            except Exception as e:
-                global _grpc_stub, _grpc_channel
-                _grpc_stub = None
-                _grpc_channel = None
-                logger.warning("Rust embedding failed (will reconnect), falling back to Python: %s", e)
-
-    model = _get_model()
-    if model is None:
-        logger.debug("embed_text skipped — model not loaded")
+    """Generate a 768-dim embedding for *text_content* via Rust gRPC service."""
+    stub = _get_grpc_stub()
+    if not stub:
+        logger.error("Rust embedding service not available")
         return None
 
     try:
-        truncated = text_content[:_MAX_INPUT_CHARS]
-
-        # Nomic-embed uses task-specific prefixes
+        from app.generated import embedding_pb2
+        # Map Python task types to Proto task types
+        rust_task = "search_document"
         if task_type == "RETRIEVAL_QUERY":
-            prefixed = f"search_query: {truncated}"
-        else:
-            prefixed = f"search_document: {truncated}"
-
-        embedding = model.encode(prefixed, normalize_embeddings=True)
-        return embedding.tolist()
-    except Exception:
-        logger.exception("embed_text failed")
+            rust_task = "search_query"
+        
+        req = embedding_pb2.EmbedRequest(
+            text=text_content[:_MAX_INPUT_CHARS],
+            task_type=rust_task
+        )
+        resp = stub.Embed(req, timeout=10.0)
+        return list(resp.vector)
+    except Exception as e:
+        global _grpc_stub, _grpc_channel
+        _grpc_stub = None
+        _grpc_channel = None
+        logger.error("Rust embedding failed: %s", e)
         return None
 
 
@@ -278,41 +141,25 @@ def embed_batch(
     texts: List[str],
     task_type: str = "RETRIEVAL_DOCUMENT",
 ) -> List[Optional[List[float]]]:
-    """Generate embeddings for a list of strings in bulk."""
-    use_rust = os.environ.get("USE_RUST_EMBEDDING", "false").lower() == "true"
-    if use_rust:
-        stub = _get_grpc_stub()
-        if stub:
-            try:
-                from app.generated import embedding_pb2
-                rust_task = "search_document"
-                if task_type == "RETRIEVAL_QUERY":
-                    rust_task = "search_query"
-                
-                req = embedding_pb2.EmbedBatchRequest(
-                    texts=[t[:_MAX_INPUT_CHARS] for t in texts],
-                    task_type=rust_task
-                )
-                resp = stub.EmbedBatch(req, timeout=30.0)
-                return [list(r.vector) for r in resp.results]
-            except Exception as e:
-                logger.warning("Rust batch embedding failed, falling back to Python: %s", e)
-
-    model = _get_model()
-    if model is None:
+    """Generate embeddings for a list of strings in bulk via Rust gRPC."""
+    stub = _get_grpc_stub()
+    if not stub:
         return [None] * len(texts)
 
     try:
-        # Nomic-embed uses task-specific prefixes
-        prefix = "search_document: "
+        from app.generated import embedding_pb2
+        rust_task = "search_document"
         if task_type == "RETRIEVAL_QUERY":
-            prefix = "search_query: "
-            
-        prefixed = [f"{prefix}{t[:_MAX_INPUT_CHARS]}" for t in texts]
-        embeddings = model.encode(prefixed, normalize_embeddings=True)
-        return [emb.tolist() for emb in embeddings]
-    except Exception:
-        logger.exception("embed_batch failed")
+            rust_task = "search_query"
+        
+        req = embedding_pb2.EmbedBatchRequest(
+            texts=[t[:_MAX_INPUT_CHARS] for t in texts],
+            task_type=rust_task
+        )
+        resp = stub.EmbedBatch(req, timeout=60.0)
+        return [list(r.vector) for r in resp.results]
+    except Exception as e:
+        logger.error("Rust batch embedding failed: %s", e)
         return [None] * len(texts)
 
 
@@ -439,7 +286,7 @@ def search_entities_semantic(
     query_embedding: List[float],
     limit: int = 30,
 ) -> List[Dict]:
-    """Search entities via cosine similarity on embeddings table (content_type='entity')."""
+    """Search knowledge_entities via cosine similarity on embeddings table."""
     vector_literal = "[" + ",".join(str(v) for v in query_embedding) + "]"
 
     sql = text(f"""
@@ -480,62 +327,31 @@ def search_entities_semantic(
 # ------------------------------------------------------------------
 
 def initialize_intent_embeddings():
-    """Embed canonical intents at API startup. Call once from main.py."""
+    """Embed canonical intents at API startup via Rust gRPC. Call once from main.py."""
     global _intent_cache
     
-    # Try Rust first for initialization speed
-    use_rust = os.environ.get("USE_RUST_EMBEDDING", "false").lower() == "true"
-    if use_rust:
-        stub = _get_grpc_stub()
-        if stub:
-            try:
-                from app.generated import embedding_pb2
-                all_intents = list(INTENT_DEFINITIONS)
-                try:
-                    additional = _expand_intents_with_translations()
-                    if additional:
-                        all_intents.extend(additional)
-                except Exception: pass
-                
-                req = embedding_pb2.EmbedBatchRequest(
-                    texts=[f"search_query: {i['name']}" for i in all_intents],
-                    task_type="search_query"
-                )
-                resp = stub.EmbedBatch(req, timeout=60.0)
-                _intent_cache = []
-                for i, r in enumerate(resp.results):
-                    _intent_cache.append({**all_intents[i], "vector": np.array(r.vector)})
-                logger.info("Intent embedding cache initialized via Rust (%d intents)", len(_intent_cache))
-                return
-            except Exception as e:
-                logger.warning("Rust intent initialization failed: %s", e)
-
-    model = _get_model()
-    if not model:
-        logger.warning("Embedding model not available, intent matching disabled")
+    stub = _get_grpc_stub()
+    if not stub:
+        logger.warning("Embedding service not available for intent matching")
         return
 
-    all_intents = list(INTENT_DEFINITIONS)
     try:
-        additional = _expand_intents_with_translations()
-        if additional:
-            all_intents.extend(additional)
+        from app.generated import embedding_pb2
+        
+        all_intents = list(INTENT_DEFINITIONS)
+        req = embedding_pb2.EmbedBatchRequest(
+            texts=[f"search_query: {i['name']}" for i in all_intents],
+            task_type="search_query"
+        )
+        resp = stub.EmbedBatch(req, timeout=60.0)
+        
+        _intent_cache = []
+        for i, r in enumerate(resp.results):
+            _intent_cache.append({**all_intents[i], "vector": np.array(r.vector)})
+            
+        logger.info("Intent embedding cache initialized via Rust (%d intents)", len(_intent_cache))
     except Exception as e:
-        logger.warning("Intent expansion failed: %s — using English only", e)
-
-    _intent_cache = []
-    for intent_def in all_intents:
-        try:
-            prefixed = f"search_query: {intent_def['name']}"
-            vec = model.encode(prefixed, normalize_embeddings=True)
-            _intent_cache.append({**intent_def, "vector": vec})
-        except Exception as e:
-            logger.error("Failed to embed intent '%s': %s", intent_def["name"], e)
-
-    logger.info(
-        "Intent embedding cache: %d intents (%d English + %d translated)",
-        len(_intent_cache), len(INTENT_DEFINITIONS), len(_intent_cache) - len(INTENT_DEFINITIONS),
-    )
+        logger.error("Failed to initialize intent embeddings: %s", e)
 
 
 def match_intent(message: str) -> dict:

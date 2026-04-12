@@ -1,8 +1,8 @@
-FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Create non-root user (use high UID/GID to avoid conflicts with base image)
+# Create non-root user
 RUN groupadd -g 2001 mcpuser && \
     useradd -r -u 2001 -g mcpuser -m mcpuser
 
@@ -15,8 +15,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies separately to avoid resolution issues
+# Note: removed playwright, sentence-transformers, einops to save space
 COPY pyproject.toml .
-RUN pip install --no-cache-dir --break-system-packages psycopg2-binary sqlalchemy asyncpg httpx pyarrow pandas pydantic pydantic-settings python-dotenv fastapi uvicorn python-multipart sentence-transformers einops mcp playwright==1.50.0
+RUN pip install --no-cache-dir --break-system-packages psycopg2-binary sqlalchemy asyncpg httpx pyarrow pandas pydantic pydantic-settings python-dotenv fastapi uvicorn python-multipart mcp playwright==1.50.0
 
 # Install the project
 RUN pip install --no-cache-dir --break-system-packages --no-deps .
