@@ -44,6 +44,10 @@ export default function ChatInterface({ handoff, requestAction }) {
   const selectSession = useCallback(async (id) => {
     setActiveSession(id);
     activeSessionRef.current = id;
+    
+    // Notify App of session change to drive event bridge
+    window.dispatchEvent(new CustomEvent('luna-session-change', { detail: id }));
+
     const msgs = await apiJson(`/api/v1/chat/sessions/${id}/messages`);
     // Only apply if still the active session
     if (activeSessionRef.current === id) {

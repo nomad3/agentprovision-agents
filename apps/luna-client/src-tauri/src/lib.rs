@@ -108,6 +108,7 @@ async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("spatial_hud") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
+            CAPTURE_RUNNING.store(false, Ordering::Relaxed);
         } else {
             let _ = window.show();
             let _ = window.set_focus();
@@ -151,6 +152,56 @@ async fn start_spatial_capture(app: tauri::AppHandle) -> Result<(), String> {
         log::info!("Native Spatial Capture stopped");
     });
     Ok(())
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ProjectionResult {
+    id: String,
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+#[tauri::command]
+async fn project_embeddings(vectors: Vec<Vec<f32>>, ids: Vec<String>) -> Result<Vec<ProjectionResult>, String> {
+    use ndarray::Array2;
+    use umap::Umap;
+
+    if vectors.is_empty() {
+        return Ok(vec![]);
+    }
+
+    if vectors.len() != ids.len() {
+        return Err("Vectors and IDs length mismatch".to_string());
+    }
+
+    let n_samples = vectors.len();
+    let n_features = vectors[0].len();
+
+    let mut flattened = Vec::with_capacity(n_samples * n_features);
+    for v in &vectors {
+        flattened.extend_from_slice(v);
+    }
+
+    let data = Array2::from_shape_vec((n_samples, n_features), flattened)
+        .map_err(|e| format!("Array creation failed: {}", e))?;
+
+    let projection = Umap::new()
+        .set_n_components(3)
+        .set_n_neighbors(15)
+        .fit(&data);
+
+    let mut results = Vec::with_capacity(n_samples);
+    for i in 0..n_samples {
+        results.push(ProjectionResult {
+            id: ids[i].clone(),
+            x: projection[[i, 0]] as f32 * 100.0,
+            y: projection[[i, 1]] as f32 * 100.0,
+            z: projection[[i, 2]] as f32 * 100.0,
+        });
+    }
+
+    Ok(results)
 }
 
 /// Resolve the real tool/app from generic process names.
@@ -371,6 +422,7 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
             if let Some(window) = app.get_webview_window("spatial_hud") {
                 if window.is_visible().unwrap_or(false) {
                     let _ = window.hide();
+                    CAPTURE_RUNNING.store(false, Ordering::Relaxed);
                 } else {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -583,6 +635,7 @@ pub fn run() {
             haptic_feedback,
             toggle_spatial_hud,
             start_spatial_capture,
+            project_embeddings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Luna");

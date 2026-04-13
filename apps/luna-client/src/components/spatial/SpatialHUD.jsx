@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import KnowledgeNebula from './KnowledgeNebula';
 import { apiJson } from '../../api';
 import './SpatialHUD.css';
@@ -17,14 +17,19 @@ export default function SpatialHUD() {
     (async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        const data = await apiJson('/api/v1/memories/search/internal?query=all&limit=100');
-        if (data && data.results) {
-          const vectors = data.results.map(r => r.embedding).filter(Boolean);
-          const ids = data.results.map(r => r.id);
+        
+        // Fetch spatial data (embeddings + IDs)
+        const memories = await apiJson('/api/v1/memories/spatial?limit=100');
+        
+        if (memories && memories.length > 0) {
+          const vectors = memories.map(r => r.embedding).filter(Boolean);
+          const ids = memories.map(r => r.id);
+          
           if (vectors.length > 2) {
             const projections = await invoke('project_embeddings', { vectors, ids });
+            
             const projectedNodes = projections.map(p => {
-              const original = data.results.find(r => r.id === p.id);
+              const original = memories.find(r => r.id === p.id);
               return {
                 id: p.id,
                 position: [p.x, p.y, p.z],
@@ -46,7 +51,9 @@ export default function SpatialHUD() {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const { listen } = await import('@tauri-apps/api/event');
+        
         await invoke('start_spatial_capture');
+        
         unlistenFrame = await listen('spatial-frame', (event) => {
           setTrackingActive(true);
           lastFrameRef.current = Date.now();
@@ -61,8 +68,10 @@ export default function SpatialHUD() {
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
+        
         eventUnlisten = await listen('collaboration-event', (event) => {
           const { event_type, payload } = event.payload;
+          
           switch(event_type) {
             case 'collaboration_started':
               setActiveQuests(prev => [...prev, {
@@ -72,6 +81,7 @@ export default function SpatialHUD() {
                 progress: 0
               }]);
               break;
+
             case 'phase_started':
               setActiveQuests(prev => prev.map(q => 
                 q.id === payload.collaboration_id 
@@ -79,6 +89,7 @@ export default function SpatialHUD() {
                   : q
               ));
               break;
+
             case 'blackboard_entry':
               setCommsLog(prev => [{
                 time: new Date().toLocaleTimeString(),
@@ -86,8 +97,10 @@ export default function SpatialHUD() {
                 text: payload.content_preview,
                 active: true
               }, ...prev].slice(0, 50));
+              
               setConsensus(prev => Math.min(prev + 5, 95));
               break;
+
             case 'collaboration_completed':
               setConsensus(100);
               setActiveQuests(prev => prev.map(q => 
@@ -104,7 +117,9 @@ export default function SpatialHUD() {
     })();
 
     const interval = setInterval(() => {
-      if (Date.now() - lastFrameRef.current > 1000) setTrackingActive(false);
+      if (Date.now() - lastFrameRef.current > 1000) {
+        setTrackingActive(false);
+      }
     }, 1000);
 
     // Keyboard controller

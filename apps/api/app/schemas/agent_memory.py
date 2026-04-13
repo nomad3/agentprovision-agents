@@ -47,3 +47,14 @@ class AgentMemoryInDB(AgentMemoryBase):
 class AgentMemoryResponse(AgentMemoryInDB):
     """Schema for API response"""
     pass
+
+
+class SpatialMemoryResponse(BaseModel):
+    id: UUID
+    content_type: str
+    text_content: str
+    embedding: List[float]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
