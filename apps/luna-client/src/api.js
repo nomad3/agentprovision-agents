@@ -1,4 +1,5 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
+console.log('[Luna OS] Initialization - API Base:', API_BASE || '(relative)');
 
 export async function apiFetch(path, options = {}) {
   const token = localStorage.getItem('luna_token');
