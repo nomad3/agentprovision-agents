@@ -330,28 +330,47 @@ def _generate_agentic_response(
                 elif part.get("text"):
                     cli_message += f"\n\n{part['text']}"
 
-    # Routing and execution
-    try:
-        response_text, context = route_and_execute(
-            db,
-            tenant_id=session.tenant_id,
-            user_id=user_id,
-            message=cli_message,
-            channel="whatsapp" if sender_phone else "web",
-            sender_phone=sender_phone,
-            agent_slug=agent_slug,
-            conversation_summary=summary,
-            image_b64=image_b64,
-            image_mime=image_mime,
-            db_session_memory={
-                **(session.memory_context or {}),
-                "chat_session_id": str(session.id),
-            },
-        )
-    except Exception as e:
-        logger.error("Routing failed: %s", e, exc_info=True)
-        response_text = None
-        context = {"error": str(e)}
+    # @coalition prefix: dispatch CoalitionWorkflow directly (fire-and-forget)
+    if cli_message.strip().lower().startswith("@coalition"):
+        task_description = cli_message.strip()[len("@coalition"):].strip()
+        # Strip optional sub-command prefixes like "investigate:", "analyze:", etc.
+        for _pfx in ("investigate:", "analyze:", "research:", "plan:", "review:"):
+            if task_description.lower().startswith(_pfx):
+                task_description = task_description[len(_pfx):].strip()
+                break
+        if not task_description:
+            task_description = cli_message
+        try:
+            from app.services.agent_router import dispatch_coalition
+            dispatch_coalition(session.tenant_id, str(session.id), task_description)
+            logger.info("@coalition dispatched for session %s: %s", session.id, task_description[:80])
+        except Exception as _e:
+            logger.warning("@coalition dispatch failed: %s", _e)
+        response_text = "Multi-agent coalition assembled. Watch the **Collaboration Panel** for live updates as each agent works through the investigation phases."
+        context = {"agent_tier": "coalition", "coalition_dispatched": True}
+    else:
+        # Routing and execution
+        try:
+            response_text, context = route_and_execute(
+                db,
+                tenant_id=session.tenant_id,
+                user_id=user_id,
+                message=cli_message,
+                channel="whatsapp" if sender_phone else "web",
+                sender_phone=sender_phone,
+                agent_slug=agent_slug,
+                conversation_summary=summary,
+                image_b64=image_b64,
+                image_mime=image_mime,
+                db_session_memory={
+                    **(session.memory_context or {}),
+                    "chat_session_id": str(session.id),
+                },
+            )
+        except Exception as e:
+            logger.error("Routing failed: %s", e, exc_info=True)
+            response_text = None
+            context = {"error": str(e)}
 
     # Gap 4: Score confidence and apply hedging when uncertain.
     _agent_tier_early = context.get("agent_tier", "full") if context else "full"

@@ -1,0 +1,298 @@
+.spatial-hud-container {
+  width: 100vw;
+  height: 100vh;
+  background: transparent;
+  color: #64b4ff;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  pointer-events: none; /* Allow click through to OS by default */
+}
+
+/* Enable pointer events only for HUD elements */
+.hud-top, .hud-left, .hud-bottom, .consensus-meter, .quest-card, .party-member {
+  pointer-events: auto;
+}
+
+.hud-top {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  right: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.hud-group {
+  display: flex;
+  gap: 40px;
+  background: rgba(0, 15, 30, 0.6);
+  padding: 10px 20px;
+  border-left: 3px solid #64b4ff;
+  backdrop-filter: blur(10px);
+}
+
+.hud-stat label {
+  display: block;
+  font-size: 10px;
+  opacity: 0.7;
+  letter-spacing: 1px;
+}
+
+.hud-value {
+  font-size: 20px;
+  font-weight: bold;
+  text-shadow: 0 0 10px rgba(100, 180, 255, 0.5);
+}
+
+.hud-value small {
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.hud-bar-container {
+  width: 150px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  margin-top: 5px;
+}
+
+.hud-bar-fill {
+  height: 100%;
+  background: #64b4ff;
+  box-shadow: 0 0 10px #64b4ff;
+}
+
+.hud-party {
+  display: flex;
+  gap: 10px;
+}
+
+.party-member {
+  background: rgba(0, 15, 30, 0.6);
+  border: 1px solid rgba(100, 180, 255, 0.3);
+  padding: 8px 15px;
+  text-align: center;
+  backdrop-filter: blur(10px);
+  min-width: 100px;
+}
+
+.party-member.active {
+  border-color: #64b4ff;
+  box-shadow: inset 0 0 15px rgba(100, 180, 255, 0.2);
+  animation: pulse-active 2s infinite;
+}
+
+@keyframes pulse-active {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+.member-status {
+  font-size: 9px;
+  margin-bottom: 2px;
+}
+
+.member-name {
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.party-member.locked {
+  opacity: 0.4;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.hud-left {
+  position: absolute;
+  top: 120px;
+  left: 20px;
+  width: 300px;
+}
+
+.hud-module-label {
+  font-size: 12px;
+  font-weight: bold;
+  background: #64b4ff;
+  color: #000;
+  display: inline-block;
+  padding: 2px 8px;
+  margin-bottom: 5px;
+}
+
+.quest-card {
+  background: rgba(0, 15, 30, 0.6);
+  border: 1px solid rgba(100, 180, 255, 0.3);
+  padding: 15px;
+  backdrop-filter: blur(10px);
+}
+
+.quest-title {
+  font-weight: bold;
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(100, 180, 255, 0.2);
+  padding-bottom: 5px;
+}
+
+.quest-progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 5px;
+}
+
+.quest-progress-bar {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  margin-bottom: 15px;
+}
+
+.quest-progress-fill {
+  height: 100%;
+  background: #64b4ff;
+}
+
+.objective {
+  font-size: 12px;
+  margin-bottom: 5px;
+  padding-left: 20px;
+  position: relative;
+}
+
+.objective::before {
+  content: '○';
+  position: absolute;
+  left: 0;
+}
+
+.objective.done {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+.objective.done::before {
+  content: '●';
+}
+
+.objective.active {
+  color: #fff;
+  text-shadow: 0 0 5px #64b4ff;
+}
+
+.objective.active::before {
+  content: '▶';
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0% { opacity: 1; }
+  50% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+.hud-bottom {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 600px;
+}
+
+.comms-terminal {
+  background: rgba(0, 5, 15, 0.8);
+  border: 1px solid rgba(100, 180, 255, 0.2);
+  padding: 10px;
+  height: 100px;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.comms-line {
+  margin-bottom: 4px;
+  opacity: 0.7;
+}
+
+.comms-line .time { color: #aaa; }
+.comms-line .agent { font-weight: bold; }
+
+.comms-line.active {
+  opacity: 1;
+  color: #fff;
+}
+
+.cursor-blink {
+  display: inline-block;
+  animation: blink 1s infinite;
+}
+
+.hud-crosshair {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  opacity: 0.5;
+}
+
+.hud-crosshair div {
+  position: absolute;
+  background: #64b4ff;
+}
+
+.ch-top, .ch-bottom { width: 2px; height: 10px; left: 19px; }
+.ch-left, .ch-right { width: 10px; height: 2px; top: 19px; }
+.ch-top { top: 0; } .ch-bottom { bottom: 0; }
+.ch-left { left: 0; } .ch-right { right: 0; }
+
+.consensus-meter {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 400px;
+  text-align: center;
+}
+
+.meter-label {
+  font-size: 9px;
+  letter-spacing: 2px;
+  margin-bottom: 4px;
+}
+
+.meter-container {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(100, 180, 255, 0.2);
+}
+
+.meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #64b4ff, #fff);
+  box-shadow: 0 0 15px #64b4ff;
+}
+
+.nebula-placeholder {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+}
+
+.nebula-star {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 10px #fff, 0 0 20px #64b4ff;
+  animation: star-pulse 3s infinite alternate;
+}
+
+@keyframes star-pulse {
+  from { transform: scale(1); opacity: 0.5; }
+  to { transform: scale(1.5); opacity: 1; }
+}

@@ -97,6 +97,19 @@ async fn read_clipboard() -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+#[tauri::command]
+async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("spatial_hud") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+        } else {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+    Ok(())
+}
+
 /// Resolve the real tool/app from generic process names.
 /// - Terminal/iTerm2: checks window title for running commands (claude, docker, npm, etc.)
 /// - Electron: extracts real app name from window title
@@ -293,15 +306,29 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
-    let shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+    let palette_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+    let hud_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyL);
 
-    app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+    app.global_shortcut().on_shortcut(palette_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             // Emit to frontend — React handles showing the command palette
             let _ = tauri::Emitter::emit(app, "toggle-palette", ());
             // Also ensure window is visible
             if let Some(window) = app.get_webview_window("main") {
                 if !window.is_visible().unwrap_or(true) {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        }
+    })?;
+
+    app.global_shortcut().on_shortcut(hud_shortcut, move |app, _shortcut, event| {
+        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            if let Some(window) = app.get_webview_window("spatial_hud") {
+                if window.is_visible().unwrap_or(false) {
+                    let _ = window.hide();
+                } else {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -511,6 +538,7 @@ pub fn run() {
             get_active_app,
             read_clipboard,
             haptic_feedback,
+            toggle_spatial_hud,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Luna");
