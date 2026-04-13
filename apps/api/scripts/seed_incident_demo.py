@@ -11,14 +11,11 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/agentprovision")
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from app.models.user import User
 from app.models.agent import Agent
-from app.models.knowledge_entity import KnowledgeEntity
-from app.models.knowledge_observation import KnowledgeObservation
-from app.models.knowledge_relation import KnowledgeRelation
 
 
 AGENTS = [
@@ -118,71 +115,72 @@ def get_or_create_agent(db, tenant_id, data):
     return agent
 
 
+class _Row:
+    """Lightweight row proxy returned by raw SQL entity queries."""
+    def __init__(self, id, name):
+        self.id = id
+        self.name = name
+
+
 def get_or_create_entity(db, tenant_id, data):
-    existing = (
-        db.query(KnowledgeEntity)
-        .filter_by(name=data["name"], tenant_id=tenant_id)
-        .filter(KnowledgeEntity.deleted_at.is_(None))
-        .first()
-    )
-    if existing:
+    # Use raw SQL to avoid ORM mapping issues with columns that may not exist in DB
+    row = db.execute(
+        text(
+            "SELECT id, name FROM knowledge_entities "
+            "WHERE name = :name AND tenant_id = :tid AND deleted_at IS NULL LIMIT 1"
+        ),
+        {"name": data["name"], "tid": str(tenant_id)},
+    ).fetchone()
+    if row:
         print(f"  [EXISTS]   Entity: {data['name']}")
-        return existing
-    entity = KnowledgeEntity(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        name=data["name"],
-        entity_type=data["entity_type"],
-        description=data["description"],
-        status="verified",
+        return _Row(row[0], row[1])
+    eid = uuid.uuid4()
+    db.execute(
+        text(
+            "INSERT INTO knowledge_entities (id, tenant_id, name, entity_type, description, status, created_at, updated_at) "
+            "VALUES (:id, :tid, :name, :etype, :desc, 'verified', now(), now())"
+        ),
+        {"id": str(eid), "tid": str(tenant_id), "name": data["name"],
+         "etype": data["entity_type"], "desc": data["description"]},
     )
-    db.add(entity)
-    db.flush()
     print(f"  [CREATED]  Entity: {data['name']}")
-    return entity
+    return _Row(eid, data["name"])
 
 
 def create_observation(db, tenant_id, entity, content):
-    obs = KnowledgeObservation(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        entity_id=entity.id,
-        observation_text=content,
-        observation_type="fact",
-        source_type="conversation",
-        source_channel="system",
+    db.execute(
+        text(
+            "INSERT INTO knowledge_observations "
+            "(id, tenant_id, entity_id, observation_text, observation_type, source_type, source_channel, created_at, updated_at) "
+            "VALUES (:id, :tid, :eid, :text, 'fact', 'conversation', 'system', now(), now())"
+        ),
+        {"id": str(uuid.uuid4()), "tid": str(tenant_id),
+         "eid": str(entity.id), "text": content},
     )
-    db.add(obs)
-    db.flush()
     print(f"  [CREATED]  Observation on {entity.name}: {content[:70]}...")
 
 
 def get_or_create_relation(db, tenant_id, src_entity, rel_type, tgt_entity):
-    existing = (
-        db.query(KnowledgeRelation)
-        .filter_by(
-            tenant_id=tenant_id,
-            from_entity_id=src_entity.id,
-            relation_type=rel_type,
-            to_entity_id=tgt_entity.id,
-        )
-        .first()
-    )
-    if existing:
+    row = db.execute(
+        text(
+            "SELECT id FROM knowledge_relations "
+            "WHERE tenant_id = :tid AND from_entity_id = :src AND relation_type = :rtype AND to_entity_id = :tgt LIMIT 1"
+        ),
+        {"tid": str(tenant_id), "src": str(src_entity.id),
+         "rtype": rel_type, "tgt": str(tgt_entity.id)},
+    ).fetchone()
+    if row:
         print(f"  [EXISTS]   Relation: {src_entity.name} --{rel_type}--> {tgt_entity.name}")
-        return existing
-    relation = KnowledgeRelation(
-        id=uuid.uuid4(),
-        tenant_id=tenant_id,
-        from_entity_id=src_entity.id,
-        to_entity_id=tgt_entity.id,
-        relation_type=rel_type,
-        confidence_source="manual",
+        return
+    db.execute(
+        text(
+            "INSERT INTO knowledge_relations (id, tenant_id, from_entity_id, to_entity_id, relation_type, created_at, updated_at) "
+            "VALUES (:id, :tid, :src, :tgt, :rtype, now(), now())"
+        ),
+        {"id": str(uuid.uuid4()), "tid": str(tenant_id),
+         "src": str(src_entity.id), "tgt": str(tgt_entity.id), "rtype": rel_type},
     )
-    db.add(relation)
-    db.flush()
     print(f"  [CREATED]  Relation: {src_entity.name} --{rel_type}--> {tgt_entity.name}")
-    return relation
 
 
 def main():
