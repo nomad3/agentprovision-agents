@@ -28,6 +28,9 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
 nokhwa = { version = "0.10", features = ["input-native"] }
 image = "0.24"
+umap-rs = "0.1.0"
+ndarray = "0.15"
+lazy_static = "1.4"
 
 # Mobile (iOS + Android)
 [target.'cfg(mobile)'.dependencies]

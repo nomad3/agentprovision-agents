@@ -1,4 +1,10 @@
 use tauri::Manager;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+lazy_static::lazy_static! {
+    static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+}
 
 #[cfg(desktop)]
 use tauri::{
@@ -119,12 +125,17 @@ struct SpatialFrame {
 
 #[tauri::command]
 async fn start_spatial_capture(app: tauri::AppHandle) -> Result<(), String> {
+    if CAPTURE_RUNNING.load(Ordering::Relaxed) {
+        return Ok(()); // Already running
+    }
+
+    CAPTURE_RUNNING.store(true, Ordering::Relaxed);
+    let running = CAPTURE_RUNNING.clone();
+
     // Run in a dedicated thread to avoid blocking the main loop
     std::thread::spawn(move || {
         log::info!("Native Spatial Capture initialized (60 FPS Target)");
-        // In a real environment, nokhwa would be used here to capture high-res frames.
-        // For the scaffolding, we emit the heartbeats that the HUD uses to show "Sync" status.
-        loop {
+        while running.load(Ordering::Relaxed) {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -137,6 +148,7 @@ async fn start_spatial_capture(app: tauri::AppHandle) -> Result<(), String> {
             });
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
+        log::info!("Native Spatial Capture stopped");
     });
     Ok(())
 }
