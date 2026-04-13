@@ -7,7 +7,7 @@ import uuid
 from app.api.deps import get_db, get_current_user
 from app.models.user import User
 from app.models.agent_memory import AgentMemory
-from app.schemas.agent_memory import AgentMemoryInDB, AgentMemoryCreate, AgentMemoryUpdate
+from app.schemas.agent_memory import AgentMemoryInDB, AgentMemoryCreate, AgentMemoryUpdate, SpatialMemoryResponse
 from app.schemas.memory_activity import MemoryActivityInDB
 from app.services import memories as service
 
@@ -25,6 +25,27 @@ def create_memory(
         return service.create_memory(db, memory_in, current_user.tenant_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/spatial", response_model=List[SpatialMemoryResponse])
+def get_spatial_memories(
+    *,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    limit: int = 100,
+):
+    """Fetch high-dimensional memory data for Luna OS Spatial Workstation."""
+    from app.models.embedding import Embedding
+    from app.api import deps
+    
+    memories = (
+        db.query(Embedding)
+        .filter(Embedding.tenant_id == current_user.tenant_id)
+        .order_by(Embedding.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return memories
 
 
 @router.get("/agent/{agent_id}", response_model=List[AgentMemoryInDB])

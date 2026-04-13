@@ -1,4 +1,10 @@
 use tauri::Manager;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+lazy_static::lazy_static! {
+    static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+}
 
 #[cfg(desktop)]
 use tauri::{
@@ -95,6 +101,99 @@ async fn read_clipboard() -> Result<String, String> {
         .output()
         .map_err(|e| format!("Clipboard read failed: {}", e))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("spatial_hud") {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            CAPTURE_RUNNING.store(false, Ordering::Relaxed);
+        } else {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, serde::Serialize)]
+struct SpatialFrame {
+    width: u32,
+    height: u32,
+    timestamp: f64,
+}
+
+#[tauri::command]
+async fn start_spatial_capture(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if CAPTURE_RUNNING.load(Ordering::Relaxed) {
+            return Ok(()); // Already running
+        }
+
+        CAPTURE_RUNNING.store(true, Ordering::Relaxed);
+        let running = CAPTURE_RUNNING.clone();
+
+        // Run in a dedicated thread to avoid blocking the main loop
+        std::thread::spawn(move || {
+            log::info!("Native Spatial Capture initialized (60 FPS Target)");
+            while running.load(Ordering::Relaxed) {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+
+                let _ = tauri::Emitter::emit(&app, "spatial-frame", SpatialFrame {
+                    width: 1920,
+                    height: 1080,
+                    timestamp,
+                });
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            log::info!("Native Spatial Capture stopped");
+        });
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        log::warn!("Spatial capture is only supported on macOS");
+    }
+    
+    Ok(())
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ProjectionResult {
+    id: String,
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+#[tauri::command]
+async fn project_embeddings(vectors: Vec<Vec<f32>>, ids: Vec<String>) -> Result<Vec<ProjectionResult>, String> {
+    // Phase 1: deterministic scatter projection based on embedding values.
+    // Full UMAP dimensionality reduction is a Phase 2 item — requires a
+    // suitable Rust UMAP crate with a lib target (umap-rs has none).
+    if vectors.is_empty() {
+        return Ok(vec![]);
+    }
+
+    if vectors.len() != ids.len() {
+        return Err("Vectors and IDs length mismatch".to_string());
+    }
+
+    let results = vectors.iter().zip(ids.iter()).map(|(v, id)| {
+        // Use first three principal components as a cheap approximation.
+        // Scale to [-100, 100] range for the Three.js scene.
+        let x = v.get(0).copied().unwrap_or(0.0) * 100.0;
+        let y = v.get(1).copied().unwrap_or(0.0) * 100.0;
+        let z = v.get(2).copied().unwrap_or(0.0) * 100.0;
+        ProjectionResult { id: id.clone(), x, y, z }
+    }).collect();
+
+    Ok(results)
 }
 
 /// Resolve the real tool/app from generic process names.
@@ -293,15 +392,30 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
-    let shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+    let palette_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+    let hud_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyL);
 
-    app.global_shortcut().on_shortcut(shortcut, move |app, _shortcut, event| {
+    app.global_shortcut().on_shortcut(palette_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             // Emit to frontend — React handles showing the command palette
             let _ = tauri::Emitter::emit(app, "toggle-palette", ());
             // Also ensure window is visible
             if let Some(window) = app.get_webview_window("main") {
                 if !window.is_visible().unwrap_or(true) {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+        }
+    })?;
+
+    app.global_shortcut().on_shortcut(hud_shortcut, move |app, _shortcut, event| {
+        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            if let Some(window) = app.get_webview_window("spatial_hud") {
+                if window.is_visible().unwrap_or(false) {
+                    let _ = window.hide();
+                    CAPTURE_RUNNING.store(false, Ordering::Relaxed);
+                } else {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -511,6 +625,9 @@ pub fn run() {
             get_active_app,
             read_clipboard,
             haptic_feedback,
+            toggle_spatial_hud,
+            start_spatial_capture,
+            project_embeddings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Luna");

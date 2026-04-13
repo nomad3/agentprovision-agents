@@ -37,11 +37,12 @@ def _get_redis() -> redis.Redis:
 def publish_event(collaboration_id: str, event_type: str, payload: dict) -> None:
     """Publish a per-collaboration event to Redis pub/sub."""
     channel = f"collaboration:{collaboration_id}"
-    message = json.dumps({
+    data = {
         "event_type": event_type,
         "payload": payload,
         "timestamp": time.time(),
-    })
+    }
+    message = json.dumps(data)
     try:
         r = _get_redis()
         r.publish(channel, message)
@@ -52,11 +53,12 @@ def publish_event(collaboration_id: str, event_type: str, payload: dict) -> None
 def publish_session_event(chat_session_id: str, event_type: str, payload: dict) -> None:
     """Publish a session-level event (e.g. collaboration_started) to Redis pub/sub."""
     channel = f"session:{chat_session_id}"
-    message = json.dumps({
+    data = {
         "event_type": event_type,
         "payload": payload,
         "timestamp": time.time(),
-    })
+    }
+    message = json.dumps(data)
     try:
         r = _get_redis()
         r.publish(channel, message)

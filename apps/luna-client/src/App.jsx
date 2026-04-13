@@ -8,7 +8,9 @@ import ActionApproval from './components/ActionApproval';
 import CommandPalette from './components/CommandPalette';
 import ClipboardToast from './components/ClipboardToast';
 import WorkflowSuggestions from './components/WorkflowSuggestions';
+import SpatialHUD from './components/spatial/SpatialHUD';
 import { useShellPresence } from './hooks/useShellPresence';
+import { useSessionEvents } from './hooks/useSessionEvents';
 import { useTrustProfile } from './hooks/useTrustProfile';
 import { useActivityTracker } from './hooks/useActivityTracker';
 import { apiJson } from './api';
@@ -57,8 +59,17 @@ function AuthenticatedApp() {
   const pendingResolve = React.useRef(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [activeSessionId, setActiveSessionId] = useState(null);
 
   useActivityTracker();
+  useSessionEvents(activeSessionId);
+
+  // Listen for session changes from ChatInterface
+  useEffect(() => {
+    const handleSessionChange = (e) => setActiveSessionId(e.detail);
+    window.addEventListener('luna-session-change', handleSessionChange);
+    return () => window.removeEventListener('luna-session-change', handleSessionChange);
+  }, []);
 
   // Listen for toggle-palette event from Tauri global shortcut
   useEffect(() => {
@@ -158,6 +169,23 @@ function AuthenticatedApp() {
 
 function AppContent() {
   const { user, loading } = useAuth();
+  const [windowLabel, setWindowLabel] = useState('main');
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const appWindow = getCurrentWebviewWindow();
+        setWindowLabel(appWindow.label);
+      } catch (e) {
+        // Not in Tauri / PWA mode
+      }
+    })();
+  }, []);
+
+  if (windowLabel === 'spatial_hud') {
+    return <SpatialHUD />;
+  }
 
   if (loading) return <div className="luna-loading">Loading...</div>;
   if (!user) return <LoginForm />;
