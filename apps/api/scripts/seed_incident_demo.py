@@ -184,13 +184,14 @@ def get_or_create_relation(db, tenant_id, src_entity, rel_type, tgt_entity):
 
 
 def main():
+    tenant_email = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("SEED_TENANT_EMAIL", "test@example.com")
     engine = create_engine(os.environ["DATABASE_URL"])
     Session = sessionmaker(bind=engine)
     db = Session()
     try:
-        user = db.query(User).filter_by(email="test@example.com").first()
+        user = db.query(User).filter_by(email=tenant_email).first()
         if not user:
-            print("ERROR: demo tenant test@example.com not found. Run the API first to seed the tenant.")
+            print(f"ERROR: tenant {tenant_email} not found. Run the API first to seed the tenant.")
             sys.exit(1)
         tenant_id = user.tenant_id
         print(f"Seeding for tenant: {tenant_id}\n")

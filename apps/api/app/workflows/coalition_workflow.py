@@ -19,7 +19,7 @@ class CoalitionWorkflow:
     async def run(self, tenant_id: str, chat_session_id: str, task_description: str) -> dict:
         retry = RetryPolicy(maximum_attempts=3)
         activity_timeout = timedelta(seconds=60)
-        cli_timeout = timedelta(minutes=5)
+        cli_timeout = timedelta(minutes=15)
 
         # 1. Select the best team shape for this task
         template = await workflow.execute_activity(

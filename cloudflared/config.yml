@@ -1,4 +1,4 @@
-tunnel: agentprovision
+tunnel: a6b55a7a-dccd-42bc-b1ef-3ca8014560b5
 credentials-file: /etc/cloudflared/credentials.json
 
 ingress:
