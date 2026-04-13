@@ -41,6 +41,22 @@
   letter-spacing: 1px;
 }
 
+.sync-indicator {
+  font-size: 14px;
+  font-weight: bold;
+  margin-top: 2px;
+}
+
+.sync-indicator.active {
+  color: #00ffaa;
+  text-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
+}
+
+.sync-indicator.searching {
+  color: #ffaa00;
+  animation: blink 1s infinite;
+}
+
 .hud-value {
   font-size: 20px;
   font-weight: bold;

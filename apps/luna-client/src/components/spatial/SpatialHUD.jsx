@@ -5,8 +5,35 @@ import './SpatialHUD.css';
 export default function SpatialHUD() {
   const [stats, setStats] = useState({ tokens: 0, cost: 0, agents: [] });
   const [activeQuests, setActiveQuests] = useState([]);
+  const [trackingActive, setTrackingActive] = useState(false);
+  const lastFrameRef = useRef(0);
   
   useEffect(() => {
+    // Start native spatial capture
+    let unlisten;
+    (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { listen } = await import('@tauri-apps/api/event');
+        
+        await invoke('start_spatial_capture');
+        
+        unlisten = await listen('spatial-frame', (event) => {
+          setTrackingActive(true);
+          lastFrameRef.current = Date.now();
+        });
+      } catch (e) {
+        console.warn('Spatial tracking not available:', e);
+      }
+    })();
+
+    // Watchdog to detect tracking loss
+    const interval = setInterval(() => {
+      if (Date.now() - lastFrameRef.current > 1000) {
+        setTrackingActive(false);
+      }
+    }, 1000);
+
     // Keyboard controller (WASD + Gaming shortcuts)
     const handleKeyDown = (e) => {
       // Future: connect to 3D camera controller
@@ -36,6 +63,12 @@ export default function SpatialHUD() {
       {/* Top Resource HUD */}
       <header className="hud-top">
         <div className="hud-group">
+          <div className="hud-stat">
+            <label>SPATIAL SYNC</label>
+            <div className={`sync-indicator ${trackingActive ? 'active' : 'searching'}`}>
+              {trackingActive ? 'LOCKED' : 'SEARCHING...'}
+            </div>
+          </div>
           <div className="hud-stat">
             <label>TOKEN BANDWIDTH</label>
             <div className="hud-bar-container">

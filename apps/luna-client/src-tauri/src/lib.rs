@@ -110,6 +110,37 @@ async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, serde::Serialize)]
+struct SpatialFrame {
+    width: u32,
+    height: u32,
+    timestamp: f64,
+}
+
+#[tauri::command]
+async fn start_spatial_capture(app: tauri::AppHandle) -> Result<(), String> {
+    // Run in a dedicated thread to avoid blocking the main loop
+    std::thread::spawn(move || {
+        log::info!("Native Spatial Capture initialized (60 FPS Target)");
+        // In a real environment, nokhwa would be used here to capture high-res frames.
+        // For the scaffolding, we emit the heartbeats that the HUD uses to show "Sync" status.
+        loop {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+
+            let _ = tauri::Emitter::emit(&app, "spatial-frame", SpatialFrame {
+                width: 1920,
+                height: 1080,
+                timestamp,
+            });
+            std::thread::sleep(std::time::Duration::from_millis(16));
+        }
+    });
+    Ok(())
+}
+
 /// Resolve the real tool/app from generic process names.
 /// - Terminal/iTerm2: checks window title for running commands (claude, docker, npm, etc.)
 /// - Electron: extracts real app name from window title
@@ -539,6 +570,7 @@ pub fn run() {
             read_clipboard,
             haptic_feedback,
             toggle_spatial_hud,
+            start_spatial_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Luna");

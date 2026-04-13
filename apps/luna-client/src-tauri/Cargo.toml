@@ -26,6 +26,8 @@ tauri-plugin-shell = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
+nokhwa = { version = "0.10", features = ["input-native"] }
+image = "0.24"
 
 # Mobile (iOS + Android)
 [target.'cfg(mobile)'.dependencies]
