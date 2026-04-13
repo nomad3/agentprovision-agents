@@ -1,7 +1,60 @@
 import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { Stars, PerspectiveCamera, Text, Float } from '@react-three/drei';
+import { Stars, PerspectiveCamera, Text, Float, Line } from '@react-three/drei';
 import * as THREE from 'three';
+
+// --- Agent Avatar (The Party) ---
+function AgentAvatar({ name, role, targetPosition, color = '#ff0055' }) {
+  const meshRef = useRef();
+
+  useFrame((state, delta) => {
+    if (!targetPosition) return;
+    const target = new THREE.Vector3(...targetPosition);
+    // Smooth interpolation (lerp) toward target node
+    meshRef.current.position.lerp(target, 0.05);
+  });
+
+  return (
+    <group ref={meshRef}>
+      <mesh>
+        <octahedronGeometry args={[1.5, 0]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={2} />
+      </mesh>
+      <Text position={[0, 2.5, 0]} fontSize={0.6} color="#ffffff" anchorX="center" anchorY="middle">
+        {name}
+      </Text>
+      <pointLight distance={10} intensity={2} color={color} />
+    </group>
+  );
+}
+
+// --- Data Beam (Comms) ---
+function DataBeam({ start, end, active }) {
+  const lineRef = useRef();
+  
+  useFrame((state) => {
+    if (active && lineRef.current) {
+      // Pulsing effect for the comms beam
+      const t = state.clock.getElapsedTime();
+      lineRef.current.material.dashOffset = -t * 2;
+    }
+  });
+
+  if (!active) return null;
+
+  return (
+    <Line
+      ref={lineRef}
+      points={[start, end]}
+      color="#64b4ff"
+      lineWidth={2}
+      dashed
+      dashScale={5}
+      dashSize={1}
+      dashOffset={0}
+    />
+  );
+}
 
 // --- Keyboard Flight Controller ---
 function NebulaCamera() {
@@ -33,7 +86,7 @@ function NebulaCamera() {
     if (keys.current['Space']) camera.translateY(speed * delta);
     if (keys.current['ControlLeft']) camera.translateY(-speed * delta);
 
-    // Rotation (Mouse-less fly mode placeholder - using Arrow keys for now)
+    // Rotation
     if (keys.current['ArrowLeft']) camera.rotation.y += rotateSpeed;
     if (keys.current['ArrowRight']) camera.rotation.y -= rotateSpeed;
     if (keys.current['ArrowUp']) camera.rotation.x += rotateSpeed;
@@ -88,7 +141,7 @@ function EntityStar({ position, name, type, similarity }) {
 }
 
 // --- Main Nebula Scene ---
-export default function KnowledgeNebula({ nodes = [] }) {
+export default function KnowledgeNebula({ nodes = [], agents = [], beams = [] }) {
   // Generate random data if none provided
   const displayNodes = useMemo(() => {
     if (nodes.length > 0) return nodes;
@@ -122,6 +175,25 @@ export default function KnowledgeNebula({ nodes = [] }) {
             position={node.position} 
             name={node.name} 
             type={node.type} 
+          />
+        ))}
+
+        {agents.map((agent) => (
+          <AgentAvatar
+            key={agent.id}
+            name={agent.name}
+            role={agent.role}
+            targetPosition={agent.targetPosition}
+            color={agent.color}
+          />
+        ))}
+
+        {beams.map((beam, i) => (
+          <DataBeam
+            key={i}
+            start={beam.start}
+            end={beam.end}
+            active={beam.active}
           />
         ))}
 

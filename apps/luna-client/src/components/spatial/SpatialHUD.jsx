@@ -3,13 +3,23 @@ import KnowledgeNebula from './KnowledgeNebula';
 import { apiJson } from '../../api';
 import './SpatialHUD.css';
 
+const AGENT_COLORS = {
+  'triage_agent': '#ff0055',
+  'investigator': '#00ffaa',
+  'analyst': '#aa00ff',
+  'commander': '#ffaa00'
+};
+
 export default function SpatialHUD() {
   const [stats, setStats] = useState({ tokens: 65, cost: 0.42, manaPercent: 65 });
   const [activeQuests, setActiveQuests] = useState([]);
   const [commsLog, setCommsLog] = useState([]);
   const [trackingActive, setTrackingActive] = useState(false);
   const [nodes, setNodes] = useState([]);
+  const [agents, setAgents] = useState([]);
+  const [beams, setBeams] = useState([]);
   const [consensus, setConsensus] = useState(0);
+  const [showInventory, setShowInventory] = useState(false);
   const lastFrameRef = useRef(0);
   
   useEffect(() => {
@@ -17,17 +27,12 @@ export default function SpatialHUD() {
     (async () => {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        
-        // Fetch spatial data (embeddings + IDs)
         const memories = await apiJson('/api/v1/memories/spatial?limit=100');
-        
         if (memories && memories.length > 0) {
           const vectors = memories.map(r => r.embedding).filter(Boolean);
           const ids = memories.map(r => r.id);
-          
           if (vectors.length > 2) {
             const projections = await invoke('project_embeddings', { vectors, ids });
-            
             const projectedNodes = projections.map(p => {
               const original = memories.find(r => r.id === p.id);
               return {
@@ -51,9 +56,7 @@ export default function SpatialHUD() {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const { listen } = await import('@tauri-apps/api/event');
-        
         await invoke('start_spatial_capture');
-        
         unlistenFrame = await listen('spatial-frame', (event) => {
           setTrackingActive(true);
           lastFrameRef.current = Date.now();
@@ -68,18 +71,25 @@ export default function SpatialHUD() {
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        
         eventUnlisten = await listen('collaboration-event', (event) => {
           const { event_type, payload } = event.payload;
-          
           switch(event_type) {
             case 'collaboration_started':
+              setConsensus(0);
               setActiveQuests(prev => [...prev, {
                 id: payload.collaboration_id,
                 title: `RAID: ${payload.pattern.toUpperCase()}`,
                 phase: 'INITIALIZING',
                 progress: 0
               }]);
+              // Spawn the raid party at the origin
+              setAgents(payload.agents.map(a => ({
+                id: a.agent_slug,
+                name: a.agent_slug.split('_')[0].toUpperCase(),
+                role: a.role,
+                targetPosition: [0, 0, 0],
+                color: AGENT_COLORS[a.agent_slug] || '#ffffff'
+              })));
               break;
 
             case 'phase_started':
@@ -88,6 +98,14 @@ export default function SpatialHUD() {
                   ? { ...q, phase: payload.phase.toUpperCase(), progress: Math.min(q.progress + 20, 90) } 
                   : q
               ));
+              // Move the active agent to a relevant node (random for now, or based on source_node_id if we had it)
+              setAgents(prev => prev.map(a => {
+                if (a.role === payload.phase) { // Assumption: role name matches phase name
+                   const randomNode = nodes[Math.floor(Math.random() * nodes.length)];
+                   return { ...a, targetPosition: randomNode ? randomNode.position : [Math.random()*50, 0, Math.random()*50] };
+                }
+                return a;
+              }));
               break;
 
             case 'blackboard_entry':
@@ -98,6 +116,14 @@ export default function SpatialHUD() {
                 active: true
               }, ...prev].slice(0, 50));
               
+              // Trigger a data beam from the author to the blackboard (center)
+              const author = agents.find(a => a.id === payload.author_slug);
+              if (author) {
+                const newBeam = { start: author.targetPosition, end: [0, 0, 0], active: true };
+                setBeams(prev => [...prev, newBeam]);
+                setTimeout(() => setBeams(prev => prev.filter(b => b !== newBeam)), 2000);
+              }
+
               setConsensus(prev => Math.min(prev + 5, 95));
               break;
 
@@ -108,6 +134,8 @@ export default function SpatialHUD() {
                   ? { ...q, phase: 'COMPLETED', progress: 100 } 
                   : q
               ));
+              // Return party to origin
+              setAgents(prev => prev.map(a => ({ ...a, targetPosition: [0, 0, 0] })));
               break;
           }
         });
@@ -117,16 +145,16 @@ export default function SpatialHUD() {
     })();
 
     const interval = setInterval(() => {
-      if (Date.now() - lastFrameRef.current > 1000) {
-        setTrackingActive(false);
-      }
+      if (Date.now() - lastFrameRef.current > 1000) setTrackingActive(false);
     }, 1000);
 
     // Keyboard controller
     const handleKeyDown = (e) => {
       switch(e.code) {
-        case 'KeyW': case 'KeyA': case 'KeyS': case 'KeyD':
-          break; // Handled in NebulaCamera
+        case 'Tab': 
+          e.preventDefault();
+          setShowInventory(prev => !prev);
+          break;
         case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4':
           console.log('Switch Agent Party member:', e.code.replace('Digit', ''));
           break;
@@ -141,11 +169,11 @@ export default function SpatialHUD() {
       clearInterval(interval);
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, []);
+  }, [nodes, agents]); // Re-bind when nodes/agents update so movement logic has access to them
 
   return (
-    <div className="spatial-hud-container">
-      <KnowledgeNebula nodes={nodes} />
+    <div className={`spatial-hud-container ${consensus >= 90 ? 'consensus-glow' : ''}`}>
+      <KnowledgeNebula nodes={nodes} agents={agents} beams={beams} />
 
       <header className="hud-top">
         <div className="hud-group">
@@ -168,22 +196,18 @@ export default function SpatialHUD() {
         </div>
 
         <div className="hud-party">
-          <div className="party-member active">
-            <div className="member-status">THINKING</div>
-            <div className="member-name">Triage</div>
-          </div>
-          <div className="party-member">
-            <div className="member-status">READY</div>
-            <div className="member-name">Data-Inv</div>
-          </div>
-          <div className="party-member locked">
-            <div className="member-status">LOCKED</div>
-            <div className="member-name">Analyst</div>
-          </div>
-          <div className="party-member locked">
-            <div className="member-status">LOCKED</div>
-            <div className="member-name">Commander</div>
-          </div>
+          {agents.map((agent, i) => (
+            <div key={agent.id} className={`party-member ${i === 0 ? 'active' : ''}`} style={{borderBottom: `3px solid ${agent.color}`}}>
+              <div className="member-status">LVL 1</div>
+              <div className="member-name">{agent.name}</div>
+            </div>
+          ))}
+          {agents.length === 0 && [1,2,3,4].map(i => (
+            <div key={i} className="party-member empty">
+              <div className="member-status">EMPTY</div>
+              <div className="member-name">SLOT {i}</div>
+            </div>
+          ))}
         </div>
       </header>
 
@@ -204,13 +228,28 @@ export default function SpatialHUD() {
         ))}
       </aside>
 
+      {showInventory && (
+        <div className="hud-inventory-overlay">
+          <div className="hud-module-label">SHARED BLACKBOARD (INVENTORY)</div>
+          <div className="inventory-grid">
+            {commsLog.map((item, i) => (
+              <div key={i} className="inventory-item">
+                <div className="item-icon" style={{backgroundColor: AGENT_COLORS[item.agent] || '#fff'}}></div>
+                <div className="item-text">{item.text}</div>
+              </div>
+            ))}
+            {commsLog.length === 0 && <div className="inventory-empty">INVENTORY EMPTY</div>}
+          </div>
+        </div>
+      )}
+
       <footer className="hud-bottom">
         <div className="hud-module-label">A2A COMBAT LOG</div>
         <div className="comms-terminal">
           {commsLog.length === 0 && <div className="comms-placeholder" style={{opacity: 0.3, fontSize: '10px'}}>WAITING FOR PARTY COMMS...</div>}
           {commsLog.map((log, i) => (
             <div key={i} className={`comms-line ${log.active ? 'active' : ''}`}>
-              <span className="time">{log.time}</span> <span className="agent">{log.agent}</span>: {log.text}
+              <span className="time">{log.time}</span> <span className="agent" style={{color: AGENT_COLORS[log.agent]}}>{log.agent}</span>: {log.text}
             </div>
           ))}
           <div className="cursor-blink">_</div>
