@@ -43,10 +43,10 @@ function InstancedEntities({ nodes = [] }) {
   return (
     <instancedMesh ref={meshRef} args={[null, null, count]}>
       <sphereGeometry args={[0.8, 16, 16]} />
-      <meshStandardMaterial emissiveIntensity={2} toneMapped={false} />
+      <meshBasicMaterial toneMapped={false} />
     </instancedMesh>
   );
-  }
+}
 
 
 // --- Agent Avatar (The Party) ---
