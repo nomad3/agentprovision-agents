@@ -172,15 +172,26 @@ function AppContent() {
   const [windowLabel, setWindowLabel] = useState(null); // Null until detected
 
   useEffect(() => {
+    // Safety timeout: if detection takes > 2s, fallback to 'main'
+    const timeout = setTimeout(() => {
+      if (windowLabel === null) {
+        console.warn('[Luna OS] Window detection timed out, defaulting to main');
+        setWindowLabel('main');
+      }
+    }, 2000);
+
     (async () => {
       try {
         const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
         const appWindow = getCurrentWebviewWindow();
-        setWindowLabel(appWindow.label);
+        setWindowLabel(appWindow.label || 'main');
       } catch (e) {
         setWindowLabel('main'); // Fallback for browser/PWA
+      } finally {
+        clearTimeout(timeout);
       }
     })();
+    return () => clearTimeout(timeout);
   }, []);
 
   if (windowLabel === null) return <div className="luna-loading">Syncing OS...</div>;
