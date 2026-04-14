@@ -126,14 +126,13 @@ jobs:
           git tag "$TAG" 2>/dev/null || true
           git push origin "$TAG" 2>/dev/null || true
 
-          # Create release (or update if exists)
+          # Create or Update release with ALL assets in one shot
+          # This is more reliable than separate create and upload calls
           gh release create "$TAG" \
+            "$DMG_PATH" \
+            latest.json \
             --title "Luna $VERSION" \
             --generate-notes \
-            "$DMG_PATH" \
-            latest.json \
-            --latest 2>/dev/null || \
-          gh release upload "$TAG" \
-            "$DMG_PATH" \
-            latest.json \
-            --clobber 2>/dev/null || true
+            --latest \
+            --verify-tag \
+            || gh release upload "$TAG" "$DMG_PATH" latest.json --clobber
