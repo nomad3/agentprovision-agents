@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import MemoryPanel from './MemoryPanel';
 import { useLunaStream } from '../hooks/useLunaStream';
-import { apiJson } from '../api';
+import { apiJson, API_BASE } from '../api';
 
 export default function ChatInterface({ handoff, requestAction }) {
   const [sessions, setSessions] = useState([]);
@@ -33,18 +33,6 @@ export default function ChatInterface({ handoff, requestAction }) {
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Load sessions on mount
-  useEffect(() => {
-    apiJson('/api/v1/chat/sessions')
-      .then(data => {
-        setSessions(data);
-        if (data.length > 0) selectSession(data[0].id);
-      })
-      .catch(err => {
-        console.error('[Luna] Failed to load sessions:', err);
-      });
-  }, [selectSession]);
-
   const selectSession = useCallback(async (id) => {
     setActiveSession(id);
     activeSessionRef.current = id;
@@ -58,6 +46,18 @@ export default function ChatInterface({ handoff, requestAction }) {
       setMessages(msgs);
     }
   }, []);
+
+  // Load sessions on mount
+  useEffect(() => {
+    apiJson('/api/v1/chat/sessions')
+      .then(data => {
+        setSessions(data);
+        if (data.length > 0) selectSession(data[0].id);
+      })
+      .catch(err => {
+        console.error('[Luna] Failed to load sessions:', err);
+      });
+  }, [selectSession]);
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth' });
@@ -95,7 +95,6 @@ export default function ChatInterface({ handoff, requestAction }) {
       formData.append('content', input.trim() || 'What do you see in this screenshot?');
 
       const token = localStorage.getItem('luna_token');
-      const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
       const tempId = `temp-${Date.now()}`;
       setMessages(prev => [...prev, { id: tempId, role: 'user', content: '[Screenshot sent]' }]);
       setInput('');

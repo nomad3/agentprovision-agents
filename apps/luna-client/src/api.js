@@ -14,7 +14,7 @@ const getApiBase = () => {
   return base;
 };
 
-const API_BASE = getApiBase();
+export const API_BASE = getApiBase();
 console.log('[Luna OS] Initialization - API Base:', API_BASE);
 
 export async function apiFetch(path, options = {}) {
