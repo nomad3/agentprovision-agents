@@ -219,19 +219,19 @@ async def validate_aremko_reservation(
     ALWAYS call this before create_aremko_reservation to confirm the slot is
     available, get the exact price, and see any pack discounts.
 
+    IMPORTANT (QUANTITY): If a service is for multiple people (e.g. breakfast for 2),
+    DO NOT add multiple entries for the same service. Instead, add ONE entry
+    with 'cantidad_personas' set to the group size.
+
     Args:
         servicios: List of service dicts, each with:
             - servicio_id (int): Service ID
             - fecha (str): Date in YYYY-MM-DD format
             - hora (str): Time in HH:MM format (24h)
             - cantidad_personas (int): Number of people
-          Example: [{"servicio_id": 12, "fecha": "2026-04-15", "hora": "14:30", "cantidad_personas": 4}]
+          Example: [{"servicio_id": 26, "fecha": "2026-04-18", "hora": "09:00", "cantidad_personas": 2}]
         tenant_id: Resolved automatically.
         ctx: MCP context (injected automatically).
-
-    Returns:
-        Dict with success, availability per service, prices, pack discounts, and total.
-        If not available, includes suggested alternative times.
     """
     resolve_tenant_id(ctx) or tenant_id
 
@@ -272,6 +272,8 @@ async def create_aremko_reservation(
     """Create a complete reservation at Aremko Spa via the Luna API.
 
     IMPORTANT: Always call validate_aremko_reservation first.
+    IMPORTANT (QUANTITY): For group services (e.g. breakfast for 2), use ONE entry 
+    with 'cantidad_personas' set to the group size. DO NOT duplicate entries.
     Uses an auto-generated idempotency_key to prevent duplicates.
 
     Args:
@@ -285,10 +287,6 @@ async def create_aremko_reservation(
         notas: Internal notes for the reservation. Default: "Reserva creada por Luna via WhatsApp".
         tenant_id: Resolved automatically.
         ctx: MCP context (injected automatically).
-
-    Returns:
-        Dict with success, reservation ID (RES-XXXX), customer details, services,
-        total price, and discounts applied.
     """
     resolve_tenant_id(ctx) or tenant_id
 
@@ -382,12 +380,11 @@ async def add_services_to_aremko_reservation(
 ) -> dict:
     """Append additional services to an existing Aremko reservation.
 
-    Use this when the client wants to add more services after a reservation
-    has already been created (e.g., "agrega masajes a mi reserva RES-5403").
-    Discounts are automatically recalculated — a pack discount may now apply.
-
     IMPORTANT: Always call validate_aremko_reservation first to confirm the
     new services are available before calling this.
+
+    IMPORTANT (QUANTITY): For group services (e.g. breakfast for 2), use ONE entry 
+    with 'cantidad_personas' set to the group size. DO NOT duplicate entries.
 
     Args:
         reserva_id: Numeric reservation ID (e.g. 5403 for RES-5403). Required.
@@ -396,13 +393,9 @@ async def add_services_to_aremko_reservation(
             - fecha (str): Date in YYYY-MM-DD format
             - hora (str): Time in HH:MM format (24h)
             - cantidad_personas (int): Number of people
-          Example: [{"servicio_id": 53, "fecha": "2026-04-30", "hora": "15:30", "cantidad_personas": 2}]
+          Example: [{"servicio_id": 26, "fecha": "2026-04-18", "hora": "09:00", "cantidad_personas": 2}]
         tenant_id: Resolved automatically.
         ctx: MCP context (injected automatically).
-
-    Returns:
-        Dict with success, servicios_agregados, nuevo_total, saldo_pendiente,
-        and any new discounts applied.
     """
     tenant_id = resolve_tenant_id(ctx) or tenant_id
 

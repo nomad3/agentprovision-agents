@@ -201,14 +201,18 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: tunnel --config /etc/cloudflared/config.yml run
+    # Added sleep 10 to ensure Docker DNS is fully ready before tunnel connects
+    command: sh -c "sleep 10 && cloudflared tunnel --config /etc/cloudflared/config.yml --no-autoupdate run"
     volumes:
       - ./cloudflared:/etc/cloudflared:ro
     depends_on:
-      - api
-      - web
-      - luna-client
-    restart: unless-stopped
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      luna-client:
+        condition: service_healthy
+    restart: always
 
   redis:
     image: redis:7-alpine
