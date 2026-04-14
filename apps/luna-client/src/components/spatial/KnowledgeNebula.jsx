@@ -29,6 +29,8 @@ function InstancedEntities({ nodes = [] }) {
         case 'person': colorStr = '#64b4ff'; break;
         case 'organization': colorStr = '#ffaa00'; break;
         case 'system': colorStr = '#00ffaa'; break;
+        case 'concept': colorStr = '#aa00ff'; break;
+        case 'memory': colorStr = '#ffffff'; break;
       }
       tempColor.set(colorStr);
       meshRef.current.setColorAt(i, tempColor);
@@ -40,11 +42,12 @@ function InstancedEntities({ nodes = [] }) {
 
   return (
     <instancedMesh ref={meshRef} args={[null, null, count]}>
-      <sphereGeometry args={[0.8, 12, 12]} />
+      <sphereGeometry args={[0.8, 16, 16]} />
       <meshStandardMaterial emissiveIntensity={2} toneMapped={false} />
     </instancedMesh>
   );
-}
+  }
+
 
 // --- Agent Avatar (The Party) ---
 function AgentAvatar({ name, role, targetPosition, color = '#ff0055' }) {

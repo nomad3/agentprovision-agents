@@ -149,7 +149,7 @@ export default function SpatialHUD() {
       eventUnlisten?.();
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [nodes, agents]);
+  }, []); // Only on mount
 
   return (
     <div className={`spatial-hud-container ${consensus >= 90 ? 'consensus-glow' : ''}`}>
