@@ -842,7 +842,8 @@ def run_agent_session(
             # Run the workflow in a separate thread with its own loop.
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                result = pool.submit(lambda: asyncio.run(_run_workflow())).result(timeout=200)
+                # Increased timeout to 600s (10 min) to allow for complex tasks like PDF ingestion
+                result = pool.submit(lambda: asyncio.run(_run_workflow())).result(timeout=600)
         else:
             loop = asyncio.new_event_loop()
             try:
