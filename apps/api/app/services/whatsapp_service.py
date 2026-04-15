@@ -70,10 +70,16 @@ def _phone_variants(value: str | None) -> set[str]:
     digits = "".join(ch for ch in base if ch.isdigit())
     variants = {base, base.lstrip("+"), digits}
 
+    # Mexico mobile: 52... -> 521... and vice-versa
     if digits.startswith("521") and len(digits) > 3:
         variants.add("52" + digits[3:])
     elif digits.startswith("52") and not digits.startswith("521") and len(digits) > 2:
         variants.add("521" + digits[2:])
+    
+    # General: If digits starts with country code but no plus, add plus variant
+    # and vice-versa if it was provided with plus
+    if digits and not value.startswith("+"):
+        variants.add("+" + digits)
 
     return {item for item in variants if item}
 
