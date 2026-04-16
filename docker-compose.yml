@@ -45,7 +45,7 @@ services:
       - CORS_EXTRA_ORIGINS=${CORS_EXTRA_ORIGINS:-}
       - EXPLORATION_RATE=${EXPLORATION_RATE:-0.0}
       - USE_MEMORY_V2=true
-      - USE_MEMORY_V2_TENANT_ALLOWLIST=[]
+      - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
       - EMBEDDING_SERVICE_URL=embedding-service:50051
       - MEMORY_CORE_URL=memory-core:50052
       - USE_RUST_EMBEDDING=true
@@ -127,7 +127,7 @@ services:
       - HF_HUB_ENABLE_HF_TRANSFER=0
       - HF_HUB_DISABLE_XET=1
       - USE_MEMORY_V2=true
-      - USE_MEMORY_V2_TENANT_ALLOWLIST=[]
+      - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
       - EMBEDDING_SERVICE_URL=embedding-service:50051
       - MEMORY_CORE_URL=memory-core:50052
       - USE_RUST_EMBEDDING=true
@@ -171,7 +171,7 @@ services:
       - OPENCODE_MODEL=${OPENCODE_MODEL:-gemma4}
       - GIT_BRANCH=${GIT_BRANCH:-feat/memory-first-phase-1}
       - USE_MEMORY_V2=true
-      - USE_MEMORY_V2_TENANT_ALLOWLIST=[]
+      - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
