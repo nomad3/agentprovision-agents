@@ -16,7 +16,14 @@ with workflow.unsafe.imports_passed_through():
 @workflow.defn
 class CoalitionWorkflow:
     @workflow.run
-    async def run(self, tenant_id: str, chat_session_id: str, task_description: str) -> dict:
+    async def run(self, tenant_id: str, chat_session_id: str = None, task_description: str = None) -> dict:
+        # Support cross-pod dispatch pattern where arguments are passed as a single dict
+        if isinstance(tenant_id, dict) and chat_session_id is None:
+            data = tenant_id
+            tenant_id = data.get("tenant_id")
+            chat_session_id = data.get("chat_session_id")
+            task_description = data.get("task_description")
+
         retry = RetryPolicy(maximum_attempts=3)
         activity_timeout = timedelta(seconds=60)
         cli_timeout = timedelta(minutes=15)

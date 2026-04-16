@@ -254,7 +254,11 @@ def dispatch_coalition(
                 client = await Client.connect(settings.TEMPORAL_ADDRESS)
                 await client.start_workflow(
                     "CoalitionWorkflow",
-                    args=[str(tenant_id), chat_session_id, task_description],
+                    arg={
+                        "tenant_id": str(tenant_id),
+                        "chat_session_id": chat_session_id,
+                        "task_description": task_description,
+                    },
                     id=f"coalition-{chat_session_id}-{uuid.uuid4().hex[:8]}",
                     task_queue="agentprovision-orchestration",
                 )
