@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { motion, useInView, useReducedMotion } from 'framer-motion';
-import { FiDatabase, FiUsers, FiGitPullRequest, FiShield, FiMail, FiTerminal } from 'react-icons/fi';
+import { FiDatabase, FiUsers, FiGitPullRequest, FiShield, FiMail } from 'react-icons/fi';
 import BentoCard from './BentoCard';
 
 const cards = [
