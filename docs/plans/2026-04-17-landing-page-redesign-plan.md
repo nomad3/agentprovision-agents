@@ -98,13 +98,15 @@
   - `.slide-left` and `.slide-left.is-visible`
   - `.slide-right` and `.slide-right.is-visible`
   - `.stagger` and all `.stagger > *:nth-child(*)` variants
+  - `.animate-stagger` and all `.animate-stagger > *:nth-child(*)` variants
+  - `@keyframes fadeInStagger` (if present)
   - `.is-visible` (standalone, if any remain)
 
   Verify they are all gone:
   ```bash
   python3 -c "
   c = open('apps/web/src/LandingPage.css').read()
-  for cls in ['animate-on-scroll','fade-in','slide-up','slide-left','slide-right','stagger']:
+  for cls in ['animate-on-scroll','fade-in','slide-up','slide-left','slide-right','stagger','animate-stagger','fadeInStagger']:
       print(f'{cls}: {c.count(cls)} occurrences')
   "
   ```
@@ -230,7 +232,7 @@ All new component tests rely on translated text. Doing this task first ensures t
 
 ---
 
-## Task 4: LandingNav — Sticky nav with scroll blur
+## Task 3: LandingNav — Sticky nav with scroll blur
 
 **Files:**
 - Create: `apps/web/src/components/marketing/LandingNav.js`
@@ -1663,112 +1665,7 @@ Grid uses `grid-template-columns: repeat(6, 1fr)` with explicit span values per 
 
 ---
 
-## Task 12: i18n — Update landing.json (en + es)
-
-**Files:**
-- Modify: `apps/web/src/i18n/locales/en/landing.json`
-- Modify: `apps/web/src/i18n/locales/es/landing.json`
-
-These are **additive** changes — do not overwrite the entire file.
-
-- [ ] **Step 1: Add new keys to en/landing.json**
-
-  Open `apps/web/src/i18n/locales/en/landing.json`. Make these changes:
-
-  a) Add top-level `nav` key:
-  ```json
-  "nav": {
-    "platform": "Platform",
-    "features": "Features",
-    "integrations": "Integrations",
-    "pricing": "Pricing",
-    "signIn": "Sign In",
-    "getStarted": "Get Started"
-  }
-  ```
-
-  b) Add `socialProof` and `socialProofFallback` inside the existing `hero` object:
-  ```json
-  "socialProof": "Trusted by teams at",
-  "socialProofFallback": "500+ teams using AgentProvision"
-  ```
-
-  c) Add top-level `statsStrip` key:
-  ```json
-  "statsStrip": {
-    "tools": { "value": "81", "label": "MCP Tools" },
-    "workflows": { "value": "25+", "label": "Native Workflows" },
-    "responseTime": { "value": "5.5s", "label": "Avg Response Time" },
-    "improvement": { "value": "88%", "label": "Faster Than Baseline" }
-  }
-  ```
-
-  d) Add top-level `integrations` key:
-  ```json
-  "integrations": {
-    "headline": "Connects to everything you already use"
-  }
-  ```
-
-  e) In the existing `cta` key, rename `description` → `subtext` and add `button`:
-  ```json
-  "cta": {
-    "heading": "Ready to Deploy Your Agent Network?",
-    "subtext": "Launch a coordinated network of AI specialists today. Create your account and have Luna, your AI chief of staff, running in minutes.",
-    "button": "Get Started Free"
-  }
-  ```
-
-  f) Delete the `ctaBanner` key entirely (it is no longer read by any component after the CTASection rewrite).
-
-- [ ] **Step 2: Verify JSON is valid**
-
-  ```bash
-  python3 -m json.tool apps/web/src/i18n/locales/en/landing.json > /dev/null && echo "valid"
-  ```
-  Expected: `valid`
-
-- [ ] **Step 3: Apply the same changes to es/landing.json**
-
-  Open `apps/web/src/i18n/locales/es/landing.json` and apply the same structural mutations with Spanish translations. Copy the English values for new keys and translate as needed:
-
-  ```json
-  "nav": {
-    "platform": "Plataforma",
-    "features": "Funciones",
-    "integrations": "Integraciones",
-    "pricing": "Precios",
-    "signIn": "Iniciar Sesión",
-    "getStarted": "Comenzar"
-  }
-  ```
-  For `hero.socialProofFallback`: `"Más de 500 equipos usando AgentProvision"`
-  For `statsStrip`, `integrations.headline`: translate appropriately or copy English if translation isn't available.
-  Rename `cta.description` → `cta.subtext`, add `cta.button: "Comenzar Gratis"`, delete `ctaBanner`.
-
-- [ ] **Step 4: Verify es JSON is valid**
-
-  ```bash
-  python3 -m json.tool apps/web/src/i18n/locales/es/landing.json > /dev/null && echo "valid"
-  ```
-
-- [ ] **Step 5: Run all tests to verify nothing broken**
-
-  ```bash
-  cd apps/web && npm test -- --watchAll=false --ci 2>&1 | tail -15
-  ```
-  Expected: All PASS
-
-- [ ] **Step 6: Commit**
-
-  ```bash
-  git add apps/web/src/i18n/locales/en/landing.json apps/web/src/i18n/locales/es/landing.json
-  git commit -m "feat: update landing i18n — add nav, statsStrip, integrations keys; migrate cta; delete ctaBanner"
-  ```
-
----
-
-## Task 13: Wire LandingPage.js
+## Task 12: Wire LandingPage.js
 
 **Files:**
 - Modify: `apps/web/src/LandingPage.js` (major refactor)
@@ -1841,7 +1738,7 @@ Replace the entire LandingPage.js with a thin orchestrator. The current file is 
 
 ---
 
-## Task 14: Visual verification in browser
+## Task 13: Visual verification in browser
 
 - [ ] **Step 1: Start the dev server**
 
@@ -1873,7 +1770,7 @@ Replace the entire LandingPage.js with a thin orchestrator. The current file is 
 
 ---
 
-## Task 15: Cleanup — Delete deprecated components
+## Task 14: Cleanup — Delete deprecated components
 
 Only run this task after Task 13 visual verification passes.
 
@@ -1925,7 +1822,7 @@ Only run this task after Task 13 visual verification passes.
 
 ---
 
-## Task 16: Final build and PR
+## Task 15: Final build and PR
 
 - [ ] **Step 1: Run full test suite one last time**
 
