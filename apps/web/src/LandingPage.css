@@ -16,19 +16,6 @@
    EXISTING ANIMATIONS
    ================================= */
 
-/* Animated gradient background */
-@keyframes gradientShift {
-
-  0%,
-  100% {
-    background-position: 0% 50%;
-  }
-
-  50% {
-    background-position: 100% 50%;
-  }
-}
-
 /* Hero section enhancements */
 .hero-section {
   min-height: 95vh;
