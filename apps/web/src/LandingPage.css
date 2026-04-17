@@ -1895,3 +1895,21 @@ button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .cta-v2 { animation: none; }
 }
+
+/* LandingFooter */
+.landing-footer { background: var(--ap-bg-subtle); border-top: 1px solid var(--ap-border); padding: 48px 24px 24px; }
+.landing-footer__inner {
+  max-width: 1200px; margin: 0 auto;
+  display: flex; justify-content: space-between; align-items: flex-start;
+  gap: 32px; flex-wrap: wrap;
+  margin-bottom: 32px;
+}
+.landing-footer__logo { font-weight: 800; font-size: 17px; color: var(--ap-text); }
+.landing-footer__tagline { font-size: 14px; color: var(--ap-text-muted); margin-top: 6px; max-width: 260px; }
+.landing-footer__nav { display: flex; gap: 24px; flex-wrap: wrap; }
+.landing-footer__link { font-size: 14px; color: var(--ap-text-muted); text-decoration: none; }
+.landing-footer__link:hover { color: var(--ap-text); }
+.landing-footer__social { display: flex; gap: 16px; }
+.landing-footer__social-link { color: var(--ap-text-muted); }
+.landing-footer__social-link:hover { color: var(--ap-text); }
+.landing-footer__copy { text-align: center; font-size: 13px; color: var(--ap-text-muted); margin: 0; }
