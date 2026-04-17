@@ -104,11 +104,11 @@ export default function HeroSection() {
               <span className="chrome-dot chrome-dot--red" />
               <span className="chrome-dot chrome-dot--yellow" />
               <span className="chrome-dot chrome-dot--green" />
-              <span className="chrome-address">agentprovision.com/dashboard</span>
+              <span className="chrome-address">agentprovision.com/chat</span>
             </div>
             <img
-              src={`${process.env.PUBLIC_URL}/images/product/dashboard.png`}
-              alt="AgentProvision dashboard"
+              src={`${process.env.PUBLIC_URL}/images/product/chat.png`}
+              alt="AgentProvision AI chat"
               className="hero-v2__screenshot"
             />
           </motion.div>
