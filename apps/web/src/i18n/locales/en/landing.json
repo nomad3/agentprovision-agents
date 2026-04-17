@@ -275,9 +275,24 @@
       }
     ]
   },
+  "ctaBanner": {
+    "heading": "The Command Center for Your AI Business",
+    "description": "Deploy specialized agents, build enterprise workflows, and let Luna manage your operations — all from one platform.",
+    "badges": {
+      "multiTenant": "Multi-Tenant",
+      "encryptedVault": "Encrypted Vault",
+      "kubernetes": "Kubernetes-Native"
+    },
+    "stats": {
+      "agentTeams": "Agent Teams",
+      "builtInTools": "Built-In Tools",
+      "integrations": "Integrations"
+    }
+  },
   "cta": {
     "heading": "Ready to Deploy Your Agent Network?",
     "subtext": "Launch a coordinated network of AI specialists today. Create your account and have Luna, your AI chief of staff, running in minutes.",
+    "description": "Launch a coordinated network of AI specialists today. Create your account and have Luna, your AI chief of staff, running in minutes.",
     "button": "Get Started Free"
   }
 }

@@ -275,9 +275,24 @@
       }
     ]
   },
+  "ctaBanner": {
+    "heading": "El Centro de Comando para tu Negocio con IA",
+    "description": "Despliega agentes especializados, construye workflows empresariales y deja que Luna gestione tus operaciones — todo desde una sola plataforma.",
+    "badges": {
+      "multiTenant": "Multi-Tenant",
+      "encryptedVault": "Vault Encriptado",
+      "kubernetes": "Nativo en Kubernetes"
+    },
+    "stats": {
+      "agentTeams": "Equipos de Agentes",
+      "builtInTools": "Herramientas Incluidas",
+      "integrations": "Integraciones"
+    }
+  },
   "cta": {
     "heading": "Listo para Desplegar tu Equipo de Agentes IA?",
     "subtext": "Empieza a construir sistemas multi-agente hoy. Crea tu cuenta y ten a Luna, tu co-piloto IA, funcionando en minutos.",
+    "description": "Empieza a construir sistemas multi-agente hoy. Crea tu cuenta y ten a Luna, tu co-piloto IA, funcionando en minutos.",
     "button": "Comenzar Gratis"
   }
 }
