@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -423,7 +424,10 @@ def get_workflow(
     """Get a single workflow."""
     wf = db.query(DynamicWorkflow).filter(
         DynamicWorkflow.id == workflow_id,
-        DynamicWorkflow.tenant_id == current_user.tenant_id,
+        or_(
+            DynamicWorkflow.tenant_id == current_user.tenant_id,
+            DynamicWorkflow.public == True,
+        ),
     ).first()
     if not wf:
         raise HTTPException(404, "Workflow not found")
@@ -713,7 +717,13 @@ def install_template(
     current_user=Depends(deps.get_current_active_user),
 ):
     """Install a template — creates a copy in the tenant's workflows."""
-    template = db.query(DynamicWorkflow).filter(DynamicWorkflow.id == template_id).first()
+    template = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == template_id,
+        or_(
+            DynamicWorkflow.public == True,
+            DynamicWorkflow.tenant_id == current_user.tenant_id,
+        ),
+    ).first()
     if not template:
         raise HTTPException(404, "Template not found")
 
