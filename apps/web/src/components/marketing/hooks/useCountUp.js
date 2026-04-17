@@ -16,7 +16,7 @@ export function useCountUp(target, duration = 1500) {
     const controls = animate(0, target, {
       duration: duration / 1000,
       ease: 'easeOut',
-      onUpdate: v => setDisplay(Math.round(v).toString()),
+      onUpdate: v => setDisplay(String(Math.round(v * 10) / 10)),
     });
     return () => controls.stop();
   }, [isInView, target, duration, prefersReducedMotion]);
