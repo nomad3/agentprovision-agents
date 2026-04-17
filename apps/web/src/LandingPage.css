@@ -1869,3 +1869,29 @@ button:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .marquee-track { animation: none !important; }
 }
+
+/* CTASection v2 */
+.cta-v2 {
+  background: linear-gradient(135deg, var(--ap-blue), var(--ap-teal));
+  background-size: 200% 200%;
+  animation: gradientShift 8s ease infinite;
+  padding: 100px 24px;
+  text-align: center;
+}
+@keyframes gradientShift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.cta-v2__inner { max-width: 640px; margin: 0 auto; }
+.cta-v2__heading { font-size: 44px; font-weight: 800; color: #fff; margin-bottom: 16px; }
+.cta-v2__sub { font-size: 18px; color: rgba(255,255,255,0.85); margin-bottom: 36px; }
+.cta-v2__btn {
+  background: #fff; color: var(--ap-blue); border: none;
+  border-radius: 9999px; padding: 16px 40px;
+  font-size: 17px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.15);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cta-v2 { animation: none; }
+}
