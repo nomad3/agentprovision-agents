@@ -65,13 +65,13 @@ async def check_aremko_availability(
     tenant_id: Optional[str] = None,
     ctx: Context = None,
 ) -> dict:
-    """Check real-time availability at Aremko Spa for tinajas, masajes, or cabañas.
+    """Check real-time availability at Aremko Spa for tinajas, masajes, cabañas, or desayunos.
 
-    Curated catalog: 8 tinajas, 1 masaje (relajación/descontracturante), 5 cabañas.
+    Curated catalog: 8 tinajas, 1 masaje (relajación/descontracturante), 5 cabañas, 1 desayuno (ID 26).
     CLOSED TUESDAYS — returns closed notice automatically.
 
     Args:
-        service_type: "tinajas", "cabanas" or "masajes". Required.
+        service_type: "tinajas", "cabanas", "masajes", or "desayunos". Required.
         fecha: "hoy", "mañana", or YYYY-MM-DD / DD-MM-YYYY / DD/MM/YYYY. Default "mañana".
         tenant_id: Resolved automatically.
         ctx: MCP context (injected automatically).

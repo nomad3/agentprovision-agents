@@ -28,6 +28,7 @@ CATALOG_URLS = {
     "masajes": f"{AREMKO_BASE_URL}/masajes/",
     "cabanas": f"{AREMKO_BASE_URL}/alojamientos/",
     "tinajas": f"{AREMKO_BASE_URL}/",
+    # desayunos has no public catalog page — availability queried directly via service ID
 }
 
 CURATED_SERVICE_NAMES = {
@@ -56,6 +57,9 @@ CURATED_MASSAGE_KEYWORDS = {
 }
 
 FALLBACK_SERVICES = {
+    "desayunos": [
+        {"id": "26", "nombre": "Desayuno", "precio": 0, "tipo": "desayuno", "nota": "tarifa plana — mismo precio para 1 o 2 personas"},
+    ],
     "cabanas": [
         {"id": "9", "nombre": "Cabaña Arrayan", "precio": 90000, "tipo": "cabana"},
         {"id": "8", "nombre": "Cabaña Laurel", "precio": 90000, "tipo": "cabana"},
@@ -95,6 +99,8 @@ CATEGORY_ALIASES = {
     "tinas": "tinajas",
     "tinaja": "tinajas",
     "tinajas": "tinajas",
+    "desayuno": "desayunos",
+    "desayunos": "desayunos",
 }
 
 
@@ -125,7 +131,7 @@ def canonical_service_type(service_type: str) -> str:
     key = _normalize(service_type)
     if key not in CATEGORY_ALIASES:
         raise ValueError(
-            "service_type debe ser 'tinajas', 'cabanas' o 'masajes'"
+            "service_type debe ser 'tinajas', 'cabanas', 'masajes' o 'desayunos'"
         )
     return CATEGORY_ALIASES[key]
 
@@ -217,6 +223,7 @@ def _build_summary(category: str, target_date: date, services: list[CuratedServi
         "tinajas": "tinajas",
         "cabanas": "cabañas",
         "masajes": "masajes",
+        "desayunos": "desayunos",
     }
     lines = [f"Disponibilidad de {labels[category]} para {target_date.isoformat()}:"]
     for service in services:
@@ -233,7 +240,12 @@ async def check_aremko_availability_data(
 ) -> dict:
     category = canonical_service_type(service_type)
     target_date = resolve_fecha(fecha)
-    catalog, source = await fetch_catalog(category)
+
+    # Desayunos: no public catalog page to scrape — use fallback service list directly
+    if category == "desayunos":
+        catalog, source = FALLBACK_SERVICES["desayunos"], "fallback_catalog"
+    else:
+        catalog, source = await fetch_catalog(category)
 
     services = []
     for service in catalog:
