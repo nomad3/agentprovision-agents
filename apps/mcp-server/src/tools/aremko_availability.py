@@ -58,7 +58,7 @@ CURATED_MASSAGE_KEYWORDS = {
 
 FALLBACK_SERVICES = {
     "desayunos": [
-        {"id": "26", "nombre": "Desayuno", "precio": 0, "tipo": "desayuno"},
+        {"id": "26", "nombre": "Desayuno", "precio": 0, "tipo": "desayuno", "nota": "tarifa plana — mismo precio para 1 o 2 personas"},
     ],
     "cabanas": [
         {"id": "9", "nombre": "Cabaña Arrayan", "precio": 90000, "tipo": "cabana"},
