@@ -259,6 +259,36 @@
   "integrations": {
     "headline": "Se conecta con todo lo que ya usas"
   },
+  "productDemo": {
+    "heading": "Míralo en acción",
+    "tabs": {
+      "dashboard": "Dashboard",
+      "memory": "Memoria del Agente",
+      "chat": "IA de Comando",
+      "agents": "Flota de Agentes",
+      "workflows": "Workflows"
+    }
+  },
+  "bento": {
+    "heading": "Todo lo que tu equipo necesita",
+    "aiCommand": { "title": "IA de Comando", "desc": "Orquestación de agentes por chat. Lanza tareas en lenguaje natural y observa la ejecución de tu red." },
+    "memory": { "title": "Memoria del Agente", "desc": "Grafo de conocimiento persistente. Cada interacción construye contexto." },
+    "multiAgent": { "title": "Equipos Multi-Agente", "desc": "5 equipos especializados, cero fricción de coordinación." },
+    "workflows": { "title": "Workflows", "desc": "Constructor visual sin código con 25 plantillas nativas." },
+    "security": { "title": "Seguridad Empresarial", "desc": "Aislamiento multi-tenant, vault de credenciales cifrado, autenticación JWT." },
+    "inbox": { "title": "Monitor de Bandeja de Entrada", "desc": "Monitoreo proactivo de email y calendario, 24/7." },
+    "codeAgent": { "title": "Agente de Código", "desc": "Programación autónoma con Claude Code CLI. Crea PRs con trazas de auditoría completas." }
+  },
+  "footer": {
+    "tagline": "Orquestación de IA empresarial, creada para equipos que entregan.",
+    "links": {
+      "platform": "Plataforma",
+      "features": "Funciones",
+      "docs": "Documentación",
+      "github": "GitHub"
+    },
+    "copy": "© {{year}} AgentProvision. Todos los derechos reservados."
+  },
   "testimonials": {
     "heading": "Construido para Builders",
     "subtitle": "Como equipos estan usando agentprovision.com para desplegar agentes IA en produccion",
@@ -275,24 +305,9 @@
       }
     ]
   },
-  "ctaBanner": {
-    "heading": "El Centro de Comando para tu Negocio con IA",
-    "description": "Despliega agentes especializados, construye workflows empresariales y deja que Luna gestione tus operaciones — todo desde una sola plataforma.",
-    "badges": {
-      "multiTenant": "Multi-Tenant",
-      "encryptedVault": "Vault Encriptado",
-      "kubernetes": "Nativo en Kubernetes"
-    },
-    "stats": {
-      "agentTeams": "Equipos de Agentes",
-      "builtInTools": "Herramientas Incluidas",
-      "integrations": "Integraciones"
-    }
-  },
   "cta": {
     "heading": "Listo para Desplegar tu Equipo de Agentes IA?",
     "subtext": "Empieza a construir sistemas multi-agente hoy. Crea tu cuenta y ten a Luna, tu co-piloto IA, funcionando en minutos.",
-    "description": "Empieza a construir sistemas multi-agente hoy. Crea tu cuenta y ten a Luna, tu co-piloto IA, funcionando en minutos.",
     "button": "Comenzar Gratis"
   }
 }

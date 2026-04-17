@@ -259,6 +259,36 @@
   "integrations": {
     "headline": "Connects to everything you already use"
   },
+  "productDemo": {
+    "heading": "See it in action",
+    "tabs": {
+      "dashboard": "Dashboard",
+      "memory": "Agent Memory",
+      "chat": "AI Command",
+      "agents": "Agent Fleet",
+      "workflows": "Workflows"
+    }
+  },
+  "bento": {
+    "heading": "Everything your team needs",
+    "aiCommand": { "title": "AI Command", "desc": "Chat-driven agent orchestration. Dispatch multi-step tasks in plain language and watch your agent network execute." },
+    "memory": { "title": "Agent Memory", "desc": "Persistent knowledge graph. Every interaction builds context." },
+    "multiAgent": { "title": "Multi-Agent Teams", "desc": "5 specialized teams, zero coordination overhead." },
+    "workflows": { "title": "Workflows", "desc": "Visual no-code workflow builder with 25 native templates." },
+    "security": { "title": "Enterprise Security", "desc": "Multi-tenant isolation, encrypted credential vault, JWT auth." },
+    "inbox": { "title": "Inbox Monitor", "desc": "Proactive email and calendar monitoring, 24/7." },
+    "codeAgent": { "title": "Code Agent", "desc": "Autonomous coding powered by Claude Code CLI. Creates PRs with full audit trails." }
+  },
+  "footer": {
+    "tagline": "Enterprise AI orchestration, built for teams that ship.",
+    "links": {
+      "platform": "Platform",
+      "features": "Features",
+      "docs": "Docs",
+      "github": "GitHub"
+    },
+    "copy": "© {{year}} AgentProvision. All rights reserved."
+  },
   "testimonials": {
     "heading": "Built for Enterprise",
     "subtitle": "How industry leaders are using AgentProvision to run operations with a distributed agent network",
@@ -275,24 +305,9 @@
       }
     ]
   },
-  "ctaBanner": {
-    "heading": "The Command Center for Your AI Business",
-    "description": "Deploy specialized agents, build enterprise workflows, and let Luna manage your operations — all from one platform.",
-    "badges": {
-      "multiTenant": "Multi-Tenant",
-      "encryptedVault": "Encrypted Vault",
-      "kubernetes": "Kubernetes-Native"
-    },
-    "stats": {
-      "agentTeams": "Agent Teams",
-      "builtInTools": "Built-In Tools",
-      "integrations": "Integrations"
-    }
-  },
   "cta": {
     "heading": "Ready to Deploy Your Agent Network?",
     "subtext": "Launch a coordinated network of AI specialists today. Create your account and have Luna, your AI chief of staff, running in minutes.",
-    "description": "Launch a coordinated network of AI specialists today. Create your account and have Luna, your AI chief of staff, running in minutes.",
     "button": "Get Started Free"
   }
 }

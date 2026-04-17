@@ -1,15 +1,16 @@
 import { render, screen } from '@testing-library/react';
+import { mockUseTranslation } from '../../../test-utils/i18nMock';
 import MetricsStrip from '../MetricsStrip';
 
-// jsdom does not implement IntersectionObserver (used by framer-motion useInView)
 beforeAll(() => {
-  global.IntersectionObserver = class IntersectionObserver {
-    constructor() {}
+  global.IntersectionObserver = class {
     observe() {}
     unobserve() {}
     disconnect() {}
   };
 });
+
+jest.mock('react-i18next', () => ({ useTranslation: mockUseTranslation }));
 
 test('renders all 4 stat labels', () => {
   render(<MetricsStrip />);

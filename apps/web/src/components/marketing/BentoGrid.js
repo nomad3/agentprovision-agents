@@ -1,16 +1,17 @@
 import { useRef } from 'react';
 import { motion, useInView, useReducedMotion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { FiDatabase, FiUsers, FiGitPullRequest, FiShield, FiMail } from 'react-icons/fi';
 import BentoCard from './BentoCard';
 
-const cards = [
-  { id: 'ai-command', title: 'AI Command', desc: 'Chat-driven agent orchestration. Dispatch multi-step tasks in plain language and watch your agent network execute.', large: true },
-  { id: 'memory', title: 'Agent Memory', desc: 'Persistent knowledge graph. Every interaction builds context.', icon: FiDatabase },
-  { id: 'multi-agent', title: 'Multi-Agent Teams', desc: '5 specialized teams, zero coordination overhead.', icon: FiUsers },
-  { id: 'workflows', title: 'Workflows', desc: 'Visual no-code workflow builder with 25 native templates.', icon: FiGitPullRequest },
-  { id: 'security', title: 'Enterprise Security', desc: 'Multi-tenant isolation, encrypted credential vault, JWT auth.', icon: FiShield },
-  { id: 'inbox', title: 'Inbox Monitor', desc: 'Proactive email and calendar monitoring, 24/7.', icon: FiMail },
-  { id: 'code-agent', title: 'Code Agent', desc: 'Autonomous coding powered by Claude Code CLI. Creates PRs with full audit trails.', large: true },
+const CARDS = [
+  { id: 'ai-command', key: 'aiCommand', large: true },
+  { id: 'memory', key: 'memory', icon: FiDatabase },
+  { id: 'multi-agent', key: 'multiAgent', icon: FiUsers },
+  { id: 'workflows', key: 'workflows', icon: FiGitPullRequest },
+  { id: 'security', key: 'security', icon: FiShield },
+  { id: 'inbox', key: 'inbox', icon: FiMail },
+  { id: 'code-agent', key: 'codeAgent', large: true },
 ];
 
 const stagger = {
@@ -23,6 +24,7 @@ const item = {
 };
 
 export default function BentoGrid() {
+  const { t } = useTranslation('landing');
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-80px 0px' });
   const prefersReducedMotion = useReducedMotion();
@@ -30,7 +32,7 @@ export default function BentoGrid() {
   return (
     <section className="bento-section" id="platform">
       <div className="bento-section__inner">
-        <h2 className="bento-section__heading">Everything your team needs</h2>
+        <h2 className="bento-section__heading">{t('bento.heading')}</h2>
 
         <motion.div
           ref={ref}
@@ -39,15 +41,15 @@ export default function BentoGrid() {
           initial="hidden"
           animate={isInView ? 'visible' : 'hidden'}
         >
-          {cards.map(card => (
+          {CARDS.map(card => (
             <motion.div
               key={card.id}
               className={`bento-${card.id}`}
               variants={prefersReducedMotion ? {} : item}
             >
               <BentoCard
-                title={card.title}
-                description={card.desc}
+                title={t(`bento.${card.key}.title`)}
+                description={t(`bento.${card.key}.desc`)}
                 icon={card.icon}
                 large={card.large}
               />

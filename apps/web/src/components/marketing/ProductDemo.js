@@ -1,25 +1,34 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence, useInView, useReducedMotion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 
-const tabs = [
-  { id: 'dashboard', label: 'Dashboard', img: '/images/product/dashboard.png' },
-  { id: 'memory', label: 'Agent Memory', img: '/images/product/memory.png' },
-  { id: 'chat', label: 'AI Command', img: '/images/product/chat.png' },
-  { id: 'agents', label: 'Agent Fleet', img: '/images/product/agents.png' },
-  { id: 'workflows', label: 'Workflows', img: '/images/product/workflows.png' },
-];
+const TAB_IDS = ['dashboard', 'memory', 'chat', 'agents', 'workflows'];
+const TAB_IMGS = {
+  dashboard: '/images/product/dashboard.png',
+  memory: '/images/product/memory.png',
+  chat: '/images/product/chat.png',
+  agents: '/images/product/agents.png',
+  workflows: '/images/product/workflows.png',
+};
 
 export default function ProductDemo() {
+  const { t } = useTranslation('landing');
   const [active, setActive] = useState('dashboard');
   const ref = useRef(null);
   const isInView = useInView(ref, { once: true, margin: '-100px 0px' });
   const prefersReducedMotion = useReducedMotion();
+
+  const tabs = TAB_IDS.map(id => ({
+    id,
+    label: t(`productDemo.tabs.${id}`),
+    img: TAB_IMGS[id],
+  }));
   const current = tabs.find(tab => tab.id === active);
 
   return (
     <section className="product-demo" id="features">
       <div className="product-demo__inner">
-        <h2 className="product-demo__heading">See it in action</h2>
+        <h2 className="product-demo__heading">{t('productDemo.heading')}</h2>
 
         <motion.div
           ref={ref}

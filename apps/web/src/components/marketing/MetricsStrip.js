@@ -1,21 +1,22 @@
 import { useRef } from 'react';
 import { motion, useInView, useReducedMotion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { useCountUp } from './hooks/useCountUp';
 
-const stats = [
-  { key: 'tools', target: 81, suffix: '', label: 'MCP Tools' },
-  { key: 'workflows', target: 25, suffix: '+', label: 'Native Workflows' },
-  { key: 'responseTime', target: 5.5, suffix: 's', label: 'Avg Response Time', decimal: true },
-  { key: 'improvement', target: 88, suffix: '%', label: 'Faster Than Baseline' },
+const STATS = [
+  { key: 'tools', target: 81, suffix: '' },
+  { key: 'workflows', target: 25, suffix: '+' },
+  { key: 'responseTime', target: 5.5, suffix: 's', decimals: 1 },
+  { key: 'improvement', target: 88, suffix: '%' },
 ];
 
-function StatBlock({ target, suffix, label, decimal }) {
-  const [ref, display] = useCountUp(target, 1500);
-  const val = decimal ? parseFloat(display).toFixed(1) : display;
+function StatBlock({ statKey, target, suffix, decimals }) {
+  const { t } = useTranslation('landing');
+  const [ref, display] = useCountUp(target, 1500, { decimals });
   return (
     <div ref={ref} className="metrics-stat">
-      <span className="metrics-stat__value">{val}{suffix}</span>
-      <span className="metrics-stat__label">{label}</span>
+      <span className="metrics-stat__value">{display}{suffix}</span>
+      <span className="metrics-stat__label">{t(`statsStrip.${statKey}.label`)}</span>
     </div>
   );
 }
@@ -34,7 +35,9 @@ export default function MetricsStrip() {
       transition={{ duration: 0.5 }}
     >
       <div className="metrics-strip__inner">
-        {stats.map(s => <StatBlock key={s.key} {...s} />)}
+        {STATS.map(({ key, ...s }) => (
+          <StatBlock key={key} statKey={key} {...s} />
+        ))}
       </div>
     </motion.section>
   );
