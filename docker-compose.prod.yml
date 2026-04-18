@@ -1,70 +1,218 @@
+version: '3.8'
+
 services:
+  temporal:
+    image: temporalio/auto-setup:1.22.2
+    restart: always
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PWD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_SEEDS=db
+      - SKIP_SCHEMA_SETUP=false
+      - SKIP_DEFAULT_NAMESPACE_CREATION=false
+    ports:
+      - "127.0.0.1:7233:7233"
+      - "127.0.0.1:8233:8233"
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   api:
     build:
-      context: .
-      dockerfile: infra/docker/api.Dockerfile
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    environment:
-      APP_ENV: production
-      PROJECT_NAME: ServiceTsunami API
-      DATABASE_URL: ${DATABASE_URL}
-      REDIS_URL: ${REDIS_URL}
-      SECRET_KEY: ${SECRET_KEY}
-      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
-      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://servicetsunami.com,https://www.servicetsunami.com}
-    depends_on:
-      - db
-      - redis
+      context: ./apps/api
+      dockerfile: Dockerfile
+    restart: always
     ports:
-      - "18000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+      - api_storage:/app/storage
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/agentprovision
+      - TEMPORAL_ADDRESS=temporal:7233
+      - REDIS_URL=redis://redis:6379/0
+      - LOG_LEVEL=INFO
+      - EMBEDDING_SERVICE_URL=embedding-service:50051
+      - MEMORY_CORE_URL=memory-core:50052
+      - USE_RUST_EMBEDDING=true
+      - USE_RUST_MEMORY=true
+      - MCP_SERVER_URL=http://mcp-tools:8086
+    depends_on:
+      db:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      redis:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  embedding-service:
+    build:
+      context: ./apps/embedding-service
+      dockerfile: Dockerfile
+    image: agentprovision-embedding-service:prod
+    restart: always
+    environment:
+      - RUST_LOG=info
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  memory-core:
+    build:
+      context: ./apps/memory-core
+      dockerfile: Dockerfile
+    image: agentprovision-memory-core:prod
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/agentprovision
+      - EMBEDDING_SERVICE_URL=http://embedding-service:50051
+      - RUST_LOG=info
+    depends_on:
+      db:
+        condition: service_healthy
+      embedding-service:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   web:
-    image: servicetsunami_web:ci
-    command: npm run start
-    environment:
-      NODE_ENV: production
-      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://api:8000}
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "127.0.0.1:8002:80"
     depends_on:
       - api
-    ports:
-      - "13000:3000"
-
-  n8n:
-    image: n8nio/n8n:1.73.0
-    environment:
-      N8N_PORT: ${N8N_PORT:-5678}
-      N8N_PROTOCOL: ${N8N_PROTOCOL:-http}
-      N8N_HOST: ${N8N_HOST:-n8n}
-      N8N_BASIC_AUTH_ACTIVE: ${N8N_BASIC_AUTH_ACTIVE:-true}
-      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:-changeme}
-      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-https://n8n.servicetsunami.com/}
-      GENERIC_TIMEZONE: ${N8N_GENERIC_TIMEZONE:-Etc/UTC}
     deploy:
-      replicas: 1
-      restart_policy:
-        condition: on-failure
-    volumes:
-      - n8n-data:/home/node/.n8n
-    ports:
-      - "15678:5678"
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
 
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg13
+    restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-servicetsunami}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=agentprovision
     ports:
-      - "${POSTGRES_HOST_PORT:-15432}:5432"
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    restart: always
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+
+  mcp-tools:
+    build:
+      context: ./apps/mcp-server
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@db:5432/agentprovision
+      - MCP_API_KEY=${MCP_API_KEY}
+      - API_INTERNAL_KEY=${API_INTERNAL_KEY}
+      - API_BASE_URL=http://api:8000
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  code-worker:
+    build:
+      context: ./apps/code-worker
+      dockerfile: Dockerfile
+    restart: always
+    env_file:
+      - .env.production
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - API_BASE_URL=http://api:8000
+    volumes:
+      - claude_sessions:/home/codeworker/.claude
+    depends_on:
+      - temporal
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: always
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    depends_on:
+      - api
+      - web
 
 volumes:
-  postgres-data:
+  db_data:
+  claude_sessions:
+  hf_cache:
+  api_storage:
   n8n-data:

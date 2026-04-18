@@ -1,9 +1,17 @@
+import os as _os
+import time
+import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.v1 import routes as v1_routes
 from app.db.session import SessionLocal
 from app.db.init_db import init_db
+from app.core.logging import setup_logging, log_request
+
+# Initialize structured logging
+setup_logging(_os.environ.get("LOG_LEVEL", "INFO"))
+logger = logging.getLogger(__name__)
 
 db = SessionLocal()
 try:
@@ -12,6 +20,26 @@ finally:
     db.close()
 
 app = FastAPI(redirect_slashes=False)
+
+
+class LoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        response = await call_next(request)
+        duration_ms = (time.time() - start_time) * 1000
+        
+        log_request(
+            logger,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+            extra={
+                "client_ip": request.client.host,
+                "user_agent": request.headers.get("user-agent"),
+            }
+        )
+        return response
 
 
 class TrailingSlashMiddleware(BaseHTTPMiddleware):
@@ -36,6 +64,7 @@ class ForceHTTPSRedirectMiddleware(BaseHTTPMiddleware):
         return response
 
 
+app.add_middleware(LoggingMiddleware)
 app.add_middleware(TrailingSlashMiddleware)
 app.add_middleware(ForceHTTPSRedirectMiddleware)
 

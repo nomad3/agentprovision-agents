@@ -74,6 +74,21 @@ CODEX_CREDIT_ERROR_PATTERNS = (
     "429",
 )
 
+COPILOT_CREDIT_ERROR_PATTERNS = (
+    "rate limit",
+    "rate_limit",
+    "usage limit",
+    "quota exceeded",
+    "insufficient_quota",
+    "subscription required",
+    "copilot is not enabled",
+    "not authorized",
+    "forbidden",
+    "out of credits",
+    "too many requests",
+    "429",
+)
+
 
 @dataclass
 class CodeTaskInput:
@@ -226,6 +241,11 @@ def _is_codex_credit_exhausted(error_text: str) -> bool:
     return any(pattern in text for pattern in CODEX_CREDIT_ERROR_PATTERNS)
 
 
+def _is_copilot_credit_exhausted(error_text: str) -> bool:
+    text = (error_text or "").lower()
+    return any(pattern in text for pattern in COPILOT_CREDIT_ERROR_PATTERNS)
+
+
 _INTEGRATION_NOT_CONNECTED_MESSAGES = {
     "claude_code": (
         "Claude Code subscription is not connected. "
@@ -238,6 +258,11 @@ _INTEGRATION_NOT_CONNECTED_MESSAGES = {
     "gemini_cli": (
         "Gemini CLI is not connected. "
         "Please connect your Google account in Settings → Integrations."
+    ),
+    "copilot_cli": (
+        "GitHub Copilot CLI is not connected. "
+        "Please connect your GitHub account in Settings → Integrations "
+        "and ensure your GitHub Copilot subscription is active."
     ),
 }
 
@@ -953,71 +978,84 @@ def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
             claude_result = _execute_claude_chat(task_input, session_dir)
             if claude_result and claude_result.success:
                 return claude_result
+            if not _is_claude_credit_exhausted(claude_result.error or ""):
+                return claude_result
 
-            # Claude Code failed — try Codex first as fallback
-            logger.warning("Claude Code failed (%s), falling back to Codex", claude_result.error[:200] if claude_result and claude_result.error else "unknown")
+            # Claude Code exhausted — try Codex
+            logger.warning("Claude Code exhausted, falling back to Codex")
             codex_result = _execute_codex_chat(task_input, session_dir, image_path)
             if codex_result and codex_result.success:
                 meta = dict(codex_result.metadata or {})
                 meta["fallback_from"] = "claude_code"
-                meta["requested_platform"] = "claude_code"
-                meta["claude_error"] = (claude_result.error or "")[:200] if claude_result else "NoneType"
                 codex_result.metadata = meta
                 return codex_result
-
-            # Codex also failed — try Gemini CLI as final fallback
-            logger.warning("Codex fallback failed (%s), falling back to Gemini CLI", codex_result.error[:200] if codex_result and codex_result.error else "unknown")
-            gemini_result = _execute_gemini_chat(task_input, session_dir, image_path)
-            if gemini_result and gemini_result.success:
-                meta = dict(gemini_result.metadata or {})
+            
+            # Codex failed — try Copilot CLI
+            logger.warning("Codex fallback failed, falling back to Copilot CLI")
+            copilot_result = _execute_copilot_chat(task_input, session_dir)
+            if copilot_result and copilot_result.success:
+                meta = dict(copilot_result.metadata or {})
                 meta["fallback_from"] = "codex"
-                meta["requested_platform"] = "claude_code"
-                meta["claude_error"] = (claude_result.error or "")[:200] if claude_result else "NoneType"
-                meta["codex_error"] = (codex_result.error or "")[:200] if codex_result else "NoneType"
-                gemini_result.metadata = meta
-                return gemini_result
-
-            return ChatCliResult(
-                response_text="",
-                success=False,
-                error=f"Claude Code failed: {claude_result.error if claude_result else 'None'}. Codex fallback failed: {codex_result.error if codex_result else 'None'}. Gemini CLI fallback failed: {gemini_result.error if gemini_result else 'None'}",
-            )
+                copilot_result.metadata = meta
+                return copilot_result
+            
+            return claude_result  # Return original error if all fallbacks fail
 
         if task_input.platform == "codex":
             logger.info("Using platform: codex")
             codex_result = _execute_codex_chat(task_input, session_dir, image_path)
             if codex_result and codex_result.success:
                 return codex_result
+            if not _is_codex_credit_exhausted(codex_result.error or ""):
+                return codex_result
 
-            # Codex failed — fallback to Gemini CLI
-            logger.warning("Codex failed (%s), falling back to Gemini CLI", codex_result.error[:200] if codex_result and codex_result.error else "unknown")
-            gemini_result = _execute_gemini_chat(task_input, session_dir, image_path)
-            if gemini_result and gemini_result.success:
-                meta = dict(gemini_result.metadata or {})
-                meta["fallback_from"] = "codex"
-                meta["requested_platform"] = "codex"
-                meta["codex_error"] = (codex_result.error or "")[:200] if codex_result else "NoneType"
-                gemini_result.metadata = meta
-                return gemini_result
-
-            # Gemini failed — try Claude Code
-            logger.warning("Gemini fallback failed (%s), falling back to Claude Code", gemini_result.error[:200] if gemini_result and gemini_result.error else "unknown")
-            task_input.model = ""
+            # Codex exhausted — try Claude Code
+            logger.warning("Codex exhausted, falling back to Claude Code")
             claude_result = _execute_claude_chat(task_input, session_dir)
             if claude_result and claude_result.success:
                 meta = dict(claude_result.metadata or {})
-                meta["fallback_from"] = "gemini_cli"
-                meta["requested_platform"] = "codex"
-                meta["codex_error"] = (codex_result.error or "")[:200] if codex_result else "NoneType"
-                meta["gemini_error"] = (gemini_result.error or "")[:200] if gemini_result else "NoneType"
+                meta["fallback_from"] = "codex"
                 claude_result.metadata = meta
                 return claude_result
+            
+            # Claude failed — try Copilot CLI
+            logger.warning("Claude fallback failed, falling back to Copilot CLI")
+            copilot_result = _execute_copilot_chat(task_input, session_dir)
+            if copilot_result and copilot_result.success:
+                meta = dict(copilot_result.metadata or {})
+                meta["fallback_from"] = "claude_code"
+                copilot_result.metadata = meta
+                return copilot_result
+            
+            return codex_result
 
-            return ChatCliResult(
-                response_text="",
-                success=False,
-                error=f"Codex failed: {codex_result.error if codex_result else 'None'}. Gemini CLI fallback failed: {gemini_result.error if gemini_result else 'None'}. Claude Code fallback failed: {claude_result.error if claude_result else 'None'}",
-            )
+        if task_input.platform == "copilot_cli":
+            logger.info("Using platform: copilot_cli")
+            copilot_result = _execute_copilot_chat(task_input, session_dir)
+            if copilot_result and copilot_result.success:
+                return copilot_result
+            if not _is_copilot_credit_exhausted(copilot_result.error or ""):
+                return copilot_result
+
+            # Copilot exhausted — try Claude Code
+            logger.warning("Copilot CLI exhausted, falling back to Claude Code")
+            claude_result = _execute_claude_chat(task_input, session_dir)
+            if claude_result and claude_result.success:
+                meta = dict(claude_result.metadata or {})
+                meta["fallback_from"] = "copilot_cli"
+                claude_result.metadata = meta
+                return claude_result
+            
+            # Claude failed — try Codex
+            logger.warning("Claude fallback failed, falling back to Codex")
+            codex_result = _execute_codex_chat(task_input, session_dir, image_path)
+            if codex_result and codex_result.success:
+                meta = dict(codex_result.metadata or {})
+                meta["fallback_from"] = "claude_code"
+                codex_result.metadata = meta
+                return codex_result
+            
+            return copilot_result
 
         if task_input.platform == "gemini_cli":
             logger.info("Using platform: gemini_cli")
@@ -1705,7 +1743,113 @@ def _prepare_gemini_home(session_dir: str, auth_payload: dict, mcp_config_json: 
     return gemini_home
 
 
+def _execute_copilot_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliResult:
+    """Execute a chat turn via GitHub Copilot CLI."""
+    token = _fetch_github_token(task_input.tenant_id)
+    if not token:
+        return ChatCliResult(response_text="", success=False, error="GitHub not connected")
+
+    mcp_config_json = task_input.mcp_config
+    if not mcp_config_json:
+        mcp_config_json = json.dumps({
+            "servers": {
+                "agentprovision": {
+                    "type": "http",
+                    "url": f"{API_BASE_URL}/mcp",
+                    "headers": {"X-Internal-Key": API_INTERNAL_KEY or "dev_mcp_key", "X-Tenant-Id": task_input.tenant_id}
+                }
+            }
+        })
+
+    _prepare_copilot_home(session_dir, mcp_config_json)
+    
+    prompt = task_input.message
+    if task_input.instruction_md_content.strip():
+        prompt = f"{task_input.instruction_md_content.strip()}\n\n# User Request\n\n{task_input.message}"
+
+    # copilot -p "prompt" -s --no-ask-user --allow-all --add-dir <session_dir>
+    cmd = [
+        "copilot",
+        "-p", prompt,
+        "-s",                # silent mode
+        "--no-ask-user",     # autonomous
+        "--allow-all",       # full permissions
+        "--add-dir", session_dir
+    ]
+    if os.path.isdir(WORKSPACE):
+        cmd.extend(["--add-dir", WORKSPACE])
+
+    env = os.environ.copy()
+    env["COPILOT_GITHUB_TOKEN"] = token
+    env["HOME"] = session_dir  # Copilot reads ~/.copilot/
+
+    import threading as _threading
+    _stop_hb = _threading.Event()
+    def _heartbeat_loop():
+        elapsed = 0
+        try:
+            activity.heartbeat("Copilot CLI starting...")
+        except Exception:
+            pass
+        while not _stop_hb.wait(30):
+            elapsed += 30
+            try:
+                activity.heartbeat(f"Copilot CLI running... ({elapsed}s elapsed)")
+            except Exception:
+                pass
+    _hb_thread = _threading.Thread(target=_heartbeat_loop, daemon=True)
+    _hb_thread.start()
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=1500,
+            env=env,
+            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+        )
+    finally:
+        _stop_hb.set()
+        _hb_thread.join(timeout=5)
+
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "")[:1000]
+        return ChatCliResult(response_text="", success=False, error=f"CLI exit {result.returncode}: {err}")
+
+    raw = result.stdout.strip()
+    if not raw:
+        return ChatCliResult(response_text="", success=False, error="Copilot produced no output")
+
+    # Copilot CLI silent mode returns plain text.
+    return ChatCliResult(
+        response_text=raw,
+        success=True,
+        metadata={"platform": "copilot_cli"}
+    )
+
+
+def _prepare_copilot_home(session_dir: str, mcp_config_json: str) -> str:
+    """Prepare ~/.copilot/mcp-config.json for Copilot CLI."""
+    copilot_dir = os.path.join(session_dir, ".copilot")
+    os.makedirs(copilot_dir, exist_ok=True)
+
+    try:
+        mcp_data = json.loads(mcp_config_json)
+        config = {
+            "servers": mcp_data.get("mcpServers", mcp_data.get("servers", {}))
+        }
+    except Exception:
+        config = {"servers": {}}
+
+    with open(os.path.join(copilot_dir, "mcp-config.json"), "w") as f:
+        json.dump(config, f, indent=2)
+
+    return session_dir
+
+
 def _prepare_gemini_home_apikey(session_dir: str, mcp_config_json: str) -> str:
+
     """Minimal GEMINI_HOME for API key auth — no credentials.json needed."""
     gemini_home = os.path.join(session_dir, ".gemini")
     os.makedirs(gemini_home, exist_ok=True)

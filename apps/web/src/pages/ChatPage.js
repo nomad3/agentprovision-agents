@@ -11,6 +11,8 @@ import ReportVisualization from '../components/chat/ReportVisualization';
 import CollaborationPanel from '../components/CollaborationPanel';
 // LunaAvatar removed
 import { useLunaPresence } from '../context/LunaPresenceContext';
+import { useVoiceInput } from '../hooks/useVoiceInput';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import agentKitService from '../services/agentKit';
 import chatService from '../services/chat';
 import './ChatPage.css';
@@ -43,13 +45,15 @@ const ChatPage = () => {
   const [responseEmotion, setResponseEmotion] = useState(null);
   const responseEmotionTimerRef = useRef(null);
   const streamAbortRef = useRef(null);
-  const [isRecording, setIsRecording] = useState(false);
+  
+  // Voice & TTS
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState(null);
+  const { isRecording, start: startVoice, stop: stopVoice, recordedBlob } = useVoiceInput();
+  const { speak, cancel: cancelSpeak } = useSpeechSynthesis();
+
   const fileInputRef = useRef(null);
   const messagesEndRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
 
   // Collaboration state
   const [activeCollaboration, setActiveCollaboration] = useState(null);
@@ -231,69 +235,27 @@ const ChatPage = () => {
     }
   };
 
-  // ── Voice helpers ────────────────────────────────────────────────────────
-
-  const stripMarkdown = (text) => {
-    return text
-      .replace(/#{1,6}\s+/g, '')           // headings
-      .replace(/(\*\*|__)(.*?)\1/g, '$2')  // bold
-      .replace(/(\*|_)(.*?)\1/g, '$2')     // italic
-      .replace(/`{1,3}[^`]*`{1,3}/g, '')   // code
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // links
-      .replace(/^[-*+]\s+/gm, '')          // list bullets
-      .replace(/^\d+\.\s+/gm, '')          // numbered list
-      .replace(/>\s+/g, '')                // blockquotes
-      .replace(/\n{2,}/g, '. ')            // paragraph breaks → pause
-      .trim();
-  };
+  // Handle recorded blob
+  useEffect(() => {
+    if (recordedBlob) {
+      const mimeType = recordedBlob.type;
+      const ext = mimeType.includes('webm') ? 'webm' : 'ogg';
+      const file = new File([recordedBlob], `voice-message.${ext}`, { type: mimeType });
+      setAttachedFile(file);
+    }
+  }, [recordedBlob]);
 
   const speakText = (text, messageId) => {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
     if (speakingMessageId === messageId) {
+      cancelSpeak();
       setSpeakingMessageId(null);
       return;
     }
-    const utterance = new SpeechSynthesisUtterance(stripMarkdown(text));
-    utterance.rate = 1.05;
-    utterance.pitch = 1.0;
-    // Prefer a natural-sounding voice if available
-    const voices = window.speechSynthesis.getVoices();
-    const preferred = voices.find(v => /samantha|karen|google us english|zira/i.test(v.name));
-    if (preferred) utterance.voice = preferred;
-    utterance.onend = () => setSpeakingMessageId(null);
-    utterance.onerror = () => setSpeakingMessageId(null);
     setSpeakingMessageId(messageId);
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
-      recorder.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        const ext = mimeType.includes('webm') ? 'webm' : 'ogg';
-        const file = new File([blob], `voice-message.${ext}`, { type: mimeType });
-        setAttachedFile(file);
-        setIsRecording(false);
-      };
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setIsRecording(true);
-    } catch {
-      alert('Microphone access denied. Please allow microphone permissions.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
+    speak(text, {
+      onEnd: () => setSpeakingMessageId(null),
+      onError: () => setSpeakingMessageId(null),
+    });
   };
 
   const handleSelectSession = (session) => {

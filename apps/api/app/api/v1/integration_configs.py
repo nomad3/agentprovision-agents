@@ -58,6 +58,14 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         "auth_type": "oauth",
         "oauth_provider": "github",
     },
+    "copilot_cli": {
+        "display_name": "GitHub Copilot CLI",
+        "description": "AI coding agent powered by GitHub Copilot subscription",
+        "icon": "FaGithub",
+        "auth_type": "oauth",
+        "oauth_provider": "github",
+        "credentials": [],
+    },
     "linkedin": {
         "display_name": "LinkedIn",
         "description": "Post updates, manage profile, and send messages",

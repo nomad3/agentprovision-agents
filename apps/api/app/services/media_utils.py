@@ -4,11 +4,18 @@ LLM-compatible message parts (inline_data / text).
 """
 
 import base64
+import functools
 import io
 import logging
 from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
+
+@functools.lru_cache(maxsize=1)
+def get_whisper_model(model_name: str = "base"):
+    """Load and cache the whisper model."""
+    import whisper
+    return whisper.load_model(model_name)
 
 # ── MIME-type sets ──────────────────────────────────────────────────────────
 
@@ -162,7 +169,6 @@ def transcribe_audio_bytes(audio_bytes: bytes) -> str | None:
     try:
         import numpy as np
         import soundfile as sf
-        import whisper
 
         buf = io.BytesIO(audio_bytes)
         data, sr = sf.read(buf, dtype="float32")
@@ -177,7 +183,7 @@ def transcribe_audio_bytes(audio_bytes: bytes) -> str | None:
             except Exception:
                 pass  # proceed anyway; whisper handles other rates reasonably
 
-        model = whisper.load_model("base")
+        model = get_whisper_model("base")
         result = model.transcribe(data)
         text = (result.get("text") or "").strip()
         return text if text else None
