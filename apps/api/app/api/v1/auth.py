@@ -20,6 +20,9 @@ from app.services import users as user_service
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+_PASSWORD_RESET_MESSAGE = "Password reset instructions sent if email is registered"
+
+
 @router.post("/login", response_model=token_schema.Token)
 def login_for_access_token(
     db: Session = Depends(deps.get_db), form_data: OAuth2PasswordRequestForm = Depends()
@@ -76,8 +79,8 @@ def recover_password(email: str, db: Session = Depends(deps.get_db)):
     user = user_service.get_user_by_email(db, email=email)
 
     if not user:
-        # We don't want to reveal if a user exists or not for security reasons
-        return {"message": "Password reset email sent if user exists"}
+        # Identical message for missing user — prevents email enumeration
+        return {"message": _PASSWORD_RESET_MESSAGE}
 
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -89,7 +92,7 @@ def recover_password(email: str, db: Session = Depends(deps.get_db)):
     # In a real app, send an email here. For now, log it.
     logger.info(f"Password reset token generated for {email}")
 
-    return {"message": "Password reset instructions sent if email exists"}
+    return {"message": _PASSWORD_RESET_MESSAGE}
 
 @router.post("/reset-password")
 def reset_password(

@@ -131,3 +131,65 @@ def test_skill_execution_does_not_expose_secret_key(tmp_path):
 
     assert result.get("result", {}).get("secret") != "super-secret-sentinel-value", \
         "SECRET_KEY must not be visible to skill scripts"
+
+
+def _make_auth_test_client():
+    """Create a minimal FastAPI test app with just the auth router mounted,
+    bypassing database initialisation which requires a live PostgreSQL server."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.api import deps
+    import app.api.v1.auth as auth_module
+
+    test_app = FastAPI()
+
+    def _stub_db():
+        yield MagicMock()
+
+    test_app.dependency_overrides[deps.get_db] = _stub_db
+    test_app.include_router(auth_module.router, prefix="/api/v1/auth")
+    return TestClient(test_app, raise_server_exceptions=False)
+
+
+def test_password_recovery_no_debug_token():
+    """debug_token must never appear in the password recovery response."""
+    from app.services import users as user_service
+
+    with patch.object(user_service, "get_user_by_email", return_value=None):
+        client = _make_auth_test_client()
+        resp = client.post("/api/v1/auth/password-recovery/nonexistent@example.com")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "debug_token" not in data, "debug_token must not be exposed in API response"
+    assert "token" not in data, "Raw token must not be exposed in API response"
+
+
+def test_password_recovery_same_message_for_existing_and_missing_email():
+    """Response message must be identical for existing and non-existing emails (prevent enumeration)."""
+    import uuid
+    from app.models.user import User
+    from app.services import users as user_service
+
+    mock_user = MagicMock(spec=User)
+    mock_user.password_reset_token = None
+    mock_user.password_reset_expires = None
+    mock_user.id = uuid.uuid4()
+    mock_user.email = "existing@example.com"
+
+    with patch.object(user_service, "get_user_by_email", return_value=None):
+        client = _make_auth_test_client()
+        resp_missing = client.post(
+            "/api/v1/auth/password-recovery/definitely_not_registered_12345@example.com"
+        )
+
+    with patch.object(user_service, "get_user_by_email", return_value=mock_user):
+        client2 = _make_auth_test_client()
+        # db.add and db.commit are no-ops on the MagicMock stub db
+        resp_existing = client2.post(
+            "/api/v1/auth/password-recovery/existing@example.com"
+        )
+
+    assert resp_missing.status_code == resp_existing.status_code, \
+        "HTTP status must be identical for existing and missing emails"
+    assert resp_missing.json().get("message") == resp_existing.json().get("message"), \
+        "Response messages must be identical to prevent user enumeration"
