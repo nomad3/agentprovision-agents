@@ -14,14 +14,29 @@ import {
   FaCheckCircle,
   FaTimesCircle,
   FaLink,
+  FaMicrophone,
+  FaStop,
+  FaVolumeUp,
+  FaVolumeMute,
 } from 'react-icons/fa';
 import channelService from '../services/channelService';
+import mediaService from '../services/mediaService';
+import { useVoiceInput } from '../hooks/useVoiceInput';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 
 const WhatsAppChannelCard = () => {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
+
+  // Voice & TTS
+  const [transcribing, setTranscribing] = useState(false);
+  const [ttsEnabled, setTtsEnabled] = useState(() => {
+    return localStorage.getItem('whatsapp_tts_enabled') === 'true';
+  });
+  const { isRecording, supported: voiceSupported, error: voiceError, start: startVoice, stop: stopVoice, recordedBlob, setError: setVoiceError } = useVoiceInput();
+  const { supported: ttsSupported, speak, cancel: cancelSpeak, speaking } = useSpeechSynthesis();
 
   // Enable form
   const [dmPolicy, setDmPolicy] = useState('allowlist');
@@ -62,6 +77,44 @@ const WhatsAppChannelCard = () => {
   useEffect(() => {
     fetchStatus();
   }, [fetchStatus]);
+
+  // Handle recorded blob
+  useEffect(() => {
+    if (recordedBlob) {
+      const handleTranscription = async () => {
+        try {
+          setTranscribing(true);
+          setError(null);
+          const res = await mediaService.transcribeAudio(recordedBlob);
+          if (res.data.transcript) {
+            setSendMessage((prev) => (prev ? `${prev} ${res.data.transcript}` : res.data.transcript));
+          } else if (res.data.engine === 'unavailable') {
+            setError('Transcription service is currently unavailable.');
+          } else {
+            setError('Could not understand the audio. Please try again.');
+          }
+        } catch (err) {
+          setError('Failed to transcribe audio.');
+        } finally {
+          setTranscribing(false);
+        }
+      };
+      handleTranscription();
+    }
+  }, [recordedBlob]);
+
+  // Handle voice errors
+  useEffect(() => {
+    if (voiceError) {
+      setError(voiceError);
+      setVoiceError(null);
+    }
+  }, [voiceError, setVoiceError]);
+
+  // Persist TTS preference
+  useEffect(() => {
+    localStorage.setItem('whatsapp_tts_enabled', ttsEnabled);
+  }, [ttsEnabled]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -242,18 +295,35 @@ const WhatsAppChannelCard = () => {
             Channel Status
           </span>
         </div>
-        <Badge
-          bg={isConnected ? 'success' : isLinked ? 'warning' : isEnabled ? 'info' : 'secondary'}
-          style={{ fontSize: '0.7rem' }}
-        >
-          {isConnected
-            ? 'Connected'
-            : isLinked
-              ? 'Disconnected'
-              : isEnabled
-                ? 'Not Linked'
-                : 'Not Enabled'}
-        </Badge>
+        <div className="d-flex align-items-center gap-2">
+          {ttsSupported && (
+            <Button
+              variant="link"
+              size="sm"
+              className="p-0 text-muted"
+              title={ttsEnabled ? 'Disable TTS playback' : 'Enable TTS playback'}
+              onClick={() => {
+                if (ttsEnabled) cancelSpeak();
+                setTtsEnabled(!ttsEnabled);
+              }}
+              style={{ fontSize: '0.9rem' }}
+            >
+              {ttsEnabled ? <FaVolumeUp /> : <FaVolumeMute />}
+            </Button>
+          )}
+          <Badge
+            bg={isConnected ? 'success' : isLinked ? 'warning' : isEnabled ? 'info' : 'secondary'}
+            style={{ fontSize: '0.7rem' }}
+          >
+            {isConnected
+              ? 'Connected'
+              : isLinked
+                ? 'Disconnected'
+                : isEnabled
+                  ? 'Not Linked'
+                  : 'Not Enabled'}
+          </Badge>
+        </div>
       </div>
 
       {/* ── Not Enabled: Show enable form ── */}
@@ -633,7 +703,7 @@ const WhatsAppChannelCard = () => {
               size="sm"
               className="flex-grow-1"
               onClick={handleSend}
-              disabled={sending || !sendTo.trim() || !sendMessage.trim()}
+              disabled={sending || transcribing || !sendTo.trim() || !sendMessage.trim()}
             >
               {sending ? (
                 <Spinner animation="border" size="sm" style={{ width: 14, height: 14, borderWidth: 1.5 }} className="me-2" />
@@ -642,6 +712,27 @@ const WhatsAppChannelCard = () => {
               )}
               Send
             </Button>
+            {voiceSupported && (
+              <Button
+                variant={isRecording ? 'danger' : 'outline-secondary'}
+                size="sm"
+                onMouseDown={startVoice}
+                onMouseUp={stopVoice}
+                onMouseLeave={isRecording ? stopVoice : undefined}
+                onTouchStart={startVoice}
+                onTouchEnd={stopVoice}
+                disabled={sending || transcribing}
+                title="Hold to speak"
+              >
+                {transcribing ? (
+                  <Spinner animation="border" size="sm" style={{ width: 12, height: 12, borderWidth: 1.5 }} />
+                ) : isRecording ? (
+                  <FaStop size={12} />
+                ) : (
+                  <FaMicrophone size={12} />
+                )}
+              </Button>
+            )}
             <Button
               variant="outline-secondary"
               size="sm"

@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir --break-system-packages --no-deps .
 
 # Copy source
 COPY src/ src/
-COPY .env.example .env
+COPY pyproject.toml .
 
 # Set ownership
 RUN chown -R mcpuser:mcpuser /app

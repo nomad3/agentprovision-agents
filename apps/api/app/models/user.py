@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Boolean, Column, String, ForeignKey
+from sqlalchemy import Boolean, Column, DateTime, String, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -14,5 +14,7 @@ class User(Base):
     hashed_password = Column(String)
     is_active = Column(Boolean(), default=True)
     is_superuser = Column(Boolean(), default=False)
+    password_reset_token = Column(String, index=True, nullable=True)
+    password_reset_expires = Column(DateTime(), nullable=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"))
     tenant = relationship("Tenant", back_populates="users")

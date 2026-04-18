@@ -7,7 +7,14 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 
-replicaCount: 1
+replicaCount: 2
+
+# Deployment strategy - RollingUpdate for zero-downtime
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
 
 container:
   port: 8000
@@ -32,14 +39,14 @@ securityContext:
     drop:
       - ALL
 
-# Resource allocation - minimal for cost savings
+# Resource allocation - Production ready
 resources:
   requests:
-    cpu: 100m
-    memory: 256Mi
-  limits:
-    cpu: 500m
+    cpu: 200m
     memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
 
 # Health checks for FastAPI
 livenessProbe:
@@ -165,13 +172,18 @@ env:
   - name: MCP_TOOLS_URL
     value: "http://agentprovision-mcp:80"
 
-# Horizontal Pod Autoscaler - disabled for cost savings
+# Horizontal Pod Autoscaler - Enable for production
 autoscaling:
-  enabled: false
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
 
-# Pod Disruption Budget - disabled with 1 replica
+# Pod Disruption Budget - Ensure availability during maintenance
 podDisruptionBudget:
-  enabled: false
+  enabled: true
+  minAvailable: 1
 
 # Persistent storage for datasets
 persistence:

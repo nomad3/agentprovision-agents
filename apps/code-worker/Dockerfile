@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
-# Install system deps: git, gh CLI, Node.js 20 LTS
+# Install system deps: git, gh CLI, Node.js 22
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl gnupg ca-certificates socat && \
-    # Node.js 20
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    # Node.js 22
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     # GitHub CLI
     curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | \
@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install CLI providers
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli opencode-ai
+RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli opencode-ai @github/copilot
 
 # Python deps
 WORKDIR /app
