@@ -33,9 +33,21 @@ class Agent(Base):
     memory_domains = Column(JSONB, nullable=True)  # list of memory domain strings for scoped recall
     escalation_agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
 
+    # Ownership
+    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    team_id = Column(UUID(as_uuid=True), ForeignKey("agent_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Lifecycle
+    status = Column(String(20), nullable=False, default="production")  # draft|staging|production|deprecated
+    version = Column(Integer, nullable=False, default=1)
+    successor_agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
+
     # Relationships
     llm_config = relationship("LLMConfig", foreign_keys=[llm_config_id])
-    escalation_agent = relationship("Agent", foreign_keys=[escalation_agent_id], remote_side="Agent.id")
+    escalation_agent = relationship("Agent", foreign_keys=[escalation_agent_id], remote_side="Agent.id", overlaps="successor")
+    owner = relationship("User", foreign_keys=[owner_user_id])
+    team = relationship("AgentGroup", foreign_keys=[team_id])
+    successor = relationship("Agent", foreign_keys=[successor_agent_id], remote_side="Agent.id", overlaps="escalation_agent")
 
     # Add relationship to skills
     skills = relationship("AgentSkill", back_populates="agent")
