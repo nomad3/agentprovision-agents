@@ -410,6 +410,7 @@ def get_agent_performance(
         db.query(AgentPerformanceSnapshot)
         .filter(
             AgentPerformanceSnapshot.agent_id == agent_id,
+            AgentPerformanceSnapshot.tenant_id == current_user.tenant_id,
             AgentPerformanceSnapshot.window_start >= start_dt,
         )
         .all()
