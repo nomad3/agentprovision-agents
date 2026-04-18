@@ -111,3 +111,23 @@ def test_skill_github_import_requires_superuser():
         json={"repo_url": "https://github.com/example/skill"},
     )
     assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
+
+
+def test_skill_execution_does_not_expose_secret_key(tmp_path):
+    """Skill scripts must not be able to read SECRET_KEY from the environment."""
+    import textwrap
+    os.environ["SECRET_KEY"] = "super-secret-sentinel-value"
+
+    script = tmp_path / "script.py"
+    script.write_text(textwrap.dedent("""
+        import os
+        def execute(inputs):
+            return {"secret": os.environ.get("SECRET_KEY", "NOT_FOUND")}
+    """))
+
+    from app.services.skill_manager import SkillManager
+    mgr = SkillManager()
+    result = mgr._execute_python("test-skill", str(script), {})
+
+    assert result.get("result", {}).get("secret") != "super-secret-sentinel-value", \
+        "SECRET_KEY must not be visible to skill scripts"
