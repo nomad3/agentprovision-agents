@@ -62,3 +62,7 @@ class Agent(Base):
         cascade="all, delete-orphan",
         foreign_keys="AgentIntegrationConfig.agent_id",
     )
+
+
+# Ensure AgentIntegrationConfig is registered before mappers finalize
+from app.models.agent_integration_config import AgentIntegrationConfig  # noqa: E402, F401
