@@ -1,6 +1,8 @@
-from pydantic import BaseModel
-from typing import List, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 import uuid
+
+from pydantic import BaseModel
 
 from app.schemas.agent_skill import AgentSkill as AgentSkillSchema
 
@@ -49,3 +51,19 @@ class AgentPromoteRequest(BaseModel):
 class AgentDeprecateRequest(BaseModel):
     successor_agent_id: Optional[uuid.UUID] = None
     notes: Optional[str] = None
+
+
+class AgentVersionResponse(BaseModel):
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    tenant_id: uuid.UUID
+    version: int
+    config_snapshot: Dict[str, Any]
+    status: str
+    notes: Optional[str] = None
+    promoted_by: Optional[uuid.UUID] = None
+    promoted_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

@@ -201,6 +201,116 @@ def deprecate_agent(
     return agent
 
 
+@router.get("/{agent_id}/versions", response_model=List[schemas.agent.AgentVersionResponse])
+def list_agent_versions(
+    agent_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent or str(agent.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    versions = (
+        db.query(AgentVersion)
+        .filter(AgentVersion.agent_id == agent_id)
+        .order_by(AgentVersion.version.desc())
+        .all()
+    )
+    return versions
+
+
+@router.post("/{agent_id}/versions/{version_num}/rollback", response_model=schemas.agent.Agent)
+def rollback_agent_version(
+    version_num: int,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+    agent: Agent = Depends(deps.require_agent_permission("promote")),
+):
+    target = (
+        db.query(AgentVersion)
+        .filter(AgentVersion.agent_id == agent.id, AgentVersion.version == version_num)
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    snapshot = target.config_snapshot
+    agent.name = snapshot.get("name", agent.name)
+    agent.description = snapshot.get("description", agent.description)
+    agent.status = "production"
+    for field in ("persona_prompt", "capabilities", "tool_groups", "config"):
+        if field in snapshot and hasattr(agent, field):
+            setattr(agent, field, snapshot[field])
+
+    live_version = (
+        db.query(AgentVersion)
+        .filter(AgentVersion.agent_id == agent.id, AgentVersion.version == agent.version)
+        .first()
+    )
+    if live_version:
+        live_version.status = "rolled_back"
+
+    new_version_num = agent.version + 1
+    rollback_record = AgentVersion(
+        agent_id=agent.id,
+        tenant_id=agent.tenant_id,
+        version=new_version_num,
+        config_snapshot=snapshot,
+        status="production",
+        notes=f"Rollback to version {version_num}",
+        promoted_by=current_user.id,
+        promoted_at=datetime.utcnow(),
+    )
+    db.add(rollback_record)
+    agent.version = new_version_num
+    db.commit()
+    db.refresh(agent)
+    return agent
+
+
+@router.get("/{agent_id}/versions/{version_num}/diff")
+def diff_agent_version(
+    agent_id: uuid.UUID,
+    version_num: int,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent or str(agent.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    target = (
+        db.query(AgentVersion)
+        .filter(AgentVersion.agent_id == agent_id, AgentVersion.version == version_num)
+        .first()
+    )
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    snapshot = target.config_snapshot
+    current_values = {
+        "name": agent.name,
+        "description": agent.description,
+        "status": agent.status,
+        "persona_prompt": agent.persona_prompt,
+        "capabilities": agent.capabilities,
+        "tool_groups": agent.tool_groups,
+        "config": agent.config,
+    }
+
+    changed = []
+    unchanged = []
+    for field, old_val in snapshot.items():
+        new_val = current_values.get(field)
+        if old_val != new_val:
+            changed.append({"field": field, "old": old_val, "new": new_val})
+        else:
+            unchanged.append(field)
+
+    return {"changed": changed, "unchanged": unchanged}
+
+
 @router.post("/{agent_id}/heartbeat")
 def agent_heartbeat(
     agent_id: uuid.UUID,
