@@ -31,6 +31,21 @@ class Agent(AgentBase):
     id: uuid.UUID
     tenant_id: uuid.UUID
     skills: List[AgentSkillSchema] = []
+    # Lifecycle fields
+    status: str = "production"
+    version: int = 1
+    owner_user_id: Optional[uuid.UUID] = None
+    team_id: Optional[uuid.UUID] = None
+    successor_agent_id: Optional[uuid.UUID] = None
 
     class Config:
         from_attributes = True
+
+
+class AgentPromoteRequest(BaseModel):
+    notes: Optional[str] = None
+
+
+class AgentDeprecateRequest(BaseModel):
+    successor_agent_id: Optional[uuid.UUID] = None
+    notes: Optional[str] = None

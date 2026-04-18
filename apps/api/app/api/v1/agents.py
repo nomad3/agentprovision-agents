@@ -1,3 +1,6 @@
+import logging
+import uuid
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -5,11 +8,21 @@ from sqlalchemy.orm import Session
 
 from app import schemas
 from app.api import deps
-from app.services import agents as agent_service
+from app.core.config import settings
+from app.models.agent import Agent
+from app.models.agent_version import AgentVersion
 from app.models.user import User
-import uuid
+from app.services import agents as agent_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Status transition order for promote
+_PROMOTE_TRANSITIONS = {
+    "draft": "staging",
+    "staging": "production",
+}
 
 @router.get("", response_model=List[schemas.agent.Agent])
 def read_agents(
@@ -86,3 +99,102 @@ def delete_agent(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     agent_service.delete_agent(db=db, agent_id=agent_id)
     return {"deleted": True}
+
+
+@router.post("/{agent_id}/promote", response_model=schemas.agent.Agent)
+def promote_agent(
+    *,
+    db: Session = Depends(deps.get_db),
+    body: schemas.agent.AgentPromoteRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    agent: Agent = Depends(deps.require_agent_permission("promote")),
+):
+    next_status = _PROMOTE_TRANSITIONS.get(agent.status)
+    if next_status is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot promote agent with status '{agent.status}'",
+        )
+
+    # Snapshot current config before transitioning
+    config_snapshot = {
+        "name": agent.name,
+        "description": agent.description,
+        "status": agent.status,
+        "persona_prompt": agent.persona_prompt,
+        "capabilities": agent.capabilities,
+        "tool_groups": agent.tool_groups,
+        "config": agent.config,
+    }
+
+    version_record = AgentVersion(
+        agent_id=agent.id,
+        tenant_id=agent.tenant_id,
+        version=agent.version,
+        config_snapshot=config_snapshot,
+        promoted_by=current_user.id,
+        promoted_at=datetime.utcnow(),
+        status=next_status,
+        notes=body.notes,
+    )
+    db.add(version_record)
+
+    agent.status = next_status
+    agent.version = agent.version + 1
+    db.commit()
+    db.refresh(agent)
+    return agent
+
+
+@router.post("/{agent_id}/deprecate", response_model=schemas.agent.Agent)
+def deprecate_agent(
+    *,
+    db: Session = Depends(deps.get_db),
+    body: schemas.agent.AgentDeprecateRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    agent: Agent = Depends(deps.require_agent_permission("deprecate")),
+):
+    if agent.status == "deprecated":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent is already deprecated",
+        )
+
+    if body.successor_agent_id:
+        successor = db.query(Agent).filter(Agent.id == body.successor_agent_id).first()
+        if not successor or str(successor.tenant_id) != str(agent.tenant_id):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Successor agent not found",
+            )
+        agent.successor_agent_id = successor.id
+
+    agent.status = "deprecated"
+    db.commit()
+    db.refresh(agent)
+    return agent
+
+
+@router.post("/{agent_id}/heartbeat")
+def agent_heartbeat(
+    agent_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    agent = db.query(Agent).filter(Agent.id == agent_id).first()
+    if not agent or str(agent.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    try:
+        import redis as redis_lib
+        r = redis_lib.from_url(settings.REDIS_URL)
+        r.set(f"agent:available:{agent_id}", "1", ex=90)
+    except Exception as exc:
+        logger.warning("Heartbeat Redis write failed for agent %s: %s", agent_id, exc)
+
+    # Touch updated_at if the column exists (Agent model may not have it)
+    if hasattr(agent, "updated_at"):
+        agent.updated_at = datetime.utcnow()
+        db.commit()
+
+    return {"status": "ok", "agent_id": str(agent_id)}
