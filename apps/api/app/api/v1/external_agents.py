@@ -1,4 +1,5 @@
 import ipaddress
+import socket
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -20,9 +21,36 @@ _PRIVATE_RANGES = (
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS IMDS
+    ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
 )
+
+
+def _ip_is_private(addr: ipaddress._BaseAddress) -> bool:
+    return any(addr in net for net in _PRIVATE_RANGES)
+
+
+def _resolve_and_check_host(host: str) -> None:
+    """Resolve hostname and check ALL returned IPs against private ranges.
+    Raises HTTPException 422 if any resolved IP falls in a blocked range.
+    """
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        raise HTTPException(status_code=422, detail=f"Could not resolve host: {host}")
+    for info in infos:
+        ip_str = info[4][0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if _ip_is_private(addr):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Host {host} resolves to private/internal address {ip_str}",
+            )
 
 
 def _validate_external_url(url: str) -> None:
@@ -30,12 +58,15 @@ def _validate_external_url(url: str) -> None:
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(status_code=422, detail="Only http/https endpoints are allowed")
     host = parsed.hostname or ""
+    if not host:
+        raise HTTPException(status_code=422, detail="URL must include a host")
     try:
         addr = ipaddress.ip_address(host)
-        if any(addr in net for net in _PRIVATE_RANGES):
+        if _ip_is_private(addr):
             raise HTTPException(status_code=422, detail="Private or internal IP addresses are not allowed")
     except ValueError:
-        pass  # hostname — DNS-level SSRF is a deeper concern; IP check is the critical guard
+        # hostname — resolve and check every A/AAAA record
+        _resolve_and_check_host(host)
 
 
 def _get_agent_or_404(db: Session, agent_id: uuid.UUID, tenant_id: uuid.UUID) -> ExternalAgent:
@@ -133,6 +164,8 @@ def health_check(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     agent = _get_agent_or_404(db, agent_id, current_user.tenant_id)
+    # Re-validate at dispatch time to defeat DNS rebinding / TOCTOU attacks
+    _validate_external_url(agent.endpoint_url)
     try:
         import httpx
         url = agent.endpoint_url.rstrip("/") + agent.health_check_path
@@ -142,6 +175,8 @@ def health_check(
             agent.last_seen_at = datetime.utcnow()
         else:
             agent.status = "offline"
+    except HTTPException:
+        raise
     except Exception:
         agent.status = "offline"
     db.commit()
@@ -158,6 +193,7 @@ def test_task(
 ):
     from app.services.external_agent_adapter import adapter
     agent = _get_agent_or_404(db, agent_id, current_user.tenant_id)
+    _validate_external_url(agent.endpoint_url)
     task = body.get("task", "")
     try:
         result = adapter.dispatch(agent, task, {}, db)

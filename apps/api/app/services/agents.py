@@ -25,7 +25,11 @@ def create_tenant_agent(db: Session, *, item_in: AgentCreate, tenant_id: uuid.UU
         from app.schemas.agent_kit import AgentKitCreate, AgentKitConfig
 
         kit_config = AgentKitConfig(
-            primary_objective=(item_in.config.get("system_prompt") if item_in.config else None) or f"Act as {db_item.name}",
+            primary_objective=(
+                item_in.persona_prompt
+                or (item_in.config.get("system_prompt") if item_in.config else None)
+                or f"Act as {db_item.name}"
+            ),
             triggers=[],
             metrics=[],
             constraints=[],
