@@ -58,6 +58,9 @@ def create_agent(
     Create new agent for the current tenant.
     """
     item = agent_service.create_tenant_agent(db=db, item_in=item_in, tenant_id=current_user.tenant_id)
+    item.owner_user_id = current_user.id
+    db.commit()
+    db.refresh(item)
     return item
 
 @router.get("/discover")
@@ -97,9 +100,10 @@ def import_agent(
         status="draft",
     )
     item = agent_service.create_tenant_agent(db=db, item_in=item_in, tenant_id=current_user.tenant_id)
+    item.owner_user_id = current_user.id
+    db.commit()
+    db.refresh(item)
     return item
-
-
 @router.get("/{agent_id}", response_model=schemas.agent.Agent)
 def read_agent_by_id(
     agent_id: uuid.UUID,
