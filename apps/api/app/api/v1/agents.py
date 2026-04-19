@@ -20,6 +20,7 @@ from app.schemas.audit import AuditLogEntry
 from app.services import agents as agent_service
 from app.services.agent_importer import parse_agent_definition
 from app.services.agent_registry import registry
+from app.services.audit_log import write_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,13 @@ def promote_agent(
     agent.version = agent.version + 1
     db.commit()
     db.refresh(agent)
+    write_audit_log(
+        agent_id=agent.id,
+        tenant_id=agent.tenant_id,
+        invoked_by_user_id=current_user.id,
+        invocation_type="lifecycle",
+        status=f"promoted_to_{next_status}",
+    )
     return agent
 
 
@@ -223,6 +231,13 @@ def deprecate_agent(
     agent.status = "deprecated"
     db.commit()
     db.refresh(agent)
+    write_audit_log(
+        agent_id=agent.id,
+        tenant_id=agent.tenant_id,
+        invoked_by_user_id=current_user.id,
+        invocation_type="lifecycle",
+        status="deprecated",
+    )
     return agent
 
 
