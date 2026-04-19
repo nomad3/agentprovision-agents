@@ -25,7 +25,7 @@ const AgentsPage = () => {
   const [importContent, setImportContent] = useState('');
   const [importing, setImporting] = useState(false);
   const [hireModalOpen, setHireModalOpen] = useState(false);
-  const [hireForm, setHireForm] = useState({ name: '', description: '', endpoint_url: '', protocol: 'openai_chat', auth_type: 'bearer', auth_credential: '', capabilities: '' });
+  const [hireForm, setHireForm] = useState({ name: '', description: '', endpoint_url: '', protocol: 'openai_chat', auth_type: 'bearer', credential_id: '', capabilities: '' });
   const [hiring, setHiring] = useState(false);
 
   const loadAgents = () =>
@@ -153,23 +153,42 @@ const AgentsPage = () => {
     }
   };
 
+  const resetHireForm = () =>
+    setHireForm({ name: '', description: '', endpoint_url: '', protocol: 'openai_chat', auth_type: 'bearer', credential_id: '', capabilities: '' });
+
+  const closeHireModal = () => {
+    setHireModalOpen(false);
+    resetHireForm();
+  };
+
+  const closeImportModal = () => {
+    setImportModalOpen(false);
+    setImportContent('');
+  };
+
   const handleHire = async () => {
     if (!hireForm.name.trim() || !hireForm.endpoint_url.trim()) return;
     try {
       setHiring(true);
+      const rawCaps = hireForm.capabilities
+        ? hireForm.capabilities.split(',').map(s => s.trim()).filter(Boolean)
+        : [];
       const payload = {
         name: hireForm.name.trim(),
         description: hireForm.description.trim() || undefined,
         endpoint_url: hireForm.endpoint_url.trim(),
         protocol: hireForm.protocol,
         auth_type: hireForm.auth_type,
-        capabilities: hireForm.capabilities ? hireForm.capabilities.split(',').map(s => s.trim()).filter(Boolean) : [],
+        capabilities: [...new Set(rawCaps)],
       };
+      if (hireForm.credential_id && hireForm.credential_id.trim()) {
+        payload.credential_id = hireForm.credential_id.trim();
+      }
       await api.post('/external-agents', payload);
       const r = await api.get('/external-agents');
       setExternalAgents(r.data || []);
       setHireModalOpen(false);
-      setHireForm({ name: '', description: '', endpoint_url: '', protocol: 'openai_chat', auth_type: 'bearer', auth_credential: '', capabilities: '' });
+      resetHireForm();
       setSuccess('External agent hired successfully.');
       setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
@@ -610,7 +629,7 @@ const AgentsPage = () => {
       </Modal>
 
       {/* Hire External Agent Modal */}
-      <Modal show={hireModalOpen} onHide={() => setHireModalOpen(false)} centered>
+      <Modal show={hireModalOpen} onHide={closeHireModal} centered>
         <Modal.Header style={{ background: 'var(--surface-elevated)', borderBottom: '1px solid var(--color-border)' }}>
           <Modal.Title style={{ fontSize: '0.95rem', fontWeight: 600 }}>Hire External Agent</Modal.Title>
         </Modal.Header>
@@ -637,9 +656,9 @@ const AgentsPage = () => {
               <Form.Select size="sm" value={hireForm.protocol} onChange={e => setHireForm(f => ({ ...f, protocol: e.target.value }))}>
                 <option value="openai_chat">OpenAI Chat</option>
                 <option value="webhook">Webhook</option>
+                <option value="mcp_sse">MCP (SSE)</option>
                 <option value="a2a">A2A</option>
-                <option value="mcp">MCP</option>
-                <option value="grpc">gRPC</option>
+                <option value="copilot_extension">Copilot Extension</option>
               </Form.Select>
             </Col>
             <Col>
@@ -653,13 +672,25 @@ const AgentsPage = () => {
             </Col>
           </Row>
           <Form.Group className="mb-3">
+            <Form.Label style={{ fontSize: '0.82rem' }}>Credential ID (optional)</Form.Label>
+            <Form.Control size="sm" value={hireForm.credential_id} onChange={e => setHireForm(f => ({ ...f, credential_id: e.target.value }))} placeholder="UUID of a stored credential" />
+            <Form.Text className="text-muted" style={{ fontSize: '0.72rem' }}>
+              Create credentials via the Integrations page. Leave empty if auth type is "none".
+            </Form.Text>
+          </Form.Group>
+          {hireForm.auth_type !== 'none' && !hireForm.credential_id && (
+            <Alert variant="warning" style={{ fontSize: '0.75rem', padding: '8px 12px' }}>
+              Auth type is <b>{hireForm.auth_type}</b> but no credential is attached — dispatches will fail until you link one.
+            </Alert>
+          )}
+          <Form.Group className="mb-3">
             <Form.Label style={{ fontSize: '0.82rem' }}>Capabilities (comma-separated)</Form.Label>
             <Form.Control size="sm" value={hireForm.capabilities} onChange={e => setHireForm(f => ({ ...f, capabilities: e.target.value }))} placeholder="sql_query, data_summary, report_generation" />
             <Form.Text className="text-muted" style={{ fontSize: '0.72rem' }}>Skills this agent can handle. Used for auto-routing.</Form.Text>
           </Form.Group>
         </Modal.Body>
         <Modal.Footer style={{ background: 'var(--surface-elevated)', borderTop: '1px solid var(--color-border)' }}>
-          <Button variant="outline-secondary" size="sm" onClick={() => setHireModalOpen(false)}>Cancel</Button>
+          <Button variant="outline-secondary" size="sm" onClick={closeHireModal}>Cancel</Button>
           <Button variant="primary" size="sm" onClick={handleHire} disabled={hiring || !hireForm.name.trim() || !hireForm.endpoint_url.trim()}>
             {hiring ? 'Hiring...' : 'Hire Agent'}
           </Button>
@@ -667,7 +698,7 @@ const AgentsPage = () => {
       </Modal>
 
       {/* Import Agent Modal */}
-      <Modal show={importModalOpen} onHide={() => setImportModalOpen(false)} centered>
+      <Modal show={importModalOpen} onHide={closeImportModal} centered>
         <Modal.Header style={{ background: 'var(--surface-elevated)', borderBottom: '1px solid var(--color-border)' }}>
           <Modal.Title style={{ fontSize: '0.95rem', fontWeight: 600 }}>Import Agent</Modal.Title>
         </Modal.Header>
@@ -688,7 +719,7 @@ const AgentsPage = () => {
           />
         </Modal.Body>
         <Modal.Footer style={{ background: 'var(--surface-elevated)', borderTop: '1px solid var(--color-border)' }}>
-          <Button variant="outline-secondary" size="sm" onClick={() => setImportModalOpen(false)}>
+          <Button variant="outline-secondary" size="sm" onClick={closeImportModal}>
             Cancel
           </Button>
           <Button variant="primary" size="sm" onClick={handleImport} disabled={importing || !importContent.trim()}>

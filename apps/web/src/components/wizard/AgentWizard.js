@@ -216,6 +216,12 @@ const AgentWizard = () => {
             {currentStep === 1 && (
               <TemplateSelector
                 onSelect={(template) => {
+                  const currentPrompt = wizardData.personality.system_prompt || '';
+                  const previousTemplateDefault = wizardData.template?.config?.system_prompt || '';
+                  const userEdited = currentPrompt && currentPrompt !== previousTemplateDefault;
+                  if (userEdited && !window.confirm('Switching templates will replace your edited system prompt. Continue?')) {
+                    return;
+                  }
                   updateWizardData({
                     template: template,
                     basicInfo: {
