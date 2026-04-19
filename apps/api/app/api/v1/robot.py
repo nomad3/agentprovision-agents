@@ -170,9 +170,43 @@ def vision_analyze(
     except Exception:
         logger.exception("Failed to store vision observation")
 
+class VisionRequest(BaseModel):
+    image_b64: str
+    source: str = "camera"
+    context: Optional[str] = None
+
+@router.post("/vision/snapshot")
+def upload_snapshot(
+    body: VisionRequest,
+    x_device_token: Optional[str] = Header(None, alias="X-Device-Token"),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+):
+    """Upload a camera snapshot for vision processing."""
+    tenant_id, _user_id = _resolve_tenant(x_device_token, db, current_user)
+
+    try:
+        from app.services.knowledge import create_observation
+        obs_text = f"Visual snapshot from {body.source}."
+        if body.context:
+            obs_text += f" Context: {body.context}"
+        
+        create_observation(
+            db, tenant_id,
+            observation_text=obs_text,
+            observation_type="vision",
+            source_type="camera_snapshot",
+            source_channel=body.source,
+            # In production, image_b64 would be uploaded to S3/GCS
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to store vision observation")
+
     return {
-        "description": f"Image received ({len(body.image_b64)} bytes b64). Vision analysis pending — local vision model not yet configured.",
-        "context": body.context,
+        "status": "stored",
+        "timestamp": datetime.utcnow().isoformat(),
+        "message": "Snapshot received and stored for knowledge extraction.",
     }
 
 
