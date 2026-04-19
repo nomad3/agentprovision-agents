@@ -51,15 +51,19 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
   - i18next for internationalization
   - Authenticated console at `/dashboard/*`, marketing landing page at `/`
 
-- **`apps/code-worker`**: Claude Code CLI Temporal worker (Python 3.11 + Node.js 20)
-  - Dedicated pod for autonomous coding tasks via Claude Code CLI
-  - Authenticates using tenant's OAuth token via `CLAUDE_CODE_OAUTH_TOKEN` env var
-  - Token fetched at runtime from API's internal endpoint (`/api/v1/oauth/internal/token/claude_code`)
+- **`apps/code-worker`**: Multi-CLI Temporal worker (Python 3.11 + Node.js 20)
+  - Dedicated pod for autonomous coding and chat tasks via Claude Code / Gemini CLI / Codex CLI / GitHub Copilot CLI
+  - Authenticates using tenant's OAuth token via `CLAUDE_CODE_OAUTH_TOKEN`, Gemini OAuth creds, Codex `auth.json`, or Copilot OAuth token — all fetched at runtime from `/api/v1/oauth/internal/token/{integration}`
   - Creates feature branches, commits changes, and opens PRs with full traceability
-  - PR body includes: task description, Claude Code output summary, commit log, files changed
-  - Temporal worker on `agentprovision-code` queue
+  - PR body includes: task description, CLI output summary, commit log, files changed
+  - Temporal worker on `agentprovision-code` queue (workflows: `CodeTaskWorkflow`, `ChatCliWorkflow`)
+  - Heartbeat every 240s to avoid Temporal CancelledError; long-running subprocesses run in a thread pool
 
-- **`apps/mcp-server`**: **Deprecated** — legacy MCP server (Databricks/Playwright). Not deployed in K8s.
+- **`apps/luna-client`**: Tauri 2 desktop + mobile client (Rust + React + Vite). See "Luna Native Client" section under architectural patterns.
+
+- **`apps/device-bridge`** (new 2026-04-19): Local IoT device + camera bridge used by Luna client Phase 2. See `apps/luna-client` integration.
+
+- **`apps/mcp-server`**: FastMCP tools server (81+ tools). Serves MCP over SSE on port 8086. Shipped tool modules in `src/mcp_tools/`: `drive`, `email`, `calendar`, `ads`, `competitor`, `knowledge`, `aremko`, `sales`, `devices`, `github`, `jira`, `shell`, `data`, `connectors`, `reports`, `memory_continuity`, `monitor`, `webhooks`, `skills`, `supermarket`, `mcp_servers`, `copilot_studio` (new 2026-04-18), `unsupervised_learning`, `dynamic_workflows`, `analytics`. Auth via `X-Internal-Key` + `X-Tenant-Id` headers.
 
 - **`apps/api/app/memory/`**: Memory-First package (Phase 1 shipped)
   - `recall.py`: Pre-loads context for chat hot path. 1500ms hard timeout, pgvector semantic search, token budget enforcement. Dual-read mode compares Python vs Rust (gRPC) results.
@@ -94,7 +98,21 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 
 **Multi-LLM Abstraction Layer**: Tenants choose their LLM provider via the **integration registry + credential vault** pattern. Credentials are Fernet-encrypted. The CLI orchestrator reads `tenant_features.default_cli_platform` to route to the appropriate CLI agent (Claude Code, Gemini CLI, Codex CLI). LLM Settings page (`LLMSettingsPage.js`) uses the same integration card pattern as other integrations.
 
-**Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default "Luna Supervisor" AgentKit on registration.
+**Agent Lifecycle Management Platform (ALM)** (shipped 2026-04-18, PR #153): Full governance layer for agents in production. AgentKit concept removed (2026-04-19, unified under Agent) — chat sessions bind to an agent directly via `chat_sessions.agent_id` (migration 101). Features:
+- **Ownership & lifecycle**: `agent.owner_user_id`, `agent.team_id`, `agent.status` (draft→staging→production→deprecated), `agent.version`, `agent.successor_agent_id`. New agents default to `draft` (migration 095).
+- **Versioning & rollback**: `agent_versions` table snapshots config on every promote. `POST /agents/{id}/rollback/{version}` restores a prior snapshot with full audit trail. (migration 100)
+- **Governance policies**: `agent_policies` — rate limits, approval gates, allowed tools, blocked actions, per-agent guardrails. (migration 097)
+- **Permissions (RBAC)**: `agent_permissions` — per-user/team roles (owner, editor, viewer). `deps.require_agent_permission` enforces access. (migration 096)
+- **Audit log**: `agent_audit_log` captures create/update/promote/deprecate/rollback/integration-change events with actor, before/after, reason. `GET /agents/{id}/audit-log`, `GET /audit/agents` (cross-agent, tenant-scoped). (migration 098)
+- **Performance snapshots**: `agent_performance_snapshots` hourly rollup (success rate, p95 latency, tokens, cost, quality score). Collected by `AgentPerformanceSnapshotWorkflow` on orchestration queue. `GET /agents/{id}/performance`. (migration 099)
+- **Agent Registry**: Redis-backed capability discovery. `GET /agents/discover?capability=<x>` returns matching active agents across tenant.
+- **External Agents**: `external_agents` table + adapter service for OpenAI Assistants, MCP protocol, webhook-based agents. Import adapters for CrewAI, LangChain, AutoGen configs. `POST /agents/import`. (migration 094)
+- **Per-agent integration assignment**: `agent_integration_configs` pivot lets specific agents consume specific integration credentials instead of tenant-wide. (migration 093)
+- **Human-in-the-loop approval**: `POST /agent-tasks/{id}/workflow-approve` gates workflow steps on tenant-admin signoff. `human_approval` step type in dynamic workflows.
+- **Heartbeat**: `POST /agents/{id}/heartbeat` for external/long-running agents to signal liveness.
+- **UI**: `AgentsPage` fleet view (status badges, AI Assistants / External Agents sections, Import modal). `AgentDetailPage` with Performance, Audit, Versions, Integrations tabs.
+
+**Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default **Luna Supervisor** agent on registration (previously an AgentKit; unified under Agent model 2026-04-19).
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
 - **Code Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`agentprovision-code` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
 - **Data Team**: **Data Analyst**, **Report Generator**, **Knowledge Manager**. Handles SQL, analytics, and knowledge graph.
@@ -107,6 +125,14 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - **Entity Validator**: High-fidelity validation of extracted knowledge entities against tenant-specific schemas.
 - **Credential Vault**: Fernet-encrypted storage for integration API keys and tokens.
 - **Skill Router**: Dynamic routing of agent tasks to external integrations.
+
+**A2A Collaboration System** (shipped 2026-04-12): Multi-agent coalition pattern where agents collaborate on a shared **Blackboard** through phased workflows. `CoalitionWorkflow` on `agentprovision-orchestration` queue runs `prepare → ChatCliWorkflow child (per agent) → record` pattern.
+- **Patterns**: `incident_investigation`, `deal_brief`, `cardiology_case_review`. Each pattern defines phases (e.g. `gather_facts → hypothesize → prescribe`) and participating agent roles.
+- **Blackboard model** (migration 091 adds `chat_session_id`): shared context substrate. Entries tagged with `source_node_id` (which agent contributed).
+- **Live streaming**: Redis pub/sub → `GET /collaborations/stream` SSE endpoint. `CollaborationPanel` React component shows live phase timeline, blackboard feed, replay.
+- **Session events SSE**: `GET /chat/sessions/{id}/events/stream` — unified stream for chat + collaboration events. Wired into `ChatPage`.
+- **Demo**: Idempotent Levi's MDM incident investigation seed (`scripts/seed_levis_demo.py`) — master-data-catalog outage with forensic A2A team.
+- Design: `docs/plans/2026-04-12-a2a-collaboration-demo-design.md`.
 
 **Knowledge Graph + Vector Search**: Entities (`knowledge_entity.py`) and relations (`knowledge_relation.py`) form a knowledge graph with pgvector-powered semantic search (768-dim embeddings via nomic-embed-text-v1.5). Supports **Lead Scoring** via configurable rubrics and the `LeadScoringTool`. Knowledge is extracted via `KnowledgeExtractionWorkflow`. Observations table (`knowledge_observations`) stores facts and insights. Entity history tracked in `knowledge_entity_history`. **Memory Activity** audit log (`memory_activities` table) tracks entity_created, entity_updated, relation_created, memory_created, and action_triggered events.
 
@@ -165,7 +191,7 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - **Visual Builder**: ReactFlow tree canvas at `/workflows/builder/:id` with drag-and-drop step palette, node inspector panel, test console (dry_run validation), integration awareness layer. 6 custom node types: Trigger, Step, Condition (diamond with then/else), ForEach, Parallel, Approval.
 - **Step types**: `mcp_tool`, `agent`, `condition`, `for_each`, `parallel`, `wait`, `transform`, `human_approval`, `webhook_trigger`, `workflow`, `continue_as_new` (infinite-duration), `cli_execute` (dispatches CodeTaskWorkflow on agentprovision-code queue), `internal_api` (calls internal API endpoints).
 - **Triggers**: `cron`, `interval`, `webhook`, `event`, `manual`, `agent`.
-- **25 native templates**: 5 original + 20 migrated from static workflows across 4 tiers (linear, branching, continue_as_new, infrastructure).
+- **26 native templates**: 5 original + 20 migrated from static workflows across 4 tiers (linear, branching, continue_as_new, infrastructure) + **Cardiac Report Generator** (HealthPets, 2026-04-19) that pulls a patient echo PDF from Gmail, extracts content, generates a DACVIM cardiac evaluation report, and saves it as a Google Doc.
 - **Luna full CRUD**: 8 MCP tools for workflow management via chat (create, list, update, delete, run, get_status, activate, install_template).
 - **Integration awareness**: `GET /integrations/status` returns connected integrations per tenant. `GET /integrations/tool-mapping` maps MCP tools to required integrations. Activation gate blocks workflows with disconnected integrations.
 - **RL wiring**: Every workflow run logs `workflow_execution` RL experience, every step logs `workflow_step` RL experience, creation events logged as `workflow_creation`.
@@ -173,14 +199,38 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - **Internal auth**: MCP tools use `/internal/*` endpoints with `X-Internal-Key` + `X-Tenant-Id` headers (accepts both `API_INTERNAL_KEY` and `MCP_API_KEY`).
 
 **Temporal workflows** (static — being migrated to dynamic): Durable workflow execution across four task queues:
-- `agentprovision-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `DynamicWorkflowExecutor`.
-- `agentprovision-postgres`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `AgentKitExecutionWorkflow`, `DataSourceSyncWorkflow`.
-- `agentprovision-code`: `CodeTaskWorkflow` (Claude Code CLI execution in isolated code-worker pod).
+- `agentprovision-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `DynamicWorkflowExecutor`, `CoalitionWorkflow` (A2A), `AgentPerformanceSnapshotWorkflow` (hourly rollup).
+- `agentprovision-postgres`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `DataSourceSyncWorkflow`.
+- `agentprovision-code`: `CodeTaskWorkflow` (Claude Code / Gemini CLI / Codex CLI / GitHub Copilot CLI execution in isolated code-worker pod), `ChatCliWorkflow` (per-agent chat turn as a child workflow — used by CoalitionWorkflow).
 - `agentprovision-business`: Industry-specific flows:
   - `DealPipelineWorkflow`: Discover → Score → Research → Outreach → Advance → Sync (6 steps).
   - `RemediaOrderWorkflow`: Create order → Confirm (WhatsApp) → Monitor payment → Notify delivery.
   - `MonthlyBillingWorkflow`: Process usage → Generate invoices → Trigger payments (HealthPets).
 - `scheduler_worker.py`: Polls every 60s for cron/interval-based pipeline runs.
+
+**Temporal heartbeat discipline**: Long-running CLI executors (Claude Code, Gemini CLI, Codex, Copilot) must heartbeat every ≤240s or Temporal will CancelledError them. `execute_chat_cli` is a **sync** activity run in a thread-pool with a background heartbeat loop (stabilized 2026-04-13). Audio MIME types are filtered out of the CLI media path — CLIs don't handle audio, transcription runs first.
+
+**Luna Native Client** (`apps/luna-client`, Tauri 2 + React + Vite): Desktop/mobile app with PWA fallback.
+- **Visual avatar**: `LunaAvatar` SVG component renders emotional states (idle, thinking, happy, alert) from LLM response metadata; wired into `ChatInterface` header.
+- **Native push-to-talk**: Rust audio capture via `cpal` in `src-tauri/src/lib.rs` (`start_audio_capture` → `AudioConfig{sample_rate, channels}`, `stop_audio_capture`). Stream is built AND dropped on the same spawned thread (CoreAudio-safe — `Stream` is `!Send` on macOS). Frontend `useVoice` hook wraps the captured Float32 PCM in a proper WAV (RIFF/PCM16) header before posting to `/api/v1/media/transcribe`.
+- **Voice context**: `VoiceProvider` (React context) wraps the authenticated app so `VoiceInput` (in chat) and `CommandPalette` share one `useVoice` instance — avoids duplicate `audio-chunk` listeners.
+- **Global shortcuts**: `Cmd+Shift+Space` = push-to-talk (emits `voice-start`/`voice-stop`), `Cmd+Shift+L` = toggle Spatial HUD. Unregistered on window destroy. `tauri-plugin-global-shortcut`.
+- **System tray** (`setup_tray`): Open, Voice Input, Toggle Spatial HUD, Quit. Uses `PredefinedMenuItem::separator`.
+- **Auto-updater**: `tauri-plugin-updater`, checks on startup + every 30 min. Emits `update-available` → React banner.
+- **Clipboard watcher** + **activity tracker**: Background threads emit `clipboard-changed` and `activity-event`. Resolves real tool/project from terminal and editor window titles (Claude Code, Docker CLI, etc.).
+- **Device bridge + camera** (Phase 2, 2026-04-19, `apps/device-bridge`): IoT device registry + local camera integration.
+- Release workflow: `.github/workflows/luna-client-build.yaml` produces signed macOS ARM64 DMGs on main merge. GitHub Releases powers the auto-updater.
+
+**Luna OS Spatial Workstation** (shipped 2026-04-13, PR #138 + Phase 6/7 follow-ups): Game-inspired spatial HUD opened via `Cmd+Shift+L`. Transparent Tauri window rendering Three.js scenes for A2A combat visualization and knowledge exploration.
+- **SpatialHUD window**: separate Tauri window label `spatial_hud`. Detected in `App.jsx` via `getCurrentWebviewWindow().label` with a 1s safety fallback to `main`.
+- **Knowledge Nebula**: 3D scatter of memory entities with instanced rendering + bloom effects. WASD flight controls. Rust-side `project_embeddings` command does a cheap 3-PC projection (UMAP crate integration pending — no lib target available).
+- **A2A Strategic Combat visuals** (Phase 6): Agent avatars, comms beams between active collaborators, inventory panel.
+- **MediaPipe hand tracking** (Phase 7): Native webcam pipeline + hand-pose detection for spatial gestures.
+- **Spatial sync indicator**: Native webcam status light.
+- **RAID status overlay**: Real-time Temporal workflow status.
+- Design: `docs/plans/2026-04-12-spatial-knowledge-exploration-design.md`.
+
+**Landing Page** (redesigned 2026-04-17, PR #146): Marketing site rewritten as component sections orchestrated by `LandingPage.js`. Framer Motion replaces animate.css. Scroll-scrub hero with wolf image crossfade (PR #149). Sections: `LandingNav` (scroll-blur), `HeroSection` (two-col, NeuralCanvas removed), `ProductDemo` (tab crossfade with `layoutId`), `BentoGrid` (6-col asymmetric, stagger reveal), `MetricsStrip` (`useCountUp` hook), `IntegrationsMarquee` (dual-row CSS keyframe), `CTASection` (animated gradient), `LandingFooter`. i18n namespaces: `nav`, `statsStrip`, `integrations`, `hero.socialProof`.
 
 **Pipeline Run Tracking**: `pipeline_run.py` model tracks pipeline execution history with status, duration, and error details. The scheduler worker handles automated pipeline execution.
 
@@ -239,6 +289,19 @@ pytest tests/ -v
 python -m src.server                   # Runs on http://localhost:8085
 ```
 
+### Luna Client Development (Tauri + React)
+
+```bash
+cd apps/luna-client
+npm install
+npm run tauri dev                      # Desktop app with hot reload
+npm run build                          # Production Vite bundle
+cd src-tauri && cargo check            # Rust-side type check
+
+# Production DMG builds happen via GitHub Actions on main merge
+# (.github/workflows/luna-client-build.yaml → signed macOS ARM64 DMG)
+```
+
 ### Monorepo Commands
 
 ```bash
@@ -252,14 +315,22 @@ pnpm install && pnpm build && pnpm lint
 Core domain models (all inherit from SQLAlchemy Base, include `tenant_id` ForeignKey):
 - `tenant.py`, `user.py`: Multi-tenancy and users
 - `tenant_branding.py`, `tenant_features.py`, `tenant_analytics.py`: Whitelabel, feature flags, usage analytics
-- `agent.py`, `agent_kit.py`: AI agent definitions and kits
+- `agent.py`: AI agent definition. Fields: identity (name, role, description, capabilities, personality), runtime (tool_groups, persona_prompt, memory_domains, default_model_tier), governance (owner_user_id, team_id, status, version, successor_agent_id, escalation_agent_id), LLM config, memory config. **Note**: `agent_kit.py` was removed 2026-04-19 — agents are now addressed directly (chat sessions bind via `agent_id`).
 - `agent_group.py`, `agent_relationship.py`, `agent_task.py`: Multi-agent teams and orchestration
 - `agent_message.py`, `agent_skill.py`, `agent_memory.py`: Agent communication, skills, and memory
+- `agent_integration_config.py` (migration 093): Pivot table binding agents to specific integration configs so one agent can use a different Gmail account than another.
+- `external_agent.py` (migration 094): Non-native agents (OpenAI Assistants, webhook endpoints, MCP servers) registered for dispatch. Adapter service translates between internal task schema and external protocol.
+- `agent_permission.py` (migration 096): Per-user/team role on an agent (owner/editor/viewer). Enforced by `deps.require_agent_permission`.
+- `agent_policy.py` (migration 097): Governance rules — rate limits, approval gates, allowed tool allowlist, blocked actions.
+- `agent_audit_log.py` (migration 098): Compliance audit log — create/update/promote/deprecate/rollback/integration-change events with actor_user_id, before/after state, reason.
+- `agent_performance_snapshot.py` (migration 099): Hourly rollup per agent — success rate, p95 latency, tokens consumed, cost, avg quality score.
+- `agent_version.py` (migration 100): Config snapshot history for rollback. Every promote creates a new version row.
+- `blackboard.py` + `blackboard_entry.py`: Shared context for A2A coalitions. `chat_session_id` (migration 091) binds a blackboard to a chat. Entries tagged with `source_node_id` (contributing agent).
 - `deployment.py`: Agent deployment tracking
 - `data_source.py`, `data_pipeline.py`, `pipeline_run.py`: Data engineering and execution tracking
 - `dataset.py`, `dataset_group.py`: Dataset management with DuckDB/Parquet support
 - `tool.py`, `connector.py`: Tool and integration definitions
-- `chat.py`: Chat sessions and messages
+- `chat.py`: Chat sessions and messages. `chat_sessions.agent_id` (migration 101) binds each session to a single agent.
 - `notebook.py`: Jupyter-style SQL notebooks
 - `vector_store.py`: Vector store management
 - `knowledge_entity.py`, `knowledge_relation.py`: Knowledge graph
@@ -279,7 +350,7 @@ Business logic layer (one service per model):
 - `llm.py`: Claude AI integration with fallback handling
 - `context_manager.py`: Token counting, conversation summarization
 - `tool_executor.py`: Tool execution framework (SQL Query, Calculator, Data Summary, Entity Extraction, Knowledge Search)
-- `chat.py`, `enhanced_chat.py`: LLM-powered chat with CLI orchestrator. Chat session creation requires only Title (optional) + Agent Kit selection; auto-selects kit when only one exists.
+- `chat.py`, `enhanced_chat.py`: LLM-powered chat with CLI orchestrator. Chat session creation requires only Title (optional) + Agent selection; auto-selects agent when only one exists (AgentKit was removed 2026-04-19 — sessions bind to an Agent directly).
 - `cli_session_manager.py`: CLI orchestrator session lifecycle — generates CLAUDE.md, MCP config, dispatches Temporal workflows.
 - `agent_router.py`: Deterministic agent routing (zero LLM cost) — maps channels/intents to skills.
 - `embedding_service.py`: Local embedding generation via nomic-embed-text-v1.5 (768-dim). Functions: `embed_text()`, `embed_and_store()`, `search_similar()`, `recall()`. Used by knowledge, chat, memory, RL, skills.
@@ -298,7 +369,13 @@ Business logic layer (one service per model):
 - `local_inference.py`: Local Ollama-based inference for scoring, summarization, extraction, triage (zero cloud cost)
 - `dynamic_workflows.py`: Workflow definition validation (`validate_workflow_definition`) for dry_run test console. Checks step ID uniqueness, tool name validity, template variable references.
 - `integration_status.py`: `TOOL_INTEGRATION_MAP` (MCP tool → integration name), `get_connected_integrations()`, `check_workflow_integrations()` for activation gate.
-- `workflow_templates.py`: 25 native workflow templates (Daily Briefing, Lead Pipeline, Competitor Watch, Code Review, Weekly Report + 20 migrated static workflows).
+- `workflow_templates.py`: 26 native workflow templates (Daily Briefing, Lead Pipeline, Competitor Watch, Code Review, Weekly Report + 20 migrated static workflows + Cardiac Report Generator).
+- `agent_registry.py`: Redis-backed capability discovery. `register_agent(agent_id, capabilities, status)`, `discover(capability, tenant_id)`.
+- `agent_audit.py`: Audit log write helper. `write_audit_log(action, actor, target_agent, before, after, reason)`.
+- `external_agent_adapter.py`: Protocol adapters for non-native agents — OpenAI Assistants API, generic webhook dispatch, MCP protocol placeholder.
+- `agent_importer.py`: CrewAI / LangChain / AutoGen → Agent config converter for `POST /agents/import`.
+- `collaboration.py`: A2A coalition service — pattern definitions (`incident_investigation`, `deal_brief`), phase mappings, event streaming.
+- `collaboration_events.py`: Redis pub/sub client for collaboration SSE streaming.
 - `orchestration/`: Orchestration services package
   - `credential_vault.py`: Fernet-encrypted credential storage with CRUD helpers
   - `task_dispatcher.py`: Agent selection and task dispatch
@@ -307,8 +384,8 @@ Business logic layer (one service per model):
 ### Workers (`apps/api/app/workers/`)
 
 Temporal workers for async processing:
-- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow (queue: `agentprovision-orchestration`)
-- `postgres_worker.py`: DatasetSync, KnowledgeExtraction, AgentKitExecution, DataSourceSync workflows (queue: `agentprovision-postgres`)
+- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow, DynamicWorkflowExecutor, CoalitionWorkflow, AgentPerformanceSnapshotWorkflow (queue: `agentprovision-orchestration`)
+- `postgres_worker.py`: DatasetSync, KnowledgeExtraction, DataSourceSync workflows (queue: `agentprovision-postgres`)
 - `scheduler_worker.py`: Automated pipeline execution (cron/interval scheduling, polls every 60s)
 
 ### Routes (`apps/api/app/api/v1/`)
@@ -321,10 +398,10 @@ FastAPI routers mounted at `/api/v1`. All routes use dependency injection via `d
 
 Organized in 3-section navigation:
 - **INSIGHTS**: `DashboardPage.js`, `DatasetsPage.js`
-- **AI OPERATIONS**: `ChatPage.js`, `AgentsPage.js`, `WorkflowsPage.js` (tabs: My Workflows, Templates, Runs, Executions, Designs + builder at `/workflows/builder/:id`), `MemoryPage.js` (labeled "Knowledge Base" in sidebar)
+- **AI OPERATIONS**: `ChatPage.js` (with `CollaborationPanel` for A2A sessions), `AgentsPage.js` (fleet view — AI Assistants, External Agents sections, status badges, Import Agent modal), `AgentDetailPage.js` (Overview, Performance, Audit, Versions, Integrations tabs — 2026-04-18), `WorkflowsPage.js` (tabs: My Workflows, Templates, Runs, Executions, Designs + builder at `/workflows/builder/:id`), `MemoryPage.js` (labeled "Knowledge Base" in sidebar)
 - **WORKSPACE**: `IntegrationsPage.js`, `NotebooksPage.js`, `VectorStoresPage.js`, `ToolsPage.js`
 - **SETTINGS**: `SettingsPage.js`, `LLMSettingsPage.js`, `BrandingPage.js`
-- **AUTH**: `RegisterPage.js`, `AgentWizardPage.js`
+- **AUTH**: `RegisterPage.js`, `AgentWizardPage.js`, `ResetPasswordPage.js`
 
 ### Components (`apps/web/src/components/`)
 
@@ -380,10 +457,14 @@ MCP_PORT=8086    # MCP server (PostgreSQL)
 Loaded via pydantic-settings. See `apps/api/app/core/config.py`:
 
 ```bash
-# Required
+# Required — all three are REQUIRED fields (no defaults, hardened 2026-04-18)
+# Startup fails with ValidationError if any is missing. Rotate via secure random.
+SECRET_KEY=<jwt-signing-key>           # 32+ byte hex
+API_INTERNAL_KEY=<internal-svc-key>    # 32+ byte hex, for /api/v1/*/internal/* endpoints
+MCP_API_KEY=<mcp-key>                  # 24+ byte hex, for MCP server ↔ API calls
+
 ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxx
 DATABASE_URL=postgresql://postgres:postgres@db:5432/agentprovision
-SECRET_KEY=your-jwt-secret
 
 # Temporal
 TEMPORAL_ADDRESS=temporal:7233  # Use localhost:7233 for local dev
@@ -400,6 +481,19 @@ GOOGLE_CLIENT_SECRET=xxx
 ```
 
 **Note**: The orchestration Helm worker needs the same secrets as the API (ENCRYPTION_KEY, ANTHROPIC_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET).
+
+**Key rotation footgun**: In `docker-compose.yml`, `environment:` values **override** `env_file` values. After rotating a key in `apps/api/.env`, audit every `environment:` block for hardcoded overrides (fixed 2026-04-18 — `code-worker` and `mcp-tools` had hardcoded `dev_mcp_key`). Always recreate with `docker compose up -d --force-recreate <service>` — `restart` alone doesn't re-read env_file.
+
+### Security Posture (2026-04-18 hardening — PR #151, #152)
+
+- **No default secrets**: `SECRET_KEY`, `API_INTERNAL_KEY`, `MCP_API_KEY` removed from `config.py`. Startup fails on missing env.
+- **OAuth callback XSS fixed**: All user-controllable values in `apps/api/app/api/v1/oauth.py` pass through `html.escape()`.
+- **Skill import RBAC**: `POST /skills/library/import-github` requires `deps.require_superuser`.
+- **Skill execution sandbox**: `_execute_python` and `_execute_shell` in `skill_manager.py` strip sensitive env vars (SECRET_KEY, ENCRYPTION_KEY, OAuth secrets, platform tokens) before spawning subprocess.
+- **Password reset**: tokens hashed with SHA-256 before DB insert, verification uses `hmac.compare_digest`, response message identical for existing vs. missing email (no enumeration). Rate-limited via `slowapi`: login 10/min, recovery 3/hour, confirm 5/hour.
+- **Media upload hardening**: transcription endpoint streams to disk instead of reading fully into memory (prevents OOM).
+- **Internal routes**: `/api/v1/*/internal/*` are still internet-reachable — Cloudflare tunnel `notFound` rule planned. See open items in `docs/plans/2026-04-18-security-remediation-plan.md`.
+- **Pentest reports**: `docs/report/2026-04-18-full-security-audit.md` (8 findings) and `docs/report/2026-04-18-pentest-verification.md` (black-hat verification).
 
 ### Web Configuration (`apps/web/.env.local`)
 
@@ -544,3 +638,20 @@ PRs created by the code agent include structured body with full audit trail:
   - `2026-03-22-local-ollama-mcp-bridge-plan.md`: Local Gemma 4 → Ollama tool calling → MCP bridge for free-tier tenants
   - `2026-04-03-dynamic-workflows-visual-builder-design.md`: Dynamic workflows visual builder, migration strategy, RL lifecycle design
   - `2026-04-03-dynamic-workflows-visual-builder-plan.md`: 25-task implementation plan for visual builder + migration
+  - `2026-04-07-memory-first-agent-platform-design.md`: Memory-first redesign (pre-loaded context, Rust gRPC services)
+  - `2026-04-07-memory-first-phase-1-plan.md` / `2026-04-10-memory-first-phase-2-plan.md` / `2026-04-10-phase-2-cutover-criteria.md`: Rust embedding + memory-core migration plans
+  - `2026-04-11-whatsapp-voice-commands-plan.md`: WhatsApp voice message transcription pipeline
+  - `2026-04-12-a2a-collaboration-demo-design.md` / `2026-04-12-a2a-collaboration-implementation.md`: Agent coalition pattern + Blackboard architecture
+  - `2026-04-12-spatial-knowledge-exploration-design.md`: Luna OS Spatial HUD scene + knowledge nebula design
+  - `2026-04-17-landing-page-redesign-design.md` / `2026-04-17-landing-page-redesign-plan.md`: Marketing site redesign with Framer Motion
+  - `2026-04-18-agent-lifecycle-management-platform-plan.md`: Agent Lifecycle Management Platform (governance, versioning, audit, registry)
+  - `2026-04-18-agent-fleet-enhancement-plan.md`: AgentsPage fleet restructure + AgentDetailPage tabs
+  - `2026-04-18-memory-entities-seed-plan.md`: Entity backfill strategy
+  - `2026-04-18-chat-ui-redesign-plan.md`: Chat UI modernization plan
+  - `2026-04-18-skills-marketplace-redesign-plan.md`: Skills marketplace UX plan
+  - `2026-04-18-security-fixes.md` / `2026-04-18-security-remediation-plan.md`: Security hardening + pentest follow-ups
+
+- `docs/report/`: Audit reports and verification
+  - `2026-04-13-a2a-coalition-verification-report.md`: A2A Coalition demo verification
+  - `2026-04-17-platform-security-audit.md` / `2026-04-18-full-security-audit.md`: Platform security audits
+  - `2026-04-18-pentest-verification.md`: Black-hat pentest verifying the 2026-04-18 hardening fixes
