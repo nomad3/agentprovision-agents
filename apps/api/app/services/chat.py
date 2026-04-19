@@ -86,11 +86,15 @@ def create_session(
         if not agent or str(agent.tenant_id) != str(tenant_id):
             raise ValueError("Agent not found for tenant")
     else:
-        # Auto-select the tenant's Luna/first production agent when none specified
+        # Auto-select: prefer Luna, then production over draft, stable tiebreak by id
         agent = (
             db.query(Agent)
             .filter(Agent.tenant_id == tenant_id)
-            .order_by(Agent.created_at.asc())
+            .order_by(
+                (Agent.name == "Luna").desc(),
+                Agent.status.desc(),
+                Agent.id.asc(),
+            )
             .first()
         )
 

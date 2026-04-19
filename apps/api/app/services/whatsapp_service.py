@@ -941,11 +941,15 @@ class WhatsAppService:
                 logger.error(f"No user found for tenant {tenant_id}")
                 return None
 
-            # Find the tenant's primary agent (Luna by default, otherwise first agent)
+            # Find the tenant's primary agent — prefer Luna, production over draft
             agent = (
                 db.query(Agent)
                 .filter(Agent.tenant_id == tid)
-                .order_by(Agent.created_at.asc())
+                .order_by(
+                    (Agent.name == "Luna").desc(),
+                    Agent.status.desc(),
+                    Agent.id.asc(),
+                )
                 .first()
             )
             if not agent:

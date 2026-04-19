@@ -83,9 +83,16 @@ def robot_interact(
             pass
 
     if not session:
-        agent = db.query(Agent).filter(
-            Agent.tenant_id == tenant_id,
-        ).order_by(Agent.created_at.asc()).first()
+        agent = (
+            db.query(Agent)
+            .filter(Agent.tenant_id == tenant_id)
+            .order_by(
+                (Agent.name == "Luna").desc(),
+                Agent.status.desc(),
+                Agent.id.asc(),
+            )
+            .first()
+        )
         session = ChatSession(
             title="Robot Session",
             tenant_id=tenant_id,
