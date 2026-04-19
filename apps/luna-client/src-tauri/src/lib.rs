@@ -1,9 +1,12 @@
 use tauri::Manager;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use base64::{Engine as _, engine::general_purpose};
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    static ref AUDIO_CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
 
 #[cfg(desktop)]
@@ -101,6 +104,61 @@ async fn read_clipboard() -> Result<String, String> {
         .output()
         .map_err(|e| format!("Clipboard read failed: {}", e))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+async fn start_audio_capture(app: tauri::AppHandle) -> Result<(), String> {
+    if AUDIO_CAPTURE_RUNNING.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+
+    let host = cpal::default_host();
+    let device = host.default_input_device()
+        .ok_or_else(|| "No input device found".to_string())?;
+    
+    let config = device.default_input_config()
+        .map_err(|e| format!("Failed to get default input config: {}", e))?;
+    
+    AUDIO_CAPTURE_RUNNING.store(true, Ordering::Relaxed);
+    let running = AUDIO_CAPTURE_RUNNING.clone();
+
+    std::thread::spawn(move || {
+        let stream = device.build_input_stream(
+            &config.into(),
+            move |data: &[f32], _: &_| {
+                if !running.load(Ordering::Relaxed) {
+                    return;
+                }
+                // Convert f32 PCM to bytes and encode to base64
+                let bytes: Vec<u8> = data.iter()
+                    .flat_map(|&sample| sample.to_le_bytes().to_vec())
+                    .collect();
+                
+                let b64 = general_purpose::STANDARD.encode(&bytes);
+                let _ = tauri::Emitter::emit(&app, "audio-chunk", b64);
+            },
+            |err| {
+                log::error!("Audio capture error: {}", err);
+            },
+            None
+        ).expect("Failed to build input stream");
+
+        stream.play().expect("Failed to start stream");
+        
+        while running.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        
+        drop(stream);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_audio_capture() -> Result<(), String> {
+    AUDIO_CAPTURE_RUNNING.store(false, Ordering::Relaxed);
+    Ok(())
 }
 
 #[tauri::command]
@@ -355,8 +413,10 @@ fn base64_encode(data: &[u8]) -> String {
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_item = MenuItem::with_id(app, "open", "Open Luna", true, None::<&str>)?;
+    let voice_item = MenuItem::with_id(app, "voice", "Voice Input (Hold Cmd+Shift+Space)", true, None::<&str>)?;
+    let hud_item = MenuItem::with_id(app, "hud", "Toggle Spatial HUD (Cmd+Shift+L)", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Luna", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&open_item, &voice_item, &hud_item, &MenuItem::with_id(app, "sep", "---", false, None::<&str>)?, &quit_item])?;
 
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -368,6 +428,16 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+            }
+            "voice" => {
+                let _ = tauri::Emitter::emit(app, "toggle-palette", ());
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "hud" => {
+                let _ = tauri::Emitter::emit(app, "toggle-spatial-hud", ());
             }
             "quit" => {
                 app.exit(0);
@@ -399,6 +469,8 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             // Emit to frontend — React handles showing the command palette
             let _ = tauri::Emitter::emit(app, "toggle-palette", ());
+            let _ = tauri::Emitter::emit(app, "voice-start", ());
+            
             // Also ensure window is visible
             if let Some(window) = app.get_webview_window("main") {
                 if !window.is_visible().unwrap_or(true) {
@@ -406,6 +478,8 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
                     let _ = window.set_focus();
                 }
             }
+        } else if event.state == tauri_plugin_global_shortcut::ShortcutState::Released {
+            let _ = tauri::Emitter::emit(app, "voice-stop", ());
         }
     })?;
 
@@ -624,6 +698,8 @@ pub fn run() {
             capture_screenshot,
             get_active_app,
             read_clipboard,
+            start_audio_capture,
+            stop_audio_capture,
             haptic_feedback,
             toggle_spatial_hud,
             start_spatial_capture,

@@ -74,9 +74,15 @@
 .luna-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--color-border);
+}
+
+.luna-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .luna-status {
@@ -990,6 +996,42 @@
   margin-top: 12px;
   padding-top: 8px;
   border-top: 1px solid var(--color-border);
+}
+
+.palette-overlay.recording {
+  background: rgba(0, 30, 60, 0.6);
+  animation: pulseBlue 2s infinite;
+}
+
+@keyframes pulseBlue {
+  0% { background: rgba(0, 30, 60, 0.6); }
+  50% { background: rgba(0, 50, 100, 0.7); }
+  100% { background: rgba(0, 30, 60, 0.6); }
+}
+
+.mic-btn {
+  background: var(--surface-elevated);
+  color: var(--color-text);
+  font-size: 16px;
+  padding: 10px 12px;
+}
+
+.mic-btn.recording {
+  background: #ef4444;
+  color: #fff;
+  animation: pulseRed 1.5s infinite;
+  box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
+}
+
+@keyframes pulseRed {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.mic-btn.transcribing {
+  opacity: 0.7;
+  cursor: wait;
 }
 
 /* Responsive */

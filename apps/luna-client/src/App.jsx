@@ -73,16 +73,26 @@ function AuthenticatedApp() {
 
   // Listen for toggle-palette event from Tauri global shortcut
   useEffect(() => {
-    let unlisten;
+    let unlistenPalette, unlistenVoiceStart, unlistenVoiceStop;
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
-        unlisten = await listen('toggle-palette', () => {
+        unlistenPalette = await listen('toggle-palette', () => {
           setPaletteOpen(prev => !prev);
+        });
+        unlistenVoiceStart = await listen('voice-start', () => {
+          window.dispatchEvent(new CustomEvent('luna-voice-start'));
+        });
+        unlistenVoiceStop = await listen('voice-stop', () => {
+          window.dispatchEvent(new CustomEvent('luna-voice-stop'));
         });
       } catch {}
     })();
-    return () => { unlisten?.(); };
+    return () => { 
+      unlistenPalette?.();
+      unlistenVoiceStart?.();
+      unlistenVoiceStop?.();
+    };
   }, []);
 
   const quickSessionRef = React.useRef(null);
