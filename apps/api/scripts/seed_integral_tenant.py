@@ -6,7 +6,7 @@ Creates:
 - Tenant: Integral
 - Admin user
 - TenantFeatures
-- AgentKit with Luna supervisor
+- Agent with Luna supervisor
 - 3 Agent records (SRE, DevOps, Business Support)
 - MCPServerConnector pointing to Integral's SRE MCP server
 """
@@ -22,7 +22,6 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.tenant_features import TenantFeatures
 from app.models.agent import Agent
-from app.models.agent_kit import AgentKit
 from app.models.mcp_server_connector import MCPServerConnector
 from app.core.security import get_password_hash
 from app.models.chat import ChatSession
@@ -106,21 +105,18 @@ def seed():
         db.flush()
         print("Created 3 agents: SRE, DevOps, Business Support")
 
-        # --- AgentKit (Luna supervisor) ---
-        kit = AgentKit(
+        # --- Luna supervisor Agent ---
+        luna_agent = Agent(
             id=uuid.uuid4(),
-            name="Integral Operations",
+            name="Luna",
             description="Luna supervises SRE, DevOps, and Business Support agents for Integral's FX infrastructure",
             tenant_id=tenant.id,
-            kit_type="hierarchy",
-            config={"skill_slug": "luna"},
-            default_agents=[
-                {"id": str(sre_agent.id), "name": sre_agent.name, "role": "specialist"},
-                {"id": str(devops_agent.id), "name": devops_agent.name, "role": "specialist"},
-                {"id": str(biz_agent.id), "name": biz_agent.name, "role": "specialist"},
-            ],
-            default_hierarchy={
-                "supervisor": "luna",
+            role="supervisor",
+            status="production",
+            autonomy_level="supervised",
+            capabilities=["routing", "coordination", "memory"],
+            config={
+                "skill_slug": "luna",
                 "workers": [
                     {"slug": "integral-sre", "agent_id": str(sre_agent.id)},
                     {"slug": "integral-devops", "agent_id": str(devops_agent.id)},
@@ -128,9 +124,9 @@ def seed():
                 ],
             },
         )
-        db.add(kit)
+        db.add(luna_agent)
         db.flush()
-        print(f"Created AgentKit: {kit.name}")
+        print(f"Created supervisor agent: {luna_agent.name}")
 
         # --- MCP Server Connector ---
         sre_mcp_url = os.getenv("INTEGRAL_SRE_MCP_URL", "http://control-plane-api:8080")
@@ -153,7 +149,7 @@ def seed():
             id=uuid.uuid4(),
             tenant_id=tenant.id,
             title="Chat with Luna",
-            agent_kit_id=kit.id,
+            agent_id=luna_agent.id,
         )
         db.add(chat)
         db.flush()
@@ -169,7 +165,7 @@ def seed():
         print("\nSeed complete. Integral tenant is ready.")
         print(f"  Tenant ID: {tenant.id}")
         print(f"  Admin: {admin_email}")
-        print(f"  AgentKit: {kit.name}")
+        print(f"  Supervisor: {luna_agent.name}")
         print(f"  MCP: {connector.server_url}")
 
     except Exception as e:

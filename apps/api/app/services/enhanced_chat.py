@@ -25,7 +25,7 @@ class EnhancedChatService:
         self,
         user_id: uuid.UUID,
         dataset_id: uuid.UUID,
-        agent_kit_id: uuid.UUID,
+        agent_id: uuid.UUID,
         agent_group_id: Optional[uuid.UUID] = None,
         title: Optional[str] = None,
     ) -> ChatSession:
@@ -35,7 +35,7 @@ class EnhancedChatService:
             tenant_id=self.tenant_id,
             user_id=user_id,
             dataset_id=dataset_id,
-            agent_kit_id=agent_kit_id,
+            agent_id=agent_id,
             title=title,
         )
 

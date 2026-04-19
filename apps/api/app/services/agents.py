@@ -18,36 +18,6 @@ def create_tenant_agent(db: Session, *, item_in: AgentCreate, tenant_id: uuid.UU
     db.add(db_item)
     db.commit()
     db.refresh(db_item)
-
-    # Auto-create AgentKit for Chat compatibility
-    try:
-        from app.services import agent_kits as agent_kit_service
-        from app.schemas.agent_kit import AgentKitCreate, AgentKitConfig
-
-        kit_config = AgentKitConfig(
-            primary_objective=(
-                item_in.persona_prompt
-                or (item_in.config.get("system_prompt") if item_in.config else None)
-                or f"Act as {db_item.name}"
-            ),
-            triggers=[],
-            metrics=[],
-            constraints=[],
-            tool_bindings=[],
-            vector_bindings=[],
-            playbook=[],
-            handoff_channels=[]
-        )
-        kit_create = AgentKitCreate(
-            name=db_item.name,
-            description=db_item.description,
-            version="1.0",
-            config=kit_config
-        )
-        agent_kit_service.create_tenant_agent_kit(db, item_in=kit_create, tenant_id=tenant_id)
-    except Exception as e:
-        print(f"Failed to auto-create AgentKit: {e}")
-
     return db_item
 
 def update_agent(db: Session, *, db_obj: Agent, obj_in: AgentBase) -> Agent:

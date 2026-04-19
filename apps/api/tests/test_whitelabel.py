@@ -139,16 +139,6 @@ def test_tenant_extended_fields():
     assert hasattr(Tenant, 'features')
 
 
-def test_agent_kit_extended_fields():
-    """Test AgentKit model has integration fields."""
-    from app.models.agent_kit import AgentKit
-
-    assert hasattr(AgentKit, 'kit_type')
-    assert hasattr(AgentKit, 'default_agents')
-    assert hasattr(AgentKit, 'default_hierarchy')
-    assert hasattr(AgentKit, 'industry')
-
-
 def test_enhanced_chat_service():
     """Test EnhancedChatService exists with required methods."""
     from app.services.enhanced_chat import EnhancedChatService

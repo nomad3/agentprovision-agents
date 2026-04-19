@@ -13,12 +13,12 @@ import CollaborationPanel from '../components/CollaborationPanel';
 import { useLunaPresence } from '../context/LunaPresenceContext';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
-import agentKitService from '../services/agentKit';
+import agentService from '../services/agent';
 import chatService from '../services/chat';
 import './ChatPage.css';
 
 const initialSessionState = {
-  agentKitId: '',
+  agentId: '',
   title: '',
 };
 
@@ -29,7 +29,7 @@ const ChatPage = () => {
   const lunaState = lunaCtx?.presence?.state || 'idle';
   const lunaMood = lunaCtx?.presence?.mood || 'calm';
   const [sessions, setSessions] = useState([]);
-  const [agentKits, setAgentKits] = useState([]);
+  const [agents, setAgents] = useState([]);
   const [selectedSession, setSelectedSession] = useState(null);
   const [messages, setMessages] = useState([]);
   const [messageDraft, setMessageDraft] = useState('');
@@ -92,10 +92,10 @@ const ChatPage = () => {
   }, [auth.user]);
 
   useEffect(() => {
-    if (agentKits.length === 1 && !sessionForm.agentKitId) {
-      setSessionForm(prev => ({ ...prev, agentKitId: agentKits[0].id }));
+    if (agents.length === 1 && !sessionForm.agentId) {
+      setSessionForm(prev => ({ ...prev, agentId: agents[0].id }));
     }
-  }, [agentKits]);
+  }, [agents]);
 
   // Abort any active stream on unmount and clear emotion timer
   useEffect(() => {
@@ -193,8 +193,8 @@ const ChatPage = () => {
 
   const loadReferenceData = async () => {
     try {
-      const agentKitsResp = await agentKitService.getAll();
-      setAgentKits(agentKitsResp.data);
+      const agentsResp = await agentService.getAll();
+      setAgents(agentsResp.data || []);
     } catch (err) {
       console.error(err);
       setGlobalError(t('errors.loadKits'));
@@ -408,8 +408,8 @@ const ChatPage = () => {
         title: sessionForm.title ? sessionForm.title.trim() : undefined,
       };
 
-      if (sessionForm.agentKitId) {
-        payload.agent_kit_id = sessionForm.agentKitId;
+      if (sessionForm.agentId) {
+        payload.agent_id = sessionForm.agentId;
       }
 
       const response = await chatService.createSession(payload);
@@ -423,12 +423,12 @@ const ChatPage = () => {
     }
   };
 
-  const agentKitById = useMemo(() => {
-    return agentKits.reduce((acc, kit) => {
-      acc[kit.id] = kit;
+  const agentById = useMemo(() => {
+    return agents.reduce((acc, a) => {
+      acc[a.id] = a;
       return acc;
     }, {});
-  }, [agentKits]);
+  }, [agents]);
 
   const renderMessage = (message) => {
     const timeLabel = message.created_at ? new Date(message.created_at).toLocaleTimeString() : '';
@@ -514,8 +514,8 @@ const ChatPage = () => {
   };
 
   const getSessionSubtitle = (session) => {
-    const kitName = (agentKitById[session.agent_kit_id] && agentKitById[session.agent_kit_id].name) || t('agentKit');
-    return kitName;
+    const agentName = (agentById[session.agent_id] && agentById[session.agent_id].name) || t('agentKit');
+    return agentName;
   };
 
   return (
@@ -833,12 +833,12 @@ const ChatPage = () => {
             </Form.Group>
 
             <Form.Group className="mb-3">
-              <Form.Label>{t('createModal.agentKit')}</Form.Label>
-              <Form.Select name="agentKitId" value={sessionForm.agentKitId} onChange={handleCreateSessionChange}>
-                <option value="">{t('createModal.agentKitPlaceholder')}</option>
-                {agentKits.map((kit) => (
-                  <option key={kit.id} value={kit.id}>
-                    {kit.name} (v{kit.version || '1.0'})
+              <Form.Label>Agent</Form.Label>
+              <Form.Select name="agentId" value={sessionForm.agentId} onChange={handleCreateSessionChange}>
+                <option value="">Select an agent…</option>
+                {agents.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
                   </option>
                 ))}
               </Form.Select>

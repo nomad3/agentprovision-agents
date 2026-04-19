@@ -8,8 +8,8 @@ import uuid
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from app.models.agent import Agent
 from app.models.chat import ChatSession as ChatSessionModel, ChatMessage
-from app.services import agent_kits as agent_kit_service
 from app.services import datasets as dataset_service
 from app.services.agent_identity import resolve_primary_agent_slug
 from app.services.embedding_service import embed_and_store as _embed
@@ -60,14 +60,14 @@ def create_session(
     *,
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
-    agent_kit_id: uuid.UUID | None = None,
+    agent_id: uuid.UUID | None = None,
     dataset_id: uuid.UUID | None = None,
     dataset_group_id: uuid.UUID | None = None,
     title: str | None = None,
 ) -> ChatSessionModel:
     dataset = None
     dataset_group = None
-    agent_kit = None
+    agent = None
 
     if dataset_id:
         dataset = dataset_service.get_dataset(db, dataset_id=dataset_id, tenant_id=tenant_id)
@@ -81,21 +81,24 @@ def create_session(
         if not dataset_group or dataset_group.tenant_id != tenant_id:
             raise ValueError("Dataset group not found for tenant")
 
-    if agent_kit_id:
-        agent_kit = agent_kit_service.get_agent_kit(db, agent_kit_id=agent_kit_id)
-        if not agent_kit or str(agent_kit.tenant_id) != str(tenant_id):
-            raise ValueError("Agent kit not found for tenant")
+    if agent_id:
+        agent = db.query(Agent).filter(Agent.id == agent_id).first()
+        if not agent or str(agent.tenant_id) != str(tenant_id):
+            raise ValueError("Agent not found for tenant")
     else:
-        # Auto-select the tenant's first kit when none is specified
-        tenant_kits = agent_kit_service.get_agent_kits_by_tenant(db, tenant_id=tenant_id)
-        if tenant_kits:
-            agent_kit = tenant_kits[0]
+        # Auto-select the tenant's Luna/first production agent when none specified
+        agent = (
+            db.query(Agent)
+            .filter(Agent.tenant_id == tenant_id)
+            .order_by(Agent.created_at.asc())
+            .first()
+        )
 
     session_title = title
     if not session_title:
         parts = []
-        if agent_kit:
-            parts.append(agent_kit.name)
+        if agent:
+            parts.append(agent.name)
         if dataset:
             parts.append(f"on {dataset.name}")
         elif dataset_group:
@@ -106,7 +109,7 @@ def create_session(
         title=session_title,
         dataset_id=dataset.id if dataset else None,
         dataset_group_id=dataset_group.id if dataset_group else None,
-        agent_kit_id=agent_kit.id if agent_kit else None,
+        agent_id=agent.id if agent else None,
         tenant_id=tenant_id,
         source="native",
     )
@@ -272,21 +275,21 @@ def _generate_agentic_response(
     from app.services.agent_router import route_and_execute
     from app.services.skill_manager import skill_manager
 
-    # Derive agent_slug from session's agent kit config or skill lookup
+    # Derive agent_slug from session's bound Agent or primary skill lookup
     agent_slug = None
     primary_slug = resolve_primary_agent_slug(db, session.tenant_id)
-    if session.agent_kit:
-        kit_config = session.agent_kit.config or {}
-        # Check if kit config specifies a skill slug directly
-        agent_slug = kit_config.get("skill_slug")
+    if session.agent:
+        agent_config = session.agent.config or {}
+        # Check if agent config specifies a skill slug directly
+        agent_slug = agent_config.get("skill_slug")
         if not agent_slug:
-            # Try to find a matching skill by kit name (case-insensitive)
-            kit_name_lower = session.agent_kit.name.lower()
+            # Try to find a matching skill by agent name (case-insensitive)
+            agent_name_lower = (session.agent.name or "").lower()
             for skill in skill_manager.list_skills():
-                if skill.slug == kit_name_lower or kit_name_lower.startswith(skill.slug):
+                if skill.slug == agent_name_lower or agent_name_lower.startswith(skill.slug):
                     agent_slug = skill.slug
                     break
-    
+
     if not agent_slug:
         agent_slug = primary_slug
 

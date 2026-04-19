@@ -4,14 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import agentService from '../services/agent';
-import agentKitService from '../services/agentKit';
 import api from '../services/api';
 
 const AgentsPage = () => {
   const { t } = useTranslation('agents');
   const navigate = useNavigate();
   const [agents, setAgents] = useState([]);
-  const [agentKits, setAgentKits] = useState([]);
   const [externalAgents, setExternalAgents] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +32,6 @@ const AgentsPage = () => {
   useEffect(() => {
     Promise.all([
       loadAgents(),
-      agentKitService.getAll().then(r => setAgentKits(r.data || [])).catch(() => {}),
       api.get('/external-agents').then(r => setExternalAgents(r.data || [])).catch(() => {}),
       agentService.getTasks().then(r => setTasks(r.data || [])).catch(() => {}),
     ])
@@ -255,7 +252,7 @@ const AgentsPage = () => {
               {t('title')}
             </h4>
             <p style={{ fontSize: '0.85rem', color: 'var(--color-muted)', margin: 0 }}>
-              {agents.length} agents · {agentKits.length} assistants · {externalAgents.length} hired
+              {agents.length} agents · {externalAgents.length} external
             </p>
           </div>
           <div className="d-flex gap-2 align-items-center">
@@ -296,45 +293,8 @@ const AgentsPage = () => {
           </div>
         ) : (
           <>
-            {/* ── Section 1: AI Assistants ── */}
-            {agentKits.length > 0 && (
-              <>
-                <p style={sectionHeadingStyle}>AI Assistants</p>
-                <Row className="g-3">
-                  {agentKits.map(kit => (
-                    <Col key={kit.id} md={6} xl={4}>
-                      <div style={{ ...cardStyle, borderLeft: '4px solid #6366f1', cursor: 'default' }}>
-                        <div className="d-flex align-items-center justify-content-between mb-2">
-                          <span style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-foreground)' }}>
-                            {kit.name}
-                          </span>
-                          <Badge bg="none" style={{ fontSize: '0.65rem', background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}>
-                            Supervisor
-                          </Badge>
-                        </div>
-                        <p style={{
-                          fontSize: '0.78rem', color: 'var(--color-muted)', margin: '0 0 12px 0',
-                          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                        }}>
-                          {kit.description || 'No description'}
-                        </p>
-                        <Button
-                          variant="outline-secondary"
-                          size="sm"
-                          style={{ fontSize: '0.75rem' }}
-                          onClick={() => navigate('/chat')}
-                        >
-                          Chat
-                        </Button>
-                      </div>
-                    </Col>
-                  ))}
-                </Row>
-              </>
-            )}
-
-            {/* ── Section 2: Custom Agents ── */}
-            <p style={{ ...sectionHeadingStyle, marginTop: agentKits.length > 0 ? 28 : 0 }}>Custom Agents</p>
+            {/* ── Agents ── */}
+            <p style={{ ...sectionHeadingStyle, marginTop: 0 }}>Agents</p>
 
             {/* Search + lifecycle filter */}
             <div className="d-flex gap-2 align-items-center mb-3 flex-wrap">

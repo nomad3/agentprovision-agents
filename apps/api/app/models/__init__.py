@@ -5,7 +5,6 @@ from .tenant import Tenant
 from .user import User
 from .agent import Agent
 from .agent_group import AgentGroup
-from .agent_kit import AgentKit
 from .agent_memory import AgentMemory
 from .agent_permission import AgentPermission
 from .agent_performance_snapshot import AgentPerformanceSnapshot
@@ -79,7 +78,7 @@ from .external_agent import ExternalAgent
 
 __all__ = [
     "Tenant", "User",
-    "Agent", "AgentGroup", "AgentKit", "AgentMemory", "AgentPermission", "AgentPerformanceSnapshot", "AgentVersion", "AgentPolicy", "AgentAuditLog",
+    "Agent", "AgentGroup", "AgentMemory", "AgentPermission", "AgentPerformanceSnapshot", "AgentVersion", "AgentPolicy", "AgentAuditLog",
     "AgentRelationship", "AgentSkill", "AgentTask",
     "ChannelAccount", "ChannelEvent",
     "ChatSession", "ChatMessage",

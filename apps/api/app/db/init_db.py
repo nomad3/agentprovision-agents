@@ -33,7 +33,6 @@ from app.models.tenant_analytics import TenantAnalytics  # noqa: F401
 from app.models.tool import Tool
 from app.models.deployment import Deployment  # noqa: F401
 from app.models.vector_store import VectorStore  # noqa: F401
-from app.models.agent_kit import AgentKit  # noqa: F401
 from app.models.agent_integration_config import AgentIntegrationConfig  # noqa: F401
 from app.models.chat import ChatSession, ChatMessage
 
@@ -172,32 +171,6 @@ def seed_demo_data(db: Session) -> None:
     ]
     db.add_all(vector_stores)
 
-    agent_kits = [
-        AgentKit(
-            name="Customer Support Agent Kit",
-            description="Kit for deploying customer support agents",
-            version="1.0.0",
-            config={
-                "primary_objective": "Provide excellent customer support by answering questions and resolving issues",
-                "base_model": "gpt-4",
-                "tools": ["faq_retrieval", "order_status"]
-            },
-            tenant_id=demo_tenant.id,
-        ),
-        AgentKit(
-            name="Data Analysis Agent Kit",
-            description="Kit for deploying data analysis agents",
-            version="1.1.0",
-            config={
-                "primary_objective": "Analyze data and provide actionable insights to drive business decisions",
-                "base_model": "claude-3-5-sonnet-20240620",
-                "tools": ["sql_query", "chart_generation"]
-            },
-            tenant_id=demo_tenant.id,
-        ),
-    ]
-    db.add_all(agent_kits)
-
     deployments = [
         Deployment(
             name="Revenue Copilot - Prod",
@@ -278,7 +251,7 @@ def seed_demo_data(db: Session) -> None:
     demo_chat_session = ChatSession(
         title="Q1 Revenue Review",
         dataset_id=seeded_dataset.id,
-        agent_kit_id=agent_kits[1].id,
+        agent_id=agents[1].id if len(agents) > 1 else None,
         tenant_id=demo_tenant.id,
     )
     db.add(demo_chat_session)

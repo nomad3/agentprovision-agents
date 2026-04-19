@@ -10,7 +10,7 @@ from app.schemas.user import UserCreate, UserUpdate
 from app.services import tenants as tenant_service
 from app.services.orchestration.credential_vault import store_credential, retrieve_credentials_for_skill
 from app.schemas.tenant import TenantCreate
-from app.models.agent_kit import AgentKit
+from app.models.agent import Agent
 from app.models.chat import ChatSession
 from app.models.integration_config import IntegrationConfig
 from app.models.tenant_features import TenantFeatures
@@ -156,27 +156,38 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
     )
     db.add(features)
     db.flush()
-    default_kit = AgentKit(
-        name="Luna Supervisor",
-        description="Luna is your AI co-pilot. She coordinates specialized teams for data analysis, sales, marketing, development, and more.",
-        version="1.0.0",
-        kit_type="hierarchy",
-        industry=None,
+    luna_persona_prompt = (
+        "You are Luna, an intelligent AI co-pilot. Route requests to the right specialized agent or tool, "
+        "maintain context across conversations, and deliver helpful, actionable responses. "
+        "Use entity_extraction to capture who/what/when from user messages, knowledge_search to recall prior context, "
+        "and calculator for any numeric work. Be concise and conversational."
+    )
+    luna_capabilities = ["entity_extraction", "knowledge_search", "lead_scoring", "calculator", "data_summary"]
+
+    luna_agent = Agent(
+        name="Luna",
+        description="Your AI co-pilot. Routes requests to specialized agents and maintains conversation context.",
+        tenant_id=tenant.id,
+        status="production",
+        persona_prompt=luna_persona_prompt,
+        capabilities=luna_capabilities,
+        tool_groups=["knowledge", "email"],
+        default_model_tier="light",
+        memory_domains=["conversation", "user"],
+        role="supervisor",
+        autonomy_level="supervised",
         config={
-            "primary_objective": "Provide intelligent AI co-pilot assistance by routing requests to specialized teams and delivering actionable responses.",
-            "skill_slug": "luna",
-            "personality": "friendly",
             "temperature": 0.7,
             "max_tokens": 2000,
-            "tools": ["entity_extraction", "knowledge_search", "lead_scoring", "calculator", "data_summary"],
-            "system_prompt": "You are Luna, an intelligent AI co-pilot. Route requests to the best specialized team and provide helpful, actionable responses.",
+            "system_prompt": luna_persona_prompt,
+            "skills": luna_capabilities,
+            "personality_preset": "friendly",
+            "template_used": "luna_default",
+            "avatar": "🌙",
         },
-        default_hierarchy={
-            "platform": "claude_code",
-        },
-        tenant_id=tenant.id,
     )
-    db.add(default_kit)
+    db.add(luna_agent)
+    db.flush()
     db_user = User(
         email=user_in.email,
         hashed_password=get_password_hash(user_in.password),
@@ -190,7 +201,7 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
     welcome_session = ChatSession(
         title="Chat with Luna",
         tenant_id=tenant.id,
-        agent_kit_id=default_kit.id,
+        agent_id=luna_agent.id,
     )
     db.add(welcome_session)
 

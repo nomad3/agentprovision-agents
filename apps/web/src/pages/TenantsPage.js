@@ -178,12 +178,6 @@ const TenantsPage = () => {
                   color="info"
                 />
                 <StatItem
-                  icon={FaBox}
-                  label="Agent Playbooks"
-                  value={stats.overview.total_agent_kits}
-                  color="warning"
-                />
-                <StatItem
                   icon={FaLayerGroup}
                   label="Knowledge Bases"
                   value={stats.overview.total_vector_stores}

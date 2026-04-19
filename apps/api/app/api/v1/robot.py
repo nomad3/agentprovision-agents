@@ -1,4 +1,5 @@
 """Robot interaction API — audio/vision/ambient capture."""
+import base64
 import hashlib
 import logging
 import uuid
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user_optional, get_db
 from app.models.device_registry import DeviceRegistry
 from app.models.user import User
+from app.services.media_utils import transcribe_audio_bytes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/robot", tags=["robot"])
@@ -67,7 +69,7 @@ def robot_interact(
 
     from app.services.chat import post_user_message
     from app.models.chat import ChatSession
-    from app.models.agent_kit import AgentKit
+    from app.models.agent import Agent
 
     # Get or create robot session
     session = None
@@ -81,21 +83,38 @@ def robot_interact(
             pass
 
     if not session:
-        kit = db.query(AgentKit).filter(
-            AgentKit.tenant_id == tenant_id,
-        ).first()
+        agent = db.query(Agent).filter(
+            Agent.tenant_id == tenant_id,
+        ).order_by(Agent.created_at.asc()).first()
         session = ChatSession(
             title="Robot Session",
             tenant_id=tenant_id,
-            agent_kit_id=kit.id if kit else None,
+            agent_id=agent.id if agent else None,
             source="robot",
         )
         db.add(session)
         db.commit()
         db.refresh(session)
 
-    # Process text input (or STT from audio — placeholder for now)
-    message = body.text or "[Audio input — STT not yet implemented]"
+    # Process text input (or STT from audio)
+    message = body.text
+    if body.audio_b64:
+        try:
+            audio_bytes = base64.b64decode(body.audio_b64)
+            transcript = transcribe_audio_bytes(audio_bytes)
+            if transcript:
+                message = f"{message} {transcript}" if message else transcript
+            else:
+                logger.warning("STT failed for robot interaction")
+                if not message:
+                    message = "[Audio input — transcription failed]"
+        except Exception as e:
+            logger.error("Audio decoding failed: %s", e)
+            if not message:
+                message = "[Audio input — decoding failed]"
+
+    if not message:
+        message = "[No text or audio input provided]"
 
     user_msg, assistant_msg = post_user_message(
         db, session=session, user_id=user_id, content=message,
@@ -160,11 +179,25 @@ def ambient_ingest(
     """Ingest ambient audio for knowledge extraction."""
     tenant_id, _user_id = _resolve_tenant(x_device_token, db, current_user)
 
+    transcript = None
+    if body.audio_b64:
+        try:
+            audio_bytes = base64.b64decode(body.audio_b64)
+            transcript = transcribe_audio_bytes(audio_bytes)
+        except Exception:
+            logger.exception("Failed to transcribe ambient audio")
+
     try:
         from app.services.knowledge import create_observation
+        obs_text = f"Ambient audio capture ({body.duration_seconds}s from {body.source})."
+        if transcript:
+            obs_text += f" Transcript: {transcript}"
+        else:
+            obs_text += " STT failed or silent."
+
         create_observation(
             db, tenant_id,
-            observation_text=f"Ambient audio capture ({body.duration_seconds}s from {body.source}). STT pending.",
+            observation_text=obs_text,
             observation_type="ambient",
             source_type="ambient_audio",
             source_channel="microphone",
@@ -177,5 +210,5 @@ def ambient_ingest(
         "status": "ingested",
         "duration_seconds": body.duration_seconds,
         "source": body.source,
-        "message": "Audio captured. STT processing pending — local whisper model not yet configured.",
+        "transcript_preview": transcript[:100] if transcript else None,
     }

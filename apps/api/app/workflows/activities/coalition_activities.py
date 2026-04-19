@@ -122,7 +122,7 @@ Write your {phase} contribution below. Be thorough and structured.
 
 @activity.defn
 async def select_coalition_template(tenant_id: str, chat_session_id: str, task_description: str) -> dict:
-    """Select optimal coalition template and resolve roles from the session's AgentKit."""
+    """Select optimal coalition template and resolve roles from the session's Agent."""
     from app.models.agent import Agent
 
     db = SessionLocal()

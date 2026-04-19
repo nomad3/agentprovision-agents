@@ -15,7 +15,6 @@ from app.api.v1 import (
     deployments,
     analytics,
     vector_stores,
-    agent_kits,
     datasets,
     chat,
     internal,
@@ -97,7 +96,6 @@ router.include_router(connectors.router, prefix="/connectors", tags=["connectors
 router.include_router(deployments.router, prefix="/deployments", tags=["deployments"])
 router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 router.include_router(vector_stores.router, prefix="/vector_stores", tags=["vector_stores"])
-router.include_router(agent_kits.router, prefix="/agent-kits", tags=["agent_kits"])
 router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
 router.include_router(dataset_groups.router, prefix="/dataset-groups", tags=["dataset_groups"])
 router.include_router(chat.router, prefix="/chat", tags=["chat"])

@@ -930,7 +930,7 @@ class WhatsAppService:
         db = self._get_db()
         try:
             from app.services import chat as chat_service
-            from app.models.agent_kit import AgentKit
+            from app.models.agent import Agent
             from app.models.user import User
 
             tid = uuid.UUID(tenant_id)
@@ -941,14 +941,15 @@ class WhatsAppService:
                 logger.error(f"No user found for tenant {tenant_id}")
                 return None
 
-            # Find the tenant's first agent kit (or a WhatsApp-specific one)
-            agent_kit = (
-                db.query(AgentKit)
-                .filter(AgentKit.tenant_id == tid)
+            # Find the tenant's primary agent (Luna by default, otherwise first agent)
+            agent = (
+                db.query(Agent)
+                .filter(Agent.tenant_id == tid)
+                .order_by(Agent.created_at.asc())
                 .first()
             )
-            if not agent_kit:
-                logger.warning(f"No agent kit found for tenant {tenant_id}")
+            if not agent:
+                logger.warning(f"No agent found for tenant {tenant_id}")
                 return None
 
             # Find or create a WhatsApp chat session keyed by sender
@@ -966,16 +967,16 @@ class WhatsAppService:
                 session = ChatSession(
                     title=f"WhatsApp: {sender_id}",
                     tenant_id=tid,
-                    agent_kit_id=agent_kit.id,
+                    agent_id=agent.id,
                     source="whatsapp",
                     external_id=session_key,
                 )
                 db.add(session)
                 db.commit()
                 db.refresh(session)
-            elif not session.agent_kit_id:
-                # Backfill agent_kit on existing sessions
-                session.agent_kit_id = agent_kit.id
+            elif not session.agent_id:
+                # Backfill agent on existing sessions
+                session.agent_id = agent.id
                 db.commit()
                 db.refresh(session)
 

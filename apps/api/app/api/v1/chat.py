@@ -78,7 +78,7 @@ def create_session(
             user_id=current_user.id,
             dataset_id=payload.dataset_id,
             dataset_group_id=payload.dataset_group_id,
-            agent_kit_id=payload.agent_kit_id,
+            agent_id=payload.agent_id,
             title=payload.title,
         )
         return session
@@ -338,7 +338,7 @@ def create_session_enhanced(
     enhanced_service = get_enhanced_chat_service(db, current_user.tenant_id)
     return enhanced_service.create_session_with_orchestration(
         dataset_id=session_in.dataset_id,
-        agent_kit_id=session_in.agent_kit_id,
+        agent_id=session_in.agent_id,
         agent_group_id=agent_group_id,
         user_id=current_user.id,
         title=session_in.title,

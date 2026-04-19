@@ -80,7 +80,7 @@ async def execute_pipeline(db: Session, data_pipeline_id: uuid.UUID) -> Dict[str
         if pipeline_type == "connector_sync":
             result = await _execute_connector_sync(db, pipeline, config)
         else:
-            result = await _execute_agent_kit_workflow(db, pipeline, config)
+            raise ValueError(f"Unsupported pipeline type: {pipeline_type}")
 
         # Update PipelineRun with success
         pipeline_run.workflow_id = result.get("workflow_id")

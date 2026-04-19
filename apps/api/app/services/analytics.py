@@ -13,7 +13,6 @@ from app.models.data_pipeline import DataPipeline
 from app.models.notebook import Notebook
 from app.models.dataset import Dataset
 from app.models.deployment import Deployment
-from app.models.agent_kit import AgentKit
 from app.models.chat import ChatSession, ChatMessage
 from app.models.tool import Tool
 from app.models.vector_store import VectorStore
@@ -49,7 +48,6 @@ def get_dashboard_stats(db: Session, tenant_id: uuid.UUID) -> Dict[str, Any]:
     total_agents = db.query(Agent).filter(Agent.tenant_id == tenant_id).count()
     total_deployments = db.query(Deployment).filter(Deployment.tenant_id == tenant_id).count()
     total_datasets = db.query(Dataset).filter(Dataset.tenant_id == tenant_id).count()
-    total_agent_kits = db.query(AgentKit).filter(AgentKit.tenant_id == tenant_id).count()
     total_chat_sessions = db.query(ChatSession).filter(ChatSession.tenant_id == tenant_id).count()
     total_data_sources = db.query(DataSource).filter(DataSource.tenant_id == tenant_id).count()
     total_pipelines = db.query(DataPipeline).filter(DataPipeline.tenant_id == tenant_id).count()
@@ -129,7 +127,6 @@ def get_dashboard_stats(db: Session, tenant_id: uuid.UUID) -> Dict[str, Any]:
             "total_agents": total_agents,
             "total_deployments": total_deployments,
             "total_datasets": total_datasets,
-            "total_agent_kits": total_agent_kits,
             "total_chat_sessions": total_chat_sessions,
             "total_data_sources": total_data_sources,
             "total_pipelines": total_pipelines,
