@@ -784,7 +784,7 @@ const SkillsPage = () => {
         {/* ── MCP Connect Modal ── */}
         <Modal show={showMcpConnect} onHide={() => setShowMcpConnect(false)} size="lg" centered>
           <Modal.Header closeButton style={{ ...modalSectionStyle, borderBottom: '1px solid var(--color-border)' }}>
-            <Modal.Title style={{ fontSize: '1.1rem' }}><FaPlug className="me-2" size={16} />{t('mcp.connectExternal')}</Modal.Title>
+            <Modal.Title style={{ fontSize: '1.1rem' }}><FaPlug className="me-2" size={16} />{t('mcp.modalTitle')}</Modal.Title>
           </Modal.Header>
           <Modal.Body style={modalSectionStyle}>
             <p className="text-muted small mb-3">{t('mcp.intro')}</p>
