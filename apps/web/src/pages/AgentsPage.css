@@ -3,90 +3,92 @@
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap;
-  gap: 1rem;
+  gap: var(--ap-space-4);
 }
 
 .page-title {
   display: flex;
   align-items: center;
-  color: #1a2b3c;
+  color: var(--ap-text);
   font-weight: 700;
-  font-size: 2rem;
+  font-size: var(--ap-fs-xl);
   margin: 0;
   letter-spacing: -0.02em;
 }
 
 .page-subtitle {
-  color: rgba(45, 65, 90, 0.7);
-  font-size: 1.1rem;
-  margin: 0.5rem 0 0 0;
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-md);
+  margin: var(--ap-space-2) 0 0 0;
 }
 
 .data-card {
+  /* TODO: no exact token — keeping hardcoded gradient */
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.9) 100%);
-  border: 1px solid rgba(180, 200, 220, 0.3);
+  border: 1px solid var(--ap-border);
   border-radius: 14px;
-  box-shadow: 0 18px 40px rgba(100, 130, 170, 0.08);
+  box-shadow: var(--ap-shadow-card);
   transition: all 0.3s ease;
 }
 
 .data-card:hover {
-  border-color: rgba(43, 125, 233, 0.25);
-  box-shadow: 0 20px 50px rgba(100, 130, 170, 0.12);
+  border-color: var(--ap-primary-ring);
+  box-shadow: var(--ap-shadow-card-hover);
 }
 
 .search-icon-wrapper {
-  background: rgba(43, 125, 233, 0.08);
-  border: 1px solid rgba(43, 125, 233, 0.15);
+  background: var(--ap-primary-tint);
+  border: 1px solid var(--ap-primary-tint-hi);
   border-right: none;
-  color: rgba(45, 65, 90, 0.6);
+  color: var(--ap-text-subtle);
 }
 
 .search-input {
   background: transparent;
   border-left: none;
-  border-color: rgba(43, 125, 233, 0.15);
-  color: #1a2b3c;
-  font-size: 1rem;
+  border-color: var(--ap-primary-tint-hi);
+  color: var(--ap-text);
+  font-size: var(--ap-fs-md);
 }
 
 .search-input::placeholder {
-  color: rgba(100, 120, 145, 0.5);
+  color: var(--ap-text-subtle);
 }
 
 .search-input:focus {
   background: transparent;
-  border-color: rgba(43, 125, 233, 0.35);
-  color: #1a2b3c;
+  border-color: var(--ap-border-strong);
+  color: var(--ap-text);
   box-shadow: none;
 }
 
 .agents-table {
-  color: #1a2b3c;
+  color: var(--ap-text);
 }
 
 .agents-table thead th {
-  background: rgba(43, 125, 233, 0.06);
-  border-bottom: 2px solid rgba(43, 125, 233, 0.2);
-  color: rgba(45, 65, 90, 0.85);
+  background: var(--ap-primary-tint);
+  border-bottom: 2px solid var(--ap-primary-ring);
+  color: var(--ap-text-muted);
   font-weight: 600;
-  font-size: 0.875rem;
+  font-size: var(--ap-fs-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  padding: 1rem;
+  padding: var(--ap-space-4);
 }
 
 .agents-table tbody tr {
-  border-bottom: 1px solid rgba(180, 200, 220, 0.2);
+  border-bottom: 1px solid var(--ap-border);
   transition: all 0.2s ease;
 }
 
 .agents-table tbody tr:hover {
+  /* TODO: no exact token — keeping hardcoded (slightly lower opacity than --ap-primary-tint) */
   background: rgba(43, 125, 233, 0.04);
 }
 
 .agents-table tbody td {
-  padding: 1rem;
+  padding: var(--ap-space-4);
   vertical-align: middle;
 }
 
@@ -94,73 +96,79 @@
   width: 36px;
   height: 36px;
   border-radius: 8px;
+  /* TODO: no exact token — keeping hardcoded gradient (brand accent blend) */
   background: linear-gradient(135deg, rgba(43, 125, 233, 0.15), rgba(94, 197, 176, 0.12));
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #2b7de9;
-  border: 1px solid rgba(43, 125, 233, 0.25);
+  color: var(--ap-primary);
+  border: 1px solid var(--ap-primary-ring);
 }
 
 .agent-modal .modal-content {
+  /* TODO: no exact token — keeping hardcoded gradient */
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.95) 100%);
-  border: 1px solid rgba(180, 200, 220, 0.3);
+  border: 1px solid var(--ap-border);
   border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(100, 130, 170, 0.15);
+  box-shadow: var(--ap-shadow-card-hover);
 }
 
 .agent-modal .modal-header {
-  border-bottom: 1px solid rgba(180, 200, 220, 0.25);
+  border-bottom: 1px solid var(--ap-border);
+  /* TODO: no exact token — subtle tinted header */
   background: rgba(43, 125, 233, 0.04);
 }
 
 .agent-modal .modal-title {
-  color: #1a2b3c;
+  color: var(--ap-text);
   font-weight: 600;
 }
 
 .agent-modal .modal-body {
-  padding: 1.5rem;
+  padding: var(--ap-space-6);
 }
 
 .agent-modal .modal-footer {
-  border-top: 1px solid rgba(180, 200, 220, 0.25);
+  border-top: 1px solid var(--ap-border);
+  /* TODO: no exact token — soft footer panel */
   background: rgba(240, 245, 250, 0.5);
 }
 
 .agent-modal .form-label {
-  color: rgba(45, 65, 90, 0.85);
+  color: var(--ap-text-muted);
   font-weight: 500;
   font-size: 0.925rem;
-  margin-bottom: 0.5rem;
+  margin-bottom: var(--ap-space-2);
 }
 
 .agent-modal .form-control,
 .agent-modal .form-select {
+  /* TODO: no exact token — subtle input surface */
   background: rgba(232, 239, 246, 0.5);
-  border: 1px solid rgba(180, 200, 220, 0.3);
-  color: #1a2b3c;
+  border: 1px solid var(--ap-border);
+  color: var(--ap-text);
 }
 
 .agent-modal .form-control:focus,
 .agent-modal .form-select:focus {
+  /* TODO: no exact token — input focus surface */
   background: rgba(232, 239, 246, 0.7);
-  border-color: rgba(43, 125, 233, 0.4);
-  color: #1a2b3c;
-  box-shadow: 0 0 0 0.25rem rgba(43, 125, 233, 0.1);
+  border-color: var(--ap-border-strong);
+  color: var(--ap-text);
+  box-shadow: 0 0 0 0.25rem var(--ap-primary-tint-hi);
 }
 
 .agent-modal .form-control::placeholder {
-  color: rgba(100, 120, 145, 0.5);
+  color: var(--ap-text-subtle);
 }
 
 .agent-modal .form-text {
-  color: rgba(100, 120, 145, 0.6);
-  font-size: 0.825rem;
+  color: var(--ap-text-subtle);
+  font-size: var(--ap-fs-xs);
 }
 
 .agent-modal .form-range {
-  --bs-form-range-thumb-bg: #2b7de9;
+  --bs-form-range-thumb-bg: var(--ap-primary);
 }
 
 .agent-modal .btn-close {
@@ -183,11 +191,11 @@
   }
 
   .page-subtitle {
-    font-size: 1rem;
+    font-size: var(--ap-fs-md);
   }
 
   .agents-table {
-    font-size: 0.875rem;
+    font-size: var(--ap-fs-sm);
   }
 
   .agents-table thead {
@@ -196,16 +204,16 @@
 
   .agents-table tbody tr {
     display: block;
-    margin-bottom: 1rem;
-    border: 1px solid rgba(180, 200, 220, 0.3);
+    margin-bottom: var(--ap-space-4);
+    border: 1px solid var(--ap-border);
     border-radius: 10px;
-    padding: 1rem;
+    padding: var(--ap-space-4);
   }
 
   .agents-table tbody td {
     display: block;
     text-align: right;
-    padding: 0.5rem 0;
+    padding: var(--ap-space-2) 0;
     border: none;
   }
 
@@ -213,30 +221,6 @@
     content: attr(data-label);
     float: left;
     font-weight: 600;
-    color: rgba(45, 65, 90, 0.6);
+    color: var(--ap-text-subtle);
   }
-}
-
-/* Inline link button — <button> styled to look like an anchor. Used inside
-   flow text where a link would normally go but we want a click handler,
-   not a navigation. */
-.inline-link-button {
-  background: none;
-  border: none;
-  padding: 0;
-  color: #2b7de9;
-  cursor: pointer;
-  font: inherit;
-  font-size: 0.85rem;
-  text-decoration: underline;
-}
-
-.inline-link-button:hover {
-  color: #1e68c8;
-}
-
-.inline-link-button:focus-visible {
-  outline: 2px solid rgba(43, 125, 233, 0.6);
-  outline-offset: 2px;
-  border-radius: 3px;
 }
