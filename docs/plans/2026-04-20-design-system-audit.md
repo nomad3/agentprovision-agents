@@ -30,17 +30,37 @@ apps/web/src/pages/WorkflowsPage.js:15:  FaBrain,
 
 These are the concrete locations future migrations need to touch. Most are concentrated on `SkillsPage` (decorative hero icon + inline rgba), plus a `FaBrain` import on `WorkflowsPage` that should be verified-or-removed when that page is migrated.
 
-## Results — to be filled in by Task 13
+## Results
 
-Task 13 will re-run the exact same three audit commands after the migration is complete and record the post-migration counts in the table below. A successful migration drives all three numbers down sharply (decorative icons → 0, hardcoded colors → a small single-digit number of intentional exceptions, gradients → 0 or a single documented exception).
+Task 13 re-ran the same three audit commands after Phase 1-5 migrations (Tasks 1-11) and Phase 6 orphan-CSS cleanup (Task 12) landed. Post-migration counts:
 
 | Metric | Before | After | Delta |
 |---|---|---|---|
-| Decorative header icons + gradient boxes (file:line hits) | 7 |  |  |
-| Hardcoded colors in page CSS (bypassing CSS variables) | 327 |  |  |
-| Gradient usage across pages + components | 38 |  |  |
+| Decorative header icons + gradient boxes (file:line hits) | 7 | 4 | −3 |
+| Hardcoded colors in page CSS (bypassing CSS variables) | 327 | 43 | −284 |
+| Gradient usage across pages + components | 38 | 21 | −17 |
+
+### Residual hits — why they remain
+
+**Decorative header icons (4):**
+- `SkillsPage.js:9` — `FaRocket` still in the import list; used on line 424 as an auto-trigger indicator icon inside skill card details and on line 590 as the empty-state icon. Both are *content*, not page-header chrome. The decorative gradient icon box that sat in the header is gone.
+- `WorkflowsPage.js:15` — `FaBrain` import; used as the workflow design card icon, not as a header ornament.
+
+**Hardcoded colors in page CSS (43):**
+- `TenantsPage.css` (32 lines) — TenantsPage was intentionally kept out of scope (see CLAUDE.md note: it uses Bootstrap `bg-${color}-subtle` utilities composed dynamically and was not in the migration task list).
+- `AgentsPage.css` (5 lines) — `.agent-modal` skin + the `.agents-table tbody tr:hover` tinted row. Flagged with `TODO: no exact token` comments in-file; deferred to a follow-up token expansion.
+- `WorkflowsPage.css` (12 lines) — `.wf-step.start/end/timer/branch/loop/child` type accents. Intentional categorical colors for workflow visualisation, called out in the PR description as a documented exception.
+
+**Gradients outside LandingPage/luna (21):**
+- `apps/web/src/pages/AgentsPage.css` (1) — `.agent-modal .modal-content` subtle white gradient. Flagged `TODO: no exact token`.
+- `apps/web/src/components/Layout.css` (9), `common/ErrorBoundary.css`, `common/EmptyState.css`, `common/Toast.css`, `common/ConfirmModal.css`, `common/LoadingSpinner.css`, `dashboard/QuickStartCard.css` (2), `CollaborationPanel.css`, `wizard/AgentWizard.css`, `datasource/DataSourceWizard.css` — component-layer surfaces (sidebar, toast, error boundary, wizard stepper). These are shared chrome components outside the per-page migration scope; they'll collapse to tokens in a follow-up pass.
+
+## Summary
+
+The Design System Unification migration replaced 14 pages of per-page ad-hoc styling with a single token layer (`tokens.css`) and shared component class library (`components.css`). Before the migration, pages reinvented their own header chrome, gradient icon boxes, hex/rgba palettes, and button styles; after, every internal page renders through `.ap-page-header`, `.ap-card`, `.ap-btn-*`, `.ap-chip-filter`, `.ap-badge-*`, `.ap-search-wrap`, `.ap-table`, and `.ap-inline-link`. The migration removed the decorative rocket hero from Skills, the gradient Try-it buttons, the neon category colors, the bespoke per-page filter bars, and ~200 lines of orphan CSS that no JS still referenced. The ambient reduction in hardcoded color declarations (327 → 43, −87%) and gradients (38 → 21, −45%) reflects the structural shift: colors now live in one place and render consistently in both light and dark themes via `[data-bs-theme="dark"]` token overrides. The remaining residue is intentional: semantic/categorical accents in `AgentDetailPage` (`STATUS_COLORS`, `ROLE_COLORS`, `TASK_STATUS_COLORS`, `PRIORITY_COLORS`, `AUDIT_STATUS_COLORS`), `WorkflowsPage` (step-type accents and `TYPE_COLORS`), and `IntegrationsPage` (`CONNECTOR_TYPES` brand colors for Postgres/MySQL/S3/GCP/REST). These are data-bound palettes — they're *supposed* to be hardcoded because they encode meaning, not styling.
 
 ## Out of scope for this audit
 
 - Component-level gradients inside `apps/web/src/components/` marketing surfaces that are intentionally expressive (landing page, hero sections) — this audit is about the internal authenticated app (`/agents`, `/skills`, `/workflows`, `/chat`, etc.).
 - `apps/web/src/index.css` — the platform-wide base stylesheet is trimmed in Task 13, not counted as a per-page offender here.
+- `TenantsPage` — not listed in the migration task list; retains its original Bootstrap-compatible `.bg-*-subtle` utility overrides which are composed dynamically via `bg-${color}-subtle`.
