@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Container, Button, Table, Modal, Form, Alert } from 'react-bootstrap';
+import { Table, Modal, Form, Alert } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import Layout from '../components/Layout';
 import vectorStoreService from '../services/vectorStore';
@@ -82,34 +82,56 @@ const VectorStoresPage = () => {
 
   return (
     <Layout>
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <h2>{t('vectorStores.title')}</h2>
-        <Button variant="primary" onClick={() => handleShowModal()}>{t('vectorStores.addStore')}</Button>
-      </div>
+      <header className="ap-page-header">
+        <div>
+          <h1 className="ap-page-title">{t('vectorStores.title')}</h1>
+        </div>
+        <div className="ap-page-actions">
+          <button type="button" className="ap-btn-primary" onClick={() => handleShowModal()}>
+            {t('vectorStores.addStore')}
+          </button>
+        </div>
+      </header>
 
       {error && <Alert variant="danger">{error}</Alert>}
 
-      <Table striped bordered hover responsive>
-        <thead>
-          <tr>
-            <th>{t('vectorStores.table.name')}</th>
-            <th>{t('vectorStores.table.description')}</th>
-            <th>{t('vectorStores.table.actions')}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {vectorStores.map((vs) => (
-            <tr key={vs.id}>
-              <td>{vs.name}</td>
-              <td>{vs.description}</td>
-              <td>
-                <Button variant="info" size="sm" onClick={() => handleShowModal(vs)}>{t('vectorStores.actions.edit')}</Button>{' '}
-                <Button variant="danger" size="sm" onClick={() => handleDelete(vs.id)}>{t('vectorStores.actions.delete')}</Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
+      {vectorStores.length === 0 ? (
+        <div className="ap-empty">
+          <div className="ap-empty-title">{t('vectorStores.title')}</div>
+          <div className="ap-empty-text">—</div>
+          <button type="button" className="ap-btn-primary" onClick={() => handleShowModal()}>
+            {t('vectorStores.addStore')}
+          </button>
+        </div>
+      ) : (
+        <article className="ap-card">
+          <Table hover responsive className="ap-table mb-0">
+            <thead>
+              <tr>
+                <th>{t('vectorStores.table.name')}</th>
+                <th>{t('vectorStores.table.description')}</th>
+                <th>{t('vectorStores.table.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {vectorStores.map((vs) => (
+                <tr key={vs.id}>
+                  <td>{vs.name}</td>
+                  <td>{vs.description}</td>
+                  <td>
+                    <button type="button" className="ap-btn-secondary ap-btn-sm" onClick={() => handleShowModal(vs)}>
+                      {t('vectorStores.actions.edit')}
+                    </button>{' '}
+                    <button type="button" className="ap-btn-danger ap-btn-sm" onClick={() => handleDelete(vs.id)}>
+                      {t('vectorStores.actions.delete')}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </article>
+      )}
 
       <Modal show={showModal} onHide={handleCloseModal}>
         <Modal.Header closeButton>
@@ -129,7 +151,7 @@ const VectorStoresPage = () => {
               <Form.Label>{t('vectorStores.modal.config')}</Form.Label>
               <Form.Control as="textarea" rows={5} name="config" value={formData.config} onChange={handleChange} required />
             </Form.Group>
-            <Button variant="primary" type="submit">{t('vectorStores.modal.save')}</Button>
+            <button type="submit" className="ap-btn-primary">{t('vectorStores.modal.save')}</button>
           </Form>
         </Modal.Body>
       </Modal>
