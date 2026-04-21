@@ -381,37 +381,28 @@ const SkillsPage = () => {
 
   // --- Skill Card ---
   const SkillCard = ({ skill }) => {
-    const EngineIcon = ENGINE_ICONS[skill.engine] || FaCode;
     const isExpanded = expandedSkill === skill.slug;
     const catColor = CATEGORY_COLORS[skill.category] || CATEGORY_COLORS.general;
 
     return (
-      <Card className="skill-card">
-        <div className="skill-card-body" onClick={() => setExpandedSkill(isExpanded ? null : skill.slug)}>
+      <article className="ap-card skill-card-article">
+        <div className="ap-card-body" onClick={() => setExpandedSkill(isExpanded ? null : skill.slug)} style={{ cursor: 'pointer' }}>
           {/* Header row */}
-          <div className="d-flex align-items-start justify-content-between mb-2">
-            <div className="d-flex align-items-center gap-2" style={{ minWidth: 0, flex: 1 }}>
-              <div className="skill-icon">
-                <EngineIcon size={16} />
-              </div>
-              <h6 className="skill-card-title">{skill.name}</h6>
-            </div>
-            <div className="d-flex align-items-center gap-1" style={{ flexShrink: 0 }}>
-              <span className="skill-engine-badge">{skill.engine}</span>
-              {skill.version && <span className="skill-version-badge">{t('version', { version: skill.version })}</span>}
+          <div className="skill-card-head">
+            <h3 className="ap-card-title" title={skill.name}>{skill.name}</h3>
+            <div className="skill-card-meta">
+              <span className="ap-badge-outline">{skill.engine}</span>
+              {skill.version && <span className="ap-badge-outline">v{skill.version}</span>}
             </div>
           </div>
 
-          {/* Category + Tier badges — plain spans so Bootstrap can't override the background */}
-          <div className="d-flex align-items-center gap-2 mb-2 flex-wrap">
-            <span
-              className="skill-category-badge"
-              style={{ background: catColor + '1f', color: catColor, borderColor: catColor + '3d' }}
-            >
-              {t(`categories.${skill.category}`, { defaultValue: skill.category })}
-            </span>
-            <span className={`skill-tier-badge skill-tier-${skill.tier || 'native'}`}>
+          {/* Tier + category */}
+          <div className="skill-card-tags">
+            <span className={`ap-badge-solid skill-tier-${skill.tier || 'native'}`}>
               {t(`tabs.${skill.tier === 'custom' ? 'mySkills' : skill.tier}`)}
+            </span>
+            <span className="ap-badge-outline" style={{ color: catColor, borderColor: catColor + '40' }}>
+              {t(`categories.${skill.category}`, { defaultValue: skill.category })}
             </span>
           </div>
 
@@ -466,17 +457,17 @@ const SkillsPage = () => {
         </div>
 
         {/* Footer */}
-        <div className="skill-card-footer">
-          <Button className="skill-try-btn" size="sm" onClick={e => { e.stopPropagation(); handleOpenExecute(skill); }}>
-            <FaPlay className="me-1" size={10} /> {t('tryIt')}
-          </Button>
-          <div className="d-flex align-items-center gap-1">
-            <span className="skill-action-icon" onClick={e => { e.stopPropagation(); setExpandedSkill(isExpanded ? null : skill.slug); }}>
+        <footer className="skill-card-foot">
+          <button type="button" className="ap-btn-primary ap-btn-sm" onClick={e => { e.stopPropagation(); handleOpenExecute(skill); }}>
+            <FaPlay size={10} />{t('tryIt')}
+          </button>
+          <div className="skill-card-foot-actions">
+            <button type="button" className="ap-btn-ghost" onClick={e => { e.stopPropagation(); setExpandedSkill(isExpanded ? null : skill.slug); }}>
               {isExpanded ? <FaChevronUp size={12} /> : <FaChevronDown size={12} />}
-            </span>
+            </button>
             <Dropdown onClick={e => e.stopPropagation()}>
-              <Dropdown.Toggle as="span" className="skill-action-icon"><FaEllipsisV size={12} /></Dropdown.Toggle>
-              <Dropdown.Menu align="end" style={{ background: 'var(--surface-elevated)', border: '1px solid var(--color-border)', borderRadius: 10, minWidth: 180 }}>
+              <Dropdown.Toggle as="button" type="button" className="ap-btn-ghost"><FaEllipsisV size={12} /></Dropdown.Toggle>
+              <Dropdown.Menu align="end" style={{ background: 'var(--ap-card-bg)', border: '1px solid var(--ap-border)', borderRadius: 'var(--ap-radius-md)', minWidth: 180 }}>
                 {skill.tier === 'native' && (
                   <>
                     <Dropdown.Item onClick={() => handleFork(skill)}><FaCodeBranch className="me-2" size={12} />{t('actions.fork')}</Dropdown.Item>
@@ -499,15 +490,15 @@ const SkillsPage = () => {
                   </>
                 )}
                 <Dropdown.Divider />
-                <Dropdown.Header style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('actions.exportAs')}</Dropdown.Header>
+                <Dropdown.Header style={{ fontSize: 'var(--ap-fs-xs)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('actions.exportAs')}</Dropdown.Header>
                 <Dropdown.Item onClick={() => handleExport(skill, 'superpowers')}><FaDownload className="me-2" size={11} />Superpowers (SKILL.md)</Dropdown.Item>
                 <Dropdown.Item onClick={() => handleExport(skill, 'gws')}><FaDownload className="me-2" size={11} />GWS (SKILL.md)</Dropdown.Item>
                 <Dropdown.Item onClick={() => handleExport(skill, 'openai')}><FaDownload className="me-2" size={11} />OpenAI function (JSON)</Dropdown.Item>
               </Dropdown.Menu>
             </Dropdown>
           </div>
-        </div>
-      </Card>
+        </footer>
+      </article>
     );
   };
 
