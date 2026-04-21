@@ -381,37 +381,28 @@ const SkillsPage = () => {
 
   // --- Skill Card ---
   const SkillCard = ({ skill }) => {
-    const EngineIcon = ENGINE_ICONS[skill.engine] || FaCode;
     const isExpanded = expandedSkill === skill.slug;
     const catColor = CATEGORY_COLORS[skill.category] || CATEGORY_COLORS.general;
 
     return (
-      <Card className="skill-card">
-        <div className="skill-card-body" onClick={() => setExpandedSkill(isExpanded ? null : skill.slug)}>
+      <article className="ap-card skill-card-article">
+        <div className="ap-card-body" onClick={() => setExpandedSkill(isExpanded ? null : skill.slug)} style={{ cursor: 'pointer' }}>
           {/* Header row */}
-          <div className="d-flex align-items-start justify-content-between mb-2">
-            <div className="d-flex align-items-center gap-2" style={{ minWidth: 0, flex: 1 }}>
-              <div className="skill-icon">
-                <EngineIcon size={16} />
-              </div>
-              <h6 className="skill-card-title">{skill.name}</h6>
-            </div>
-            <div className="d-flex align-items-center gap-1" style={{ flexShrink: 0 }}>
-              <span className="skill-engine-badge">{skill.engine}</span>
-              {skill.version && <span className="skill-version-badge">{t('version', { version: skill.version })}</span>}
+          <div className="skill-card-head">
+            <h3 className="ap-card-title" title={skill.name}>{skill.name}</h3>
+            <div className="skill-card-meta">
+              <span className="ap-badge-outline">{skill.engine}</span>
+              {skill.version && <span className="ap-badge-outline">v{skill.version}</span>}
             </div>
           </div>
 
-          {/* Category + Tier badges — plain spans so Bootstrap can't override the background */}
-          <div className="d-flex align-items-center gap-2 mb-2 flex-wrap">
-            <span
-              className="skill-category-badge"
-              style={{ background: catColor + '1f', color: catColor, borderColor: catColor + '3d' }}
-            >
-              {t(`categories.${skill.category}`, { defaultValue: skill.category })}
-            </span>
-            <span className={`skill-tier-badge skill-tier-${skill.tier || 'native'}`}>
+          {/* Tier + category */}
+          <div className="skill-card-tags">
+            <span className={`ap-badge-solid skill-tier-${skill.tier || 'native'}`}>
               {t(`tabs.${skill.tier === 'custom' ? 'mySkills' : skill.tier}`)}
+            </span>
+            <span className="ap-badge-outline" style={{ color: catColor, borderColor: catColor + '40' }}>
+              {t(`categories.${skill.category}`, { defaultValue: skill.category })}
             </span>
           </div>
 
@@ -466,17 +457,17 @@ const SkillsPage = () => {
         </div>
 
         {/* Footer */}
-        <div className="skill-card-footer">
-          <Button className="skill-try-btn" size="sm" onClick={e => { e.stopPropagation(); handleOpenExecute(skill); }}>
-            <FaPlay className="me-1" size={10} /> {t('tryIt')}
-          </Button>
-          <div className="d-flex align-items-center gap-1">
-            <span className="skill-action-icon" onClick={e => { e.stopPropagation(); setExpandedSkill(isExpanded ? null : skill.slug); }}>
+        <footer className="skill-card-foot">
+          <button type="button" className="ap-btn-primary ap-btn-sm" onClick={e => { e.stopPropagation(); handleOpenExecute(skill); }}>
+            <FaPlay size={10} />{t('tryIt')}
+          </button>
+          <div className="skill-card-foot-actions">
+            <button type="button" className="ap-btn-ghost" onClick={e => { e.stopPropagation(); setExpandedSkill(isExpanded ? null : skill.slug); }}>
               {isExpanded ? <FaChevronUp size={12} /> : <FaChevronDown size={12} />}
-            </span>
+            </button>
             <Dropdown onClick={e => e.stopPropagation()}>
-              <Dropdown.Toggle as="span" className="skill-action-icon"><FaEllipsisV size={12} /></Dropdown.Toggle>
-              <Dropdown.Menu align="end" style={{ background: 'var(--surface-elevated)', border: '1px solid var(--color-border)', borderRadius: 10, minWidth: 180 }}>
+              <Dropdown.Toggle as="button" type="button" className="ap-btn-ghost"><FaEllipsisV size={12} /></Dropdown.Toggle>
+              <Dropdown.Menu align="end" style={{ background: 'var(--ap-card-bg)', border: '1px solid var(--ap-border)', borderRadius: 'var(--ap-radius-md)', minWidth: 180 }}>
                 {skill.tier === 'native' && (
                   <>
                     <Dropdown.Item onClick={() => handleFork(skill)}><FaCodeBranch className="me-2" size={12} />{t('actions.fork')}</Dropdown.Item>
@@ -499,15 +490,15 @@ const SkillsPage = () => {
                   </>
                 )}
                 <Dropdown.Divider />
-                <Dropdown.Header style={{ fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('actions.exportAs')}</Dropdown.Header>
+                <Dropdown.Header style={{ fontSize: 'var(--ap-fs-xs)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('actions.exportAs')}</Dropdown.Header>
                 <Dropdown.Item onClick={() => handleExport(skill, 'superpowers')}><FaDownload className="me-2" size={11} />Superpowers (SKILL.md)</Dropdown.Item>
                 <Dropdown.Item onClick={() => handleExport(skill, 'gws')}><FaDownload className="me-2" size={11} />GWS (SKILL.md)</Dropdown.Item>
                 <Dropdown.Item onClick={() => handleExport(skill, 'openai')}><FaDownload className="me-2" size={11} />OpenAI function (JSON)</Dropdown.Item>
               </Dropdown.Menu>
             </Dropdown>
           </div>
-        </div>
-      </Card>
+        </footer>
+      </article>
     );
   };
 
@@ -515,28 +506,23 @@ const SkillsPage = () => {
     <Layout>
       <div className="skills-page">
         {/* Header */}
-        <div className="skills-page-header">
-          <div className="skills-identity">
-            <div className="skills-page-icon">
-              <FaRocket size={22} />
-            </div>
-            <div>
-              <h2 className="skills-page-title">{t('title')}</h2>
-              <p className="skills-page-subtitle">{t('subtitle')}</p>
-            </div>
+        <header className="ap-page-header">
+          <div>
+            <h1 className="ap-page-title">{t('title')}</h1>
+            <p className="ap-page-subtitle">{t('subtitle')}</p>
           </div>
-          <div className="d-flex gap-2 flex-wrap">
-            <Button variant="outline-primary" onClick={openMcpConnect} style={{ borderRadius: 8 }} title={t('mcp.connectExternal')}>
-              <FaPlug className="me-2" size={13} />{t('mcp.connectExternal')}
-            </Button>
-            <Button variant="outline-secondary" onClick={() => setShowImport(true)} style={{ borderRadius: 8 }}>
-              <FaGithub className="me-2" size={14} />{t('actions.import')}
-            </Button>
-            <Button variant="primary" onClick={openCreate} style={{ borderRadius: 8 }}>
-              <FaPlus className="me-2" size={12} />{t('createSkill')}
-            </Button>
+          <div className="ap-page-actions">
+            <button type="button" className="ap-btn-secondary" onClick={openMcpConnect} title={t('mcp.connectExternal')}>
+              <FaPlug size={13} />{t('mcp.connectExternal')}
+            </button>
+            <button type="button" className="ap-btn-secondary" onClick={() => setShowImport(true)}>
+              <FaGithub size={14} />{t('actions.import')}
+            </button>
+            <button type="button" className="ap-btn-primary" onClick={openCreate}>
+              <FaPlus size={12} />{t('createSkill')}
+            </button>
           </div>
-        </div>
+        </header>
 
         {/* Search */}
         <InputGroup className="skills-search-wrapper">
@@ -553,14 +539,14 @@ const SkillsPage = () => {
         {/* Tabs — native <button> gives us baseline keyboard handling (Enter/Space),
             tab-stop ordering, and screen-reader semantics for free. Bootstrap's
             .nav-link.active classes are avoided so they can't override our palette. */}
-        <div className="skills-tabs" role="tablist">
+        <div className="ap-chip-row" role="tablist">
           {['native', 'my', 'community'].map(tab => (
             <button
               key={tab}
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
-              className={`skills-tab ${activeTab === tab ? 'active' : ''}`}
+              className={`ap-chip-filter ${activeTab === tab ? 'active' : ''}`}
               onClick={() => setActiveTab(tab)}
             >
               {tab === 'my' ? t('tabs.mySkills') : t(`tabs.${tab}`)}
@@ -571,13 +557,13 @@ const SkillsPage = () => {
         {/* Category chips — real buttons, not Badge, so Bootstrap's .badge (bg-primary
             default) can't override the tinted inactive state, and keyboard users can
             activate them with Enter/Space. */}
-        <div className="skills-category-chips" role="group" aria-label={t('categories.all')}>
+        <div className="ap-chip-row" role="group" aria-label={t('categories.all')}>
           {CATEGORIES.map(cat => (
             <button
               key={cat}
               type="button"
               aria-pressed={activeCategory === cat}
-              className={`skills-chip ${activeCategory === cat ? 'active' : ''}`}
+              className={`ap-chip-filter ${activeCategory === cat ? 'active' : ''}`}
               onClick={() => setActiveCategory(cat)}
             >
               {t(`categories.${cat}`)}

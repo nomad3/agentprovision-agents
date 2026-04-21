@@ -492,7 +492,7 @@ const AgentsPage = () => {
                   <button
                     type="button"
                     onClick={() => setHireModalOpen(true)}
-                    className="inline-link-button"
+                    className="ap-inline-link"
                   >
                     Hire one now.
                   </button>

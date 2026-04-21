@@ -1,0 +1,108 @@
+/* Design tokens — single source of truth for the AgentProvision internal app.
+   Every page should consume these via var(--ap-*). Do not use hardcoded
+   hex/rgba values inside page CSS. */
+
+:root {
+  /* -------- Palette (light, default) -------- */
+  --ap-primary:          #2b7de9;
+  --ap-primary-hover:    #1e68c8;
+  --ap-primary-tint:     rgba(43, 125, 233, 0.08);
+  --ap-primary-tint-hi:  rgba(43, 125, 233, 0.14);
+  --ap-primary-ring:     rgba(43, 125, 233, 0.25);
+
+  --ap-accent:           #3b9d86;  /* Agent Fleet teal — used sparingly */
+
+  --ap-success:          #2d9d78;
+  --ap-success-tint:     rgba(45, 157, 120, 0.12);
+  --ap-warning:          #c27803;
+  --ap-warning-tint:     rgba(194, 120, 3, 0.12);
+  --ap-danger:           #d33c3c;
+  --ap-danger-tint:      rgba(211, 60, 60, 0.10);
+
+  /* -------- Surfaces -------- */
+  --ap-page-bg:          #f0f5fa;
+  --ap-card-bg:          #ffffff;
+  --ap-card-bg-hover:    #fafcfe;
+  --ap-code-bg:          rgba(22, 34, 49, 0.05);
+
+  /* -------- Text -------- */
+  --ap-text:             #1a2b3c;
+  --ap-text-muted:       rgba(45, 65, 90, 0.72);
+  --ap-text-subtle:      rgba(45, 65, 90, 0.55);
+  --ap-text-disabled:    rgba(100, 120, 145, 0.45);
+
+  /* -------- Borders -------- */
+  --ap-border:           rgba(180, 200, 220, 0.4);
+  --ap-border-strong:    rgba(43, 125, 233, 0.35);
+
+  /* -------- Radii -------- */
+  --ap-radius-sm:        6px;
+  --ap-radius-md:        8px;
+  --ap-radius-lg:        12px;
+  --ap-radius-pill:      999px;
+
+  /* -------- Shadows — one elevation, one hover elevation -------- */
+  --ap-shadow-card:       0 1px 2px rgba(100, 130, 170, 0.06),
+                          0 8px 20px rgba(100, 130, 170, 0.06);
+  --ap-shadow-card-hover: 0 2px 4px rgba(100, 130, 170, 0.08),
+                          0 14px 32px rgba(100, 130, 170, 0.12);
+
+  /* -------- Spacing scale -------- */
+  --ap-space-1:  0.25rem;
+  --ap-space-2:  0.5rem;
+  --ap-space-3:  0.75rem;
+  --ap-space-4:  1rem;
+  --ap-space-5:  1.25rem;
+  --ap-space-6:  1.5rem;
+  --ap-space-8:  2rem;
+  --ap-space-10: 2.5rem;
+
+  /* -------- Typography -------- */
+  --ap-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --ap-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ap-fs-xs:   0.72rem;
+  --ap-fs-sm:   0.82rem;
+  --ap-fs-base: 0.9rem;
+  --ap-fs-md:   1rem;
+  --ap-fs-lg:   1.25rem;
+  --ap-fs-xl:   1.5rem;
+  --ap-lh-tight:  1.25;
+  --ap-lh-normal: 1.5;
+  --ap-lh-loose:  1.6;
+
+  /* -------- Transitions -------- */
+  --ap-transition: all 0.15s ease;
+}
+
+/* -------- Dark mode overrides -------- */
+[data-bs-theme="dark"] {
+  --ap-primary:          #4a94f0;
+  --ap-primary-hover:    #62a5f4;
+  --ap-primary-tint:     rgba(74, 148, 240, 0.12);
+  --ap-primary-tint-hi:  rgba(74, 148, 240, 0.2);
+  --ap-primary-ring:     rgba(74, 148, 240, 0.4);
+
+  --ap-accent:           #5ec5b0;
+
+  --ap-success-tint:     rgba(94, 197, 176, 0.15);
+  --ap-warning-tint:     rgba(251, 146, 60, 0.15);
+  --ap-danger-tint:      rgba(248, 113, 113, 0.15);
+
+  --ap-page-bg:          #0f1923;
+  --ap-card-bg:          #162231;
+  --ap-card-bg-hover:    #1a2938;
+  --ap-code-bg:          rgba(226, 232, 240, 0.06);
+
+  --ap-text:             #e2e8f0;
+  --ap-text-muted:       rgba(226, 232, 240, 0.72);
+  --ap-text-subtle:      rgba(226, 232, 240, 0.52);
+  --ap-text-disabled:    rgba(226, 232, 240, 0.35);
+
+  --ap-border:           rgba(60, 90, 130, 0.4);
+  --ap-border-strong:    rgba(74, 148, 240, 0.45);
+
+  --ap-shadow-card:       0 1px 2px rgba(0, 0, 0, 0.2),
+                          0 8px 20px rgba(0, 0, 0, 0.25);
+  --ap-shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.3),
+                          0 14px 32px rgba(0, 0, 0, 0.4);
+}
