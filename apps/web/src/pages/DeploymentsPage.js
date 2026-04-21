@@ -4,8 +4,12 @@ import Layout from '../components/Layout';
 const DeploymentsPage = () => {
   return (
     <Layout>
-      <h2>Deployments</h2>
-      <p>Manage your deployments here.</p>
+      <header className="ap-page-header">
+        <div>
+          <h1 className="ap-page-title">Deployments</h1>
+          <p className="ap-page-subtitle">Manage your deployments here.</p>
+        </div>
+      </header>
     </Layout>
   );
 };
