@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import { Spinner } from 'react-bootstrap';
-import { FaBrain, FaUsers, FaProjectDiagram, FaCalendarDay, FaComments, FaEye } from 'react-icons/fa';
 import { getActivityEventConfig } from './constants';
 import { memoryService } from '../../services/memory';
 
@@ -38,13 +37,15 @@ const OverviewTab = () => {
   }
 
   const statTiles = [
-    { label: 'Entities', value: stats?.total_entities || 0, icon: FaUsers, color: '#60a5fa' },
-    { label: 'Memories', value: stats?.total_memories || 0, icon: FaBrain, color: '#f472b6' },
-    { label: 'Relations', value: stats?.total_relations || 0, icon: FaProjectDiagram, color: '#a78bfa' },
-    { label: 'Observations', value: stats?.total_observations || 0, icon: FaEye, color: '#fbbf24' },
-    { label: 'Episodes', value: stats?.total_episodes || 0, icon: FaComments, color: '#38bdf8' },
-    { label: 'Learned Today', value: stats?.learned_today || 0, icon: FaCalendarDay, color: '#34d399' },
+    { label: 'Entities', value: stats?.total_entities || 0 },
+    { label: 'Memories', value: stats?.total_memories || 0 },
+    { label: 'Relations', value: stats?.total_relations || 0 },
+    { label: 'Observations', value: stats?.total_observations || 0 },
+    { label: 'Episodes', value: stats?.total_episodes || 0 },
+    { label: 'Learned Today', value: stats?.learned_today || 0 },
   ];
+
+  const byCategory = stats?.by_category || {};
 
   const formatTime = (dateStr) => {
     if (!dateStr) return '';
@@ -62,21 +63,42 @@ const OverviewTab = () => {
 
   return (
     <div className="overview-tab">
-      {/* Stat Tiles */}
-      <div className="overview-tiles">
-        {statTiles.map((tile) => {
-          const Icon = tile.icon;
-          return (
-            <div key={tile.label} className="overview-tile">
-              <div className="overview-tile-icon" style={{ color: tile.color }}>
-                <Icon size={20} />
+      {/* Summary tiles */}
+      <div className="row g-3 mb-4">
+        {statTiles.map((tile) => (
+          <div key={tile.label} className="col-6 col-md-4 col-lg-2">
+            <article className="ap-card">
+              <div className="ap-card-body" style={{ padding: 'var(--ap-space-4)' }}>
+                <div className="ap-section-label">{tile.label}</div>
+                <div style={{ fontSize: 'var(--ap-fs-xl)', fontWeight: 700, color: 'var(--ap-text)', lineHeight: 1 }}>
+                  {tile.value}
+                </div>
               </div>
-              <div className="overview-tile-value">{tile.value}</div>
-              <div className="overview-tile-label">{tile.label}</div>
-            </div>
-          );
-        })}
+            </article>
+          </div>
+        ))}
       </div>
+
+      {/* Per-category entity counts */}
+      {Object.keys(byCategory).length > 0 && (
+        <div className="mb-4">
+          <div className="ap-section-label" style={{ marginBottom: 'var(--ap-space-3)' }}>By Category</div>
+          <div className="row g-3">
+            {Object.entries(byCategory).map(([cat, count]) => (
+              <div key={cat} className="col-6 col-md-3">
+                <article className="ap-card">
+                  <div className="ap-card-body" style={{ padding: 'var(--ap-space-4)' }}>
+                    <div className="ap-section-label">{cat}</div>
+                    <div style={{ fontSize: 'var(--ap-fs-xl)', fontWeight: 700, color: 'var(--ap-text)', lineHeight: 1 }}>
+                      {count}
+                    </div>
+                  </div>
+                </article>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Memory Health */}
       <div className="overview-section">

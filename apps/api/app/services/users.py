@@ -13,6 +13,7 @@ from app.schemas.tenant import TenantCreate
 from app.models.agent import Agent
 from app.models.chat import ChatSession
 from app.models.integration_config import IntegrationConfig
+from app.models.knowledge_entity import KnowledgeEntity
 from app.models.tenant_features import TenantFeatures
 import os
 import uuid
@@ -208,6 +209,18 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
     # Auto-provision shared CLI credentials so new tenants inherit the
     # platform owner's Claude Code and Codex subscriptions by default.
     seed_shared_cli_credentials_for_tenant(db, tenant.id)
+
+    # Seed a starter knowledge entity so Memory > Entities is never blank.
+    company_name = tenant_in.name if tenant_in.name else "My Organization"
+    seed_entity = KnowledgeEntity(
+        name=company_name,
+        entity_type="organization",
+        category="company",
+        description=f"{company_name} — primary organization for this workspace.",
+        tenant_id=tenant.id,
+        confidence=1.0,
+    )
+    db.add(seed_entity)
 
     db.commit()
     db.refresh(db_user)
