@@ -37,7 +37,7 @@ const DashboardPage = () => {
       <Layout>
         <div className="text-center py-5">
           <Spinner animation="border" role="status" variant="primary" size="sm" />
-          <p className="mt-3 text-muted" style={{ fontSize: '0.85rem' }}>{t('loading')}</p>
+          <p className="mt-3 text-muted" style={{ fontSize: 'var(--ap-fs-sm)' }}>{t('loading')}</p>
         </div>
       </Layout>
     );
@@ -46,14 +46,14 @@ const DashboardPage = () => {
   if (error) {
     return (
       <Layout>
-        <Alert variant="danger" style={{ fontSize: '0.85rem' }}>{error}</Alert>
+        <Alert variant="danger">{error}</Alert>
       </Layout>
     );
   }
 
   const { overview, activity, agents, datasets, recent_sessions } = dashboardData || {};
 
-  // System health items
+  // System health items — status is a semantic/categorical value, kept as enum
   const systemItems = [
     {
       label: t('system.agents'),
@@ -81,70 +81,62 @@ const DashboardPage = () => {
     },
   ];
 
-  const statusDot = (status) => ({
+  // Status dot — uses semantic tokens (success vs. muted text)
+  const statusDotStyle = (status) => ({
     width: 6,
     height: 6,
     borderRadius: '50%',
-    background: status === 'operational' ? '#22c55e' : '#94a3b8',
+    background: status === 'operational' ? 'var(--ap-success)' : 'var(--ap-text-subtle)',
     display: 'inline-block',
     marginRight: 6,
     flexShrink: 0,
   });
 
-  const cardStyle = {
-    background: 'var(--surface-elevated)',
-    border: '1px solid var(--color-border)',
-    borderRadius: 8,
-    padding: '20px 24px',
-  };
-
-  const sectionLabel = {
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-    color: 'var(--color-muted)',
-    marginBottom: 12,
-  };
+  const dividerStyle = (isLast) => ({
+    padding: '10px 0',
+    borderBottom: isLast ? 'none' : '1px solid var(--ap-border)',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  });
 
   return (
     <Layout>
       <div style={{ maxWidth: 1100 }}>
-        {/* Header */}
-        <div style={{ marginBottom: 28 }}>
-          <h4 style={{ fontWeight: 600, marginBottom: 4, color: 'var(--color-foreground)' }}>
-            {t('title')}
-          </h4>
-          <p style={{ fontSize: '0.85rem', color: 'var(--color-muted)', margin: 0 }}>
-            {t('subtitle')}
-          </p>
-        </div>
+        <header className="ap-page-header">
+          <div>
+            <h1 className="ap-page-title">{t('title')}</h1>
+            <p className="ap-page-subtitle">{t('subtitle')}</p>
+          </div>
+        </header>
 
         {/* System Status */}
-        <div style={sectionLabel}>{t('systemStatus')}</div>
+        <div className="ap-section-label">{t('systemStatus')}</div>
         <Row className="g-3 mb-4">
           {systemItems.map((item) => (
             <Col md={3} sm={6} key={item.label}>
-              <div style={cardStyle}>
-                <div className="d-flex align-items-center mb-2" style={{ gap: 6 }}>
-                  <span style={statusDot(item.status)} />
-                  <span style={{ fontSize: '0.78rem', color: 'var(--color-muted)', fontWeight: 500 }}>
-                    {item.label}
-                  </span>
+              <article className="ap-card h-100">
+                <div className="ap-card-body">
+                  <div className="d-flex align-items-center mb-2" style={{ gap: 6 }}>
+                    <span style={statusDotStyle(item.status)} />
+                    <span style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text-muted)', fontWeight: 500 }}>
+                      {item.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 'var(--ap-fs-xl)', fontWeight: 600, color: 'var(--ap-text)', lineHeight: 1.2 }}>
+                    {item.value}
+                  </div>
+                  <div style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)', marginTop: 4 }}>
+                    {item.sub}
+                  </div>
                 </div>
-                <div style={{ fontSize: '1.5rem', fontWeight: 600, color: 'var(--color-foreground)', lineHeight: 1.2 }}>
-                  {item.value}
-                </div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)', marginTop: 4 }}>
-                  {item.sub}
-                </div>
-              </div>
+              </article>
             </Col>
           ))}
         </Row>
 
         {/* Quick Navigation */}
-        <div style={sectionLabel}>{t('quickAccess')}</div>
+        <div className="ap-section-label">{t('quickAccess')}</div>
         <Row className="g-3 mb-4">
           {[
             { label: t('quick.aiChat'), desc: t('quick.aiChatDesc'), path: '/chat' },
@@ -153,23 +145,19 @@ const DashboardPage = () => {
             { label: t('quick.workflows'), desc: t('quick.workflowsDesc'), path: '/workflows' },
           ].map((item) => (
             <Col md={3} sm={6} key={item.label}>
-              <div
-                style={{
-                  ...cardStyle,
-                  cursor: 'pointer',
-                  transition: 'border-color 0.15s ease',
-                }}
+              <article
+                className="ap-card h-100"
+                role="button"
+                tabIndex={0}
                 onClick={() => navigate(item.path)}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = 'var(--color-primary, #4a90d9)'}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = 'var(--color-border)'}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(item.path); }}
+                style={{ cursor: 'pointer' }}
               >
-                <div style={{ fontSize: '0.88rem', fontWeight: 500, color: 'var(--color-foreground)', marginBottom: 2 }}>
-                  {item.label}
+                <div className="ap-card-body">
+                  <div className="ap-card-title">{item.label}</div>
+                  <p className="ap-card-text">{item.desc}</p>
                 </div>
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-muted)' }}>
-                  {item.desc}
-                </div>
-              </div>
+              </article>
             </Col>
           ))}
         </Row>
@@ -177,111 +165,104 @@ const DashboardPage = () => {
         {/* Two-column layout: Recent Sessions + Agent Fleet */}
         <Row className="g-3">
           <Col lg={7}>
-            <div style={sectionLabel}>{t('recentConversations')}</div>
-            <div style={cardStyle}>
-              {recent_sessions && recent_sessions.length > 0 ? (
-                <div>
-                  {recent_sessions.slice(0, 6).map((session, idx) => (
-                    <div
-                      key={session.id}
-                      style={{
-                        padding: '10px 0',
-                        borderBottom: idx < Math.min(recent_sessions.length, 6) - 1 ? '1px solid var(--color-border)' : 'none',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        cursor: 'pointer',
-                      }}
-                      onClick={() => navigate('/chat')}
-                    >
-                      <div>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-foreground)' }}>
-                          {session.title}
+            <div className="ap-section-label">{t('recentConversations')}</div>
+            <article className="ap-card">
+              <div className="ap-card-body">
+                {recent_sessions && recent_sessions.length > 0 ? (
+                  <div>
+                    {recent_sessions.slice(0, 6).map((session, idx) => (
+                      <div
+                        key={session.id}
+                        style={{ ...dividerStyle(idx >= Math.min(recent_sessions.length, 6) - 1), cursor: 'pointer' }}
+                        onClick={() => navigate('/chat')}
+                      >
+                        <div>
+                          <div style={{ fontSize: 'var(--ap-fs-sm)', fontWeight: 500, color: 'var(--ap-text)' }}>
+                            {session.title}
+                          </div>
+                          <div style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)' }}>
+                            {t('sessions.messages', { count: session.message_count })}
+                          </div>
                         </div>
-                        <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
-                          {t('sessions.messages', { count: session.message_count })}
+                        <div style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)', whiteSpace: 'nowrap' }}>
+                          {new Date(session.created_at).toLocaleDateString()}
                         </div>
                       </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)', whiteSpace: 'nowrap' }}>
-                        {new Date(session.created_at).toLocaleDateString()}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', textAlign: 'center', margin: '20px 0' }}>
-                  {t('sessions.noRecent')}
-                </p>
-              )}
-            </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center" style={{ color: 'var(--ap-text-muted)', fontSize: 'var(--ap-fs-sm)', margin: '20px 0' }}>
+                    {t('sessions.noRecent')}
+                  </p>
+                )}
+              </div>
+            </article>
           </Col>
 
           <Col lg={5}>
-            <div style={sectionLabel}>{t('agentFleet')}</div>
-            <div style={cardStyle}>
-              {agents && agents.length > 0 ? (
-                <div>
-                  {agents.slice(0, 6).map((agent, idx) => (
-                    <div
-                      key={agent.name}
-                      style={{
-                        padding: '10px 0',
-                        borderBottom: idx < Math.min(agents.length, 6) - 1 ? '1px solid var(--color-border)' : 'none',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <div style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--color-foreground)' }}>
-                        {agent.name}
+            <div className="ap-section-label">{t('agentFleet')}</div>
+            <article className="ap-card">
+              <div className="ap-card-body">
+                {agents && agents.length > 0 ? (
+                  <div>
+                    {agents.slice(0, 6).map((agent, idx) => (
+                      <div
+                        key={agent.name}
+                        style={dividerStyle(idx >= Math.min(agents.length, 6) - 1)}
+                      >
+                        <div style={{ fontSize: 'var(--ap-fs-sm)', fontWeight: 500, color: 'var(--ap-text)' }}>
+                          {agent.name}
+                        </div>
+                        <div className="d-flex align-items-center" style={{ gap: 4 }}>
+                          <span style={statusDotStyle(agent.deployment_count > 0 ? 'operational' : 'idle')} />
+                          <span style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)' }}>
+                            {agent.deployment_count > 0 ? t('agents.active') : t('agents.ready')}
+                          </span>
+                        </div>
                       </div>
-                      <div className="d-flex align-items-center" style={{ gap: 4 }}>
-                        <span style={statusDot(agent.deployment_count > 0 ? 'operational' : 'idle')} />
-                        <span style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
-                          {agent.deployment_count > 0 ? t('agents.active') : t('agents.ready')}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', textAlign: 'center', margin: '20px 0' }}>
-                  {t('agents.noAgents')}
-                </p>
-              )}
-            </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center" style={{ color: 'var(--ap-text-muted)', fontSize: 'var(--ap-fs-sm)', margin: '20px 0' }}>
+                    {t('agents.noAgents')}
+                  </p>
+                )}
+              </div>
+            </article>
 
             {/* Datasets summary */}
-            <div style={{ ...sectionLabel, marginTop: 16 }}>{t('datasets')}</div>
-            <div style={cardStyle}>
-              {datasets && datasets.length > 0 ? (
-                <div>
-                  {datasets.slice(0, 4).map((dataset, idx) => (
-                    <div
-                      key={dataset.id}
-                      style={{
-                        padding: '8px 0',
-                        borderBottom: idx < Math.min(datasets.length, 4) - 1 ? '1px solid var(--color-border)' : 'none',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <div style={{ fontSize: '0.82rem', color: 'var(--color-foreground)' }}>
-                        {dataset.name}
+            <div className="ap-section-label" style={{ marginTop: 'var(--ap-space-4)' }}>{t('datasets')}</div>
+            <article className="ap-card">
+              <div className="ap-card-body">
+                {datasets && datasets.length > 0 ? (
+                  <div>
+                    {datasets.slice(0, 4).map((dataset, idx) => (
+                      <div
+                        key={dataset.id}
+                        style={{
+                          padding: '8px 0',
+                          borderBottom: idx < Math.min(datasets.length, 4) - 1 ? '1px solid var(--ap-border)' : 'none',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                      >
+                        <div style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>
+                          {dataset.name}
+                        </div>
+                        <div style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)' }}>
+                          {t('datasetsSection.rows', { count: dataset.rows?.toLocaleString() })}
+                        </div>
                       </div>
-                      <div style={{ fontSize: '0.72rem', color: 'var(--color-muted)' }}>
-                        {t('datasetsSection.rows', { count: dataset.rows?.toLocaleString() })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p style={{ color: 'var(--color-muted)', fontSize: '0.82rem', textAlign: 'center', margin: '16px 0' }}>
-                  {t('datasetsSection.noDatasets')}
-                </p>
-              )}
-            </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center" style={{ color: 'var(--ap-text-muted)', fontSize: 'var(--ap-fs-sm)', margin: '16px 0' }}>
+                    {t('datasetsSection.noDatasets')}
+                  </p>
+                )}
+              </div>
+            </article>
           </Col>
         </Row>
       </div>
