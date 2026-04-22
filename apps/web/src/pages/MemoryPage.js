@@ -194,11 +194,37 @@ function MemoryPage() {
   const [extracting, setExtracting] = useState(false);
   const runExtraction = async () => {
     setExtracting(true);
+    setImportMessage(null);
     try {
-      await api.post('/knowledge/extract');
+      const res = await api.post('/knowledge/extract');
+      const {
+        sessions_processed = 0,
+        entities_created = 0,
+        relations_created = 0,
+        memories_created = 0,
+      } = res.data || {};
+      setImportMessage({
+        type: 'success',
+        text: t(
+          'entities.extractionSuccess',
+          'Processed {{sessions}} session(s): {{entities}} entities, {{relations}} relations, {{memories}} memories created.',
+          {
+            sessions: sessions_processed,
+            entities: entities_created,
+            relations: relations_created,
+            memories: memories_created,
+          }
+        ),
+      });
       await loadEntities(true);
     } catch (error) {
       console.error('Knowledge extraction failed:', error);
+      setImportMessage({
+        type: 'danger',
+        text: t('entities.extractionError', 'Knowledge extraction failed: {{err}}', {
+          err: error?.response?.data?.detail || error?.message || 'unknown error',
+        }),
+      });
     } finally {
       setExtracting(false);
     }
@@ -256,6 +282,13 @@ function MemoryPage() {
 
         {activeTab === 'entities' && (
           <>
+            {/* Extraction / action feedback */}
+            {importMessage && (
+              <Alert variant={importMessage.type} dismissible onClose={() => setImportMessage(null)}>
+                {importMessage.text}
+              </Alert>
+            )}
+
             {/* Stats Bar */}
             {!loading && entities.length > 0 && (
               <EntityStatsBar entities={entities} />
