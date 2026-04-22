@@ -526,45 +526,6 @@
 
 /* ── Overview Tab ────────────────────────────────────────────── */
 
-.overview-tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
-}
-
-.overview-tile {
-  background: var(--ap-card-bg);
-  border: 1px solid var(--ap-border);
-  border-radius: var(--ap-radius-lg);
-  padding: var(--ap-space-4);
-  text-align: center;
-  transition: var(--ap-transition);
-}
-
-.overview-tile:hover {
-  border-color: var(--ap-border-strong);
-}
-
-.overview-tile-icon {
-  margin-bottom: var(--ap-space-2);
-}
-
-.overview-tile-value {
-  font-size: var(--ap-fs-xl);
-  font-weight: 700;
-  color: var(--ap-text);
-  line-height: 1;
-}
-
-.overview-tile-label {
-  font-size: var(--ap-fs-xs);
-  color: var(--ap-text-muted);
-  margin-top: var(--ap-space-1);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
 .overview-section {
   background: var(--ap-card-bg);
   border: 1px solid var(--ap-border);

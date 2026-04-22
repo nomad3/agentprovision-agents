@@ -362,7 +362,7 @@ function MemoryPage() {
                 <p className="ap-empty-text">{t('entities.noEntitiesDesc', 'Chat with Luna to build the knowledge graph, or add entities manually.')}</p>
                 <div className="d-flex gap-2 justify-content-center">
                   <button type="button" className="ap-btn-primary" onClick={() => setShowCreateModal(true)}>
-                    + {t('addEntity', 'Add Entity')}
+                    + {t('entities.addEntity', 'Add Entity')}
                   </button>
                   <button type="button" className="ap-btn-secondary" onClick={runExtraction} disabled={extracting}>
                     {extracting ? <Spinner animation="border" size="sm" /> : t('entities.runExtraction', 'Run Knowledge Extraction')}
