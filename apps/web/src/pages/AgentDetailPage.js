@@ -784,8 +784,8 @@ const AgentDetailPage = () => {
               </select>
             </div>
             <div className="col-12">
-              <label style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)' }}>Endpoint URL</label>
-              <input className="form-control form-control-sm" value={publishForm.endpoint_url} onChange={(e) => setPublishForm({ ...publishForm, endpoint_url: e.target.value })} placeholder="https://agentprovision.com/api/v1/agents/…/invoke" />
+              <label style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)' }}>Endpoint URL *</label>
+              <input className="form-control form-control-sm" required value={publishForm.endpoint_url} onChange={(e) => setPublishForm({ ...publishForm, endpoint_url: e.target.value })} placeholder="https://agentprovision.com/api/v1/agents/…/invoke" />
             </div>
             {publishForm.pricing_model !== 'free' && (
               <div className="col-md-6">
@@ -800,7 +800,7 @@ const AgentDetailPage = () => {
           <button
             type="button"
             className="ap-btn-primary ap-btn-sm"
-            disabled={publishBusy}
+            disabled={publishBusy || !publishForm.endpoint_url.trim()}
             onClick={async () => {
               setPublishBusy(true);
               setPublishError(null);

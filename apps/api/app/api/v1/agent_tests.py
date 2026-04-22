@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -42,8 +43,8 @@ class TestRunOut(BaseModel):
     passed_count: int
     failed_count: int
     results: list = Field(default_factory=list)
-    created_at: Optional[str] = None
-    completed_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
