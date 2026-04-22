@@ -66,6 +66,8 @@ class SubscriptionOut(BaseModel):
 def list_public_listings(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
+    skip: int = 0,
+    limit: int = 50,
 ):
     """Browse the cross-tenant marketplace. Returns public listings from other tenants."""
     return (
@@ -75,6 +77,8 @@ def list_public_listings(
             AgentMarketplaceListing.publisher_tenant_id != current_user.tenant_id,
         )
         .order_by(AgentMarketplaceListing.install_count.desc())
+        .offset(max(0, skip))
+        .limit(max(1, min(limit, 100)))
         .all()
     )
 
@@ -132,9 +136,27 @@ def unpublish_listing(
     )
     if not listing:
         raise HTTPException(status_code=404, detail="Listing not found")
+
+    # Revoke every downstream ExternalAgent row so subscribers can't keep calling the
+    # publisher's endpoint after the listing is removed. The subscriptions themselves
+    # cascade via the FK; the external agents don't, since they're owned by the
+    # subscriber tenant and only soft-linked via metadata_.
+    from app.models.external_agent import ExternalAgent
+
+    subs = (
+        db.query(AgentMarketplaceSubscription)
+        .filter(AgentMarketplaceSubscription.listing_id == listing_id)
+        .all()
+    )
+    for sub in subs:
+        if sub.external_agent_id:
+            ea = db.query(ExternalAgent).filter(ExternalAgent.id == sub.external_agent_id).first()
+            if ea:
+                db.delete(ea)
+
     db.delete(listing)
     db.commit()
-    return {"deleted": True}
+    return {"deleted": True, "revoked_subscribers": len(subs)}
 
 
 @router.post("/subscribe", response_model=SubscriptionOut, status_code=status.HTTP_201_CREATED)

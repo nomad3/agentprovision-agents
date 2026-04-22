@@ -34,6 +34,21 @@ def publish(
         raise ValueError("Agent not found for publisher tenant")
     if agent.status != "production":
         raise ValueError("Only production agents can be published")
+    if not endpoint_url:
+        # Every supported protocol (openai_chat, mcp_sse, webhook, a2a) is endpoint-driven;
+        # a listing without one is an unusable stub for subscribers.
+        raise ValueError("endpoint_url is required to publish")
+
+    existing = (
+        db.query(AgentMarketplaceListing)
+        .filter(
+            AgentMarketplaceListing.agent_id == agent.id,
+            AgentMarketplaceListing.publisher_tenant_id == publisher_tenant_id,
+        )
+        .first()
+    )
+    if existing:
+        raise ValueError("This agent already has a marketplace listing")
 
     listing = AgentMarketplaceListing(
         agent_id=agent.id,

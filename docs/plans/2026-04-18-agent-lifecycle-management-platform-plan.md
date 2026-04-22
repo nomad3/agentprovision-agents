@@ -478,8 +478,8 @@ POST /agents/{id}/test/shadow   → run new version in shadow (don't affect outp
 | P2 | Pillar 6 — Versioning | ✅ Shipped (migration 100, promote/rollback) |
 | P2 | Pillar 7 — Human-in-the-Loop | ✅ Shipped (`human_approval` step + `/agent-tasks/{id}/workflow-approve`) |
 | P2 | Pillar 8 — Import Formats | ✅ Shipped (`agent_importer.py`, `/agents/import`, Import modal) |
-| P3 | Pillar 9 — Federation / Marketplace | ✅ Shipped (migration 104, `/marketplace/*`, Marketplace section) |
-| P3 | Pillar 10 — Testing & Evaluation | ✅ Shipped (migration 105, `/agents/{id}/test`, Tests tab, promotion gate) |
+| P3 | Pillar 9 — Federation / Marketplace | ✅ Core shipped (migration 104, `/marketplace/*`, Marketplace section). **Deferred:** per-subscriber rate limits, allowed scopes, revenue splits. |
+| P3 | Pillar 10 — Testing & Evaluation | ✅ Core shipped (migration 105, `/agents/{id}/test`, Tests tab, promotion gate). **Deferred:** `/test/shadow` mode (run new vs. current in parallel). |
 
 ---
 

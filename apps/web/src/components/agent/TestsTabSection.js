@@ -68,7 +68,7 @@ const TestsTabSection = ({ agentId }) => {
     setError(null);
     try {
       await api.post(`/agents/${agentId}/test`);
-      load();
+      await load();
     } catch (e) {
       setError(e?.response?.data?.detail || 'Failed to run tests');
     } finally {
@@ -199,8 +199,22 @@ const TestsTabSection = ({ agentId }) => {
                   <td>{r.created_at ? new Date(r.created_at).toLocaleString() : ''}</td>
                   <td>{r.run_type}</td>
                   <td>
-                    <span className={`ap-status-${r.status === 'passed' ? 'production' : r.status === 'failed' ? 'deprecated' : 'staging'}`}>
-                      <span className="ap-status-dot" /> {r.status}
+                    <span
+                      className="ap-badge-solid"
+                      style={{
+                        background:
+                          r.status === 'passed' ? 'var(--ap-success-tint)' :
+                          r.status === 'failed' ? 'var(--ap-danger-tint)' :
+                          r.status === 'running' ? 'var(--ap-warning-tint)' :
+                          'var(--ap-border)',
+                        color:
+                          r.status === 'passed' ? 'var(--ap-success)' :
+                          r.status === 'failed' ? 'var(--ap-danger)' :
+                          r.status === 'running' ? 'var(--ap-warning)' :
+                          'var(--ap-text-muted)',
+                      }}
+                    >
+                      {r.status}
                     </span>
                   </td>
                   <td>{r.passed_count}</td>

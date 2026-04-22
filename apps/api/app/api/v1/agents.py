@@ -171,7 +171,16 @@ def promote_agent(
     # Promotion gate: if the agent has enabled test cases, they must pass before
     # we transition the lifecycle state. Running the suite against an empty set
     # short-circuits (no regression gate to enforce).
-    if not body.skip_tests:
+    if body.skip_tests:
+        # Auditable bypass — governance needs to see who skipped the regression gate.
+        write_audit_log(
+            agent_id=agent.id,
+            tenant_id=agent.tenant_id,
+            invoked_by_user_id=current_user.id,
+            invocation_type="lifecycle",
+            status="promote_bypass_gate",
+        )
+    else:
         from app.models.agent_test_suite import AgentTestCase
         from app.services import agent_test_runner
 
