@@ -13,6 +13,7 @@ from app.schemas.tenant import TenantCreate
 from app.models.agent import Agent
 from app.models.chat import ChatSession
 from app.models.integration_config import IntegrationConfig
+from app.models.knowledge_entity import KnowledgeEntity
 from app.models.tenant_features import TenantFeatures
 import os
 import uuid
@@ -209,8 +210,71 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
     # platform owner's Claude Code and Codex subscriptions by default.
     seed_shared_cli_credentials_for_tenant(db, tenant.id)
 
+    # Seed a starter knowledge entity so Memory > Entities is never blank.
+    # Embedding is backfilled asynchronously below — sentence-transformers
+    # cold-start is 10-30s and must not block the registration HTTP response.
+    company_name = tenant_in.name if tenant_in.name else "My Organization"
+    seed_description = f"{company_name} — primary organization for this workspace."
+
+    seed_entity = KnowledgeEntity(
+        name=company_name,
+        entity_type="organization",
+        category="company",
+        description=seed_description,
+        tenant_id=tenant.id,
+        confidence=1.0,
+        # embedding left NULL — backfilled by the background thread below.
+    )
+    db.add(seed_entity)
+    db.flush()  # populate seed_entity.id so the background thread can find it
+    seed_entity_id = seed_entity.id
+    seed_embed_text = f"{company_name}. {seed_description}"
+
     db.commit()
     db.refresh(db_user)
+
+    # Kick off embedding backfill AFTER commit so the row is visible to the
+    # thread's own DB session. The thread owns its lifecycle and must not
+    # propagate exceptions into the request path.
+    import threading
+
+    def _backfill_seed_embedding(entity_id: uuid.UUID, text: str, tenant_id_str: str):
+        from app.db.session import SessionLocal
+        from app.services.embedding_service import embed_text
+        import logging
+        log = logging.getLogger(__name__)
+        bg_db = SessionLocal()
+        try:
+            vec = embed_text(text)
+            if vec is None:
+                log.warning(
+                    "Seed entity embedding returned None for tenant %s", tenant_id_str
+                )
+                return
+            ent = (
+                bg_db.query(KnowledgeEntity)
+                .filter(KnowledgeEntity.id == entity_id)
+                .first()
+            )
+            if ent is None:
+                return
+            ent.embedding = vec
+            bg_db.commit()
+        except Exception as exc:  # background thread — never let this crash the pod
+            bg_db.rollback()
+            log.warning(
+                "Seed entity embedding backfill failed for tenant %s: %s",
+                tenant_id_str, exc,
+            )
+        finally:
+            bg_db.close()
+
+    threading.Thread(
+        target=_backfill_seed_embedding,
+        args=(seed_entity_id, seed_embed_text, str(tenant.id)),
+        daemon=True,
+    ).start()
+
     return db_user
 
 

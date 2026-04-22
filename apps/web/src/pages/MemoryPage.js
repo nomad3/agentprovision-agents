@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, Container, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
-import { FaCloudUploadAlt, FaFileAlt, FaLightbulb, FaPlus, FaSearch, FaTrash } from 'react-icons/fa';
+import { FaCloudUploadAlt, FaFileAlt, FaPlus, FaSearch, FaTrash } from 'react-icons/fa';
 import EntityCard from '../components/memory/EntityCard';
 import EntityCreateModal from '../components/memory/EntityCreateModal';
 import EntityStatsBar from '../components/memory/EntityStatsBar';
@@ -190,6 +190,46 @@ function MemoryPage() {
     }
   };
 
+  // ── Knowledge extraction ─────────────────────────────────────
+  const [extracting, setExtracting] = useState(false);
+  const runExtraction = async () => {
+    setExtracting(true);
+    setImportMessage(null);
+    try {
+      const res = await api.post('/knowledge/extract');
+      const {
+        sessions_processed = 0,
+        entities_created = 0,
+        relations_created = 0,
+        memories_created = 0,
+      } = res.data || {};
+      setImportMessage({
+        type: 'success',
+        text: t(
+          'entities.extractionSuccess',
+          'Processed {{sessions}} session(s): {{entities}} entities, {{relations}} relations, {{memories}} memories created.',
+          {
+            sessions: sessions_processed,
+            entities: entities_created,
+            relations: relations_created,
+            memories: memories_created,
+          }
+        ),
+      });
+      await loadEntities(true);
+    } catch (error) {
+      console.error('Knowledge extraction failed:', error);
+      setImportMessage({
+        type: 'danger',
+        text: t('entities.extractionError', 'Knowledge extraction failed: {{err}}', {
+          err: error?.response?.data?.detail || error?.message || 'unknown error',
+        }),
+      });
+    } finally {
+      setExtracting(false);
+    }
+  };
+
   // Tab labels
   const tabLabels = {
     overview: t('tabs.overview'),
@@ -242,6 +282,13 @@ function MemoryPage() {
 
         {activeTab === 'entities' && (
           <>
+            {/* Extraction / action feedback */}
+            {importMessage && (
+              <Alert variant={importMessage.type} dismissible onClose={() => setImportMessage(null)}>
+                {importMessage.text}
+              </Alert>
+            )}
+
             {/* Stats Bar */}
             {!loading && entities.length > 0 && (
               <EntityStatsBar entities={entities} />
@@ -310,9 +357,17 @@ function MemoryPage() {
                 <Spinner animation="border" size="sm" className="text-muted" />
               </div>
             ) : entities.length === 0 ? (
-              <div className="memory-empty">
-                <div className="memory-empty-icon"><FaLightbulb /></div>
-                <p>{t('entities.empty')}</p>
+              <div className="ap-empty">
+                <h3 className="ap-empty-title">{t('entities.noEntitiesTitle', 'No entities yet')}</h3>
+                <p className="ap-empty-text">{t('entities.noEntitiesDesc', 'Chat with Luna to build the knowledge graph, or add entities manually.')}</p>
+                <div className="d-flex gap-2 justify-content-center">
+                  <button type="button" className="ap-btn-primary" onClick={() => setShowCreateModal(true)}>
+                    + {t('entities.addEntity', 'Add Entity')}
+                  </button>
+                  <button type="button" className="ap-btn-secondary" onClick={runExtraction} disabled={extracting}>
+                    {extracting ? <Spinner animation="border" size="sm" /> : t('entities.runExtraction', 'Run Knowledge Extraction')}
+                  </button>
+                </div>
               </div>
             ) : (
               <>

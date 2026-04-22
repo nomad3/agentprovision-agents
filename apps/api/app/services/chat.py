@@ -467,19 +467,17 @@ def _generate_agentic_response(
     except Exception:
         db.rollback()
 
-    # Phase 1.6: Dispatch post-chat memory activities (Temporal)
-    from app.memory.feature_flag import is_v2_enabled
-    if is_v2_enabled(session.tenant_id):
-        try:
-            from app.memory.dispatch import dispatch_post_chat_memory
-            dispatch_post_chat_memory(
-                tenant_id=session.tenant_id,
-                session_id=session.id,
-                user_message_id=user_message_id,
-                assistant_message_id=assistant_msg.id,
-            )
-        except Exception as e:
-            logger.warning("Failed to dispatch PostChatMemoryWorkflow: %s", e)
+    # Dispatch post-chat memory activities (Temporal) — runs for all tenants.
+    try:
+        from app.memory.dispatch import dispatch_post_chat_memory
+        dispatch_post_chat_memory(
+            tenant_id=session.tenant_id,
+            session_id=session.id,
+            user_message_id=user_message_id,
+            assistant_message_id=assistant_msg.id,
+        )
+    except Exception as e:
+        logger.error("Failed to dispatch PostChatMemoryWorkflow: %s", e)
 
     # Update presence: idle (response delivered), scoped to this session
     try:

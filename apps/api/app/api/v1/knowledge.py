@@ -1,5 +1,5 @@
 """API routes for knowledge graph"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -72,6 +72,79 @@ def search_entities(
 ):
     """Search entities by name."""
     return service.search_entities(db, current_user.tenant_id, q, entity_type, category=category)
+
+
+# ---------------------------------------------------------------------------
+# Manual Knowledge Extraction (Memory > Entities "Run Knowledge Extraction")
+# ---------------------------------------------------------------------------
+
+class ExtractRequest(BaseModel):
+    session_id: Optional[uuid.UUID] = None  # if None, runs over N most recent sessions
+    max_sessions: int = 5                    # cap on batch
+
+
+class ExtractResponse(BaseModel):
+    sessions_processed: int
+    entities_created: int
+    relations_created: int
+    memories_created: int
+
+
+@router.post("/extract", response_model=ExtractResponse)
+def extract_knowledge(
+    payload: ExtractRequest = Body(default_factory=ExtractRequest),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Extract entities/relations/memories from recent chat sessions.
+
+    If session_id is provided, processes that single session; otherwise processes
+    the tenant's N most recent sessions (capped at max_sessions, default 5, max 20).
+    Triggered by the Memory > Entities "Run Knowledge Extraction" button.
+    """
+    from app.services.knowledge_extraction import knowledge_extraction_service
+    from app.models.chat import ChatSession, ChatMessage
+    from sqlalchemy import func
+
+    if payload.session_id:
+        target_ids = [payload.session_id]
+    else:
+        # Sort by last message activity (not session creation) so a freshly-created
+        # empty session doesn't outrank an older session with real history.
+        # extract_from_session early-returns on empty sessions, so ordering by
+        # creation could waste the whole batch on blank tabs.
+        recent = (
+            db.query(ChatSession.id)
+            .join(ChatMessage, ChatMessage.session_id == ChatSession.id)
+            .filter(ChatSession.tenant_id == current_user.tenant_id)
+            .group_by(ChatSession.id)
+            .order_by(func.max(ChatMessage.created_at).desc())
+            .limit(max(1, min(payload.max_sessions, 20)))
+            .all()
+        )
+        target_ids = [r.id for r in recent]
+
+    totals = {"entities": 0, "relations": 0, "memories": 0}
+    processed = 0
+    for sid in target_ids:
+        try:
+            result = knowledge_extraction_service.extract_from_session(
+                db, sid, current_user.tenant_id
+            )
+        except Exception:
+            # One bad session must not abort the batch — caller still gets partial totals.
+            continue
+        totals["entities"] += len(result.get("entities", []))
+        totals["relations"] += len(result.get("relations", []))
+        totals["memories"] += len(result.get("memories", []))
+        processed += 1
+
+    return ExtractResponse(
+        sessions_processed=processed,
+        entities_created=totals["entities"],
+        relations_created=totals["relations"],
+        memories_created=totals["memories"],
+    )
 
 
 @router.post("/entities/bulk", response_model=KnowledgeEntityBulkResponse, status_code=201)
