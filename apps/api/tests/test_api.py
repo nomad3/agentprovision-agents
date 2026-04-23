@@ -11,7 +11,9 @@ from app.core.config import settings
 import os
 import uuid
 
-# Set TESTING environment variable for app.main to skip init_db
+# TESTING=True + PYTEST_CURRENT_TEST together route session.py to the
+# dedicated agentprovision_test database on localhost:8003. See
+# app/db/session.py for the gating logic.
 os.environ["TESTING"] = "True"
 
 # Override the get_db dependency for tests
@@ -84,9 +86,7 @@ def test_create_user_and_tenant(db_session, test_user_data):
             }
         }
     )
-    assert response.status_code in [200, 201]
-
-
+    assert response.status_code == 200
     assert response.json()["email"] == test_user_data["email"]
     assert "id" in response.json()
     assert "tenant_id" in response.json()

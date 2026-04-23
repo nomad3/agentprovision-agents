@@ -35,8 +35,8 @@ from app.models.deployment import Deployment  # noqa: F401
 from app.models.vector_store import VectorStore  # noqa: F401
 from app.models.agent_integration_config import AgentIntegrationConfig  # noqa: F401
 from app.models.chat import ChatSession, ChatMessage
-from app.models.agent_permission import AgentPermission  # noqa: F401
-from app.models.integration_credential import IntegrationCredential  # noqa: F401
+# AgentPermission and IntegrationCredential are already imported via
+# app.models.__init__ — duplicating here was redundant.
 
 from app.core.security import get_password_hash
 from app.services import datasets as dataset_service

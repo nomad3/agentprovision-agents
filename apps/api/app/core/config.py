@@ -16,7 +16,10 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     DATABASE_URL: str = "postgresql://postgres:postgres@db:5432/agentprovision"
-    DATA_STORAGE_PATH: str = "/app/storage" if os.path.exists("/app") else "./storage"
+    # Default storage path: /app/storage in container (set by IN_DOCKER=1 in
+    # Dockerfile), ./storage for local dev. Helm/compose should set
+    # DATA_STORAGE_PATH explicitly in production to avoid relying on detection.
+    DATA_STORAGE_PATH: str = "/app/storage" if os.environ.get("IN_DOCKER") == "1" else "./storage"
     TEMPORAL_ADDRESS: str | None = "localhost:7233"
     TEMPORAL_NAMESPACE: str = "default"
     REDIS_URL: str = "redis://redis:6379/0"
