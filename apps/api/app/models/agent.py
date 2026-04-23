@@ -22,8 +22,7 @@ class Agent(Base):
     autonomy_level = Column(String, default="supervised")  # "full", "supervised", "approval_required"
     max_delegation_depth = Column(Integer, default=2)
 
-    # LLM and Memory configuration
-    llm_config_id = Column(UUID(as_uuid=True), ForeignKey("llm_configs.id"), nullable=True)
+    # Memory configuration
     memory_config = Column(JSON, nullable=True)  # {"retention_days": 30, "max_memories": 1000}
 
     # Agent-driven runtime fields
@@ -43,7 +42,6 @@ class Agent(Base):
     successor_agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True)
 
     # Relationships
-    llm_config = relationship("LLMConfig", foreign_keys=[llm_config_id])
     escalation_agent = relationship("Agent", foreign_keys=[escalation_agent_id], remote_side="Agent.id", overlaps="successor")
     owner = relationship("User", foreign_keys=[owner_user_id])
     team = relationship("AgentGroup", foreign_keys=[team_id])

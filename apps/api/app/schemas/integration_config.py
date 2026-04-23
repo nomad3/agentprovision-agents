@@ -11,7 +11,6 @@ class IntegrationConfigBase(BaseModel):
     requires_approval: Optional[bool] = False
     rate_limit: Optional[dict] = None
     allowed_scopes: Optional[list] = None
-    llm_config_id: Optional[uuid.UUID] = None
 
 
 class IntegrationConfigCreate(IntegrationConfigBase):
@@ -23,7 +22,6 @@ class IntegrationConfigUpdate(BaseModel):
     requires_approval: Optional[bool] = None
     rate_limit: Optional[dict] = None
     allowed_scopes: Optional[list] = None
-    llm_config_id: Optional[uuid.UUID] = None
 
 
 class IntegrationConfig(IntegrationConfigBase):

@@ -37,46 +37,35 @@ class LLMService:
         Returns:
             OpenAI-compatible response object
         """
-        # 1. Router selects optimal model
-        model = self.router.select_model(self.tenant_id, task_type)
-
-        # 2. Get tenant's API key for this provider
-        config = self.router.get_tenant_config(self.tenant_id)
-        api_key = self._get_api_key(config, model.provider.name)
+        # 1. Get active config for the tenant
+        config = self.router.get_active_config(self.tenant_id)
+        
+        provider = config["provider"]
+        model_id = config["model_id"]
+        api_key = config["api_key"]
 
         if not api_key:
-            raise ValueError(f"No API key configured for provider: {model.provider.name}")
+            raise ValueError(f"No API key configured for provider: {provider}")
 
-        # 3. Factory creates provider client
-        client = self.factory.get_client(model.provider.name, api_key)
+        # 2. Factory creates provider client
+        client = self.factory.get_client(provider, api_key)
 
-        # 4. Make request
+        # 3. Make request
         response = client.chat.completions.create(
-            model=model.model_id,
+            model=model_id,
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
             **kwargs
         )
 
-        # 5. Track usage
-        cost = self.router.estimate_cost(
-            model,
-            response.usage.prompt_tokens,
-            response.usage.completion_tokens
-        )
+        # 4. Track usage
         self.router.track_usage(
             tenant_id=self.tenant_id,
-            model_id=model.id,
+            model_id=model_id,
             tokens_input=response.usage.prompt_tokens,
             tokens_output=response.usage.completion_tokens,
-            cost=cost
+            cost=0.0 # We'll need a better way to get per-model cost if needed
         )
 
         return response
-
-    def _get_api_key(self, config, provider_name: str) -> Optional[str]:
-        """Get API key for provider from config."""
-        if config and config.provider_api_keys:
-            return config.provider_api_keys.get(provider_name)
-        return None

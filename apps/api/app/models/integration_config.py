@@ -19,7 +19,6 @@ class IntegrationConfig(Base):
     requires_approval = Column(Boolean, default=False)
     rate_limit = Column(JSON, nullable=True)  # e.g., {"max_calls": 100, "window_seconds": 3600}
     allowed_scopes = Column(JSON, nullable=True)  # e.g., ["read", "write"]
-    llm_config_id = Column(UUID(as_uuid=True), ForeignKey("llm_configs.id"), nullable=True)
     # Usage tracking
     last_used_at = Column(DateTime, nullable=True)
     call_count = Column(Integer, default=0)
@@ -30,7 +29,6 @@ class IntegrationConfig(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     tenant = relationship("Tenant", foreign_keys=[tenant_id])
-    llm_config = relationship("LLMConfig", foreign_keys=[llm_config_id])
 
     def __repr__(self):
         return f"<IntegrationConfig {self.integration_name} tenant={self.tenant_id}>"

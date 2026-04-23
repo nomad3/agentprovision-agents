@@ -77,6 +77,8 @@ const SKILL_COLORS = {
 // Pinned order for the integration card grid. Anything not listed gets pushed
 // to the end and sorted alphabetically.
 const INTEGRATION_ORDER = [
+  'gemini_llm',
+  'anthropic_llm',
   'gemini_cli',
   'codex',
   'claude_code',

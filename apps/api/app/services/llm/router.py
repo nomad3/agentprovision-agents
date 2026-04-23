@@ -1,93 +1,67 @@
-"""LLM Router for smart model selection."""
+"""LLM Router for smart model selection using the Integration system."""
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, Dict, Any
 import uuid
+import logging
 
-from app.models.llm_config import LLMConfig
-from app.models.llm_model import LLMModel
+from app.models.tenant_features import TenantFeatures
+from app.models.integration_config import IntegrationConfig
+from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 
+logger = logging.getLogger(__name__)
 
 class LLMRouter:
-    """Routes requests to optimal LLM based on task requirements."""
+    """Routes requests to optimal LLM based on active tenant integration."""
 
     def __init__(self, db: Session):
         self.db = db
 
-    def select_model(
-        self,
-        tenant_id: uuid.UUID,
-        task_type: str = None,
-        priority: str = "balanced",  # cost, speed, quality, balanced
-        config_id: uuid.UUID = None
-    ) -> LLMModel:
+    def get_active_provider(self, tenant_id: uuid.UUID) -> str:
+        """Get the active LLM provider name for the tenant."""
+        features = self.db.query(TenantFeatures).filter(
+            TenantFeatures.tenant_id == tenant_id
+        ).first()
+        
+        if features and features.active_llm_provider:
+            return features.active_llm_provider
+            
+        return "gemini_llm" # Default
+
+    def get_active_config(self, tenant_id: uuid.UUID) -> Dict[str, Any]:
         """
-        Select best model for task based on configuration and routing rules.
-
-        Args:
-            tenant_id: Tenant ID
-            task_type: Type of task (e.g., "coding", "creative", "analysis")
-            priority: Optimization priority
-            config_id: Optional specific config ID
-
-        Returns:
-            Selected LLMModel
+        Get the active LLM configuration (model and credentials) for a tenant.
+        
+        Returns a dict with 'provider', 'model_id', and 'api_key'.
         """
-        # Get tenant config
-        if config_id:
-            config = self.db.query(LLMConfig).filter(LLMConfig.id == config_id).first()
-        else:
-            config = self.db.query(LLMConfig).filter(
-                LLMConfig.tenant_id == tenant_id,
-                LLMConfig.is_tenant_default
-            ).first()
-
+        provider = self.get_active_provider(tenant_id)
+        
+        # Look up IntegrationConfig
+        config = self.db.query(IntegrationConfig).filter(
+            IntegrationConfig.tenant_id == tenant_id,
+            IntegrationConfig.integration_name == provider,
+            IntegrationConfig.enabled.is_(True)
+        ).first()
+        
         if not config:
-            # Fallback if no config found (should not happen in prod)
-            raise ValueError("No LLM config found for tenant")
+            logger.warning("No enabled IntegrationConfig found for provider %s on tenant %s", provider, tenant_id)
+            return {"provider": provider, "model_id": "default", "api_key": None}
 
-        # Apply routing rules if defined
-        if config.routing_rules and task_type:
-            rule = config.routing_rules.get(task_type)
-            if rule and "model_id" in rule:
-                model = self.db.query(LLMModel).filter(
-                    LLMModel.id == rule["model_id"]
-                ).first()
-                if model and model.is_active:
-                    return model
-
-        # Default to primary model
-        if config.primary_model and config.primary_model.is_active:
-            return config.primary_model
-
-        # Fallback to secondary model
-        if config.fallback_model and config.fallback_model.is_active:
-            return config.fallback_model
-
-        raise ValueError("No active model available in configuration")
-
-    def estimate_cost(self, model: LLMModel, input_tokens: int, output_tokens: int) -> float:
-        """Estimate cost for token usage."""
-        input_cost = (input_tokens / 1000) * float(model.input_cost_per_1k)
-        output_cost = (output_tokens / 1000) * float(model.output_cost_per_1k)
-        return input_cost + output_cost
-
-    def get_tenant_config(self, tenant_id: uuid.UUID) -> Optional[LLMConfig]:
-        """Get tenant's default LLM configuration."""
-        from app.models.tenant import Tenant
-        tenant = self.db.query(Tenant).filter(Tenant.id == tenant_id).first()
-        if tenant and tenant.default_llm_config_id:
-            return self.db.query(LLMConfig).filter(
-                LLMConfig.id == tenant.default_llm_config_id
-            ).first()
-        return None
+        # Get credentials from vault
+        creds = retrieve_credentials_for_skill(self.db, config.id, tenant_id)
+        
+        return {
+            "provider": provider.replace("_llm", ""),
+            "model_id": creds.get("model", "default"),
+            "api_key": creds.get("api_key")
+        }
 
     def track_usage(
         self,
         tenant_id: uuid.UUID,
-        model_id: uuid.UUID,
+        model_id: str,
         tokens_input: int,
         tokens_output: int,
-        cost: float,
+        cost: float = 0.0,
     ) -> None:
         """Track LLM usage for analytics."""
         from app.models.tenant_analytics import TenantAnalytics

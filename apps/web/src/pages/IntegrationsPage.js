@@ -17,19 +17,13 @@ import {
   FaBolt,
   FaCalendarAlt,
   FaCheckCircle,
-  FaCloud,
   FaCloudUploadAlt,
-
   FaDatabase,
   FaEdit,
   FaExclamationTriangle,
-  FaEye,
-  FaEyeSlash,
   FaFileUpload,
-  FaKey,
   FaMicrochip,
   FaNetworkWired,
-  FaPen,
   FaPlay,
   FaPlug,
   FaPlus,
@@ -38,21 +32,18 @@ import {
   FaSyncAlt,
   FaTimesCircle,
   FaTrash,
-  FaWhatsapp
 } from 'react-icons/fa';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import IntegrationsPanel from '../components/IntegrationsPanel';
 import DevicePanel from '../components/DevicePanel';
 
-import WhatsAppChannelCard from '../components/WhatsAppChannelCard';
 import api from '../services/api';
 import connectorService from '../services/connector';
 import dataPipelineService from '../services/dataPipeline';
 import dataSourceService from '../services/dataSource';
 import datasetService from '../services/dataset';
 import datasetGroupService from '../services/datasetGroup';
-import llmService from '../services/llm';
 import './IntegrationsPage.css';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -97,7 +88,7 @@ const CONNECTOR_FIELDS = {
   ]
 };
 
-const TAB_KEYS = ['integrations', 'devices', 'connectors', 'data-sources', 'datasets', 'ai-models', 'skills'];
+const TAB_KEYS = ['integrations', 'devices', 'connectors', 'data-sources', 'datasets', 'skills'];
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -174,14 +165,6 @@ const IntegrationsPage = () => {
     }
   };
 
-  // ── AI Models (LLM Providers) state ──
-  const [llmProviders, setLlmProviders] = useState([]);
-  const [llmLoading, setLlmLoading] = useState(true);
-  const [llmApiKeys, setLlmApiKeys] = useState({});
-  const [llmShowKeys, setLlmShowKeys] = useState({});
-  const [llmSaving, setLlmSaving] = useState(null);
-  const [llmSaveSuccess, setLlmSaveSuccess] = useState({});
-
   // ── Tab change handler ──
   const handleTabChange = (tab) => {
     setActiveTab(tab);
@@ -196,7 +179,6 @@ const IntegrationsPage = () => {
     fetchDataSources();
     fetchDatasets();
     fetchGroups();
-    fetchLlmProviders();
   }, []);
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -620,360 +602,6 @@ const IntegrationsPage = () => {
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // AI MODELS (LLM Providers) logic
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const fetchLlmProviders = async () => {
-    try {
-      setLlmLoading(true);
-      const data = await llmService.getProviderStatus();
-      setLlmProviders(data);
-    } catch (err) {
-      console.error('Failed to load LLM providers:', err);
-    } finally {
-      setLlmLoading(false);
-    }
-  };
-
-  const handleLlmKeyChange = (providerName, value) => {
-    setLlmApiKeys(prev => ({ ...prev, [providerName]: value }));
-    setLlmSaveSuccess(prev => ({ ...prev, [providerName]: false }));
-  };
-
-  const handleLlmSaveKey = async (providerName) => {
-    const key = llmApiKeys[providerName];
-    if (!key) return;
-    try {
-      setLlmSaving(providerName);
-      await llmService.setProviderKey(providerName, key);
-      setLlmSaveSuccess(prev => ({ ...prev, [providerName]: true }));
-      setLlmApiKeys(prev => ({ ...prev, [providerName]: '' }));
-      await fetchLlmProviders();
-    } catch (err) {
-      setError(t('aiModels.errors.saveKey', { provider: providerName }));
-    } finally {
-      setLlmSaving(null);
-    }
-  };
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TAB CONTENT: Skills
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const renderSkillsTab = () => (
-    <div className="tab-content-inner">
-      <IntegrationsPanel />
-    </div>
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TAB CONTENT: Connectors
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const renderConnectorsTab = () => (
-    <div className="tab-content-inner">
-      {/* Stats */}
-      <Row className="g-4 mb-4">
-        <Col md={3}>
-          <article className="ap-card stat-card stat-total">
-            <div className="ap-card-body stat-card-body">
-              <div className="stat-icon"><FaDatabase size={24} /></div>
-              <div className="stat-content">
-                <div className="stat-value">{connectorStats.total}</div>
-                <div className="stat-label">{t('connectors.total')}</div>
-              </div>
-            </div>
-          </article>
-        </Col>
-        <Col md={3}>
-          <article className="ap-card stat-card stat-active">
-            <div className="ap-card-body stat-card-body">
-              <div className="stat-icon"><FaCheckCircle size={24} /></div>
-              <div className="stat-content">
-                <div className="stat-value">{connectorStats.active}</div>
-                <div className="stat-label">{t('connectors.active')}</div>
-              </div>
-            </div>
-          </article>
-        </Col>
-        <Col md={3}>
-          <article className="ap-card stat-card stat-syncs">
-            <div className="ap-card-body stat-card-body">
-              <div className="stat-icon"><FaSyncAlt size={24} /></div>
-              <div className="stat-content">
-                <div className="stat-value">{connectorStats.syncsActive}</div>
-                <div className="stat-label">{t('connectors.activeSyncs')}</div>
-              </div>
-            </div>
-          </article>
-        </Col>
-        <Col md={3}>
-          <article className="ap-card stat-card stat-error">
-            <div className="ap-card-body stat-card-body">
-              <div className="stat-icon"><FaExclamationTriangle size={24} /></div>
-              <div className="stat-content">
-                <div className="stat-value">{connectorStats.error}</div>
-                <div className="stat-label">{t('connectors.needAttention')}</div>
-              </div>
-            </div>
-          </article>
-        </Col>
-      </Row>
-
-      {connectorsLoading ? (
-        <div className="text-center py-5"><Spinner animation="border" variant="primary" /></div>
-      ) : (
-        <Row className="g-4">
-          <Col lg={8}>
-            <section className="ap-card activity-card">
-              <header className="activity-card-header">
-                <h5 className="mb-0"><FaBolt className="me-2" />{t('connectors.connectedSystems')}</h5>
-                <button type="button" className="ap-btn-primary ap-btn-sm" onClick={() => handleOpenConnectorModal()}>
-                  <FaPlus />{t('connectors.addConnector')}
-                </button>
-              </header>
-              <div className="p-0">
-                {connectors.length === 0 ? (
-                  <div className="text-center py-5">
-                    <FaCloudUploadAlt size={48} className="text-muted mb-3" />
-                    <h5>{t('connectors.noConnectors')}</h5>
-                    <p className="text-muted">{t('connectors.noConnectorsDesc')}</p>
-                    <button type="button" className="ap-btn-primary" onClick={() => handleOpenConnectorModal()}>
-                      <FaPlus />{t('connectors.connectFirst')}
-                    </button>
-                  </div>
-                ) : (
-                  <Table hover className="mb-0 connectors-table">
-                    <thead><tr><th>{t('connectors.source')}</th><th>Status</th><th>{t('connectors.lastTested')}</th><th className="text-end">Actions</th></tr></thead>
-                    <tbody>
-                      {connectors.map(connector => (
-                        <tr key={connector.id}>
-                          <td>
-                            <div className="d-flex align-items-center">
-                              <span className="connector-icon me-2">{CONNECTOR_TYPES[connector.type]?.icon || '🔌'}</span>
-                              <div>
-                                <div className="fw-medium">{connector.name}</div>
-                                <small className="text-muted">{CONNECTOR_TYPES[connector.type]?.label}</small>
-                              </div>
-                            </div>
-                          </td>
-                          <td>{getStatusBadge(connector.status)}</td>
-                          <td><small className="text-muted">{connector.last_test_at ? new Date(connector.last_test_at).toLocaleDateString() : t('connectors.never')}</small></td>
-                          <td className="text-end">
-                            <button type="button" className="ap-btn-ghost" onClick={() => handleTestConnector(connector.id)} disabled={testing === connector.id}>
-                              {testing === connector.id ? <Spinner size="sm" /> : <FaPlay />}
-                            </button>
-                            <button type="button" className="ap-btn-ghost" onClick={() => handleOpenSyncModal(connector)} disabled={connector.status !== 'active'}>
-                              <FaSyncAlt />
-                            </button>
-                            <button type="button" className="ap-btn-ghost" onClick={() => handleOpenConnectorModal(connector)}>
-                              <FaPen />
-                            </button>
-                            <button type="button" className="ap-btn-danger" onClick={() => handleDeleteConnector(connector.id)}>
-                              <FaTrash />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </Table>
-                )}
-              </div>
-            </section>
-          </Col>
-          <Col lg={4}>
-            <section className="ap-card syncs-card">
-              <header className="activity-card-header"><h5 className="mb-0"><FaCalendarAlt className="me-2" />{t('connectors.dataSyncs')}</h5></header>
-              <div className="p-0">
-                {syncs.length === 0 ? (
-                  <div className="text-center py-4">
-                    <FaSyncAlt size={32} className="text-muted mb-2" />
-                    <p className="text-muted mb-0 small">{t('connectors.noSyncsScheduled')}</p>
-                  </div>
-                ) : (
-                  <div className="syncs-list">
-                    {syncs.slice(0, 5).map(sync => (
-                      <div key={sync.id} className="sync-item">
-                        <div className="sync-info">
-                          <div className="sync-name">{sync.name}</div>
-                          <small className="text-muted">{sync.config?.frequency || 'Manual'} &bull; {sync.config?.mode || 'Full'}</small>
-                        </div>
-                        <button type="button" className="ap-btn-ghost" onClick={() => handleRunSync(sync.id)} disabled={syncing === sync.id}>
-                          {syncing === sync.id ? <Spinner size="sm" /> : <FaPlay />}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </section>
-          </Col>
-        </Row>
-      )}
-    </div>
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TAB CONTENT: Data Sources
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const renderDataSourcesTab = () => (
-    <div className="tab-content-inner">
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <p className="text-muted mb-0">{t('dataSources.subtitle')}</p>
-        <button type="button" className="ap-btn-primary" onClick={() => handleShowDsModal()}>
-          <FaPlusCircle />{t('dataSources.addSource')}
-        </button>
-      </div>
-
-      {dsLoading ? (
-        <div className="text-center py-5"><Spinner animation="border" variant="primary" /></div>
-      ) : (
-        <Row xs={1} md={2} lg={3} className="g-4">
-          {dataSources.map(ds => (
-            <Col key={ds.id}>
-              <article className="ap-card datasource-card h-100">
-                <div className="ap-card-body">
-                  <div className="d-flex justify-content-between align-items-start mb-3">
-                    <div className="datasource-icon-wrapper">{getDsTypeIcon(ds.type)}</div>
-                    <div className="d-flex gap-1">
-                      <button type="button" className="ap-btn-ghost" onClick={() => handleShowDsModal(ds)}><FaEdit size={14} /></button>
-                      <button type="button" className="ap-btn-danger" onClick={() => handleDeleteDs(ds.id)}><FaTrash size={14} /></button>
-                    </div>
-                  </div>
-                  <h3 className="ap-card-title">{ds.name}</h3>
-                  <div className="mb-2">
-                    <span className="ap-badge-outline">{ds.type}</span>
-                  </div>
-                  <p className="ap-card-text">
-                    {ds.config?.host ? <span className="text-truncate d-block" title={ds.config.host}>Host: {ds.config.host}</span>
-                      : ds.config?.base_url ? <span className="text-truncate d-block" title={ds.config.base_url}>{ds.config.base_url}</span>
-                        : <span>Configured</span>}
-                  </p>
-                  <div className="mt-3 pt-3" style={{ borderTop: '1px solid var(--ap-border)' }}>
-                    <div className="d-flex align-items-center small" style={{ color: 'var(--ap-success)' }}>
-                      <FaCheckCircle className="me-1" />{t('dataSources.connected')}
-                    </div>
-                  </div>
-                </div>
-              </article>
-            </Col>
-          ))}
-          {dataSources.length === 0 && (
-            <Col xs={12}>
-              <div className="ap-empty">
-                <FaDatabase size={48} className="mb-3 opacity-50" />
-                <div className="ap-empty-title">{t('dataSources.noSources')}</div>
-                <div className="ap-empty-text">{t('dataSources.noSourcesDesc')}</div>
-              </div>
-            </Col>
-          )}
-        </Row>
-      )}
-    </div>
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // TAB CONTENT: Datasets
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const renderDatasetsTab = () => (
-    <div className="tab-content-inner">
-      <div className="d-flex justify-content-between align-items-center mb-4">
-        <Nav variant="pills" activeKey={datasetSubTab} onSelect={setDatasetSubTab}>
-          <Nav.Item><Nav.Link eventKey="datasets">{t('datasets.subTabs.datasets')}</Nav.Link></Nav.Item>
-          <Nav.Item><Nav.Link eventKey="groups">{t('datasets.subTabs.groups')}</Nav.Link></Nav.Item>
-        </Nav>
-        <div>
-          {datasetSubTab === 'datasets' && (
-            <Button variant="primary" onClick={() => setShowUpload(true)}>
-              <FaFileUpload className="me-2" />{t('datasets.upload')}
-            </Button>
-          )}
-          {datasetSubTab === 'groups' && (
-            <Button variant="primary" onClick={() => setShowGroupModal(true)}>
-              <FaPlus className="me-2" />{t('datasets.createGroup')}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {datasetSubTab === 'datasets' && (
-        <>
-          {datasetsLoading ? (
-            <div className="text-center py-4"><Spinner animation="border" size="sm" /> {t('datasets.loadingDatasets')}</div>
-          ) : (
-            <Table striped bordered hover responsive>
-              <thead>
-                <tr>
-                  <th>{t('datasets.table.name')}</th>
-                  <th>{t('datasets.table.description')}</th>
-                  <th>{t('datasets.table.rows')}</th>
-                  <th>{t('datasets.table.sync')}</th>
-                  <th>{t('datasets.table.created')}</th>
-                  <th>{t('datasets.table.actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {datasets.map(dataset => (
-                  <tr key={dataset.id}>
-                    <td>{dataset.name}</td>
-                    <td>{dataset.description}</td>
-                    <td>{dataset.row_count}</td>
-                    <td><Badge bg="secondary">{dataset.metadata?.sync_status || 'unknown'}</Badge></td>
-                    <td>{dataset.created_at ? new Date(dataset.created_at).toLocaleString() : '...'}</td>
-                    <td>
-                      <Button variant="info" size="sm" onClick={() => openPreview(dataset)} className="me-2">{t('datasets.preview')}</Button>
-                      <Button
-                        variant="outline-primary"
-                        size="sm"
-                        onClick={async () => {
-                          try { await datasetService.sync(dataset.id); fetchDatasets(); } catch (e) { setError(t('datasets.syncError')); }
-                        }}
-                        disabled={dataset.metadata?.sync_status === 'syncing'}
-                      >
-                        {dataset.metadata?.sync_status === 'syncing' ? t('datasets.syncing') : t('datasets.sync')}
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-                {datasets.length === 0 && !datasetsLoading && (
-                  <tr><td colSpan={6} className="text-center text-muted">{t('datasets.noDatasets')}</td></tr>
-                )}
-              </tbody>
-            </Table>
-          )}
-        </>
-      )}
-
-      {datasetSubTab === 'groups' && (
-        <>
-          {groupsLoading ? (
-            <div className="text-center py-4"><Spinner animation="border" size="sm" /> {t('datasets.loadingGroups')}</div>
-          ) : (
-            <Table striped bordered hover responsive>
-              <thead><tr><th>Name</th><th>Description</th><th>Datasets</th><th>Created</th></tr></thead>
-              <tbody>
-                {groups.map(group => (
-                  <tr key={group.id}>
-                    <td>{group.name}</td>
-                    <td>{group.description}</td>
-                    <td><Badge bg="secondary">{group.datasets ? group.datasets.length : 0}</Badge></td>
-                    <td>{group.created_at ? new Date(group.created_at).toLocaleString() : '...'}</td>
-                  </tr>
-                ))}
-                {groups.length === 0 && !groupsLoading && (
-                  <tr><td colSpan={4} className="text-center text-muted">{t('datasets.noGroups')}</td></tr>
-                )}
-              </tbody>
-            </Table>
-          )}
-        </>
-      )}
-    </div>
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════════
   // RENDER: Page
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -983,7 +611,6 @@ const IntegrationsPage = () => {
     { key: 'connectors',   icon: FaBolt,      label: t('tabs.connectors') },
     { key: 'data-sources', icon: FaDatabase,  label: t('tabs.dataSources') },
     { key: 'datasets',     icon: FaFileUpload, label: t('tabs.datasets') },
-    { key: 'ai-models',    icon: FaMicrochip, label: t('tabs.aiModels') },
   ];
 
   return (
@@ -1025,67 +652,6 @@ const IntegrationsPage = () => {
         )}
         {activeTab === 'data-sources' && renderDataSourcesTab()}
         {activeTab === 'datasets' && renderDatasetsTab()}
-        {activeTab === 'ai-models' && (
-          <div className="tab-content-inner">
-            <p className="text-muted mb-4">{t('aiModels.subtitle')}</p>
-            {llmLoading ? (
-              <div className="text-center py-5"><Spinner animation="border" variant="primary" /></div>
-            ) : (
-              <Row xs={1} md={2} lg={3} className="g-4">
-                {llmProviders.map((provider) => (
-                  <Col key={provider.name}>
-                    <article className="ap-card h-100">
-                      <div className="ap-card-body">
-                        <div className="d-flex align-items-center justify-content-between mb-3">
-                          <strong>{provider.display_name}</strong>
-                          {provider.configured ? (
-                            <span className="ap-status ap-status-production">
-                              <FaCheckCircle size={10} /> {t('aiModels.connected')}
-                            </span>
-                          ) : (
-                            <span className="ap-badge-outline">{t('aiModels.notConfigured')}</span>
-                          )}
-                        </div>
-                        <Form.Label className="small text-muted"><FaKey className="me-1" size={10} />{t('aiModels.apiKey')}</Form.Label>
-                        <div className="d-flex gap-1 mb-2">
-                          <Form.Control
-                            size="sm"
-                            type={llmShowKeys[provider.name] ? 'text' : 'password'}
-                            placeholder={provider.configured ? t('aiModels.apiKeyMasked') : t('aiModels.apiKeyPlaceholder')}
-                            value={llmApiKeys[provider.name] || ''}
-                            onChange={(e) => handleLlmKeyChange(provider.name, e.target.value)}
-                            disabled={llmSaving === provider.name}
-                          />
-                          <button
-                            type="button"
-                            className="ap-btn-secondary ap-btn-sm"
-                            onClick={() => setLlmShowKeys(prev => ({ ...prev, [provider.name]: !prev[provider.name] }))}
-                          >
-                            {llmShowKeys[provider.name] ? <FaEyeSlash size={12} /> : <FaEye size={12} />}
-                          </button>
-                        </div>
-                        {llmSaveSuccess[provider.name] && (
-                          <small className="text-success d-block mb-2"><FaCheckCircle className="me-1" size={10} />{t('aiModels.keySaved')}</small>
-                        )}
-                        <button
-                          type="button"
-                          className="ap-btn-primary ap-btn-sm w-100"
-                          onClick={() => handleLlmSaveKey(provider.name)}
-                          disabled={!llmApiKeys[provider.name] || llmSaving === provider.name}
-                        >
-                          {llmSaving === provider.name ? <Spinner animation="border" size="sm" /> : t('aiModels.saveKey')}
-                        </button>
-                        <div className="text-center mt-2">
-                          <small className="text-muted">{provider.is_openai_compatible ? t('aiModels.openaiCompatible') : t('aiModels.nativeApi')}</small>
-                        </div>
-                      </div>
-                    </article>
-                  </Col>
-                ))}
-              </Row>
-            )}
-          </div>
-        )}
 
         {/* ── Connector Modal ── */}
         <Modal show={showConnectorModal} onHide={() => setShowConnectorModal(false)} size="lg">
