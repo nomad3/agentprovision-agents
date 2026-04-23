@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, ForeignKey
+from sqlalchemy import Column, String, ForeignKey, ForeignKeyConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -13,7 +13,12 @@ class Tenant(Base):
     name = Column(String, index=True)
 
     # Default LLM configuration for this tenant
-    default_llm_config_id = Column(UUID(as_uuid=True), ForeignKey("llm_configs.id"), nullable=True)
+    # use_alter=True resolves circular dependency during DROP TABLE in tests
+    default_llm_config_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("llm_configs.id", name="fk_tenant_default_llm_config", use_alter=True),
+        nullable=True
+    )
 
     # Relationships
     users = relationship("User", back_populates="tenant")
