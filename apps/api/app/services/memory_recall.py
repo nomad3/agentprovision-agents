@@ -661,10 +661,6 @@ def build_memory_context(
     return context
 
 
-# ---------------------------------------------------------------------------
-# Git Context Recall
-# ---------------------------------------------------------------------------
-
 # Keywords that suggest a code-related query
 _CODE_KEYWORDS = {
     "code", "commit", "change", "changed", "file", "files", "bug", "fix",

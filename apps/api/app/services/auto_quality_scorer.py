@@ -120,7 +120,6 @@ async def _score_and_log(
             logger.info("Auto-quality scorer: Ollama not available — skipping")
             return
 
-    # ── Run single-agent rubric scoring AND 3-agent consensus in parallel ──
     from app.services.scoring_rubrics import get_rubric
     from app.services.consensus_reviewer import run_consensus_review
 
@@ -163,7 +162,6 @@ async def _score_and_log(
         return_exceptions=True,
     )
 
-    # ── Parse rubric score ──
     import json, re
     score = 50
     breakdown = {}
@@ -191,7 +189,6 @@ async def _score_and_log(
         from app.services.consensus_reviewer import ConsensusResult
         consensus = ConsensusResult(passed=True, approved_count=3, total_reviewers=3, reviews=[], report="skipped")
 
-    # ── Blend consensus signal into reward ──
     # Consensus failure: reduce reward by up to 15 points (proportional to disapprovals)
     disapproval_ratio = 1.0 - (consensus.approved_count / consensus.total_reviewers)
     consensus_penalty = disapproval_ratio * 15  # Max 15-pt penalty for 0/3 approval
@@ -231,7 +228,6 @@ async def _score_and_log(
     if not consensus.passed:
         logger.info("Consensus FAILED for agent=%s — issues: %s", agent_slug, "; ".join(consensus.all_issues[:3]))
 
-    # ── Determine scorer confidence weight based on reward source ──
     # Single Gemma 4 run (auto_quality) is less reliable than multi-reviewer
     # consensus. Human reviews and explicit ratings are ground truth.
     # Confidence weights: admin_review/explicit_rating=1.0,
@@ -247,7 +243,6 @@ async def _score_and_log(
     }
     scorer_confidence = _SCORER_CONFIDENCE.get(reward_source, 0.5)
 
-    # ── Log as RL experience with rubric + consensus breakdown ──
     try:
         from app.db.session import SessionLocal
         from app.services import rl_experience_service
@@ -324,7 +319,6 @@ async def _score_and_log(
                 str(exp.id)[:8], score, adjusted_score,
                 consensus.approved_count, consensus.total_reviewers, platform,
             )
-            # ── Rollout reward: feed scored reward back into the live experiment ──
             if rollout_experiment_id:
                 try:
                     from app.services import policy_rollout_service
@@ -337,9 +331,8 @@ async def _score_and_log(
                 except Exception as e:
                     logger.debug("Rollout reward update failed: %s", e)
 
-            # ── Backfill agent_routing experience with the same reward ──
-            # The routing decision that selected this platform should share credit
-            # for the response quality outcome.
+            # Share credit: the routing decision that selected this platform
+            # gets the same reward as the response quality outcome.
             if routing_trajectory_id:
                 try:
                     from sqlalchemy import text as sa_text
@@ -363,7 +356,6 @@ async def _score_and_log(
                 except Exception as e:
                     logger.debug("routing reward backfill failed: %s", e)
 
-            # ── Decision gate: trigger provider council for high-value cases ──
             _maybe_trigger_provider_council(
                 tenant_id=tenant_id,
                 experience_id=str(exp.id),
@@ -382,10 +374,6 @@ async def _score_and_log(
     except Exception as e:
         logger.warning("Failed to log auto-quality RL: %s", e)
 
-
-# ---------------------------------------------------------------------------
-# Provider council decision gate
-# ---------------------------------------------------------------------------
 
 _SIDE_EFFECT_TOOLS = {"send_email", "create_jira_issue", "deploy_changes", "execute_shell"}
 

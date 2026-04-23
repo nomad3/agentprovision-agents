@@ -4,10 +4,8 @@ import re
 from typing import Any, Dict, List, Optional, Set
 
 
-# ── MCP tool -> integration mapping ────────────────────────────────
-# Maps known MCP tool names to the integration they require.
+# Maps MCP tool names to the integration they require.
 # None means the tool is built-in and needs no external integration.
-
 TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     # Gmail
     "search_emails": "gmail",

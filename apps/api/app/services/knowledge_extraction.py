@@ -79,10 +79,6 @@ _SOURCE_CHANNEL_MAP = {
 class KnowledgeExtractionService:
     """Universal entity extraction from arbitrary content sources."""
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def extract_from_session(
         self,
         db: Session,
@@ -179,7 +175,7 @@ class KnowledgeExtractionService:
         prompt = self._build_prompt(content, content_type, entity_schema)
 
         try:
-            # ── Try local Gemma 4 model first (zero token cost) ──
+            # Try local Gemma 4 first (zero token cost); fall back to Anthropic.
             parsed = None
             try:
                 from app.services.local_inference import extract_knowledge_with_prompt_sync as _gemma_extract
@@ -193,7 +189,6 @@ class KnowledgeExtractionService:
             except Exception as e:
                 logger.debug("Gemma 4 knowledge extraction failed (%s) — falling back to Anthropic", e)
 
-            # ── Fall back to Anthropic if Gemma 4 failed ──
             if parsed is None:
                 try:
                     llm_service = get_llm_service()
@@ -293,10 +288,6 @@ class KnowledgeExtractionService:
         except Exception as e:
             logger.error("Knowledge extraction failed: %s", e)
             return empty_result
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _build_prompt(
