@@ -7,7 +7,9 @@ import authService from '../services/auth';
 const ResetPasswordPage = () => {
   const { t } = useTranslation('auth');
   const [searchParams] = useSearchParams();
+  const [email, setEmail] = useState('');
   const [token, setToken] = useState('');
+  const [tokenFromUrl, setTokenFromUrl] = useState(false);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
@@ -15,27 +17,34 @@ const ResetPasswordPage = () => {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const tokenFromUrl = searchParams.get('token');
-    if (tokenFromUrl) {
-      setToken(tokenFromUrl);
+    const t = searchParams.get('token');
+    const e = searchParams.get('email');
+    if (t) {
+      setToken(t);
+      setTokenFromUrl(true);
     }
+    if (e) setEmail(e);
   }, [searchParams]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    
+
     if (password !== confirmPassword) {
       setError(t('reset.mismatch'));
+      return;
+    }
+    if (password.length < 8) {
+      setError(t('reset.tooShort'));
       return;
     }
 
     setLoading(true);
     try {
-      await authService.resetPassword(token, password);
+      await authService.resetPassword(email, token, password);
       setSuccess(true);
     } catch (err) {
-      setError(t('reset.error'));
+      setError(err?.response?.data?.detail || t('reset.error'));
     } finally {
       setLoading(false);
     }
@@ -62,12 +71,24 @@ const ResetPasswordPage = () => {
               {error && <Alert variant="danger">{error}</Alert>}
               <Form onSubmit={handleSubmit}>
                 <Form.Group className="mb-3">
+                  <Form.Label>{t('reset.email')}</Form.Label>
+                  <Form.Control
+                    type="email"
+                    placeholder={t('reset.emailPlaceholder')}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                  />
+                </Form.Group>
+
+                <Form.Group className="mb-3">
                   <Form.Label>{t('reset.token')}</Form.Label>
                   <Form.Control
                     type="text"
                     placeholder={t('reset.tokenPlaceholder')}
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
+                    readOnly={tokenFromUrl}
                     required
                   />
                 </Form.Group>
@@ -95,7 +116,7 @@ const ResetPasswordPage = () => {
                 </Form.Group>
 
                 <Button variant="primary" type="submit" className="w-100 mb-2" disabled={loading}>
-                  {loading ? 'Processing...' : t('reset.submit')}
+                  {loading ? t('reset.processing') : t('reset.submit')}
                 </Button>
                 <div className="text-center mt-3">
                   <Link to="/login">{t('register.loginLink')}</Link>
