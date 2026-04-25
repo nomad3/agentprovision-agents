@@ -1618,13 +1618,38 @@ def _execute_gemini_chat(task_input: ChatCliInput, session_dir: str, image_path:
     if result.stderr:
         logger.warning("Gemini CLI stderr: %s", result.stderr[:500])
 
+    # Parse stderr for tool-call signals. Gemini CLI in --output-format=json
+    # does not surface successful tool invocations in stdout; failures appear
+    # in stderr as "Error executing tool <name>: ...". This is partial
+    # observability (failures only) but enough to catch the common
+    # hallucination signature: assistant lists specific names but stderr
+    # shows zero tool activity.
+    tool_errors: list[dict] = []
+    if result.stderr:
+        for m in re.finditer(r"Error executing tool ([^\s:]+):\s*(.*)", result.stderr):
+            tool_errors.append({
+                "name": m.group(1).strip(),
+                "status": "error",
+                "error": m.group(2).strip()[:300],
+            })
+
     if result.returncode != 0:
         err = (result.stderr or result.stdout or "")[:2000]
-        return ChatCliResult(response_text="", success=False, error=f"CLI exit {result.returncode}: {err}")
+        return ChatCliResult(
+            response_text="",
+            success=False,
+            error=f"CLI exit {result.returncode}: {err}",
+            metadata={"platform": "gemini_cli", "tools_called": tool_errors},
+        )
 
     raw = result.stdout.strip()
     if not raw:
-        return ChatCliResult(response_text="", success=False, error="Gemini produced no output")
+        return ChatCliResult(
+            response_text="",
+            success=False,
+            error="Gemini produced no output",
+            metadata={"platform": "gemini_cli", "tools_called": tool_errors},
+        )
 
     try:
         data = json.loads(raw)
@@ -1634,13 +1659,14 @@ def _execute_gemini_chat(task_input: ChatCliInput, session_dir: str, image_path:
             "input_tokens": (data.get("usage") or {}).get("input_tokens", 0),
             "output_tokens": (data.get("usage") or {}).get("output_tokens", 0),
             "model": data.get("model", "gemini-2.5-pro"),
+            "tools_called": tool_errors,
         }
         return ChatCliResult(response_text=text, success=True, metadata=meta)
     except json.JSONDecodeError:
         return ChatCliResult(
             response_text=raw,
             success=True,
-            metadata={"platform": "gemini_cli"},
+            metadata={"platform": "gemini_cli", "tools_called": tool_errors},
         )
 
 
