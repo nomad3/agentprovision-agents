@@ -20,9 +20,14 @@
 -- (tenant_id, name). Safe to re-run. We can't use ON CONFLICT because
 -- knowledge_entities has no UNIQUE constraint on (tenant_id, name).
 --
--- Embeddings: NOT seeded here. The api's embedding backfill picks up
--- entities with NULL embedding on a periodic cycle. If you want immediate
--- recall, run scripts/backfill_embeddings.py after this migration.
+-- Embeddings: NOT seeded here. There is currently NO automatic backfill
+-- for knowledge_entities (BackfillEmbeddingsWorkflow only embeds
+-- chat_messages; the entity-side activity is unwired). Run
+-- `scripts/backfill_embeddings.py` once after applying this migration
+-- to populate embeddings for the seeded rows. Without that step,
+-- semantic recall on these entities will fall back to ILIKE keyword
+-- match — still functional for exact/aliased name lookups, but won't
+-- surface them on paraphrased queries.
 
 INSERT INTO knowledge_entities (
     id, tenant_id, entity_type, category, name, description,
