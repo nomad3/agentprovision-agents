@@ -68,48 +68,8 @@ Return ONLY a JSON object with this exact structure:
 })
 
 
-# ---------- HCA Deal Intelligence (M&A sell-likelihood) ----------
-_register("hca_deal", {
-    "name": "HCA Deal Intelligence",
-    "description": "Score companies 0-100 on sell-likelihood for middle-market M&A advisory",
-    "system_prompt": "You are an investment banking deal scoring engine. Return only valid JSON.",
-    "prompt_template": """You are an M&A deal intelligence specialist for a middle-market investment bank. Analyze the following company entity and compute a sell-likelihood score from 0 to 100.
-
-## Scoring Rubric (0-100 total, weighted)
-
-| Category | Weight | Max Points | What to look for |
-|---|---|---|---|
-| ownership_succession | 0.30 | 30 | Owner age 55+, years in business 20+, no visible succession plan, owner reducing involvement, key person risk |
-| market_timing | 0.25 | 25 | Industry M&A activity trending up, multiples at cycle highs, competitor exits, industry consolidation, regulatory sell pressure |
-| company_performance | 0.20 | 20 | Revenue plateau after strong run, revenue $10M-$200M sweet spot, EBITDA margins expanding, customer concentration decreasing, recurring revenue growing |
-| external_triggers | 0.15 | 15 | Recent leadership changes (new CFO/COO), hiring for corp dev/M&A roles, capex slowdown, debt maturity approaching, recent press/awards |
-| negative_signals | 0.10 | -10 | Recent PE acquisition (-5), recent capital raise (-3), founder very young (-3), rapid hiring/growth mode (-2), new product launches (-2). These REDUCE the score. |
-
-## Entity to Score
-
-Name: {name}
-Type: {entity_type}
-Category: {category}
-Description: {description}
-Properties: {properties}
-Enrichment Data: {enrichment_data}
-Source URL: {source_url}
-
-## Related Entities
-{relations_text}
-
-## Instructions
-
-Return ONLY a JSON object with this exact structure:
-{{"score": <integer 0-100>, "breakdown": {{"ownership_succession": <integer 0-30>, "market_timing": <integer 0-25>, "company_performance": <integer 0-20>, "external_triggers": <integer 0-15>, "negative_signals": <integer -10 to 0>}}, "reasoning": "<one paragraph explaining the sell-likelihood assessment>"}}""",
-    "categories": {
-        "ownership_succession": {"max": 30, "description": "Owner age, succession planning, involvement reduction"},
-        "market_timing": {"max": 25, "description": "M&A cycle, multiples, industry consolidation"},
-        "company_performance": {"max": 20, "description": "Revenue, margins, recurring revenue"},
-        "external_triggers": {"max": 15, "description": "Leadership changes, corp dev hiring, debt maturity"},
-        "negative_signals": {"max": 0, "min": -10, "description": "Factors reducing sell-likelihood"},
-    },
-})
+# HCA Deal Intelligence rubric removed 2026-04-26 — investment banking
+# use case is no longer being pursued.
 
 
 # ---------- Marketing Signals (campaign/engagement scoring) ----------

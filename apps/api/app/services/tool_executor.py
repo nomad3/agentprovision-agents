@@ -90,9 +90,8 @@ class LeadScoringTool(Tool):
 
     Supports multiple scoring rubrics:
     - ai_lead: AI orchestration platform lead scoring (default)
-    - hca_deal: M&A sell-likelihood for investment banking
     - marketing_signal: Marketing engagement and intent scoring
-    - Custom rubrics via agent kit configuration
+    - Custom rubrics via tenant configuration
     """
 
     def __init__(self, db, tenant_id, rubric_id=None, custom_rubric=None):
@@ -133,7 +132,7 @@ class LeadScoringTool(Tool):
                     },
                     "rubric_id": {
                         "type": "string",
-                        "description": "Scoring rubric to use: ai_lead, hca_deal, marketing_signal"
+                        "description": "Scoring rubric to use: ai_lead, marketing_signal"
                     },
                 },
                 "required": []

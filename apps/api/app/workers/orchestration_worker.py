@@ -44,14 +44,10 @@ from app.workflows.activities.remedia import (
     monitor_remedia_payment,
     track_remedia_delivery,
 )
-from app.workflows.activities.hca_activities import (
-    hca_discover_prospects,
-    hca_score_prospects,
-    hca_generate_research,
-    hca_generate_outreach,
-    hca_advance_pipeline,
-    hca_sync_knowledge_graph,
-)
+# HCA Deal Intelligence activities removed 2026-04-26 — investment banking
+# use case is no longer being pursued. The hca_activities module is kept on
+# disk under app/workflows/activities/ for one release cycle in case any
+# in-flight Temporal workflows still reference these activity names by string.
 from app.workflows.activities.inbox_monitor import (
     fetch_new_emails,
     fetch_upcoming_events,
@@ -244,12 +240,6 @@ async def run_orchestration_worker():
             send_remedia_notification,
             monitor_remedia_payment,
             track_remedia_delivery,
-            hca_discover_prospects,
-            hca_score_prospects,
-            hca_generate_research,
-            hca_generate_outreach,
-            hca_advance_pipeline,
-            hca_sync_knowledge_graph,
             fetch_new_emails,
             fetch_upcoming_events,
             triage_items,
