@@ -292,7 +292,7 @@ class SkillManager:
         if not slug:
             return {"error": "Invalid skill name."}
 
-        skill_dir = self._tenant_dir(tenant_id) / slug
+        skill_dir = self._tenant_skills_dir(tenant_id) / slug
         if skill_dir.exists():
             return {"error": f"Directory '{slug}' already exists."}
 
@@ -397,7 +397,7 @@ class SkillManager:
         if skill.tier == "custom":
             return {"error": "Skill is already a custom skill."}
 
-        target_dir = self._tenant_dir(tenant_id) / slug
+        target_dir = self._tenant_skills_dir(tenant_id) / slug
         if target_dir.exists():
             return {"error": f"You already have a skill with slug '{slug}'."}
 
@@ -709,7 +709,15 @@ print(json.dumps(mod.execute(inputs)))
             return {"error": f"No name in {path}"}
 
         slug = re.sub(r'[^a-z0-9]+', '_', skill_name.lower()).strip('_')
-        skill_dir = self._community_dir() / slug
+        # The legacy `community/` global pool is gone in the new layout
+        # (apps/api/app/skills/_archive/community/ holds the historical
+        # imports, frozen). PR4 reshapes the GitHub-import path to land
+        # imports as TENANT skills (per-tenant scope) — until then the
+        # endpoint is disabled to avoid writing to a half-thought-through
+        # location.
+        return {"error": "GitHub skill import is temporarily disabled while the community pool is being reshaped into per-tenant scope. See docs/plans/2026-04-26-skills-fleet-alignment-plan.md (PR4)."}
+        # NOTE: dead code below preserved so PR4 can reactivate the path.
+        skill_dir = SKILLS_BASE / "_archive" / "community" / slug
         if skill_dir.exists():
             return {"error": f"Community skill '{slug}' already exists."}
 
