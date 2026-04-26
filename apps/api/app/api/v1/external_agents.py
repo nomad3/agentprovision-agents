@@ -191,12 +191,12 @@ def test_task(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    from app.services.external_agent_adapter import adapter
+    from app.services.external_agent_reliability import external_agent_call
     agent = _get_agent_or_404(db, agent_id, current_user.tenant_id)
     _validate_external_url(agent.endpoint_url)
     task = body.get("task", "")
     try:
-        result = adapter.dispatch(agent, task, {}, db)
+        result = external_agent_call(agent, task, {}, db)
     except Exception as e:
         result = str(e)
     return {
