@@ -557,6 +557,35 @@ def update_skill_prompt_internal(
     return result["skill"]
 
 
+@router.get("/library/internal/{slug}/source")
+def read_skill_source_internal(
+    slug: str,
+    tenant_id: Optional[str] = Query(None),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """Return the full body of a skill (markdown / script) for mid-turn read.
+
+    Used by the code-worker / chat-side ``read_library_skill`` MCP tool so a
+    CLI subprocess can inspect what a bundled or tenant skill actually says
+    before quoting / extending it.
+    """
+    skill = skill_manager.get_skill_by_slug(slug, tenant_id)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{slug}' not found.")
+
+    return {
+        "slug": skill.slug,
+        "name": skill.name,
+        "description": skill.description,
+        "tier": skill.tier,
+        "engine": skill.engine,
+        "category": skill.category,
+        "tags": skill.tags,
+        "auto_trigger": skill.auto_trigger,
+        "body": _read_skill_source(skill),
+    }
+
+
 @router.get("/library/revisions/internal")
 def list_skill_revisions_internal(
     target_type: Optional[str] = Query(None, description="'skill' or 'agent'"),

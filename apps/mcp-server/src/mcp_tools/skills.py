@@ -181,6 +181,55 @@ async def match_skills_to_context(
 
 
 @mcp.tool()
+async def read_library_skill(
+    slug: str,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Fetch the full body of a skill or agent definition by slug.
+
+    Use this when ``list_skills`` shows a skill that might apply but you
+    need to read its actual instructions before answering. Bundled
+    "agents" (sre, devops, business-support, aremko_receptionist…) live in
+    the same library and are readable through this tool.
+
+    Args:
+        slug: Slug of the skill / agent definition.
+        tenant_id: Tenant UUID (resolved from session if omitted).
+        ctx: MCP request context (injected automatically).
+
+    Returns:
+        Dict with slug, name, description, tier, engine, category, tags, body.
+    """
+    tid = resolve_tenant_id(ctx) or tenant_id
+    if not slug:
+        return {"error": "slug is required."}
+
+    api_base_url = _get_api_base_url()
+    internal_key = _get_internal_key()
+
+    params: dict = {}
+    if tid:
+        params["tenant_id"] = tid
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{api_base_url}/api/v1/skills/library/internal/{slug}/source",
+                headers={"X-Internal-Key": internal_key},
+                params=params,
+            )
+            if resp.status_code == 200:
+                return {"status": "success", **resp.json()}
+            if resp.status_code == 404:
+                return {"error": f"Skill '{slug}' not found."}
+            return {"error": f"Read failed: HTTP {resp.status_code}", "detail": resp.text[:500]}
+    except Exception as e:
+        logger.exception("read_library_skill failed")
+        return {"error": f"Failed to read skill: {str(e)}"}
+
+
+@mcp.tool()
 async def update_skill_definition(
     skill_slug: str,
     new_prompt: str,

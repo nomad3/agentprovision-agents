@@ -173,6 +173,12 @@ services:
     volumes:
       - ./apps/code-worker:/app
       - claude_sessions:/home/codeworker/.claude
+      # Read-only library mount so CLI subprocesses can grep/read the canonical
+      # skill + agent definitions directly when the API is unreachable mid-turn.
+      # The tenant-customized copies still live behind the API; only the
+      # bundled (_bundled/) tier is useful from the filesystem here.
+      - ./apps/api/app/skills:/library/skills:ro
+      - ./apps/api/app/agents:/library/agents:ro
     depends_on:
       - temporal
     restart: unless-stopped
