@@ -545,8 +545,16 @@ def run_agent_session(
     agent_tier: str = "full",
     agent_tool_groups: list = None,
     agent_memory_domains: list = None,
+    agent_skill_slugs: list = None,
 ) -> Tuple[Optional[str], Dict]:
-    """Run a full stateless CLI agent session through the configured platform."""
+    """Run a full stateless CLI agent session through the configured platform.
+
+    `agent_skill_slugs` is the ordered list of skill slugs to compose into
+    CLAUDE.md. The first element is the agent's identity skill (its body
+    drives persona); subsequent elements are additional capability bundles
+    appended after the identity body. When None, falls back to
+    `[agent_slug]` for legacy compatibility.
+    """
     metadata: Dict[str, Any] = {
         "platform": platform,
         "agent_slug": agent_slug,
@@ -576,6 +584,32 @@ def run_agent_session(
         return None, metadata
 
     skill_body = skill.description or ""
+
+    # Compose additional skill bodies (PR2). The identity slug already
+    # provided `skill_body`; append the rest of the declared list with a
+    # clear section header so the model can tell them apart.
+    composed_slugs = list(agent_skill_slugs) if agent_skill_slugs else [agent_slug]
+    extra_slugs = [s for s in composed_slugs[1:] if s and s != agent_slug]
+    if extra_slugs:
+        appended: list[str] = []
+        for extra_slug in extra_slugs:
+            extra_skill = skill_manager.get_skill_by_slug(extra_slug, str(tenant_id))
+            if not extra_skill or not extra_skill.description:
+                logger.warning(
+                    "Composed skill '%s' not found / empty for tenant %s — skipping",
+                    extra_slug, str(tenant_id)[:8],
+                )
+                continue
+            appended.append(
+                f"\n\n## Additional Skill: {extra_skill.name}\n\n{extra_skill.description.strip()}"
+            )
+        if appended:
+            skill_body = (skill_body or "").rstrip() + "".join(appended)
+            logger.info(
+                "Composed %d additional skills onto identity %s: %s",
+                len(appended), agent_slug, ", ".join(extra_slugs[: len(appended)]),
+            )
+    metadata["composed_skills"] = composed_slugs
 
     # OpenCode uses local Gemma 4 — no credentials needed
     if platform == "opencode":
