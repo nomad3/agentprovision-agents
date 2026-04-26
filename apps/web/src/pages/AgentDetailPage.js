@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Badge, Col, Modal, Nav, Row, Spinner } from 'react-bootstrap';
+import { Badge, Button, Col, Form, Modal, Nav, Row, Spinner } from 'react-bootstrap';
 import { useNavigate, useParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import agentService from '../services/agent';
@@ -55,6 +55,12 @@ const AgentDetailPage = () => {
   const [allIntegrations, setAllIntegrations] = useState([]);
   const [assignedIntegrations, setAssignedIntegrations] = useState([]);
   const [integrationsLoading, setIntegrationsLoading] = useState(false);
+
+  // Config editor state — populated when entering Edit mode on the Config tab.
+  // null when in view-only mode.
+  const [configDraft, setConfigDraft] = useState(null);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState(null);
 
   const apiBase = process.env.REACT_APP_API_BASE_URL || '';
   const token = localStorage.getItem('token');
@@ -132,6 +138,75 @@ const AgentDetailPage = () => {
     if (tab === 'audit' && auditLogs.length === 0) fetchAuditLogs('', '');
     if (tab === 'versions' && versions.length === 0) fetchVersions();
     if (tab === 'integrations' && allIntegrations.length === 0) fetchIntegrations();
+    // Leaving the Config tab discards any unsaved draft
+    if (tab !== 'config' && configDraft) {
+      setConfigDraft(null);
+      setConfigError(null);
+    }
+  };
+
+  // Build a draft from the current agent config, including the new
+  // PR2 `skills` list. Backward-compat: a single legacy `skill_slug`
+  // shows up in the same comma-separated field.
+  const enterConfigEdit = () => {
+    if (!agent) return;
+    const cfg = agent.config || {};
+    const skillsSrc = Array.isArray(cfg.skills) && cfg.skills.length
+      ? cfg.skills
+      : cfg.skill_slug ? [cfg.skill_slug] : [];
+    setConfigDraft({
+      system_prompt: cfg.system_prompt || agent.system_prompt || '',
+      skills: skillsSrc.join(', '),
+      tool_groups: Array.isArray(agent.tool_groups) ? agent.tool_groups.join(', ') : '',
+      default_model_tier: agent.default_model_tier || 'full',
+      autonomy_level: agent.autonomy_level || 'supervised',
+      temperature: cfg.temperature ?? '',
+      max_tokens: cfg.max_tokens ?? '',
+    });
+    setConfigError(null);
+  };
+
+  const cancelConfigEdit = () => {
+    setConfigDraft(null);
+    setConfigError(null);
+  };
+
+  const saveConfigEdit = async () => {
+    if (!configDraft || !agent) return;
+    setConfigSaving(true);
+    setConfigError(null);
+    try {
+      const skills = configDraft.skills
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const tool_groups = configDraft.tool_groups
+        .split(',').map(s => s.trim()).filter(Boolean);
+      const newConfig = {
+        ...(agent.config || {}),
+        system_prompt: configDraft.system_prompt || undefined,
+        skills: skills.length ? skills : undefined,
+        // Drop the legacy single-slot now that `skills` is the source of truth
+        skill_slug: undefined,
+        temperature: configDraft.temperature === '' ? undefined : Number(configDraft.temperature),
+        max_tokens: configDraft.max_tokens === '' ? undefined : Number(configDraft.max_tokens),
+      };
+      // Strip undefined keys so we don't write nulls into the config blob
+      Object.keys(newConfig).forEach(k => newConfig[k] === undefined && delete newConfig[k]);
+
+      const payload = {
+        config: newConfig,
+        tool_groups,
+        default_model_tier: configDraft.default_model_tier,
+        autonomy_level: configDraft.autonomy_level,
+      };
+      const res = await agentService.update(agent.id, payload);
+      setAgent(res.data);
+      setConfigDraft(null);
+    } catch (err) {
+      console.error('Failed to save agent config:', err);
+      setConfigError(err.response?.data?.detail || err.message || 'Failed to save');
+    } finally {
+      setConfigSaving(false);
+    }
   };
 
   const handlePerfWindow = (win) => {
@@ -441,8 +516,11 @@ const AgentDetailPage = () => {
         )}
 
         {/* Config Tab */}
-        {activeTab === 'config' && (
+        {activeTab === 'config' && !configDraft && (
           <div>
+            <div className="d-flex justify-content-end mb-3">
+              <Button size="sm" variant="primary" onClick={enterConfigEdit}>Edit</Button>
+            </div>
             {(agent.config?.system_prompt || agent.system_prompt) && (
               <div className="mb-4">
                 <div className="ap-section-label">System Prompt</div>
@@ -451,6 +529,28 @@ const AgentDetailPage = () => {
                 </div>
               </div>
             )}
+
+            {(() => {
+              const skills = Array.isArray(agent.config?.skills) && agent.config.skills.length
+                ? agent.config.skills
+                : agent.config?.skill_slug ? [agent.config.skill_slug] : [];
+              if (!skills.length) return null;
+              return (
+                <div className="mb-4">
+                  <div className="ap-section-label">Skills (composed in order)</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {skills.map((s, i) => (
+                      <Badge key={`${s}-${i}`} bg="secondary" style={{ fontWeight: 500 }}>
+                        {i === 0 ? '🪪 ' : ''}{s}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)', marginTop: 6 }}>
+                    The first skill drives the agent's identity. Additional skills are appended to CLAUDE.md as capability bundles.
+                  </p>
+                </div>
+              );
+            })()}
 
             <div className="ap-section-label">Routing</div>
             <p style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)', marginTop: 0, marginBottom: 12 }}>
@@ -484,6 +584,110 @@ const AgentDetailPage = () => {
                 2
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === 'config' && configDraft && (
+          <div>
+            <div className="d-flex justify-content-between align-items-center mb-3">
+              <div className="ap-section-label" style={{ marginBottom: 0 }}>Edit Agent Configuration</div>
+              <div className="d-flex gap-2">
+                <Button size="sm" variant="outline-secondary" onClick={cancelConfigEdit} disabled={configSaving}>Cancel</Button>
+                <Button size="sm" variant="primary" onClick={saveConfigEdit} disabled={configSaving}>
+                  {configSaving ? <><Spinner animation="border" size="sm" className="me-2" />Saving...</> : 'Save'}
+                </Button>
+              </div>
+            </div>
+            {configError && (
+              <div className="mb-3" style={{ padding: '8px 12px', background: 'rgba(239,68,68,0.12)', borderLeft: '3px solid #ef4444', color: '#ef4444', borderRadius: 6, fontSize: 'var(--ap-fs-sm)' }}>
+                {configError}
+              </div>
+            )}
+
+            <Form.Group className="mb-3">
+              <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>System Prompt</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={6}
+                value={configDraft.system_prompt}
+                onChange={e => setConfigDraft({ ...configDraft, system_prompt: e.target.value })}
+                placeholder="(optional) Override the persona instruction. Leave blank to fall back to the agent's bound skill body."
+              />
+            </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>
+                Skills <span style={{ color: 'var(--ap-text-muted)', fontWeight: 400 }}>(comma-separated, ordered — first is the identity)</span>
+              </Form.Label>
+              <Form.Control
+                value={configDraft.skills}
+                onChange={e => setConfigDraft({ ...configDraft, skills: e.target.value })}
+                placeholder="aremko_receptionist, booking, escalation"
+              />
+              <Form.Text style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)' }}>
+                Each slug must match a skill visible to this tenant (Skills page → My Skills or Bundled).
+              </Form.Text>
+            </Form.Group>
+
+            <Form.Group className="mb-3">
+              <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>
+                Tool Groups <span style={{ color: 'var(--ap-text-muted)', fontWeight: 400 }}>(comma-separated)</span>
+              </Form.Label>
+              <Form.Control
+                value={configDraft.tool_groups}
+                onChange={e => setConfigDraft({ ...configDraft, tool_groups: e.target.value })}
+                placeholder="aremko, calendar, knowledge"
+              />
+            </Form.Group>
+
+            <Row className="g-3 mb-3">
+              <Col md={3} sm={6}>
+                <Form.Group>
+                  <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>Model Tier</Form.Label>
+                  <Form.Select
+                    value={configDraft.default_model_tier}
+                    onChange={e => setConfigDraft({ ...configDraft, default_model_tier: e.target.value })}
+                  >
+                    <option value="light">light (Haiku-class)</option>
+                    <option value="full">full (Sonnet-class)</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={3} sm={6}>
+                <Form.Group>
+                  <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>Autonomy</Form.Label>
+                  <Form.Select
+                    value={configDraft.autonomy_level}
+                    onChange={e => setConfigDraft({ ...configDraft, autonomy_level: e.target.value })}
+                  >
+                    <option value="supervised">supervised</option>
+                    <option value="autonomous">autonomous</option>
+                  </Form.Select>
+                </Form.Group>
+              </Col>
+              <Col md={3} sm={6}>
+                <Form.Group>
+                  <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>Temperature</Form.Label>
+                  <Form.Control
+                    type="number" step="0.1" min="0" max="2"
+                    value={configDraft.temperature}
+                    onChange={e => setConfigDraft({ ...configDraft, temperature: e.target.value })}
+                    placeholder="—"
+                  />
+                </Form.Group>
+              </Col>
+              <Col md={3} sm={6}>
+                <Form.Group>
+                  <Form.Label style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text)' }}>Max Tokens</Form.Label>
+                  <Form.Control
+                    type="number" min="0"
+                    value={configDraft.max_tokens}
+                    onChange={e => setConfigDraft({ ...configDraft, max_tokens: e.target.value })}
+                    placeholder="—"
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
           </div>
         )}
 
