@@ -9,18 +9,14 @@ const ReviewStep = ({ wizardData, onEdit }) => {
     .filter(([_, enabled]) => enabled)
     .map(([tool, _]) => tool);
 
+  // Friendly display names for the few skills that survived the
+  // 2026-04-26 cleanup. Unknown slugs fall back to the raw slug.
   const toolNames = {
-    sql_query: 'SQL Query Tool',
-    data_summary: 'Data Summary Tool',
-    calculator: 'Calculator Tool',
-    entity_extraction: 'Entity Extraction',
-    knowledge_search: 'Knowledge Search',
     lead_scoring: 'Lead Scoring',
   };
 
   const rubricNames = {
     ai_lead: 'AI Lead Scoring',
-    hca_deal: 'M&A Deal Scoring',
     marketing_signal: 'Marketing Signal Scoring',
   };
 
