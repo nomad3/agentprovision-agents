@@ -1,29 +1,35 @@
 """Reliability shim around ExternalAgentAdapter.dispatch.
 
 Wraps each external dispatch with:
-  * Per-protocol timeout (default 30s, override via metadata_['timeout']).
   * Exponential backoff retry — 3 attempts, coefficient 2 — matching the
     Temporal RetryPolicy(maximum_attempts=3) semantics that
     coalition_workflow.py:27 already uses, so the platform's retry
-    vocabulary stays uniform.
+    vocabulary stays uniform. Per-protocol timeouts live in the adapter
+    (metadata_['timeout']); the shim doesn't duplicate them.
+  * Retry classification — only retries transient errors. ``NonRetryableExternalError``
+    short-circuits immediately (4xx auth/validation, missing-tool, etc.).
   * Redis-backed circuit breaker keyed on ``agent:breaker:{external_agent_id}``.
-    Open after 5 consecutive failures; auto half-open after 60s; one
-    successful probe closes it.
+    Open after 5 consecutive failures; auto half-open after 60s (key TTL
+    expires → next call is a probe); one successful probe closes it.
+    There is no explicit half-open state machine — a thundering herd of
+    probes when TTL flips is acceptable for v1.
   * Optional fallback dispatch to another external agent specified in
     ``metadata_['fallback_agent_id']`` (depth 1, no recursion).
 
 Surfaces breaker state in ``external_agents.status``:
-``online | busy | error | breaker_open``.
+``online | offline | busy | error | breaker_open``.
 
 Design notes:
   * Sync entrypoint to match the rest of the adapter and chat path.
+  * The shim uses ``db.flush()`` (not ``db.commit()``) so the caller's
+    request-scoped session keeps its transaction boundary. Status
+    updates are visible inside the request but committed when the
+    caller commits at end-of-request.
   * Redis is optional — if unavailable, the breaker degrades to no-op
-    (just retry). The native side already handles this pattern (see
-    AgentRegistry._get_redis).
-  * The retry loop is intentionally simple — no jitter, no per-error
-    classification — because external-agent dispatch is low-frequency
-    relative to the rest of the platform. If volume grows we can swap
-    in tenacity.
+    (just retry). Mirrors AgentRegistry._get_redis.
+  * Breaker race: ``_record_failure`` uses ``set(..., nx=True)`` so a
+    concurrent ``_record_success`` that just deleted the key can't be
+    raced into reopening it.
 """
 from __future__ import annotations
 
@@ -50,6 +56,16 @@ BREAKER_OPEN_SECONDS = 60
 
 _BREAKER_KEY_FMT = "agent:breaker:{external_agent_id}"
 _FAIL_COUNT_KEY_FMT = "agent:breaker:fails:{external_agent_id}"
+
+
+class NonRetryableExternalError(RuntimeError):
+    """Raised by adapter callers when an external dispatch shouldn't be
+    retried — auth failures, schema validation errors, missing tools.
+
+    Mirrors Temporal's ``non_retryable_error_types`` notion. When the
+    shim sees this, it skips the remaining retry attempts and goes
+    straight to the fallback / breaker path.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +120,14 @@ def _record_failure(agent_id) -> int:
         # failures forever after a long quiet period.
         r.expire(key, BREAKER_OPEN_SECONDS * 4)
         if count >= BREAKER_THRESHOLD:
+            # nx=True: don't reset the TTL of an already-open breaker, and
+            # don't race a concurrent _record_success that just deleted the
+            # key into reopening it on stale state.
             r.set(
                 _BREAKER_KEY_FMT.format(external_agent_id=str(agent_id)),
                 "1",
                 ex=BREAKER_OPEN_SECONDS,
+                nx=True,
             )
         return count
     except Exception as exc:
@@ -156,7 +176,7 @@ def external_agent_call(
     if _breaker_is_open(agent.id):
         agent.status = "breaker_open"
         db.add(agent)
-        db.commit()
+        db.flush()
         fallback = _resolve_fallback(agent, db)
         if fallback is not None:
             logger.info(
@@ -176,6 +196,16 @@ def external_agent_call(
             _mark_online(agent, db)
             _record_success(agent.id)
             return result
+        except NonRetryableExternalError as exc:
+            # Auth failure / schema validation / missing tool — retrying
+            # won't help. Skip the remaining attempts; the failure still
+            # counts toward breaker since *something* is wrong with the
+            # agent's configuration.
+            last_exc = exc
+            logger.warning(
+                "external_agent_call: %s non-retryable error: %s", agent.id, exc,
+            )
+            break
         except Exception as exc:
             last_exc = exc
             logger.warning(
@@ -224,10 +254,10 @@ def _mark_online(agent: ExternalAgent, db: Session) -> None:
     if agent.status != "online":
         agent.status = "online"
         db.add(agent)
-        db.commit()
+        db.flush()
 
 
 def _mark_error(agent: ExternalAgent, db: Session) -> None:
     agent.status = "error"
     db.add(agent)
-    db.commit()
+    db.flush()

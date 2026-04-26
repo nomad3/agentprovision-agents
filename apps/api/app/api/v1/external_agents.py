@@ -199,6 +199,9 @@ def test_task(
         result = external_agent_call(agent, task, {}, db)
     except Exception as e:
         result = str(e)
+    # Shim flushes status changes but leaves the commit boundary to the
+    # caller — match the rest of the route's session contract.
+    db.commit()
     return {
         "result": result,
         "agent_id": str(agent_id),
