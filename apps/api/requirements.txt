@@ -43,3 +43,6 @@ openai-whisper
 soundfile
 librosa
 slowapi>=0.1.9
+# MCP client SDK — used by external_agent_adapter._dispatch_mcp_sse to talk
+# to remote MCP servers (Claude Code / Gemini / Cursor skills) over SSE.
+mcp>=1.0.0
