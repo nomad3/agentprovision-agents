@@ -672,10 +672,13 @@ const SkillsPage = () => {
                 <Form.Group className="mb-3">
                   <Form.Label style={{ fontSize: '0.85rem', color: 'var(--color-foreground)' }}>{t('form.engine')}</Form.Label>
                   <div className="d-flex gap-2 mt-1">
-                    {/* Only `markdown` is offered today — the python/shell
-                        executable engines are unused in production and slated
-                        for removal in PR7 of the alignment plan. */}
-                    {['markdown'].map(eng => {
+                    {/* Only `markdown` is offered for new skills — the
+                        python/shell executable engines are unused in
+                        production and slated for removal in PR7. When
+                        editing a legacy python/shell skill we still
+                        surface its current engine as a chip so the UI
+                        reflects the real state. */}
+                    {Array.from(new Set(['markdown', newSkill.engine].filter(Boolean))).map(eng => {
                       const Icon = ENGINE_ICONS[eng];
                       return (
                         <div
