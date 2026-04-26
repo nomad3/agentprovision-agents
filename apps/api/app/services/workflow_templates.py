@@ -1537,6 +1537,31 @@ NATIVE_TEMPLATES = [
         },
     },
 
+    # ── 1-step delegation primitive (PR-F of the external-agents + A2A plan).
+    # The delegate_to_agent MCP tool launches this template with input
+    # {recipient_agent_id, task, reason}. The single agent step gives us
+    # the WorkflowRun + WorkflowStepLog audit trail "for free" — that's
+    # what the chat-side `[handoff]` message links back to.
+    {
+        "name": "Delegate To Agent",
+        "description": "Single-step handoff: dispatch a task to one agent and await reply. Used by delegate_to_agent.",
+        "tier": "native",
+        "public": True,
+        "tags": ["a2a", "handoff", "delegate"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "delegate",
+                    "type": "agent",
+                    "agent": "{{input.recipient_agent_id}}",
+                    "prompt": "{{input.task}}",
+                    "output": "reply",
+                },
+            ],
+        },
+    },
+
     # ── A2A coalition patterns (PR-G of the external-agents + A2A plan).
     # These are the lighter-loop alternatives to CoalitionWorkflow's
     # 5 hardcoded patterns. They compose existing step types only —

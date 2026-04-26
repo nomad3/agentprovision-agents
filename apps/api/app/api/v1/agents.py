@@ -201,6 +201,178 @@ def create_agent(
     db.refresh(item)
     return item
 
+class InternalDelegateRequest(BaseModel):
+    """Chat-side handoff payload routed through Dynamic Workflows.
+
+    ``actor_user_id`` and ``tenant_id`` come from MCP request headers
+    (X-User-Id / X-Tenant-Id) and are forwarded by the MCP tool. The
+    internal-key dep is the trust boundary; tenant scoping is enforced
+    when we look up the recipient.
+    """
+
+    tenant_id: str
+    recipient_agent_id: str
+    task: str
+    reason: Optional[str] = None
+    actor_user_id: Optional[str] = None
+    chat_session_id: Optional[str] = None
+
+
+@router.post("/internal/delegate")
+async def delegate_to_agent_internal(
+    payload: InternalDelegateRequest,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key_dep),
+):
+    """Launch the 'Delegate To Agent' Dynamic Workflow and (optionally)
+    drop a ``[handoff]`` chat message into the originating session.
+
+    Returns the run id so the caller can poll. Audit + replay come from
+    WorkflowRun + WorkflowStepLog — no separate ``agent_messages`` table.
+    """
+    from app.services.dynamic_workflow_launcher import start_dynamic_workflow
+    from app.models.chat import ChatMessage
+
+    # Tenant scoping: the recipient must belong to the requesting tenant.
+    # We accept either a native Agent.id or an ExternalAgent.id; the
+    # workflow's `agent` step resolves both via the platform's normal
+    # dispatch path.
+    tenant_uuid = uuid.UUID(payload.tenant_id)
+    recipient_uuid = uuid.UUID(payload.recipient_agent_id)
+
+    native = (
+        db.query(Agent)
+        .filter(Agent.id == recipient_uuid, Agent.tenant_id == tenant_uuid)
+        .first()
+    )
+    if native is None:
+        from app.models.external_agent import ExternalAgent
+        ext = (
+            db.query(ExternalAgent)
+            .filter(ExternalAgent.id == recipient_uuid, ExternalAgent.tenant_id == tenant_uuid)
+            .first()
+        )
+        if ext is None:
+            raise HTTPException(status_code=404, detail="Recipient agent not found in tenant.")
+        recipient_name = ext.name
+    else:
+        recipient_name = native.name
+
+    temporal_wf_id = await start_dynamic_workflow(
+        db=db,
+        template_name="Delegate To Agent",
+        tenant_id=tenant_uuid,
+        input_data={
+            "recipient_agent_id": str(recipient_uuid),
+            "task": payload.task,
+            "reason": payload.reason or "",
+        },
+        workflow_id_prefix="delegate",
+    )
+
+    # Optional in-chat surface: drop a [handoff] system message into the
+    # originating session so the user sees "→ Handoff to {Agent} (run #abc)"
+    # inline. The chat UI's CollaborationPanel doesn't open for this —
+    # 1-step handoffs are lightweight.
+    if payload.chat_session_id:
+        try:
+            session_uuid = uuid.UUID(payload.chat_session_id)
+            short = temporal_wf_id.rsplit("-", 1)[-1]
+            handoff_msg = ChatMessage(
+                session_id=session_uuid,
+                role="system",
+                content=f"→ Handoff to {recipient_name} (run #{short})",
+                context={
+                    "kind": "handoff",
+                    "run_id": temporal_wf_id,
+                    "recipient_agent_id": str(recipient_uuid),
+                    "recipient_name": recipient_name,
+                    "reason": payload.reason or "",
+                },
+            )
+            db.add(handoff_msg)
+            db.flush()
+        except Exception as exc:
+            logger.warning("delegate_to_agent_internal: handoff message write failed: %s", exc)
+
+    db.commit()
+    return {
+        "run_id": temporal_wf_id,
+        "recipient_agent_id": str(recipient_uuid),
+        "recipient_name": recipient_name,
+    }
+
+
+@router.get("/internal/handoff/{run_id}/status")
+def handoff_status_internal(
+    run_id: str,
+    tenant_id: str,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key_dep),
+):
+    """Read the WorkflowRun + step logs for a handoff. Returns the
+    delegate step's output once the run completes.
+    """
+    from app.models.dynamic_workflow import WorkflowRun, WorkflowStepLog
+    run = (
+        db.query(WorkflowRun)
+        .filter(WorkflowRun.temporal_workflow_id == run_id, WorkflowRun.tenant_id == uuid.UUID(tenant_id))
+        .first()
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+
+    step_logs = (
+        db.query(WorkflowStepLog)
+        .filter(WorkflowStepLog.run_id == run.id)
+        .order_by(WorkflowStepLog.started_at)
+        .all()
+    )
+    delegate_step = next((s for s in step_logs if s.step_id == "delegate"), None)
+
+    return {
+        "run_id": run_id,
+        "status": run.status,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "reply": (delegate_step.output_data if delegate_step else None),
+        "error": run.error,
+    }
+
+
+def _discover_payload(matches, kind_filter: Optional[str]):
+    if kind_filter in ("native", "external"):
+        matches = [(k, a) for k, a in matches if k == kind_filter]
+    return [
+        {
+            "kind": k,
+            "id": str(a.id),
+            "name": a.name,
+            "description": a.description,
+            "status": a.status,
+            "capabilities": a.capabilities,
+        }
+        for k, a in matches
+    ]
+
+
+@router.get("/internal/discover")
+def discover_agents_internal(
+    capability: str,
+    tenant_id: str,
+    kind: Optional[str] = None,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key_dep),
+):
+    """Internal-key variant of /discover for MCP-side find_agent tool.
+
+    Tenant scoping is forwarded as a query param since the internal-key
+    boundary doesn't carry user identity.
+    """
+    matches = registry.find_by_capability(capability, uuid.UUID(tenant_id), db)
+    return _discover_payload(matches, kind)
+
+
 @router.get("/discover")
 def discover_agents(
     capability: str,
@@ -216,19 +388,7 @@ def discover_agents(
     Optional ``kind`` query param filters to one side.
     """
     matches = registry.find_by_capability(capability, current_user.tenant_id, db)
-    if kind in ("native", "external"):
-        matches = [(k, a) for k, a in matches if k == kind]
-    return [
-        {
-            "kind": k,
-            "id": str(a.id),
-            "name": a.name,
-            "description": a.description,
-            "status": a.status,
-            "capabilities": a.capabilities,
-        }
-        for k, a in matches
-    ]
+    return _discover_payload(matches, kind)
 
 
 @router.post("/import", response_model=schemas.agent.Agent, status_code=status.HTTP_201_CREATED)

@@ -139,6 +139,11 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "list_library_revisions",
         "get_skill_gaps",
     ],
+    "a2a": [
+        "delegate_to_agent",
+        "read_handoff_status",
+        "find_agent",
+    ],
     "webhooks": [
         "register_webhook",
         "list_webhooks",
