@@ -28,11 +28,13 @@ def _agent(**overrides):
 
 
 class _DB:
-    """Stand-in: db.add/commit no-op; db.query returns canned rows."""
+    """Stand-in: db.add/flush/commit no-op; db.query returns canned rows."""
     def __init__(self, rows=None):
         self._rows = rows or []
         self.commits = 0
+        self.flushes = 0
     def add(self, _row): pass
+    def flush(self): self.flushes += 1
     def commit(self): self.commits += 1
     def query(self, _model):
         rows = self._rows
@@ -139,8 +141,11 @@ class _FakeRedis:
         self.store[key] = int(self.store.get(key, 0)) + 1
         return self.store[key]
     def expire(self, *_a, **_k): pass
-    def set(self, key, value, ex=None):
+    def set(self, key, value, ex=None, nx=False):
+        if nx and key in self.store:
+            return None
         self.store[key] = value
+        return True
     def delete(self, *keys):
         for k in keys:
             self.store.pop(k, None)
@@ -179,6 +184,76 @@ def test_open_breaker_short_circuits_to_fallback(monkeypatch):
         out = rel.external_agent_call(primary, "t", {}, db)
     assert out == "fb-ok"
     assert primary.status == "breaker_open"
+
+
+def test_non_retryable_error_skips_remaining_attempts(monkeypatch):
+    """Auth/validation failures shouldn't burn 3 attempts × backoff."""
+    agent = _agent()
+    db = _DB()
+    monkeypatch.setattr(rel.time, "sleep", lambda *_a: None)
+    with patch("app.services.external_agent_adapter.adapter") as a:
+        a.dispatch.side_effect = rel.NonRetryableExternalError("401 unauthorized")
+        with pytest.raises(RuntimeError, match="401"):
+            rel.external_agent_call(agent, "t", {}, db)
+    # Only one attempt should have been made.
+    assert a.dispatch.call_count == 1
+
+
+def test_shim_flushes_but_does_not_commit(monkeypatch):
+    """Status updates must flush (visible in tx) but not commit (caller
+    owns the boundary). Locks the contract the test_task endpoint relies
+    on.
+    """
+    agent = _agent()
+    db = _DB()
+    # Track explicit commits — the shim shouldn't add to this count.
+    db.commit = lambda: setattr(db, "explicit_commits", db.commits + 1)
+    db.explicit_commits = 0
+    with patch("app.services.external_agent_adapter.adapter") as a:
+        a.dispatch.return_value = "ok"
+        rel.external_agent_call(agent, "t", {}, db)
+    assert db.explicit_commits == 0
+
+
+def test_breaker_uses_set_nx_to_avoid_overwriting(monkeypatch):
+    """If a concurrent _record_success has just deleted the breaker key,
+    a stale failure path mustn't reopen the breaker on top.
+    """
+    fake = _FakeRedis()
+    monkeypatch.setattr(rel, "_get_redis", lambda: fake)
+
+    captured_kwargs = {}
+
+    real_set = fake.set
+    def tracking_set(key, value, **kwargs):
+        captured_kwargs.update(kwargs)
+        return real_set(key, value, **kwargs)
+    fake.set = tracking_set  # type: ignore[assignment]
+
+    monkeypatch.setattr(rel, "BREAKER_THRESHOLD", 1)
+    rel._record_failure("agent-x")
+    # nx=True must be present — that's the race-safety contract.
+    assert captured_kwargs.get("nx") is True
+
+
+def test_breaker_recovers_after_ttl_expires(monkeypatch):
+    """Half-open semantics: after TTL the next call passes through and
+    can close the breaker on success. We simulate TTL by deleting the
+    key between calls.
+    """
+    fake = _FakeRedis()
+    monkeypatch.setattr(rel, "_get_redis", lambda: fake)
+    agent = _agent(id="dddddddd-0000-0000-0000-000000000000")
+    fake.store[rel._BREAKER_KEY_FMT.format(external_agent_id=str(agent.id))] = "1"
+    db = _DB()
+
+    with patch("app.services.external_agent_adapter.adapter") as a:
+        a.dispatch.return_value = "ok"
+        # Simulate TTL expiry — caller deletes key, next call probes.
+        del fake.store[rel._BREAKER_KEY_FMT.format(external_agent_id=str(agent.id))]
+        out = rel.external_agent_call(agent, "t", {}, db)
+    assert out == "ok"
+    assert agent.status == "online"
 
 
 def test_success_clears_breaker_state(monkeypatch):

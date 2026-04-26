@@ -26,7 +26,7 @@ class ExternalAgent(Base):
 
     # Health
     health_check_path = Column(String, nullable=False, default="/health")
-    status = Column(String, nullable=False, default="offline")  # online|offline|busy|error
+    status = Column(String, nullable=False, default="offline")  # online|offline|busy|error|breaker_open
     last_seen_at = Column(DateTime, nullable=True)
 
     # Stats
