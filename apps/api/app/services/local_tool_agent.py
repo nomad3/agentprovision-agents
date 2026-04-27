@@ -336,22 +336,35 @@ def run(
             **(extra or {}),
         }
 
-    # Build system prompt from skill_body
-    system = skill_body.strip()[:2000] if skill_body else ""
+    # Build system prompt from skill_body. Trim aggressively — Gemma 4 on
+    # M4 prefills at ~100–200 tok/s, so every kilobyte of system prompt
+    # adds ~0.5–1 s to *every* tool-calling round (2–3 rounds per turn).
+    # Bench v4 measured 13–20 s per round; this trim halves the base
+    # system prompt and is expected to save 3–5 s per round.
+    system = skill_body.strip()[:1000] if skill_body else ""
     if not system:
         system = (
             "You are an AI assistant with access to tools. "
-            "Use tools when they would help answer the user's question. "
-            "Respond in the same language the user writes in."
+            "Reply in the user's language. Be concise."
         )
-    system += (
-        "\n\nYou have access to tools. Use them when needed to answer accurately. "
-        "If no tool is needed, respond directly. Be concise."
+    # Local-path anti-hallucination rules — condensed from the cloud-CLI
+    # ANTI_HALLUCINATION_PREAMBLE (1873 chars) to ~500 chars. The cloud
+    # path has bigger context budgets and can afford the longer text;
+    # here the same rules in fewer tokens.
+    _LOCAL_AH_PREAMBLE = (
+        "## Anti-hallucination rules (apply every turn)\n"
+        "1. Names, prices, IDs, dates, times, addresses must come from "
+        "(a) the conversation above, (b) memory/recall blocks below, or "
+        "(c) a tool you call THIS turn. Never invent them.\n"
+        "2. If a tool returns nothing or fails, say so plainly. "
+        "Don't substitute plausible alternatives.\n"
+        "3. Never say 'done', 'sent', 'scheduled', 'booked' unless you "
+        "called the action tool successfully this turn.\n"
+        "4. Honest 'I couldn't reach the system' beats a guessed answer."
     )
-    # Universal anti-hallucination preamble — same rules as the CLI hot path.
-    # Imported lazily to avoid circular imports.
-    from app.services.cli_session_manager import ANTI_HALLUCINATION_PREAMBLE
-    system = ANTI_HALLUCINATION_PREAMBLE + "\n\n" + system
+    system = _LOCAL_AH_PREAMBLE + "\n\n" + system + (
+        "\n\nUse tools when needed; reply directly when not. Be brief."
+    )
 
     # Get curated tools for this tenant
     tools = _get_tools_for_tenant(tenant_id, connected_integrations)
@@ -461,9 +474,14 @@ def run(
                 _tool_ms_total += int((time.monotonic() - _tool_t0) * 1000)
                 metadata["tools_used"].append(tool_name)
 
+                # Trim tool results aggressively. Round 2's prefill cost
+                # scales linearly with this content — cutting from 4 KB to
+                # 1 KB saves ~750 tokens × 5 ms/token ≈ 4 s on the next
+                # Gemma round. Most knowledge / search tools return
+                # listings whose first 1 KB carries the headline answer.
                 messages.append({
                     "role": "tool",
-                    "content": json.dumps(result, default=str)[:4000],
+                    "content": json.dumps(result, default=str)[:1000],
                 })
 
             metadata["tool_rounds"] = round_num + 1
