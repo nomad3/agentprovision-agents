@@ -82,6 +82,20 @@ Greeting target hit decisively. Other targets are below the Gemma 4 prefill+gene
 | `2026-04-27-luna-bench-v8-raw.md` + `.json` | Post-round-cap bench (PR #220). |
 | (this file) | Final session summary. |
 
+## Ollama prompt caching probe (post-v8)
+
+Measured whether Ollama's KV cache materially helps when the same prompt is sent repeatedly to fresh sessions:
+
+```
+attempt 1: 13.6 s
+attempt 2: 21.9 s
+attempt 3: 17.9 s
+```
+
+**No monotonic decrease.** Variance overwhelms whatever cache reuse exists. Cause: even with identical user input, Gemma's stochastic tool-calling decisions produce different round-2 inputs → cache miss on round 2. To make caching effective we'd have to make the entire chat trajectory deterministic (greedy decoding + fixed tool ordering), which would change response quality.
+
+**Verdict: not worth shipping a caching change** without a quality A/B that's outside the scope of latency work. Removed from the Tier-1 queue.
+
 ## Recommended next session move
 
 Stop on the local path. Mint a JWT for AgentProvision and run:
