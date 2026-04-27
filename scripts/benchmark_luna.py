@@ -61,6 +61,9 @@ class TurnResult:
     success: bool
     error: Optional[str] = None
     response_preview: str = ""
+    # Phase A.1 stage breakdown (populated when the api response carries
+    # timings via assistant_message.context.timings). Empty until A.1 lands.
+    timings: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -147,17 +150,22 @@ def _run_cell(
     runs_per_cell: int,
     warmup: int,
 ) -> list[TurnResult]:
-    """Run all repetitions of one (prompt-class) cell with a fresh session."""
+    """Run all repetitions of one (prompt-class) cell with a fresh session.
+
+    Every step is wrapped — a single transient connection drop (api
+    recreate, network blip) records a fail row and lets the rest of
+    the matrix continue. The final report is always written.
+    """
     out: list[TurnResult] = []
     for idx in range(runs_per_cell + warmup):
         is_warmup = idx < warmup
         is_cold = idx == warmup  # first non-warmup run is "cold" in this batch
-        # Each repetition uses a fresh session so the recall cache and
-        # CLI subprocess context start the same way every time.
-        session_id = _new_session(base, token)
+        row: TurnResult
         try:
+            session_id = _new_session(base, token)
             wall_ms, payload = _send_message(base, token, session_id, prompt)
             assistant = payload.get("assistant_message") or {}
+            ctx = assistant.get("context") or {}
             row = TurnResult(
                 cell=cell,
                 prompt=prompt,
@@ -166,11 +174,11 @@ def _run_cell(
                 wall_ms=wall_ms,
                 server_duration_ms=assistant.get("duration_ms"),
                 tokens=assistant.get("tokens_used"),
-                platform=(assistant.get("context") or {}).get("platform")
-                         or assistant.get("platform"),
+                platform=ctx.get("platform") or assistant.get("platform"),
                 response_len=len(assistant.get("content") or ""),
                 success=True,
                 response_preview=(assistant.get("content") or "")[:200],
+                timings=ctx.get("timings") or {},
             )
         except requests.HTTPError as e:
             row = TurnResult(
@@ -183,7 +191,7 @@ def _run_cell(
             row = TurnResult(
                 cell=cell, prompt=prompt, run_idx=idx, cold=is_cold,
                 wall_ms=0, server_duration_ms=None, tokens=None, platform=None,
-                response_len=0, success=False, error=str(e),
+                response_len=0, success=False, error=f"{type(e).__name__}: {e}",
             )
         marker = " (warmup)" if is_warmup else ""
         print(
@@ -219,6 +227,16 @@ def _summarize(rows: list[TurnResult]) -> dict:
     summary = {}
     for cell, b in by_cell.items():
         walls = b["walls"]
+        # Aggregate per-stage timings across the OK rows in this cell.
+        stage_avg: dict = {}
+        successful = [r for r in rows if r.cell == cell and r.success and r.timings]
+        if successful:
+            keys = set()
+            for r in successful:
+                keys.update(r.timings.keys())
+            for k in keys:
+                vals = [r.timings.get(k, 0) for r in successful]
+                stage_avg[k] = int(statistics.mean(vals))
         summary[cell] = {
             "n_ok": b["ok"],
             "n_fail": b["fail"],
@@ -229,6 +247,7 @@ def _summarize(rows: list[TurnResult]) -> dict:
             "wall_avg_ms": int(statistics.mean(walls)) if walls else 0,
             "server_p50_ms": timed_p(b["servers"], 50),
             "platforms": sorted(set(filter(None, [r.platform for r in rows if r.cell == cell]))),
+            "stage_avg_ms": stage_avg,
         }
     return summary
 
@@ -260,6 +279,17 @@ def _write_markdown(path: str, run: BenchmarkRun, summary: dict) -> None:
             f"{s['server_p50_ms']} ms | {', '.join(s['platforms']) or '—'} |"
         )
 
+    # Per-stage breakdown (Phase A.1 — populated when api response carries timings).
+    has_stage_data = any(s.get("stage_avg_ms") for s in summary.values())
+    if has_stage_data:
+        all_stages = sorted({k for s in summary.values() for k in (s.get("stage_avg_ms") or {})})
+        lines += ["", "## Stage breakdown (avg ms)", "", "| cell | " + " | ".join(all_stages) + " |"]
+        lines.append("|---" * (1 + len(all_stages)) + "|")
+        for cell, s in summary.items():
+            stages = s.get("stage_avg_ms") or {}
+            row = [cell] + [str(stages.get(k, "—")) for k in all_stages]
+            lines.append("| " + " | ".join(row) + " |")
+
     lines += ["", "## All rows", "", "| cell | run | cold | wall | server | tokens | platform | ok | error / preview |", "|---|---|---|---|---|---|---|---|---|"]
     for r in run.rows:
         snippet = (r.error or r.response_preview).replace("|", "\\|").replace("\n", " ")[:120]
@@ -279,15 +309,28 @@ def main() -> int:
     ap.add_argument("--base-url", default=os.environ.get("BENCH_BASE_URL", "http://localhost:8000"))
     ap.add_argument("--email", default=os.environ.get("BENCH_EMAIL", "test@example.com"))
     ap.add_argument("--password", default=os.environ.get("BENCH_PASSWORD", "password"))
+    ap.add_argument("--token", default=os.environ.get("BENCH_TOKEN"),
+                    help="Pre-minted JWT — skips login. Use to bench any tenant without sharing the password.")
     ap.add_argument("--runs", type=int, default=2, help="non-warmup runs per cell")
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--out-prefix", default="benchmarks")
     args = ap.parse_args()
 
     base = args.base_url.rstrip("/")
-    print(f"login → {base} as {args.email}", flush=True)
-    token, tenant_id = _login(base, args.email, args.password)
-    print(f"  tenant_id={tenant_id}\n", flush=True)
+    if args.token:
+        token = args.token
+        me = requests.get(
+            f"{base}/api/v1/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        me.raise_for_status()
+        tenant_id = me.json()["tenant_id"]
+        print(f"using --token → tenant_id={tenant_id}\n", flush=True)
+    else:
+        print(f"login → {base} as {args.email}", flush=True)
+        token, tenant_id = _login(base, args.email, args.password)
+        print(f"  tenant_id={tenant_id}\n", flush=True)
 
     started = datetime.now(tz=timezone.utc).isoformat()
     run = BenchmarkRun(
@@ -298,15 +341,22 @@ def main() -> int:
         warmup=args.warmup,
     )
 
-    for cell, prompt, _hint in PROMPTS:
-        print(f"=== cell: {cell} :: {prompt!r} ===", flush=True)
-        rows = _run_cell(
-            base=base, token=token,
-            cell=cell, prompt=prompt,
-            runs_per_cell=args.runs, warmup=args.warmup,
-        )
-        run.rows.extend(rows)
-        print()
+    aborted_reason: Optional[str] = None
+    try:
+        for cell, prompt, _hint in PROMPTS:
+            print(f"=== cell: {cell} :: {prompt!r} ===", flush=True)
+            rows = _run_cell(
+                base=base, token=token,
+                cell=cell, prompt=prompt,
+                runs_per_cell=args.runs, warmup=args.warmup,
+            )
+            run.rows.extend(rows)
+            print()
+    except KeyboardInterrupt:
+        aborted_reason = "KeyboardInterrupt"
+    except Exception as e:
+        aborted_reason = f"{type(e).__name__}: {e}"
+        print(f"\n!!! bench aborted mid-run: {aborted_reason}\n  (writing partial report)", flush=True)
 
     run.finished_at = datetime.now(tz=timezone.utc).isoformat()
     summary = _summarize(run.rows)

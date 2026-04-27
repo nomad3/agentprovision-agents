@@ -566,6 +566,18 @@ def run_agent_session(
     appended after the identity body. When None, falls back to
     `[agent_slug]` for legacy compatibility.
     """
+    # Phase A.1 of the latency reduction plan: per-stage timers persisted
+    # into ``metadata['timings']`` so the chat layer's ExecutionTrace gets
+    # them under ``details``. The bench script reads them from there.
+    import time as _stage_time
+    _stage_t0 = _stage_time.monotonic()
+    timings: Dict[str, int] = {}
+    def _mark(stage: str) -> None:
+        nonlocal _stage_t0
+        now = _stage_time.monotonic()
+        timings[stage] = int((now - _stage_t0) * 1000)
+        _stage_t0 = now
+
     metadata: Dict[str, Any] = {
         "platform": platform,
         "agent_slug": agent_slug,
@@ -573,6 +585,7 @@ def run_agent_session(
         "user_id": str(user_id),
         "channel": channel,
         "error": None,
+        "timings": timings,
     }
 
     if platform not in SUPPORTED_CLI_PLATFORMS:
@@ -580,6 +593,8 @@ def run_agent_session(
         logger.error(err)
         metadata["error"] = err
         return None, metadata
+
+    _mark("setup")
 
     primary_slug = resolve_primary_agent_slug(db, tenant_id)
     skill = skill_manager.get_skill_by_slug(agent_slug, str(tenant_id))
@@ -657,6 +672,7 @@ def run_agent_session(
             "No %s credential for tenant %s — falling back to local agent",
             platform, tenant_id,
         )
+        _mark("cli_credentials_missing")
         # 1. Try local tool agent (curated MCP tools via Ollama)
         try:
             from app.services import local_tool_agent
@@ -673,8 +689,15 @@ def run_agent_session(
                 conversation_summary=conversation_summary,
                 connected_integrations=connected,
             )
+            _mark("local_tool_agent")
             if tool_response:
+                # Preserve our timings dict on metadata.update.
+                meta_timings = tool_meta.pop("timings", None) if isinstance(tool_meta, dict) else None
                 metadata.update(tool_meta)
+                if meta_timings:
+                    metadata.setdefault("timings", {}).update(meta_timings)
+                else:
+                    metadata["timings"] = timings
                 return tool_response, metadata
             logger.info("Local tool agent returned no response — falling back to plain text")
         except Exception as exc:
@@ -688,9 +711,11 @@ def run_agent_session(
             skill_body=skill_body,
             agent_slug=agent_slug,
         )
+        _mark("local_inference_plain")
         if local_response:
             metadata["platform"] = "local_gemma"
             metadata["fallback"] = True
+            metadata["timings"] = timings
             return local_response, metadata
 
         # 3. Friendly error
@@ -706,6 +731,8 @@ def run_agent_session(
     session_entity_names = (db_session_memory or {}).get("recalled_entity_names")
 
     limits = TIER_LIMITS.get(agent_tier, TIER_LIMITS["full"])
+
+    _mark("skill_compose")
 
     if pre_built_memory_context is not None:
         memory_context = pre_built_memory_context
@@ -729,6 +756,8 @@ def run_agent_session(
         except Exception as exc:
             logger.warning("Memory recall failed for tenant %s: %s", tenant_id, exc)
             memory_context = {}
+
+    _mark("memory_recall")
 
     # Inject self-model context: identity profile, active goals, open commitments
     try:
@@ -854,6 +883,8 @@ def run_agent_session(
     internal_key = settings.MCP_API_KEY or "dev_mcp_key"
     mcp_config = generate_mcp_config(str(tenant_id), internal_key, db=db, user_id=str(user_id))
 
+    _mark("prompt_render")
+
     logger.info(
         "Dispatching ChatCliWorkflow: platform=%s skill=%s tenant=%s channel=%s",
         platform, agent_slug, str(tenant_id)[:8], channel,
@@ -944,6 +975,8 @@ def run_agent_session(
             error = getattr(result, "error", None)
             meta = getattr(result, "metadata", None) or {}
 
+        _mark("cli_dispatch")
+
         if success and response_text:
             if isinstance(meta, dict):
                 input_tokens = meta.get("input_tokens") or 0
@@ -954,7 +987,13 @@ def run_agent_session(
                     pass
                 if meta.get("cost") is None and meta.get("cost_usd") is not None:
                     meta["cost"] = meta.get("cost_usd")
+                # Preserve our timings dict — meta.update would clobber it.
+                meta_timings = meta.pop("timings", None)
                 metadata.update(meta)
+                if meta_timings:
+                    metadata.setdefault("timings", {}).update(meta_timings)
+                else:
+                    metadata["timings"] = timings
             return response_text, metadata
 
         metadata["error"] = error or "CLI workflow returned empty response"
