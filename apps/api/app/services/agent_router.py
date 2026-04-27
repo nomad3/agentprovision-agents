@@ -163,6 +163,49 @@ def _infer_task_type(message: str) -> str:
 _LOCAL_PATH_MAX_CHARS = 100
 
 
+# ── Greeting fast-path (Tier-1 #1 of the latency reduction plan) ──
+#
+# Bench v4 measured a "hola luna" turn at 21 s, 100% Gemma 4 inference,
+# 2 inference rounds — a 50-token greeting reply. The agent's persona
+# enforces proactive memory recall on every turn, even ones that are
+# just "say hi". For trivially short messages with greeting intent we
+# can short-circuit BEFORE any LLM call.
+#
+# Heuristic: intent matched the canonical "greeting or small talk"
+# class AND the message is ≤ this many characters AND contains no
+# question marks (so we don't snap on "hola, qué citas tengo hoy?").
+_GREETING_FAST_PATH_MAX_CHARS = 30
+
+
+def _greeting_template(intent: dict | None, message: str, agent_slug: str) -> str | None:
+    """Return a templated greeting reply, or None if the message
+    doesn't qualify for the fast-path.
+    """
+    if not intent or intent.get("name") != "greeting or small talk":
+        return None
+    msg = (message or "").strip()
+    if not msg or len(msg) > _GREETING_FAST_PATH_MAX_CHARS:
+        return None
+    if "?" in msg or "¿" in msg:
+        return None
+    # Spanish vs English heuristic by leading token. Cheap; the agent
+    # persona's "respond in the same language" guidance covered this in
+    # the LLM path; here we approximate.
+    lower = msg.lower()
+    is_spanish = any(lower.startswith(t) for t in (
+        "hola", "qué tal", "que tal", "buenas", "buenos días", "buen día",
+        "buenas tardes", "buenas noches", "saludos", "ey", "ola",
+    ))
+    name = "Luna"
+    # Slug → friendly display name fallback (only used when the agent
+    # isn't Luna — e.g. tenant has named their agent something else).
+    if agent_slug and agent_slug != "luna":
+        name = agent_slug.replace("_", " ").replace("-", " ").title()
+    if is_spanish:
+        return f"¡Hola! Soy {name}. ¿En qué te puedo ayudar?"
+    return f"Hi! I'm {name}. How can I help?"
+
+
 def _should_use_local_path(intent: dict | None, message: str, pin_to_cli: bool) -> bool:
     if pin_to_cli:
         return False
@@ -347,6 +390,21 @@ def route_and_execute(
         agent_tier = "full"
         intent_tool_groups = None
         is_mutation = False
+
+    # Greeting fast-path (Tier-1 #1 from the latency reduction plan).
+    # Bench v4 measured: a "hola luna" turn spent 21 s in 2 Gemma 4
+    # rounds + 0.26 s in tool calls. The whole thing is "say hi back".
+    # If intent matched "greeting or small talk" AND the message is
+    # short enough that there's no real content to process, return a
+    # pre-rendered template and skip Gemma entirely.
+    template_response = _greeting_template(intent, message, agent_slug)
+    if template_response is not None:
+        return template_response, {
+            "platform": "template",
+            "agent_tier": "template",
+            "agent_slug": agent_slug,
+            "timings": {"template_match_ms": 0},
+        }
 
     # 4. Agent selection
     responding_agent = None
