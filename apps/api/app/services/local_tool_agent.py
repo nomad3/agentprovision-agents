@@ -27,7 +27,12 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
-MCP_TOOLS_URL = os.environ.get("MCP_TOOLS_URL", "http://mcp-tools:8000")
+# Prefer MCP_SERVER_URL (the canonical name set by docker-compose); fall back
+# to MCP_TOOLS_URL for legacy callers. Both should point at the FastMCP
+# server's SSE root (e.g. http://mcp-tools:8086).
+MCP_TOOLS_URL = os.environ.get("MCP_SERVER_URL") or os.environ.get(
+    "MCP_TOOLS_URL", "http://mcp-tools:8086"
+)
 LOCAL_TOOL_MODEL = os.environ.get("LOCAL_TOOL_MODEL", "gemma4")
 MCP_INTERNAL_KEY = os.environ.get("MCP_API_KEY", "dev_mcp_key")
 
@@ -164,7 +169,10 @@ def _get_tools_for_tenant(
 
 
 # ---------------------------------------------------------------------------
-# MCP JSON-RPC tool call (reuses pattern from mcp_server_connectors.py)
+# MCP tool call via the SSE protocol — the FastMCP server only exposes /sse,
+# not a JSON-RPC POST endpoint. Reuses the same primitive PR-A's external
+# agent adapter (`external_agent_adapter._mcp_sse_call`) lands on, so there
+# is one MCP-SSE call path across the platform.
 # ---------------------------------------------------------------------------
 
 def _call_mcp_tool(
@@ -172,55 +180,78 @@ def _call_mcp_tool(
     arguments: Dict[str, Any],
     tenant_id: str,
 ) -> Dict[str, Any]:
-    """Execute a tool via JSON-RPC tools/call against the internal MCP server."""
-    # Auto-inject tenant_id — MCP tools require it
+    """Execute a tool against the internal MCP server over SSE."""
     arguments = {**arguments, "tenant_id": tenant_id}
+    sse_url = MCP_TOOLS_URL.rstrip("/")
+    if not sse_url.endswith("/sse"):
+        sse_url = sse_url + "/sse"
 
-    rpc_body = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": tool_name,
-            "arguments": arguments,
-        },
-    }
     headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
         "X-Internal-Key": MCP_INTERNAL_KEY,
         "X-Tenant-Id": tenant_id,
     }
-    url = f"{MCP_TOOLS_URL}/mcp"
 
     start = time.time()
     try:
-        with httpx.Client(timeout=float(TOOL_CALL_TIMEOUT)) as client:
-            resp = client.post(url, json=rpc_body, headers=headers)
-        duration_ms = int((time.time() - start) * 1000)
+        # Lazy-import the SDK so api startup doesn't pay the cost.
+        import asyncio
+        from mcp import ClientSession
+        from mcp.client.sse import sse_client
 
-        if resp.status_code >= 400:
-            return {"error": f"HTTP {resp.status_code}: {resp.text[:300]}", "duration_ms": duration_ms}
+        async def _do() -> Dict[str, Any]:
+            async with sse_client(sse_url, headers=headers) as (read, write):
+                async with ClientSession(read, write) as session:
+                    await session.initialize()
+                    result = await session.call_tool(tool_name, arguments=arguments)
+                    return _flatten_call_tool_result(result)
 
-        data = resp.json()
-        result = data.get("result", {})
-
-        # Extract text content from MCP response
-        content = result.get("content", [])
-        if content:
-            for item in content:
-                if item.get("type") == "text":
-                    try:
-                        return {"result": json.loads(item["text"]), "duration_ms": duration_ms}
-                    except (json.JSONDecodeError, KeyError):
-                        return {"result": item.get("text", ""), "duration_ms": duration_ms}
-            return {"result": content, "duration_ms": duration_ms}
-        return {"result": result, "duration_ms": duration_ms}
-
+        # The local_tool_agent runs from the synchronous chat path. If a
+        # FastAPI handler ever wraps this in an async loop we'd need the
+        # _run_async thread-pool dance from external_agent_adapter, but
+        # today the call site is sync.
+        out = asyncio.run(asyncio.wait_for(_do(), timeout=float(TOOL_CALL_TIMEOUT)))
+        out["duration_ms"] = int((time.time() - start) * 1000)
+        return out
     except Exception as e:
         duration_ms = int((time.time() - start) * 1000)
         logger.warning("MCP tool call failed: %s(%s) — %s", tool_name, arguments, e)
         return {"error": str(e), "duration_ms": duration_ms}
+
+
+def _flatten_call_tool_result(result: Any) -> Dict[str, Any]:
+    """Reduce an mcp ``CallToolResult`` to ``{result: ...}`` or ``{error: ...}``.
+
+    The SDK returns ``content`` as a list of typed blocks (TextContent,
+    ImageContent, ...). For the local_tool_agent we only consume the first
+    text block; non-text blocks fall back to repr so nothing silently drops.
+    """
+    if getattr(result, "isError", False):
+        msg = getattr(result, "content", None) or "remote MCP tool returned an error"
+        return {"error": _stringify_blocks(msg)}
+    content = getattr(result, "content", None)
+    blocks = content if isinstance(content, list) else []
+    for item in blocks:
+        text = getattr(item, "text", None)
+        if isinstance(text, str):
+            try:
+                return {"result": json.loads(text)}
+            except (json.JSONDecodeError, ValueError):
+                return {"result": text}
+    return {"result": _stringify_blocks(content)}
+
+
+def _stringify_blocks(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            text = getattr(item, "text", None)
+            parts.append(text if isinstance(text, str) else repr(item))
+        return "\n".join(parts)
+    return str(content)
 
 
 # ---------------------------------------------------------------------------
