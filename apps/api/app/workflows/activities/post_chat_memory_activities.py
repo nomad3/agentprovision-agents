@@ -109,7 +109,15 @@ async def update_world_state(
             activity_source='chat',
         )
         
-        # Convert raw extraction to MemoryEvents for ingest
+        # Convert raw extraction to MemoryEvents for ingest.
+        # `extract_from_content` returns persisted KnowledgeEntity instances under
+        # "entities", but `ingest_events` expects dicts. Re-shape so name/category/
+        # description survive — `upsert_entity_by_name` will dedupe on the round-trip.
+        proposed_entity_dicts = [
+            {"name": e.name, "category": e.category, "description": e.description}
+            for e in raw_result.get("entities", [])
+            if getattr(e, "name", None)
+        ]
         now = datetime.utcnow()
         event = MemoryEvent(
             tenant_id=UUID(tenant_id),
@@ -119,7 +127,7 @@ async def update_world_state(
             ingested_at=now,
             kind="text",
             text=content,
-            proposed_entities=raw_result.get("entities", []),
+            proposed_entities=proposed_entity_dicts,
             proposed_observations=raw_result.get("observations", []),
             proposed_relations=raw_result.get("relations", []),
             proposed_commitments=[],

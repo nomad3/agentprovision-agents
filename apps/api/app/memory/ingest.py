@@ -56,16 +56,30 @@ def ingest_events(
             logger.warning("Ingesting event with unregistered source_type: %s", ev.source_type)
 
         try:
-            # 2. Resolve or create entities
+            # 2. Resolve or create entities.
+            # Tolerate either dicts ({name, category, description}) or persisted
+            # KnowledgeEntity instances — callers occasionally hand us the latter
+            # by mistake, and crashing the whole workflow over a contract slip
+            # loses observations and relations too.
             entity_lookup = {}
             for prop in ev.proposed_entities:
+                if isinstance(prop, dict):
+                    name = prop.get("name")
+                    category = prop.get("category")
+                    description = prop.get("description")
+                else:
+                    name = getattr(prop, "name", None)
+                    category = getattr(prop, "category", None)
+                    description = getattr(prop, "description", None)
+                if not name:
+                    continue
                 ent, created = knowledge_service.upsert_entity_by_name(
                     db, tenant_id=tenant_id,
-                    name=prop["name"],
-                    category=prop.get("category"),
-                    description=prop.get("description"),
+                    name=name,
+                    category=category,
+                    description=description,
                 )
-                entity_lookup[prop["name"]] = ent
+                entity_lookup[name] = ent
                 if created:
                     result.entities_created += 1
                 else:
