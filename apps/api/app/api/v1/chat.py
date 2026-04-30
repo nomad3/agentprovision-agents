@@ -229,11 +229,21 @@ def post_message_stream(
             yield f"data: {_json.dumps({'type': 'error', 'detail': result['error']})}\n\n"
             return
 
+        # Defensive: the generation thread should have populated either "error"
+        # or "user_message"/"assistant_message" before signalling done_event.
+        # If it set done_event without populating either (e.g. an exception
+        # outside the try/except boundary, or a thread death we didn't catch),
+        # surface that explicitly instead of crashing the SSE response with a
+        # KeyError that propagates to the client as a 500.
+        if "user_message" not in result or "assistant_message" not in result:
+            yield f"data: {_json.dumps({'type': 'error', 'detail': 'Generation thread exited without producing a response'})}\n\n"
+            return
+
         # First event: user message saved
         yield f"data: {_json.dumps({'type': 'user_saved', 'message': result['user_message']})}\n\n"
 
         # Stream the assistant response 2 words at a time
-        full_text = result["content"]
+        full_text = result.get("content", "")
         words = full_text.split(" ")
         for i in range(0, len(words), chunk_size):
             chunk = " ".join(words[i:i + chunk_size])
