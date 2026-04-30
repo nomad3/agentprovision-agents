@@ -5,6 +5,7 @@ Phase 3: RL-driven routing added on top.
 """
 import logging
 import os
+import time
 import uuid
 import random
 from typing import Optional, Tuple, Dict, Any, List
@@ -563,8 +564,7 @@ def route_and_execute(
     # path: it issues blocking gRPC + DB queries with internal deadlines, but
     # the outer call has no wall-clock guard. Bracket it with a timing log so
     # a future hang is observable instead of opaque.
-    import time as _time
-    _recall_t0 = _time.perf_counter()
+    _recall_t0 = time.perf_counter()
     logger.info(
         "[chat-trace] recall: enter tenant=%s agent=%s",
         str(tenant_id)[:8], agent_slug or "luna",
@@ -586,13 +586,13 @@ def route_and_execute(
             recalled_entities = pre_built_memory_context["relevant_entities"]
         logger.info(
             "[chat-trace] recall: return tenant=%s elapsed=%.0fms entities=%d",
-            str(tenant_id)[:8], (_time.perf_counter() - _recall_t0) * 1000,
+            str(tenant_id)[:8], (time.perf_counter() - _recall_t0) * 1000,
             len((pre_built_memory_context or {}).get("relevant_entities") or []),
         )
     except Exception:
         logger.warning(
             "[chat-trace] recall: failed tenant=%s elapsed=%.0fms — routing without entity context",
-            str(tenant_id)[:8], (_time.perf_counter() - _recall_t0) * 1000,
+            str(tenant_id)[:8], (time.perf_counter() - _recall_t0) * 1000,
         )
         safe_rollback(db)
 

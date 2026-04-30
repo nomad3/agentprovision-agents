@@ -220,8 +220,7 @@ def post_user_message(
     # Goal: surface where the hot path stalls when Luna goes silent without
     # raising. Without this, the gap between WhatsApp `Inbound DM` and
     # `Dispatching ChatCliWorkflow` is opaque and the only fix is restart.
-    import time as _time
-    _trace_t0 = _time.perf_counter()
+    _trace_t0 = time.perf_counter()
     logger.info(
         "[chat-trace] enter post_user_message: tenant=%s session=%s sender=%s",
         str(session.tenant_id)[:8], str(session.id)[:8], sender_phone or "web",
@@ -383,7 +382,7 @@ def _generate_agentic_response(
         # Routing and execution
         logger.info(
             "[chat-trace] route_and_execute: enter session=%s elapsed=%.0fms",
-            str(session.id)[:8], (_time.perf_counter() - _trace_t0) * 1000,
+            str(session.id)[:8], (time.perf_counter() - _trace_t0) * 1000,
         )
         try:
             response_text, context = route_and_execute(
@@ -405,13 +404,13 @@ def _generate_agentic_response(
             )
             logger.info(
                 "[chat-trace] route_and_execute: return session=%s elapsed=%.0fms response=%s",
-                str(session.id)[:8], (_time.perf_counter() - _trace_t0) * 1000,
+                str(session.id)[:8], (time.perf_counter() - _trace_t0) * 1000,
                 "ok" if response_text else "none",
             )
         except Exception as e:
             logger.error(
                 "[chat-trace] route_and_execute: raised session=%s elapsed=%.0fms err=%s",
-                str(session.id)[:8], (_time.perf_counter() - _trace_t0) * 1000, e,
+                str(session.id)[:8], (time.perf_counter() - _trace_t0) * 1000, e,
                 exc_info=True,
             )
             response_text = None
