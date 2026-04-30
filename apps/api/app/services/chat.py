@@ -286,6 +286,11 @@ def _generate_agentic_response(
     """Route user message through the CLI orchestrator (Claude Code CLI)."""
     # Ensure clean DB session — previous requests may have left a poisoned transaction
     safe_rollback(db)
+    # [chat-trace] anchor for this function — `_trace_t0` from
+    # `post_user_message` is in a different scope and not visible here.
+    # Reset locally so the elapsed= readings in the route_and_execute
+    # bracket below have a defined reference.
+    _trace_t0 = time.perf_counter()
     from app.services.agent_router import route_and_execute
     from app.services.skill_manager import skill_manager
 
