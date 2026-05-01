@@ -393,10 +393,42 @@ def route_and_execute(
     if features and hasattr(features, 'default_cli_platform') and features.default_cli_platform:
         platform = features.default_cli_platform
 
-    # When the tenant has a CLI subscription (gemini_cli, claude_code, codex),
-    # always route through it — don't fall back to local Gemma 4 for short
-    # messages. Local inference is for free-tier tenants with no subscription.
-    _pin_to_claude = platform in {"gemini_cli", "claude_code", "codex"}
+    # Per-agent CLI override. Imported agents from Microsoft Copilot Studio
+    # and Azure AI Foundry are stored as native Agent rows with
+    # `config.preferred_cli` set (typically to "copilot_cli" so they run
+    # against the tenant's GitHub Copilot subscription). Honor that ahead
+    # of the tenant default — admin-declared per-agent intent wins.
+    try:
+        from app.models.agent import Agent as _Agent
+        _agent_row = (
+            db.query(_Agent)
+            .filter(
+                _Agent.tenant_id == tenant_id,
+                _Agent.name.ilike(agent_slug.replace("_", " ")),
+            )
+            .first()
+        )
+        if _agent_row is None:
+            # Fallback: exact slug match on lowercase-name with underscores.
+            for a in db.query(_Agent).filter(_Agent.tenant_id == tenant_id).all():
+                if (a.name or "").lower().replace(" ", "_") == agent_slug:
+                    _agent_row = a
+                    break
+        if _agent_row is not None:
+            cfg = _agent_row.config or {}
+            preferred = cfg.get("preferred_cli")
+            if preferred and preferred in {
+                "copilot_cli", "claude_code", "gemini_cli", "codex", "opencode"
+            }:
+                platform = preferred
+    except Exception:
+        safe_rollback(db)
+
+    # When the tenant has a CLI subscription (gemini_cli, claude_code, codex,
+    # copilot_cli), always route through it — don't fall back to local Gemma 4
+    # for short messages. Local inference is for free-tier tenants with no
+    # subscription.
+    _pin_to_claude = platform in {"gemini_cli", "claude_code", "codex", "copilot_cli"}
 
     # 2. Get trust profile
     try:
