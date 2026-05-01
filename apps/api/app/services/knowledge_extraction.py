@@ -361,9 +361,9 @@ class KnowledgeExtractionService:
             "\nAlso extract:\n"
             "\nRELATIONS between entities (if any are apparent):\n"
             'Return as "relations" array. Each object:\n'
-            '- "from": string (source entity name, must match an entity name above)\n'
-            '- "to": string (target entity name, must match an entity name above)\n'
-            '- "type": string (one of: works_at, knows, manages, reports_to, purchased, prefers, related_to, part_of, located_in, competes_with, owns)\n'
+            '- "from_entity": string (source entity name, must match an entity name above)\n'
+            '- "to_entity": string (target entity name, must match an entity name above)\n'
+            '- "relation_type": string (one of: works_at, knows, manages, reports_to, purchased, prefers, related_to, part_of, located_in, competes_with, owns)\n'
             '- "confidence": number 0.0-1.0\n'
             '- "evidence": string (brief text explaining why this relation exists)\n'
             "\nMEMORIES — things learned about the user from this conversation:\n"
@@ -649,15 +649,25 @@ class KnowledgeExtractionService:
         tenant_id: uuid.UUID,
         relations_data: List[Dict[str, Any]],
     ) -> int:
-        """Persist extracted relations by resolving entity names to IDs."""
+        """Persist extracted relations by resolving entity names to IDs.
+
+        Accepts both relation dict shapes that flow through the codebase:
+          - Shape B (canonical, matches gRPC MemoryEvent contract):
+            {"from_entity", "to_entity", "relation_type"}
+          - Shape A (legacy, the historical prompt shape kept for forward
+            compatibility with in-flight LLM responses during the rollout):
+            {"from", "to", "type"}
+        """
         if not relations_data:
             return 0
 
         created_count = 0
         for rel in relations_data:
-            from_name = rel.get("from", "").strip()
-            to_name = rel.get("to", "").strip()
-            rel_type = rel.get("type", "related_to")
+            if not isinstance(rel, dict):
+                continue
+            from_name = (rel.get("from_entity") or rel.get("from") or "").strip()
+            to_name = (rel.get("to_entity") or rel.get("to") or "").strip()
+            rel_type = rel.get("relation_type") or rel.get("type") or "related_to"
 
             if not from_name or not to_name:
                 continue
