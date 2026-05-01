@@ -391,14 +391,52 @@ def discover_agents(
     return _discover_payload(matches, kind)
 
 
-@router.post("/import", response_model=schemas.agent.Agent, status_code=status.HTTP_201_CREATED)
+@router.post("/import", status_code=status.HTTP_201_CREATED)
 def import_agent(
     *,
     db: Session = Depends(deps.get_db),
     body: schemas.agent.AgentImportRequest,
     current_user: User = Depends(deps.get_current_active_user),
 ):
+    """Import an agent from any supported format.
+
+    Returns either a native Agent (for crewai/langchain/autogen/native
+    formats) or an ExternalAgent (for copilot_studio / ai_foundry — the
+    Microsoft remote-agent platforms). Both response shapes include
+    ``id``, ``name``, ``description``, ``capabilities``; the
+    ``__kind`` discriminator field tells the caller which it got.
+    """
     parsed = parse_agent_definition(body.content, body.filename)
+
+    if parsed.get("kind") == "external":
+        # Remote agent (Copilot Studio, AI Foundry) — register as ExternalAgent.
+        from app.models.external_agent import ExternalAgent
+        external = ExternalAgent(
+            tenant_id=current_user.tenant_id,
+            name=parsed.get("name", "Imported External Agent"),
+            description=parsed.get("description"),
+            protocol=parsed.get("protocol", "webhook"),
+            endpoint_url=parsed.get("endpoint_url", ""),
+            auth_type=parsed.get("auth_type", "bearer"),
+            capabilities=parsed.get("capabilities") or [],
+            metadata_=parsed.get("metadata") or {},
+            status="offline",
+        )
+        db.add(external)
+        db.commit()
+        db.refresh(external)
+        return {
+            "__kind": "external",
+            "id": str(external.id),
+            "name": external.name,
+            "description": external.description,
+            "protocol": external.protocol,
+            "endpoint_url": external.endpoint_url,
+            "capabilities": external.capabilities,
+            "status": external.status,
+        }
+
+    # Native agent — use existing path.
     item_in = schemas.agent.AgentCreate(
         name=parsed.get("name", "Imported Agent"),
         description=parsed.get("description"),
@@ -411,7 +449,15 @@ def import_agent(
     item.owner_user_id = current_user.id
     db.commit()
     db.refresh(item)
-    return item
+    return {
+        "__kind": "native",
+        "id": str(item.id),
+        "name": item.name,
+        "description": item.description,
+        "capabilities": item.capabilities,
+        "status": item.status,
+        "persona_prompt": item.persona_prompt,
+    }
 @router.get("/{agent_id}", response_model=schemas.agent.Agent)
 def read_agent_by_id(
     agent_id: uuid.UUID,

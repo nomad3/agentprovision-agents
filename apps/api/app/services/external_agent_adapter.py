@@ -27,12 +27,198 @@ class ExternalAgentAdapter:
             return self._dispatch_mcp_sse(agent, task, context, db)
         elif agent.protocol == "webhook":
             return self._dispatch_webhook(agent, task, context, db)
+        elif agent.protocol == "copilot_studio":
+            return self._dispatch_copilot_studio(agent, task, context, db)
+        elif agent.protocol == "ai_foundry":
+            return self._dispatch_ai_foundry(agent, task, context, db)
         elif agent.protocol == "a2a":
             return "A2A dispatch not yet implemented for external agent adapter"
         elif agent.protocol == "copilot_extension":
             return "Copilot Extension dispatch not yet implemented"
         else:
             raise RuntimeError(f"Unknown protocol: {agent.protocol}")
+
+    # ── Microsoft Copilot Studio (Direct Line API) ───────────────────
+
+    def _dispatch_copilot_studio(
+        self, agent: ExternalAgent, task: str, context: dict, db: Session
+    ) -> str:
+        """Dispatch to a Microsoft Copilot Studio bot via Direct Line.
+
+        Each call: start a fresh conversation, send the user message, poll
+        activities until we have a bot reply, return the bot's text.
+
+        Stateless from our side — Copilot Studio has its own conversation
+        memory keyed off the `from.id` we pass. To preserve continuity
+        across calls within the same chat session, the caller can pass
+        `context["copilot_user_id"]` to keep the same conversational state.
+        """
+        import time
+
+        meta = agent.metadata_ or {}
+        bot_id = meta.get("bot_id") or ""
+        # Direct Line auth: prefer credential_id if set, fall back to the
+        # bootstrap secret stored in metadata.
+        secret = self._get_credential(agent, db) or meta.get("directline_secret")
+        if not secret:
+            raise RuntimeError(
+                f"Copilot Studio agent '{agent.name}' has no Direct Line secret"
+            )
+        base = (agent.endpoint_url or "https://directline.botframework.com/v3/directline").rstrip("/")
+        headers = {"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+        user_id = (context or {}).get("copilot_user_id") or "agentprovision"
+
+        with httpx.Client(timeout=agent.metadata_.get("timeout", 30)) as client:
+            try:
+                conv = client.post(f"{base}/conversations", headers=headers)
+                conv.raise_for_status()
+                conv_id = conv.json()["conversationId"]
+
+                client.post(
+                    f"{base}/conversations/{conv_id}/activities",
+                    headers=headers,
+                    json={"type": "message", "from": {"id": user_id}, "text": task},
+                ).raise_for_status()
+
+                # Poll up to ~10 attempts for the bot reply.
+                watermark = None
+                for _ in range(10):
+                    time.sleep(1.0)
+                    url = f"{base}/conversations/{conv_id}/activities"
+                    if watermark:
+                        url += f"?watermark={watermark}"
+                    acts = client.get(url, headers=headers)
+                    acts.raise_for_status()
+                    payload = acts.json()
+                    watermark = payload.get("watermark") or watermark
+                    bot_replies = [
+                        a for a in (payload.get("activities") or [])
+                        if a.get("type") == "message"
+                        and (a.get("from") or {}).get("id") != user_id
+                        and (a.get("text") or "").strip()
+                    ]
+                    if bot_replies:
+                        return "\n".join(a["text"] for a in bot_replies)
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(
+                    f"copilot_studio dispatch failed with status {e.response.status_code}"
+                ) from e
+        return "(no reply from copilot studio agent within timeout)"
+
+    # ── Azure AI Foundry Agent Service (Assistants-compatible REST) ──
+
+    def _dispatch_ai_foundry(
+        self, agent: ExternalAgent, task: str, context: dict, db: Session
+    ) -> str:
+        """Dispatch to an Azure AI Foundry Agent Service agent.
+
+        Foundry's Agent Service exposes an Assistants-compatible API:
+
+          POST   {endpoint}/threads
+          POST   {endpoint}/threads/{thread_id}/messages
+          POST   {endpoint}/threads/{thread_id}/runs
+          GET    {endpoint}/threads/{thread_id}/runs/{run_id}
+          GET    {endpoint}/threads/{thread_id}/messages
+
+        We persist the thread_id on the agent's metadata after first call so
+        subsequent dispatches preserve conversation continuity.
+        """
+        import time
+
+        meta = dict(agent.metadata_ or {})
+        agent_id = meta.get("agent_id") or ""
+        endpoint = (agent.endpoint_url or "").rstrip("/")
+        if not (endpoint and agent_id):
+            raise RuntimeError(
+                f"AI Foundry agent '{agent.name}' missing endpoint or agent_id"
+            )
+        token = self._get_credential(agent, db)
+        if not token:
+            raise RuntimeError(
+                f"AI Foundry agent '{agent.name}' has no auth credential"
+            )
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "OpenAI-Beta": "assistants=v2",
+        }
+        # Foundry's REST is versioned; the api-version query param is required.
+        api_version = meta.get("api_version", "2024-12-01-preview")
+        params = {"api-version": api_version}
+
+        with httpx.Client(timeout=agent.metadata_.get("timeout", 60)) as client:
+            try:
+                # 1. Reuse or create a thread.
+                thread_id = meta.get("thread_id")
+                if not thread_id:
+                    thr = client.post(
+                        f"{endpoint}/threads", headers=headers, params=params, json={}
+                    )
+                    thr.raise_for_status()
+                    thread_id = thr.json()["id"]
+                    meta["thread_id"] = thread_id
+                    agent.metadata_ = meta
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(agent, "metadata_")
+                    db.commit()
+
+                # 2. Add user message.
+                client.post(
+                    f"{endpoint}/threads/{thread_id}/messages",
+                    headers=headers,
+                    params=params,
+                    json={"role": "user", "content": task},
+                ).raise_for_status()
+
+                # 3. Start a run.
+                run = client.post(
+                    f"{endpoint}/threads/{thread_id}/runs",
+                    headers=headers,
+                    params=params,
+                    json={"assistant_id": agent_id},
+                )
+                run.raise_for_status()
+                run_id = run.json()["id"]
+
+                # 4. Poll until the run is terminal.
+                terminal = {"completed", "failed", "cancelled", "expired", "requires_action"}
+                for _ in range(60):
+                    time.sleep(1.0)
+                    r = client.get(
+                        f"{endpoint}/threads/{thread_id}/runs/{run_id}",
+                        headers=headers, params=params,
+                    )
+                    r.raise_for_status()
+                    state = r.json().get("status")
+                    if state in terminal:
+                        if state != "completed":
+                            return f"(ai_foundry run ended in state: {state})"
+                        break
+                else:
+                    return "(ai_foundry run timed out)"
+
+                # 5. Read the latest assistant message.
+                msgs = client.get(
+                    f"{endpoint}/threads/{thread_id}/messages",
+                    headers=headers, params={**params, "order": "desc", "limit": 1},
+                )
+                msgs.raise_for_status()
+                items = (msgs.json() or {}).get("data") or []
+                if not items:
+                    return "(ai_foundry returned no messages)"
+                first = items[0]
+                if first.get("role") != "assistant":
+                    return "(ai_foundry latest message is not from the assistant)"
+                content_parts = first.get("content") or []
+                texts = []
+                for part in content_parts:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        texts.append(((part.get("text") or {}).get("value") or ""))
+                return "\n".join(t for t in texts if t).strip() or "(empty assistant reply)"
+            except httpx.HTTPStatusError as e:
+                raise RuntimeError(
+                    f"ai_foundry dispatch failed with status {e.response.status_code}: {e.response.text[:200]}"
+                ) from e
 
     def _dispatch_openai_chat(self, agent: ExternalAgent, task: str, context: dict, db: Session) -> str:
         messages = []
