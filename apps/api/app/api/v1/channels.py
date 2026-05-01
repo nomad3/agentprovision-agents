@@ -164,3 +164,162 @@ async def send_whatsapp(
     if result.get("status") == "error":
         raise HTTPException(status_code=502, detail=result.get("error", "Send failed"))
     return {"status": "sent", "data": result}
+
+
+# ── Teams Channel (Microsoft Graph via existing microsoft OAuth) ──
+# Reuses the same app registration / OAuth tokens as Outlook.
+# Pre-condition: tenant has authorized the `microsoft` provider via the
+# Outlook integration card (or any future microsoft-provider card).
+# This endpoint group flips the Teams channel on/off and exposes
+# basic management; inbound polling is handled by the Teams Monitor
+# workflow (analogous to Inbox Monitor).
+
+from app.services.teams_service import teams_service
+
+
+class TeamsEnableRequest(BaseModel):
+    dm_policy: str = "allowlist"
+    allow_from: List[str] = []
+    account_id: str = "default"
+
+
+class TeamsSettingsRequest(BaseModel):
+    dm_policy: str = "allowlist"
+    allow_from: List[str] = []
+    account_id: str = "default"
+
+
+class TeamsAccountIdRequest(BaseModel):
+    account_id: str = "default"
+
+
+class TeamsSendChatRequest(BaseModel):
+    chat_id: str
+    text: str
+    account_id: str = "default"
+
+
+class TeamsSendChannelRequest(BaseModel):
+    team_id: str
+    channel_id: str
+    text: str
+    account_id: str = "default"
+
+
+@router.post("/teams/enable")
+async def enable_teams(
+    request: TeamsEnableRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Enable Teams channel for this tenant.
+
+    Pre-condition: the tenant has already authorized the `microsoft` OAuth
+    provider (via the Outlook integration card or similar). The Graph
+    access_token is reused for Teams API calls.
+    """
+    result = await teams_service.enable(
+        str(current_user.tenant_id),
+        request.account_id,
+        dm_policy=request.dm_policy,
+        allow_from=request.allow_from,
+    )
+    if not result.get("enabled"):
+        raise HTTPException(status_code=400, detail=result.get("reason", "enable failed"))
+    return {"status": "enabled", "data": result}
+
+
+@router.post("/teams/disable")
+async def disable_teams(
+    request: TeamsAccountIdRequest = None,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    account_id = request.account_id if request else "default"
+    result = await teams_service.disable(str(current_user.tenant_id), account_id)
+    return {"status": "disabled", "data": result}
+
+
+@router.put("/teams/settings")
+async def update_teams_settings(
+    request: TeamsSettingsRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    result = await teams_service.update_settings(
+        str(current_user.tenant_id),
+        request.account_id,
+        request.dm_policy,
+        request.allow_from,
+    )
+    return {"status": "updated", "data": result}
+
+
+@router.get("/teams/status")
+async def teams_status(
+    account_id: str = Query("default"),
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    return await teams_service.get_status(str(current_user.tenant_id), account_id)
+
+
+@router.get("/teams/chats")
+async def list_teams_chats(
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """List the user's Teams chats (1:1 + group). Uses the Graph token."""
+    chats = await teams_service.list_chats(str(current_user.tenant_id))
+    return {"chats": chats}
+
+
+@router.post("/teams/send/chat")
+async def send_teams_chat(
+    request: TeamsSendChatRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Send a message to a Teams chat (1:1 or group)."""
+    result = await teams_service.send_chat_message(
+        str(current_user.tenant_id), request.chat_id, request.text,
+    )
+    if not result.get("sent"):
+        raise HTTPException(status_code=502, detail=result)
+    return {"status": "sent", "data": result}
+
+
+@router.post("/teams/send/channel")
+async def send_teams_channel(
+    request: TeamsSendChannelRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Send a message to a Team channel."""
+    result = await teams_service.send_channel_message(
+        str(current_user.tenant_id),
+        request.team_id,
+        request.channel_id,
+        request.text,
+    )
+    if not result.get("sent"):
+        raise HTTPException(status_code=502, detail=result)
+    return {"status": "sent", "data": result}
+
+
+@router.post("/teams/poll")
+async def poll_teams(
+    request: TeamsAccountIdRequest = None,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Manual trigger of a Teams Monitor tick (for testing).
+
+    Production deployments rely on the Teams Monitor workflow firing
+    every N minutes via continue_as_new — analogous to Inbox Monitor.
+    """
+    account_id = request.account_id if request else "default"
+    result = await teams_service.monitor_tick(
+        str(current_user.tenant_id), account_id,
+    )
+    return result
