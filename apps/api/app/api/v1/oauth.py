@@ -77,10 +77,18 @@ OAUTH_PROVIDERS = {
             "profile",
             "email",
             "User.Read",
+            # Outlook
             "Mail.Read",
             "Mail.Send",
+            # Teams (delegated; same Graph token, same app registration as
+            # Outlook). Requires the customer to consent to these scopes
+            # when re-authorizing the microsoft provider; existing Outlook
+            # tokens that pre-date this addition will need re-consent.
+            "Chat.ReadWrite",
+            "ChannelMessage.Send",
+            "Team.ReadBasic.All",
         ],
-        "integration_names": ["outlook"],
+        "integration_names": ["outlook", "teams"],
     },
     "github": {
         "authorize_url": "https://github.com/login/oauth/authorize",
