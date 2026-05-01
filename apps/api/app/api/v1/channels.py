@@ -164,3 +164,152 @@ async def send_whatsapp(
     if result.get("status") == "error":
         raise HTTPException(status_code=502, detail=result.get("error", "Send failed"))
     return {"status": "sent", "data": result}
+
+
+# ── Teams Channel ────────────────────────────────────────────────────
+# Microsoft Teams via Bot Framework. Per-tenant BYO Azure Bot —
+# customer creates the Bot in their Azure subscription, gives us App ID
+# + secret, points the bot's messaging endpoint at our webhook.
+
+from fastapi import Request
+from app.services.teams_service import teams_service
+
+
+class TeamsEnableRequest(BaseModel):
+    microsoft_app_id: str
+    microsoft_app_secret: str
+    azure_tenant_id: str | None = None
+    bot_handle: str | None = None
+    dm_policy: str = "allowlist"
+    allow_from: List[str] = []
+    account_id: str = "default"
+
+
+class TeamsSettingsRequest(BaseModel):
+    dm_policy: str = "allowlist"
+    allow_from: List[str] = []
+    account_id: str = "default"
+
+
+class TeamsAccountIdRequest(BaseModel):
+    account_id: str = "default"
+
+
+class TeamsSendRequest(BaseModel):
+    text: str
+    conversation_reference: dict
+    account_id: str = "default"
+
+
+@router.post("/teams/enable")
+async def enable_teams(
+    request: TeamsEnableRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Enable Teams channel for this tenant. Returns the webhook URL the
+    customer must paste into their Azure Bot's `Messaging endpoint` field.
+    """
+    try:
+        result = await teams_service.enable(
+            str(current_user.tenant_id),
+            request.account_id,
+            microsoft_app_id=request.microsoft_app_id,
+            microsoft_app_secret=request.microsoft_app_secret,
+            azure_tenant_id=request.azure_tenant_id,
+            bot_handle=request.bot_handle,
+            dm_policy=request.dm_policy,
+            allow_from=request.allow_from,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "enabled", "data": result}
+
+
+@router.post("/teams/disable")
+async def disable_teams(
+    request: TeamsAccountIdRequest = None,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    account_id = request.account_id if request else "default"
+    result = await teams_service.disable(str(current_user.tenant_id), account_id)
+    return {"status": "disabled", "data": result}
+
+
+@router.put("/teams/settings")
+async def update_teams_settings(
+    request: TeamsSettingsRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    result = await teams_service.update_settings(
+        str(current_user.tenant_id),
+        request.account_id,
+        request.dm_policy,
+        request.allow_from,
+    )
+    return {"status": "updated", "data": result}
+
+
+@router.get("/teams/status")
+async def teams_status(
+    account_id: str = Query("default"),
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    result = await teams_service.get_status(str(current_user.tenant_id), account_id)
+    return result
+
+
+@router.post("/teams/send")
+async def send_teams(
+    request: TeamsSendRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Send a Teams message. Caller must supply the conversation_reference
+    captured from a prior inbound activity (or persisted from one).
+    """
+    result = await teams_service.send_message(
+        str(current_user.tenant_id),
+        request.text,
+        account_id=request.account_id,
+        conversation_reference=request.conversation_reference,
+    )
+    if not result.get("sent"):
+        raise HTTPException(status_code=502, detail=result)
+    return {"status": "sent", "data": result}
+
+
+@router.post("/teams/webhook/{tenant_id}/{account_id}/{webhook_secret}")
+async def teams_webhook(
+    tenant_id: str,
+    account_id: str,
+    webhook_secret: str,
+    request: Request,
+):
+    """Bot Framework webhook for inbound Teams activities.
+
+    PUBLIC endpoint — auth is by URL secret (tenant-scoped, unguessable)
+    PLUS Bot Framework JWT signature validation inside the service.
+    """
+    auth_header = request.headers.get("authorization", "")
+    try:
+        activity = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON body")
+
+    result = await teams_service.handle_inbound(
+        tenant_id=tenant_id,
+        account_id=account_id,
+        webhook_path_secret=webhook_secret,
+        authorization_header=auth_header,
+        activity=activity,
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=401 if "jwt" in str(result.get("reason", "")).lower() else 400,
+            detail=result.get("reason", "rejected"),
+        )
+    return result
