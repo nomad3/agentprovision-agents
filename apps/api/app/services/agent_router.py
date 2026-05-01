@@ -11,7 +11,7 @@ import random
 from typing import Optional, Tuple, Dict, Any, List
 
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, func
 
 from app.db.safe_ops import safe_rollback
 from app.models.tenant_features import TenantFeatures
@@ -393,10 +393,56 @@ def route_and_execute(
     if features and hasattr(features, 'default_cli_platform') and features.default_cli_platform:
         platform = features.default_cli_platform
 
-    # When the tenant has a CLI subscription (gemini_cli, claude_code, codex),
-    # always route through it — don't fall back to local Gemma 4 for short
-    # messages. Local inference is for free-tier tenants with no subscription.
-    _pin_to_claude = platform in {"gemini_cli", "claude_code", "codex"}
+    # Per-agent CLI override. Imported agents from Microsoft Copilot Studio
+    # and Azure AI Foundry are stored as native Agent rows with
+    # `config.preferred_cli` set (typically to "copilot_cli" so they run
+    # against the tenant's GitHub Copilot subscription). Honor that ahead
+    # of the tenant default — admin-declared per-agent intent wins.
+    #
+    # Slug normalization note: `agent_slug` originates from
+    # `resolve_primary_agent_slug` (hyphen-delimited) or downstream rewrites
+    # (`name.lower().replace(" ", "-")`). Normalize both sides to a common
+    # form (lowercase, hyphen-separated) so a hyphenated slug like
+    # "copilot-studio-bot" matches the row "Copilot Studio Bot". Exact-match
+    # in SQL — no ILIKE — to avoid `%` / `_` wildcard collisions on names
+    # like `"Sales_Manager"` or hand-crafted slugs.
+    try:
+        normalized_slug = (
+            agent_slug.lower().replace(" ", "-").replace("_", "-")
+            if agent_slug else ""
+        )
+        if normalized_slug:
+            normalized_name = func.replace(
+                func.replace(func.lower(AgentModel.name), " ", "-"),
+                "_", "-",
+            )
+            _agent_row = (
+                db.query(AgentModel)
+                .filter(
+                    AgentModel.tenant_id == tenant_id,
+                    normalized_name == normalized_slug,
+                )
+                .first()
+            )
+            if _agent_row is not None:
+                cfg = _agent_row.config or {}
+                preferred = cfg.get("preferred_cli")
+                if preferred and preferred in {
+                    "copilot_cli", "claude_code", "gemini_cli", "codex", "opencode"
+                }:
+                    platform = preferred
+    except Exception as e:
+        logger.warning(
+            "per-agent preferred_cli override lookup failed for slug=%r tenant=%s: %s",
+            agent_slug, tenant_id, e,
+        )
+        safe_rollback(db)
+
+    # When the tenant has a CLI subscription (gemini_cli, claude_code, codex,
+    # copilot_cli), always route through it — don't fall back to local Gemma 4
+    # for short messages. Local inference is for free-tier tenants with no
+    # subscription.
+    _pin_to_cli = platform in {"gemini_cli", "claude_code", "codex", "copilot_cli"}
 
     # 2. Get trust profile
     try:
@@ -597,7 +643,7 @@ def route_and_execute(
         safe_rollback(db)
 
     # 8. Short-message local path
-    if _should_use_local_path(intent, message, _pin_to_claude):
+    if _should_use_local_path(intent, message, _pin_to_cli):
         user_name = None
         try:
             from app.models.user import User
