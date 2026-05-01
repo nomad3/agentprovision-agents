@@ -138,18 +138,14 @@ def import_copilot_studio(data: dict) -> dict:
     subscription is the runtime regardless of tenant default CLI.
     """
     name = data.get("displayName") or data.get("name") or "Copilot Studio Agent"
+    gen_ai = data.get("generativeAI")
+    gen_ai_instructions = gen_ai.get("instructions") if isinstance(gen_ai, dict) else None
     instructions = (
         data.get("instructions")
         or data.get("system_prompt")
         or data.get("persona_prompt")
-        or data.get("generativeAI", {}).get("instructions")
-        if isinstance(data.get("generativeAI"), dict)
-        else (
-            data.get("instructions")
-            or data.get("system_prompt")
-            or data.get("persona_prompt")
-            or ""
-        )
+        or gen_ai_instructions
+        or ""
     )
     if not isinstance(instructions, str):
         instructions = str(instructions or "")
@@ -165,6 +161,10 @@ def import_copilot_studio(data: dict) -> dict:
         "description": data.get("description") or f"Microsoft Copilot Studio agent: {name}",
         "persona_prompt": instructions,
         "capabilities": capabilities,
+        # Externally-imported agents start supervised — this matches the model
+        # default but is set explicitly so the choice is deliberate, not
+        # accidental. Tenant admins can promote later via the agent UI.
+        "autonomy_level": "supervised",
         "config": {
             # Force runtime to the GitHub Copilot CLI — uses the tenant's
             # GitHub OAuth + Copilot subscription. Honored by agent_router.
@@ -209,6 +209,9 @@ def import_ai_foundry(data: dict) -> dict:
         "description": data.get("description") or f"Azure AI Foundry agent: {name}",
         "persona_prompt": instructions,
         "capabilities": capabilities,
+        # Same rationale as copilot_studio — externally-imported agents start
+        # supervised (explicit, not relying on model default).
+        "autonomy_level": "supervised",
         "config": {
             "preferred_cli": "copilot_cli",
             "metadata": {
