@@ -512,6 +512,13 @@ def _get_cli_platform_credentials(
     search_names = [integration_name]
     if integration_name == "gemini_cli":
         search_names.extend(["gmail", "google_drive", "google_calendar"])
+    elif integration_name == "copilot_cli":
+        # Copilot CLI authenticates with the same GitHub OAuth token the
+        # `github` integration stores. Tenants don't (and can't) connect a
+        # standalone "copilot_cli" provider — they connect github once and
+        # the Copilot subscription rides the same OAuth token via
+        # COPILOT_GITHUB_TOKEN at runtime (see code-worker workflows.py).
+        search_names.append("github")
 
     for name in search_names:
         config = (
@@ -669,6 +676,10 @@ def run_agent_session(
             (platform == "claude_code" and not session_token)
             or (platform == "codex" and not (session_token or auth_json))
             or (platform == "gemini_cli" and not (oauth_token or session_token))
+            # Copilot CLI authenticates with the GitHub OAuth token (gho_…)
+            # exposed via COPILOT_GITHUB_TOKEN in code-worker. Without it
+            # the CLI runs anonymously and Copilot replies with auth errors.
+            or (platform == "copilot_cli" and not oauth_token)
         )
     else:
         subscription_missing = False
@@ -724,7 +735,12 @@ def run_agent_session(
             return local_response, metadata
 
         # 3. Friendly error
-        platform_label = {"claude_code": "Claude Code", "codex": "Codex", "gemini_cli": "Gemini CLI"}.get(platform, platform)
+        platform_label = {
+            "claude_code": "Claude Code",
+            "codex": "Codex",
+            "gemini_cli": "Gemini CLI",
+            "copilot_cli": "GitHub Copilot CLI",
+        }.get(platform, platform)
         err = (
             f"{platform_label} subscription is not connected "
             "and the local model is unavailable. Please connect your account in Settings → Integrations."

@@ -18,6 +18,11 @@ from app.models.tenant_features import TenantFeatures
 from app.models.tenant_branding import TenantBranding
 from app.models.agent import Agent as AgentModel
 from app.services.cli_session_manager import run_agent_session
+from app.services.cli_platform_resolver import (
+    classify_error as _classify_cli_error,
+    mark_cooldown as _mark_cli_cooldown,
+    resolve_cli_chain as _resolve_cli_chain,
+)
 from app.services import rl_experience_service
 from app.services.memory_recall import build_memory_context_with_git
 from app.services import safety_trust
@@ -705,21 +710,116 @@ def route_and_execute(
     except Exception:
         pass
 
-    # 11. Execute
+    # 11. Execute — autodetect available CLIs, walk the chain on quota/auth.
+    #
+    # Resolution priority (built in resolve_cli_chain):
+    #   1. The `platform` value resolved above (per-agent override → tenant
+    #      default → upstream RL/exploration), IF the tenant has the
+    #      credentials wired AND that CLI isn't in cooldown.
+    #   2. Other CLIs the tenant has actually connected, in default order.
+    #   3. `opencode` (local Gemma 4) as the universal floor.
+    #
+    # Cooldown rules (deliberately narrow — see PR #245 review):
+    #   * `quota` and `auth` classifications mark a 10-min cooldown so
+    #     subsequent turns skip the failing CLI immediately.
+    #   * `missing_credential` skips the CLI on this turn but does NOT
+    #     cool — config issues (revoked OAuth) resolve in seconds, and
+    #     cooling would stretch a quick reconnect into 10 min of
+    #     degraded replies.
+    #   * Bare exceptions (Temporal CancelledError, network blips) skip
+    #     to the next CLI but do NOT cool — a transient code-worker pod
+    #     restart shouldn't mass-cool every tenant's preferred CLI.
+    #   * Unclassified empty responses bubble up — we don't burn the
+    #     tenant's other CLI quotas on what's likely a prompt bug.
+    #
+    # Chain telemetry (`cli_chain_attempted`, `cli_fallback_used`) goes
+    # to the structured logger only — NOT into `metadata` — because
+    # `metadata` is serialized verbatim into `ChatMessage.context` and
+    # would expose internal routing decisions to end-users.
     try:
-        response_text, metadata = run_agent_session(
-            db, tenant_id=tenant_id, user_id=user_id,
-            platform=platform, agent_slug=agent_slug,
-            agent_skill_slugs=agent_skill_slugs,
-            message=message, channel=channel,
-            sender_phone=sender_phone, conversation_summary=conversation_summary,
-            image_b64=image_b64, image_mime=image_mime,
-            db_session_memory=db_session_memory,
-            pre_built_memory_context=pre_built_memory_context,
-            agent_tier=agent_tier,
-            agent_tool_groups=agent_tool_groups,
-            agent_memory_domains=agent_memory_domains,
+        cli_chain = _resolve_cli_chain(db, tenant_id, explicit_platform=platform)
+    except Exception as e:
+        # Resolver failure must not block dispatch — fall back to the
+        # single-platform legacy behavior.
+        logger.warning(
+            "CLI chain resolution failed for tenant=%s platform=%s: %s — using single-platform path",
+            str(tenant_id)[:8], platform, e,
         )
+        cli_chain = [platform]
+
+    response_text: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+    last_error: Optional[str] = None
+    attempted: List[str] = []
+
+    try:
+        for attempt_platform in cli_chain:
+            attempted.append(attempt_platform)
+            try:
+                response_text, metadata = run_agent_session(
+                    db, tenant_id=tenant_id, user_id=user_id,
+                    platform=attempt_platform, agent_slug=agent_slug,
+                    agent_skill_slugs=agent_skill_slugs,
+                    message=message, channel=channel,
+                    sender_phone=sender_phone, conversation_summary=conversation_summary,
+                    image_b64=image_b64, image_mime=image_mime,
+                    db_session_memory=db_session_memory,
+                    pre_built_memory_context=pre_built_memory_context,
+                    agent_tier=agent_tier,
+                    agent_tool_groups=agent_tool_groups,
+                    agent_memory_domains=agent_memory_domains,
+                )
+            except Exception as exc:
+                # Hard exception (Temporal CancelledError, network blip).
+                # Skip to the next CLI but do NOT cool — a transient
+                # code-worker hiccup must not mass-degrade every tenant's
+                # preferred CLI for 10 min. Next chat turn retries.
+                last_error = f"{attempt_platform}: {exc}"
+                logger.warning(
+                    "CLI attempt raised (no cooldown set) — tenant=%s platform=%s err=%s",
+                    str(tenant_id)[:8], attempt_platform, exc,
+                )
+                continue
+
+            # Successful response — done. Log chain telemetry; don't
+            # write it to metadata (avoids client leak via ChatMessage.context).
+            if response_text:
+                if attempt_platform != platform or len(attempted) > 1:
+                    logger.info(
+                        "CLI chain resolved — tenant=%s requested=%s served_by=%s attempted=%s",
+                        str(tenant_id)[:8], platform, attempt_platform, attempted,
+                    )
+                break
+
+            # No response text but no exception — classify the metadata.error.
+            err = (metadata or {}).get("error") if isinstance(metadata, dict) else None
+            err_class = _classify_cli_error(err)
+            last_error = err or "empty response"
+            if err_class in {"quota", "auth"}:
+                logger.info(
+                    "CLI %s returned %s for tenant=%s — cooldown + chain skip: %r",
+                    attempt_platform, err_class, str(tenant_id)[:8], err,
+                )
+                _mark_cli_cooldown(tenant_id, attempt_platform, reason=err_class)
+                continue
+            if err_class == "missing_credential":
+                logger.info(
+                    "CLI %s missing credential for tenant=%s — chain skip (no cooldown): %r",
+                    attempt_platform, str(tenant_id)[:8], err,
+                )
+                continue
+
+            # Unclassified empty response — don't blast through the tenant's
+            # other CLI quotas; let the empty result surface.
+            break
+
+        if not response_text:
+            metadata = metadata or {}
+            metadata.setdefault("error", last_error or "all CLI fallbacks failed")
+            logger.warning(
+                "CLI chain exhausted — tenant=%s requested=%s attempted=%s last_error=%r",
+                str(tenant_id)[:8], platform, attempted, last_error,
+            )
     except Exception:
         try:
             luna_presence_service.update_state(tenant_id, state="error", session_id=_presence_sid)
