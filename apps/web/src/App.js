@@ -39,6 +39,14 @@ const AuthContext = createContext(null);
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(authService.getCurrentUser());
   const navigate = useNavigate();
+  // In-flight guard for refreshUser — coalesces concurrent callers
+  // (rapid SettingsPage save clicks, websocket-triggered refreshes,
+  // etc.) onto a single /users/me call. Without this, thundering-herd
+  // refetches on auth event spam waste API quota and can race the
+  // localStorage write. M3 from the 2026-05-02 holistic review.
+  // Stored on a ref-style holder rather than React state so reads in
+  // the closure see the latest in-flight Promise without a re-render.
+  const refreshInFlight = { current: null };
 
   const login = async (email, password) => {
     const userData = await authService.login(email, password);
@@ -57,18 +65,24 @@ const AuthProvider = ({ children }) => {
   // SettingsPage's full_name save) call this so the in-memory user
   // object reflects the change without a full page reload.
   const refreshUser = async () => {
-    try {
-      const resp = await api.get('/users/me');
-      const fresh = resp.data;
-      // Preserve the access_token that login persisted alongside the user.
-      const existing = authService.getCurrentUser() || {};
-      const merged = { ...existing, ...fresh };
-      localStorage.setItem('user', JSON.stringify(merged));
-      setUser(merged);
-      return merged;
-    } catch {
-      return null;
-    }
+    if (refreshInFlight.current) return refreshInFlight.current;
+    refreshInFlight.current = (async () => {
+      try {
+        const resp = await api.get('/users/me');
+        const fresh = resp.data;
+        // Preserve the access_token that login persisted alongside the user.
+        const existing = authService.getCurrentUser() || {};
+        const merged = { ...existing, ...fresh };
+        localStorage.setItem('user', JSON.stringify(merged));
+        setUser(merged);
+        return merged;
+      } catch {
+        return null;
+      } finally {
+        refreshInFlight.current = null;
+      }
+    })();
+    return refreshInFlight.current;
   };
 
   const value = { user, login, logout, refreshUser };
