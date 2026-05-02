@@ -124,3 +124,40 @@ async def test_discovery_handles_endpoint_404():
     # _list_paginated returns empty on non-200; helpers return [].
     bots = await mad.discover_copilot_studio_bots(client, "tok")
     assert bots == []
+
+
+@pytest.mark.asyncio
+async def test_discovery_raises_DiscoveryAuthError_on_401():
+    """401 from Graph means the token lacks the Copilot Studio /
+    AI Foundry scopes. Must raise so the caller can surface a
+    re-consent prompt instead of silently returning "no agents found".
+
+    Regression for the holistic 2026-05-02 review I3 — without this
+    distinction, existing Outlook+Teams users would never know they
+    needed to reconnect for the discovery feature to work.
+    """
+    unauthorized = _mock_response(401, [])
+    client = MagicMock()
+    client.get = AsyncMock(return_value=unauthorized)
+    raised = False
+    try:
+        await mad._list_paginated(client, "https://x", {})
+    except mad._DiscoveryAuthError:
+        raised = True
+    assert raised, "_list_paginated must raise on 401"
+
+
+@pytest.mark.asyncio
+async def test_discovery_raises_DiscoveryAuthError_on_403():
+    """403 (forbidden — admin policy denies the OAuth app) is treated
+    the same as 401 — the user needs to reconnect / get admin
+    approval, not see a phantom 'no agents' state."""
+    forbidden = _mock_response(403, [])
+    client = MagicMock()
+    client.get = AsyncMock(return_value=forbidden)
+    raised = False
+    try:
+        await mad._list_paginated(client, "https://x", {})
+    except mad._DiscoveryAuthError:
+        raised = True
+    assert raised, "_list_paginated must raise on 403"

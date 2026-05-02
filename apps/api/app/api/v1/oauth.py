@@ -87,6 +87,18 @@ OAUTH_PROVIDERS = {
             "Chat.ReadWrite",
             "ChannelMessage.Send",
             "Team.ReadBasic.All",
+            # Microsoft agent discovery — Copilot Studio + Azure AI
+            # Foundry enumeration via Graph beta (/me/copilots,
+            # /me/aiAssistants). PR-B follow-up to PR #251: the holistic
+            # 2026-05-02 review caught that without these scopes,
+            # existing Outlook+Teams users see "no agents found" instead
+            # of a re-consent prompt. Existing tenants must re-authorize
+            # the microsoft provider for the discovery feature to light up;
+            # `microsoft_agent_discovery._list_paginated` now distinguishes
+            # 401/403 from 404 and surfaces `reason="auth_failed"` so the
+            # UI can prompt re-consent.
+            "CopilotStudio.Read.User",
+            "AIServices.Read.User",
         ],
         "integration_names": ["outlook", "teams"],
     },

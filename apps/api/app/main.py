@@ -175,13 +175,31 @@ async def startup_teams_monitor_reconcile():
          in-line ``start_workflow`` call in /teams/enable, leaving
          a "channel enabled, no monitor" zombie.
 
-    Idempotent — already-running workflows are no-ops via
-    ``ALLOW_DUPLICATE_FAILED_ONLY`` + WorkflowAlreadyStartedError.
-    Best-effort: a single tenant's failure doesn't stop the rest.
+    Fire-and-forget via ``asyncio.create_task`` — the api becomes ready
+    immediately and reconcile runs in the background. Was previously
+    awaited inline; with 1000+ tenants the readiness probe would fail
+    waiting on N sequential Temporal connects. PR-B follow-up to the
+    2026-05-02 holistic review.
+
+    Reconcile itself is bounded-concurrency (20 in flight) and uses
+    a singleton Temporal client to avoid the per-call connect cost.
     """
     try:
+        import asyncio
         from app.api.v1.channels import reconcile_teams_monitors
-        await reconcile_teams_monitors()
+
+        async def _bg():
+            try:
+                await reconcile_teams_monitors()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Teams monitor reconcile (background) failed: %s", e,
+                )
+
+        # Fire-and-forget. Loop is the FastAPI startup loop; the task
+        # runs alongside the request loop for the api lifetime.
+        asyncio.create_task(_bg())
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(
