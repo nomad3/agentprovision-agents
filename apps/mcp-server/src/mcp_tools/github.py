@@ -53,10 +53,16 @@ def _get_internal_key() -> str:
     return settings.API_INTERNAL_KEY
 
 
-async def _list_github_accounts(tenant_id: str) -> List[Tuple[str, str]]:
-    """Return ``[(account_email, oauth_token), ...]`` for every connected
-    GitHub account on the tenant. Empty list means no accounts wired or
-    every credential lookup failed.
+async def _list_github_accounts(
+    tenant_id: str,
+) -> Tuple[List[Tuple[str, str]], Optional[str]]:
+    """Return ``([(account_email, oauth_token), ...], primary_account_email)``
+    for every connected GitHub account on the tenant.
+
+    The second element is the tenant's pinned ``github_primary_account``
+    (see migration 113, ``tenant_features``). When set, the resolver
+    uses it as the single default for repo operations; when null, the
+    full list is returned and tools fan out / try each.
 
     Calls two internal endpoints in sequence — the connected-accounts
     list, then a per-account token fetch — because the platform stores
@@ -79,11 +85,13 @@ async def _list_github_accounts(tenant_id: str) -> List[Tuple[str, str]]:
                     "GitHub connected-accounts lookup returned %s for tenant=%s",
                     list_resp.status_code, str(tenant_id)[:8],
                 )
-                return []
+                return [], None
 
-            accounts_payload = list_resp.json().get("accounts") or []
+            payload = list_resp.json() or {}
+            accounts_payload = payload.get("accounts") or []
+            primary_account = payload.get("primary_account")  # may be None
             if not accounts_payload:
-                return []
+                return [], primary_account
 
             results: List[Tuple[str, str]] = []
             for acct in accounts_payload:
@@ -105,28 +113,44 @@ async def _list_github_accounts(tenant_id: str) -> List[Tuple[str, str]]:
                 token = data.get("oauth_token") or data.get("access_token")
                 if token:
                     results.append((email, token))
-            return results
+            return results, primary_account
     except Exception:
         logger.exception("Failed to enumerate GitHub accounts for tenant=%s", str(tenant_id)[:8])
-        return []
+        return [], None
 
 
 async def _resolve_accounts(
     tenant_id: str,
     account_email: Optional[str],
 ) -> List[Tuple[str, str]]:
-    """Narrow the account list to the one the caller asked for, or all.
+    """Pick which GitHub accounts to use for this call.
 
-    When ``account_email`` is provided AND matches exactly one connected
-    account, the result is a single-tuple list. When provided but not
-    matched, returns an empty list (so the caller surfaces a helpful
-    error rather than silently fanning out to the wrong account).
+    Priority:
+      1. Caller-supplied ``account_email`` — explicit wins. Returns the
+         single matching tuple, or empty if no match (caller surfaces a
+         useful error rather than silently fanning out elsewhere).
+      2. Tenant's ``github_primary_account`` pin (migration 113). When
+         set, the resolver returns ONLY that account so the tool skips
+         non-repo accounts (e.g. EMU accounts that only have Copilot CLI
+         license, no repo visibility under enterprise policy).
+      3. Otherwise, all connected accounts — caller fans out / tries each.
     """
-    accounts = await _list_github_accounts(tenant_id)
+    accounts, primary = await _list_github_accounts(tenant_id)
     if not accounts:
         return []
     if account_email:
         return [(e, t) for e, t in accounts if e.lower() == account_email.lower()]
+    if primary:
+        match = [(e, t) for e, t in accounts if e.lower() == primary.lower()]
+        if match:
+            return match
+        # Primary configured but not connected (revoked / removed) —
+        # log and fall through to fan-out so we don't fail closed.
+        logger.warning(
+            "Tenant %s has github_primary_account=%s but no matching connected "
+            "account; falling back to fan-out across %d account(s)",
+            str(tenant_id)[:8], primary, len(accounts),
+        )
     return accounts
 
 
@@ -792,7 +816,7 @@ async def _get_github_token(
     When ``account_email`` is provided, returns that account's token.
     When omitted, returns the first connected account's token (legacy).
     """
-    accounts = await _resolve_accounts(tenant_id, account_email)
-    if not accounts:
+    accounts_resolved = await _resolve_accounts(tenant_id, account_email)
+    if not accounts_resolved:
         return None
-    return accounts[0][1]
+    return accounts_resolved[0][1]
