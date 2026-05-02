@@ -1787,8 +1787,18 @@ def _execute_copilot_chat(task_input: ChatCliInput, session_dir: str) -> ChatCli
     We set the highest-precedence one with the tenant's OAuth token so
     that any GITHUB_TOKEN baked into the container image (used for git
     operations) doesn't override per-tenant Copilot subscription routing.
+
+    Token reuse: ``execute_chat_cli`` already fetches the per-tenant
+    github token + sets ``os.environ["GITHUB_TOKEN"]`` at the top of
+    every chat dispatch (for git remote setup). Reuse that value here
+    instead of re-fetching from the API — saves 2-3 HTTP round-trips
+    per chat turn on the Copilot path. Fall back to a fresh fetch
+    only when env is empty (defensive, e.g. if execute_chat_cli was
+    bypassed by a different caller). I6 from the holistic review.
     """
-    token = _fetch_github_token(task_input.tenant_id)
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        token = _fetch_github_token(task_input.tenant_id)
     if not token:
         return ChatCliResult(
             response_text="",

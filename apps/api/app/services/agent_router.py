@@ -458,19 +458,35 @@ def route_and_execute(
     # for short messages. Local inference is for free-tier tenants with no
     # subscription.
     #
-    # With the gemini_cli floor removed (PR #245+ autodetect), `platform`
-    # may be None when no explicit default is set. Resolve the chain
-    # via the resolver (cheap — same call we'd make below for dispatch)
-    # and pin-to-cli when the chain leads with anything other than the
-    # local opencode floor.
+    # With the gemini_cli floor removed (PR #252 autodetect), `platform`
+    # may be None when no explicit default is set. Compute the resolver
+    # chain ONCE and reuse it for both `_pin_to_cli` and the actual
+    # dispatch loop later — was previously called twice per chat turn,
+    # an avoidable +1 DB query and ~4 Redis EXISTS per call. Holistic
+    # 2026-05-02 review C4.
+    cli_chain: Optional[List[str]] = None
     if platform in {"gemini_cli", "claude_code", "codex", "copilot_cli"}:
+        # Fast path — explicit paid CLI is already pinned, skip the
+        # resolver probe entirely (we'll still call it below for the
+        # actual chain at dispatch time, but `_pin_to_cli` doesn't need it).
         _pin_to_cli = True
     else:
         try:
-            _probe_chain = _resolve_cli_chain(db, tenant_id, explicit_platform=platform)
-            _pin_to_cli = bool(_probe_chain) and _probe_chain[0] != "opencode"
-        except Exception:
-            _pin_to_cli = False
+            cli_chain = _resolve_cli_chain(db, tenant_id, explicit_platform=platform)
+            _pin_to_cli = bool(cli_chain) and cli_chain[0] != "opencode"
+        except Exception as e:
+            logger.warning(
+                "CLI chain probe (for pin-to-cli) failed for tenant=%s: %s",
+                str(tenant_id)[:8], e,
+            )
+            # Conservative — when probing fails, prefer pinning if the
+            # explicit platform LOOKS like a paid CLI; otherwise fall
+            # through to local-path eligibility. M5 from holistic review:
+            # don't silently downgrade a paid tenant to local Gemma on a
+            # transient resolver hiccup.
+            _pin_to_cli = platform in {
+                "gemini_cli", "claude_code", "codex", "copilot_cli",
+            }
 
     # 2. Get trust profile
     try:
@@ -759,16 +775,21 @@ def route_and_execute(
     # to the structured logger only — NOT into `metadata` — because
     # `metadata` is serialized verbatim into `ChatMessage.context` and
     # would expose internal routing decisions to end-users.
-    try:
-        cli_chain = _resolve_cli_chain(db, tenant_id, explicit_platform=platform)
-    except Exception as e:
-        # Resolver failure must not block dispatch — fall back to the
-        # single-platform legacy behavior.
-        logger.warning(
-            "CLI chain resolution failed for tenant=%s platform=%s: %s — using single-platform path",
-            str(tenant_id)[:8], platform, e,
-        )
-        cli_chain = [platform]
+    # Reuse the chain computed earlier when probing for `_pin_to_cli`.
+    # Only fall back to a fresh resolve if it wasn't computed (the fast
+    # path branch — explicit paid CLI). Saves a redundant DB+Redis hit
+    # per chat turn. C4 from the holistic 2026-05-02 review.
+    if cli_chain is None:
+        try:
+            cli_chain = _resolve_cli_chain(db, tenant_id, explicit_platform=platform)
+        except Exception as e:
+            # Resolver failure must not block dispatch — fall back to the
+            # single-platform legacy behavior.
+            logger.warning(
+                "CLI chain resolution failed for tenant=%s platform=%s: %s — using single-platform path",
+                str(tenant_id)[:8], platform, e,
+            )
+            cli_chain = [platform] if platform else ["opencode"]
 
     response_text: Optional[str] = None
     metadata: Dict[str, Any] = {}

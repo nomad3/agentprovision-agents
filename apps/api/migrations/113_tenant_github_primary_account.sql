@@ -14,9 +14,16 @@
 --
 -- The new column lets a tenant pin "this is the GitHub account I want
 -- for repo / issue / PR operations". MCP tools that don't get an
--- explicit `account_email` parameter use this as the default. The
--- Copilot CLI runtime in apps/code-worker is unaffected — it picks any
--- valid github OAuth token regardless of this preference.
+-- explicit `account_email` parameter use this as the default.
+--
+-- Code-worker's `_fetch_github_token` (apps/code-worker/workflows.py)
+-- ALSO honors this pin so `git push` / `gh pr create` from the code
+-- agent uses the same canonical account as MCP. Without that, the
+-- runtime could pick the EMU token (no repo write access) and fail
+-- PR creation even though MCP read tools succeeded with the pinned
+-- personal token. Earlier revisions of this comment claimed code-worker
+-- was "unaffected" — that was wrong; PR #249 actually wired the
+-- code-worker honor, the comment is now consistent with the code.
 --
 -- Nullable on purpose: when null, the resolver falls back to the
 -- multi-account fan-out / try-each behavior from PR #249.
