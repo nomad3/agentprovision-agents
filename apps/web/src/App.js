@@ -29,6 +29,7 @@ import SkillsPage from './pages/SkillsPage';
 import WorkflowsPage from './pages/WorkflowsPage';
 import WorkflowBuilder from './components/workflows/WorkflowBuilder';
 import LearningPage from './pages/LearningPage';
+import api from './services/api';
 import authService from './services/auth';
 
 // Create an Auth Context
@@ -57,7 +58,6 @@ const AuthProvider = ({ children }) => {
   // object reflects the change without a full page reload.
   const refreshUser = async () => {
     try {
-      const api = (await import('./services/api')).default;
       const resp = await api.get('/users/me');
       const fresh = resp.data;
       // Preserve the access_token that login persisted alongside the user.

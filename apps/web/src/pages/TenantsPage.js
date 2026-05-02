@@ -286,7 +286,7 @@ const TenantsPage = () => {
                           <td>{m.full_name || <span className="text-muted">—</span>}</td>
                           <td>{m.email}</td>
                           <td>
-                            {m.is_superuser
+                            {m.role === 'admin'
                               ? <Badge bg="warning"><FaUserShield className="me-1" size={10} />Admin</Badge>
                               : <Badge bg="secondary">Member</Badge>}
                           </td>
