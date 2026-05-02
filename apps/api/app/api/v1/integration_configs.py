@@ -51,20 +51,18 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         "oauth_provider": "microsoft",
     },
     "github": {
-        "display_name": "GitHub",
-        "description": "Manage repositories, issues, pull requests",
-        "icon": "FaGithub",
-        "credentials": [],
-        "auth_type": "oauth",
-        "oauth_provider": "github",
-    },
-    "copilot_cli": {
+        # Single GitHub OAuth covers two use cases for the platform:
+        #   1. Repo / issue / PR management (code-worker, code agents).
+        #   2. GitHub Copilot CLI runtime (chat agents — see
+        #      `cli_platform_resolver.py`'s copilot_cli → github mapping).
+        # Customers think of the card as "Copilot CLI" once connected, so
+        # that's the lead label; description explicitly mentions both.
         "display_name": "GitHub Copilot CLI",
-        "description": "AI coding agent powered by GitHub Copilot subscription",
+        "description": "Run chat agents on the GitHub Copilot subscription, plus manage repos, issues, and pull requests",
         "icon": "FaGithub",
+        "credentials": [],
         "auth_type": "oauth",
         "oauth_provider": "github",
-        "credentials": [],
     },
     "linkedin": {
         "display_name": "LinkedIn",
@@ -126,7 +124,7 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         ],
     },
     "codex": {
-        "display_name": "Codex",
+        "display_name": "Codex CLI",
         "description": "Connect your ChatGPT / Codex subscription for AI agent chat",
         "icon": "FaTerminal",
         "auth_type": "device_auth",

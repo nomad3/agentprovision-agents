@@ -77,17 +77,21 @@ const SKILL_COLORS = {
 
 // Pinned order for the integration card grid. Anything not listed gets pushed
 // to the end and sorted alphabetically.
+//
+// Layout intent: WhatsApp first (primary tenant channel for Luna), then the
+// CLI cluster grouped together (Gemini, Claude Code, GitHub Copilot CLI,
+// Codex CLI), then productivity / OAuth-suite integrations.
 const INTEGRATION_ORDER = [
+  'whatsapp',
   'gemini_cli',
-  'codex',
   'claude_code',
+  'github',
+  'codex',
   'gmail',
   'google_calendar',
   'google_drive',
   'outlook',
-  'github',
   'linkedin',
-  'whatsapp',
   'slack',
   'notion',
   'jira',
