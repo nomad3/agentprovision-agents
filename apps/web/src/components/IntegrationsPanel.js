@@ -68,7 +68,6 @@ const SKILL_COLORS = {
   jira: '#0052CC',
   google_calendar: '#4285F4',
   outlook: '#0078D4',
-  linear: '#5E6AD2',
   linkedin: '#0A66C2',
   claude_code: '#D97706',
   codex: '#111827',
@@ -95,7 +94,6 @@ const INTEGRATION_ORDER = [
   'slack',
   'notion',
   'jira',
-  'linear',
 ];
 
 const sortIntegrations = (a, b) => {
