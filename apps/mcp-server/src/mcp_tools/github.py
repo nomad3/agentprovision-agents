@@ -799,24 +799,3 @@ async def search_github_code(
         "results": merged_results[:max_results],
         "accounts_queried": [e for e, _ in accounts],
     }
-
-
-# ---------------------------------------------------------------------------
-# Backward-compat helper (deprecated — use _resolve_accounts)
-# ---------------------------------------------------------------------------
-
-async def _get_github_token(
-    tenant_id: str,
-    account_email: Optional[str] = None,
-) -> Optional[str]:
-    """Deprecated single-token getter retained for any external callers
-    that may still import it. Prefer ``_resolve_accounts`` so multi-account
-    semantics are honored.
-
-    When ``account_email`` is provided, returns that account's token.
-    When omitted, returns the first connected account's token (legacy).
-    """
-    accounts_resolved = await _resolve_accounts(tenant_id, account_email)
-    if not accounts_resolved:
-        return None
-    return accounts_resolved[0][1]
