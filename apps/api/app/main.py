@@ -166,6 +166,30 @@ async def startup_whatsapp():
 
 
 @app.on_event("startup")
+async def startup_teams_monitor_reconcile():
+    """Re-spawn TeamsMonitorWorkflow for every enabled Teams account.
+
+    Catches two scenarios:
+      1. Tenants who enabled Teams before this workflow was deployed.
+      2. API crashed between the channel-enable DB commit and the
+         in-line ``start_workflow`` call in /teams/enable, leaving
+         a "channel enabled, no monitor" zombie.
+
+    Idempotent — already-running workflows are no-ops via
+    ``ALLOW_DUPLICATE_FAILED_ONLY`` + WorkflowAlreadyStartedError.
+    Best-effort: a single tenant's failure doesn't stop the rest.
+    """
+    try:
+        from app.api.v1.channels import reconcile_teams_monitors
+        await reconcile_teams_monitors()
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Teams monitor reconcile skipped: %s", e,
+        )
+
+
+@app.on_event("startup")
 async def startup_proactive_workflows():
     """Auto-start long-running Temporal workflows for all active tenants.
 

@@ -74,6 +74,14 @@ class TeamsMonitorWorkflow:
         # Continue as new — keeps workflow history bounded and resets
         # any in-memory state. Pass-through args so the cadence and
         # account binding survive across continuations.
+        #
+        # WARNING: signature change requires Temporal versioning
+        # (workflow.patched / GetVersion). Adding/reordering args here
+        # will break in-flight runs at the next continue_as_new
+        # boundary — the activation will receive args that don't match
+        # the new signature. If a new param is needed, append it as
+        # OPTIONAL with a default and gate behavior with
+        # ``workflow.patched("teams-monitor-vN")``.
         workflow.continue_as_new(
             args=[tenant_id, account_id, poll_interval_minutes],
         )

@@ -178,6 +178,108 @@ async def send_whatsapp(
 from app.services.teams_service import teams_service
 
 
+# ── TeamsMonitorWorkflow start helper + API-startup reconcile ────────
+#
+# These are exposed at module level so:
+#   - `enable_teams` can call `_start_teams_monitor` after the
+#     channel-enable DB commit (best-effort; failure logged).
+#   - `app.main`'s startup hook can call `reconcile_teams_monitors`
+#     so tenants with already-enabled Teams channels (e.g. from
+#     before this PR landed, or after an api restart that lost the
+#     in-flight `start_workflow` call) get their monitor workflow
+#     re-spawned on the next boot. This addresses reviewer Important
+#     #2 in PR #250 — without it, an api crash between the DB commit
+#     and the Temporal start_workflow leaves the tenant in a
+#     "channel enabled, no monitor" zombie state until the next
+#     manual /teams/enable call.
+
+async def _start_teams_monitor(tenant_id: str, account_id: str) -> tuple[bool, "str | None"]:
+    """Start TeamsMonitorWorkflow for (tenant, account); idempotent.
+
+    Returns ``(started, error_message_or_None)``. Already-running
+    workflows are treated as success — Temporal raises
+    ``WorkflowAlreadyStartedError`` which we catch and surface as OK.
+    """
+    try:
+        from temporalio.client import Client, WorkflowIDReusePolicy
+        from temporalio.exceptions import WorkflowAlreadyStartedError
+        from app.core.config import settings as _settings
+
+        client = await Client.connect(_settings.TEMPORAL_ADDRESS)
+        wf_id = f"teams-monitor-{tenant_id}-{account_id}"
+        try:
+            await client.start_workflow(
+                "TeamsMonitorWorkflow",
+                args=[str(tenant_id), account_id],
+                id=wf_id,
+                task_queue="agentprovision-orchestration",
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+            )
+            return True, None
+        except WorkflowAlreadyStartedError:
+            # Idempotent — workflow already running for this (tenant, account).
+            return True, None
+    except Exception as e:
+        logger.warning(
+            "TeamsMonitorWorkflow start failed for tenant=%s account=%s: %s",
+            str(tenant_id)[:8], account_id, e,
+        )
+        return False, str(e)
+
+
+async def reconcile_teams_monitors() -> dict:
+    """API-startup hook: ensure every enabled Teams channel has a
+    running monitor workflow.
+
+    Iterates ``channel_accounts WHERE channel_type='teams' AND enabled=True``
+    and calls ``_start_teams_monitor`` for each. Idempotent — already-
+    running workflows are no-ops. Bounded best-effort: a single
+    tenant's failure doesn't stop the rest.
+
+    Wired into ``app.main`` startup so api restarts don't leave Teams
+    channels in a "enabled but no monitor" zombie state. Also catches
+    tenants who enabled Teams before TeamsMonitorWorkflow was deployed.
+    """
+    from sqlalchemy.orm import Session
+    from app.db.session import SessionLocal
+    from app.models.channel_account import ChannelAccount
+
+    summary = {"checked": 0, "started": 0, "failed": 0, "errors": []}
+    db: Session = SessionLocal()
+    try:
+        rows = (
+            db.query(ChannelAccount)
+            .filter(
+                ChannelAccount.channel_type == "teams",
+                ChannelAccount.enabled.is_(True),
+            )
+            .all()
+        )
+        summary["checked"] = len(rows)
+        for acct in rows:
+            ok, err = await _start_teams_monitor(
+                str(acct.tenant_id), acct.account_id,
+            )
+            if ok:
+                summary["started"] += 1
+            else:
+                summary["failed"] += 1
+                summary["errors"].append(
+                    {"tenant_id": str(acct.tenant_id)[:8], "account_id": acct.account_id, "error": err}
+                )
+    except Exception as e:
+        logger.warning("reconcile_teams_monitors swallowed: %s", e)
+        summary["errors"].append({"reconcile_error": str(e)})
+    finally:
+        db.close()
+    if summary["checked"]:
+        logger.info(
+            "Teams monitor reconcile: checked=%d started=%d failed=%d",
+            summary["checked"], summary["started"], summary["failed"],
+        )
+    return summary
+
+
 class TeamsEnableRequest(BaseModel):
     dm_policy: str = "allowlist"
     allow_from: List[str] = []
@@ -242,35 +344,12 @@ async def enable_teams(
         raise HTTPException(status_code=400, detail=result.get("reason", "enable failed"))
 
     # Best-effort: start the monitor workflow. A failure here does NOT
-    # roll back the channel-enable — admin can manually trigger the
-    # /teams/poll endpoint, or the workflow will start on the next
-    # enable call. The error is logged and surfaced in the response.
-    monitor_started = False
-    monitor_error = None
-    try:
-        from temporalio.client import Client, WorkflowIDReusePolicy
-        from app.core.config import settings as _settings
-        client = await Client.connect(_settings.TEMPORAL_ADDRESS)
-        wf_id = f"teams-monitor-{current_user.tenant_id}-{request.account_id}"
-        await client.start_workflow(
-            "TeamsMonitorWorkflow",
-            args=[str(current_user.tenant_id), request.account_id],
-            id=wf_id,
-            task_queue="agentprovision-orchestration",
-            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
-        )
-        monitor_started = True
-    except Exception as e:
-        # Already-running counts as success — Temporal raises
-        # WorkflowAlreadyStartedError which we treat as idempotent.
-        if "WorkflowAlreadyStarted" in type(e).__name__ or "already started" in str(e).lower():
-            monitor_started = True
-        else:
-            logger.warning(
-                "TeamsMonitorWorkflow start failed for tenant=%s: %s",
-                str(current_user.tenant_id)[:8], e,
-            )
-            monitor_error = str(e)
+    # roll back the channel-enable — the API-startup reconcile (see
+    # main.py) catches any zombies on the next boot. The error is
+    # logged and surfaced in the response for ops visibility.
+    monitor_started, monitor_error = await _start_teams_monitor(
+        str(current_user.tenant_id), request.account_id,
+    )
 
     return {
         "status": "enabled",
