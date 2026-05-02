@@ -139,6 +139,12 @@ def _get_microsoft_token(db: Session, tenant_id: uuid.UUID) -> Optional[str]:
     return refreshed["access_token"]
 
 
+class _DiscoveryAuthError(Exception):
+    """Raised when Graph returns 401/403 — token lacks scope or has
+    expired. Surfaced to the API so the UI can prompt re-consent
+    instead of silently displaying ``no_agents_found``."""
+
+
 async def _list_paginated(
     client: httpx.AsyncClient,
     url: str,
@@ -146,14 +152,30 @@ async def _list_paginated(
     params: Optional[dict] = None,
     cap: int = _DISCOVERY_CAP,
 ) -> List[dict]:
-    """Follow Graph ``@odata.nextLink`` up to ``cap`` items."""
+    """Follow Graph ``@odata.nextLink`` up to ``cap`` items.
+
+    Distinguishes auth failures (401/403) from missing endpoints (404 /
+    501) — the former raises ``_DiscoveryAuthError`` so the caller can
+    tell the user "your microsoft OAuth token doesn't include the
+    Copilot Studio scope, please reconnect", while the latter returns
+    empty (the surface is just unavailable on this tenant). Without
+    this distinction, both paths surfaced as ``reason="no_agents_found"``
+    and existing Outlook+Teams users would never know they needed to
+    re-consent for the discovery feature to light up.
+    """
     out: List[dict] = []
     next_url: Optional[str] = url
     next_params: Optional[dict] = params
     while next_url and len(out) < cap:
         resp = await client.get(next_url, headers=headers, params=next_params)
+        if resp.status_code in (401, 403):
+            raise _DiscoveryAuthError(
+                f"Graph returned {resp.status_code} — token lacks required "
+                f"scope or has expired. Re-authorize the microsoft "
+                f"provider with Copilot Studio + AI Foundry scopes."
+            )
         if resp.status_code >= 300:
-            return out  # caller decides how to surface
+            return out  # 404/501/etc. — surface unavailable on this tenant
         payload = resp.json() or {}
         out.extend(payload.get("value") or [])
         next_url = payload.get("@odata.nextLink")
@@ -252,10 +274,14 @@ async def discover(
 
     agents: List[Dict[str, Any]] = []
     errors: List[str] = []
+    auth_failed = False
 
     async with httpx.AsyncClient(timeout=20.0) as client:
-        # Run both discovery surfaces; one failing shouldn't kill
-        # the other.
+        # Run both discovery surfaces; one failing shouldn't kill the
+        # other UNLESS the failure is auth (401/403) — which means the
+        # token doesn't have the right scopes for ANY discovery surface,
+        # so reporting "no agents found" misleads the user. We collect
+        # the auth error and surface it explicitly with reason=auth_failed.
         for fn, label in [
             (discover_copilot_studio_bots, "copilot_studio"),
             (discover_ai_foundry_agents, "ai_foundry"),
@@ -263,12 +289,33 @@ async def discover(
             try:
                 found = await fn(client, token)
                 agents.extend(found)
+            except _DiscoveryAuthError as e:
+                logger.info(
+                    "microsoft_agent_discovery: %s auth failed for tenant=%s: %s",
+                    label, str(tenant_id)[:8], e,
+                )
+                auth_failed = True
+                errors.append(f"{label}: {e}")
             except Exception as e:
                 logger.warning(
                     "microsoft_agent_discovery: %s discovery failed for tenant=%s: %s",
                     label, str(tenant_id)[:8], e,
                 )
                 errors.append(f"{label}: {e}")
+
+    if auth_failed and not agents:
+        return {
+            "agents": [],
+            "count": 0,
+            "reason": "auth_failed",
+            "message": (
+                "Microsoft token lacks Copilot Studio / AI Foundry scopes. "
+                "Re-authorize the microsoft provider — the platform requests "
+                "additional scopes (CopilotStudio.Read.User and equivalents) "
+                "on top of the existing Outlook + Teams scopes."
+            ),
+            "errors": errors or None,
+        }
 
     return {
         "agents": agents,

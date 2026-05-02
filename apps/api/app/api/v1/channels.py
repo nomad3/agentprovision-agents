@@ -193,6 +193,38 @@ from app.services.teams_service import teams_service
 #     "channel enabled, no monitor" zombie state until the next
 #     manual /teams/enable call.
 
+# Module-level Temporal client singleton — connect once on first use,
+# reuse for every subsequent start_workflow call. Was previously rebuilt
+# per call (every /teams/enable + every reconcile iteration), which on a
+# Levi-scale rollout (1000+ tenants) would do 1000 sequential
+# Client.connect() calls during api startup and fail readiness probes.
+# The 2026-05-02 holistic review flagged this as Important #4.
+_temporal_client = None
+_temporal_client_lock = None
+
+
+async def _get_temporal_client():
+    """Return a process-wide Temporal client, creating it lazily.
+
+    The asyncio.Lock guards against the thundering-herd case where many
+    concurrent /teams/enable requests on a cold api would each try to
+    create the client. Once cached, subsequent calls are O(1).
+    """
+    global _temporal_client, _temporal_client_lock
+    if _temporal_client is not None:
+        return _temporal_client
+    import asyncio
+    if _temporal_client_lock is None:
+        _temporal_client_lock = asyncio.Lock()
+    async with _temporal_client_lock:
+        if _temporal_client is not None:
+            return _temporal_client
+        from temporalio.client import Client
+        from app.core.config import settings as _settings
+        _temporal_client = await Client.connect(_settings.TEMPORAL_ADDRESS)
+        return _temporal_client
+
+
 async def _start_teams_monitor(tenant_id: str, account_id: str) -> tuple[bool, "str | None"]:
     """Start TeamsMonitorWorkflow for (tenant, account); idempotent.
 
@@ -201,11 +233,10 @@ async def _start_teams_monitor(tenant_id: str, account_id: str) -> tuple[bool, "
     ``WorkflowAlreadyStartedError`` which we catch and surface as OK.
     """
     try:
-        from temporalio.client import Client, WorkflowIDReusePolicy
+        from temporalio.client import WorkflowIDReusePolicy
         from temporalio.exceptions import WorkflowAlreadyStartedError
-        from app.core.config import settings as _settings
 
-        client = await Client.connect(_settings.TEMPORAL_ADDRESS)
+        client = await _get_temporal_client()
         wf_id = f"teams-monitor-{tenant_id}-{account_id}"
         try:
             await client.start_workflow(
@@ -227,19 +258,29 @@ async def _start_teams_monitor(tenant_id: str, account_id: str) -> tuple[bool, "
         return False, str(e)
 
 
+# Concurrency cap on reconcile fan-out. Each start_workflow adds back-
+# pressure on the Temporal server; sending 1000 concurrent requests is
+# unkind. 20 in flight is plenty to keep the reconcile fast even at
+# Levi scale (1000 tenants × ~50ms per call ÷ 20 = ~2.5s end-to-end).
+_RECONCILE_CONCURRENCY = 20
+
+
 async def reconcile_teams_monitors() -> dict:
     """API-startup hook: ensure every enabled Teams channel has a
     running monitor workflow.
 
     Iterates ``channel_accounts WHERE channel_type='teams' AND enabled=True``
     and calls ``_start_teams_monitor`` for each. Idempotent — already-
-    running workflows are no-ops. Bounded best-effort: a single
-    tenant's failure doesn't stop the rest.
+    running workflows are no-ops. Bounded concurrency (20 in flight) so
+    a Levi-scale rollout doesn't hammer Temporal during boot.
 
-    Wired into ``app.main`` startup so api restarts don't leave Teams
-    channels in a "enabled but no monitor" zombie state. Also catches
-    tenants who enabled Teams before TeamsMonitorWorkflow was deployed.
+    Designed to be ``asyncio.create_task``-friendly — fire-and-forget
+    from ``app.main`` startup so the api becomes ready immediately and
+    reconcile runs in the background. (Previously this was awaited in
+    the startup hook, blocking readiness probes for tenants × ~50ms
+    each. The 2026-05-02 holistic review flagged it.)
     """
+    import asyncio
     from sqlalchemy.orm import Session
     from app.db.session import SessionLocal
     from app.models.channel_account import ChannelAccount
@@ -256,26 +297,48 @@ async def reconcile_teams_monitors() -> dict:
             .all()
         )
         summary["checked"] = len(rows)
-        for acct in rows:
-            ok, err = await _start_teams_monitor(
-                str(acct.tenant_id), acct.account_id,
-            )
-            if ok:
-                summary["started"] += 1
-            else:
-                summary["failed"] += 1
-                summary["errors"].append(
-                    {"tenant_id": str(acct.tenant_id)[:8], "account_id": acct.account_id, "error": err}
-                )
+        if not rows:
+            return summary
+
+        # Snapshot identifiers — release the DB session before the
+        # concurrent Temporal calls so we don't pin a connection while
+        # waiting on network.
+        targets = [(str(acct.tenant_id), acct.account_id) for acct in rows]
     except Exception as e:
-        logger.warning("reconcile_teams_monitors swallowed: %s", e)
+        logger.warning("reconcile_teams_monitors db query failed: %s", e)
         summary["errors"].append({"reconcile_error": str(e)})
+        return summary
     finally:
         db.close()
+
+    sem = asyncio.Semaphore(_RECONCILE_CONCURRENCY)
+
+    async def _start_one(tenant_id: str, account_id: str):
+        async with sem:
+            return tenant_id, account_id, await _start_teams_monitor(tenant_id, account_id)
+
+    results = await asyncio.gather(
+        *[_start_one(tid, aid) for tid, aid in targets],
+        return_exceptions=True,
+    )
+    for r in results:
+        if isinstance(r, Exception):
+            summary["failed"] += 1
+            summary["errors"].append({"reconcile_error": str(r)})
+            continue
+        tid, aid, (ok, err) = r
+        if ok:
+            summary["started"] += 1
+        else:
+            summary["failed"] += 1
+            summary["errors"].append(
+                {"tenant_id": tid[:8], "account_id": aid, "error": err}
+            )
+
     if summary["checked"]:
         logger.info(
-            "Teams monitor reconcile: checked=%d started=%d failed=%d",
-            summary["checked"], summary["started"], summary["failed"],
+            "Teams monitor reconcile: checked=%d started=%d failed=%d (concurrency=%d)",
+            summary["checked"], summary["started"], summary["failed"], _RECONCILE_CONCURRENCY,
         )
     return summary
 
