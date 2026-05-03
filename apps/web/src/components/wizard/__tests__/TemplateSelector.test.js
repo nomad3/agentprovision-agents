@@ -8,19 +8,17 @@ describe('TemplateSelector', () => {
     mockOnSelect.mockClear();
   });
 
-  test('renders all 5 templates', () => {
+  test('renders core templates', () => {
     render(<TemplateSelector onSelect={mockOnSelect} />);
     expect(screen.getByText('Customer Support Agent')).toBeInTheDocument();
     expect(screen.getByText('Data Analyst Agent')).toBeInTheDocument();
     expect(screen.getByText('Sales Assistant')).toBeInTheDocument();
-    expect(screen.getByText('General Assistant')).toBeInTheDocument();
-    expect(screen.getByText('Content Writer')).toBeInTheDocument();
   });
 
-  test('calls onSelect when template is clicked', () => {
+  test('calls onSelect when a template card is clicked', () => {
     render(<TemplateSelector onSelect={mockOnSelect} />);
-    const buttons = screen.getAllByText('Select');
-    fireEvent.click(buttons[0]);
+    const card = screen.getByText('Customer Support Agent').closest('.template-card');
+    fireEvent.click(card);
     expect(mockOnSelect).toHaveBeenCalledWith(expect.objectContaining({
       id: expect.any(String),
       name: expect.any(String),

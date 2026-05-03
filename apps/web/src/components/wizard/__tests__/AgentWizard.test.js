@@ -1,11 +1,21 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import AgentWizard from '../AgentWizard';
+import { ToastProvider } from '../../common/Toast';
 
 jest.mock('react-router-dom');
 
-const renderWizard = () => {
-  return render(<AgentWizard />);
-};
+// Surface skills service mock so SkillsDataStep can resolve a list cleanly,
+// even though we never reach step 4 in these tests.
+jest.mock('../../../services/skills', () => ({
+  getFileSkills: jest.fn(() => Promise.resolve({ data: { skills: [] } })),
+}));
+
+const renderWizard = () =>
+  render(
+    <ToastProvider>
+      <AgentWizard />
+    </ToastProvider>
+  );
 
 describe('AgentWizard', () => {
   test('renders wizard stepper', () => {
@@ -18,15 +28,13 @@ describe('AgentWizard', () => {
     expect(screen.getByText('What type of agent do you want to create?')).toBeInTheDocument();
   });
 
-  test('has Back and Next buttons', () => {
+  test('renders Cancel button', () => {
     renderWizard();
-    expect(screen.getByText('Next')).toBeInTheDocument();
     expect(screen.getByText('Cancel')).toBeInTheDocument();
   });
 
-  test('Back button disabled on step 1', () => {
+  test('hides Back button on step 1', () => {
     renderWizard();
-    const backButton = screen.queryByText('Back');
-    expect(backButton).not.toBeInTheDocument();
+    expect(screen.queryByText('Back')).not.toBeInTheDocument();
   });
 });

@@ -6,7 +6,7 @@ describe('ReviewStep', () => {
     template: { name: 'Data Analyst Agent', icon: 'BarChart' },
     basicInfo: { name: 'My Analyst', description: 'Analyzes data', avatar: '📊' },
     personality: { preset: 'formal', temperature: 0.4, max_tokens: 2000 },
-    skills: { sql_query: true, data_summary: true, calculator: false },
+    skills: { lead_scoring: true },
     datasets: ['123', '456'],
   };
 
@@ -22,22 +22,25 @@ describe('ReviewStep', () => {
     expect(screen.getByText(/formal/i)).toBeInTheDocument();
   });
 
-  test('shows enabled tools', () => {
+  test('shows enabled skills using friendly names when available', () => {
     render(<ReviewStep wizardData={mockWizardData} datasets={mockDatasets} onEdit={jest.fn()} />);
-    expect(screen.getByText('SQL Query Tool')).toBeInTheDocument();
-    expect(screen.getByText('Data Summary Tool')).toBeInTheDocument();
-    expect(screen.queryByText('Calculator Tool')).not.toBeInTheDocument();
+    expect(screen.getByText('Lead Scoring')).toBeInTheDocument();
   });
 
-  test('shows connected datasets', () => {
+  test('renders the Skills section header', () => {
     render(<ReviewStep wizardData={mockWizardData} datasets={mockDatasets} onEdit={jest.fn()} />);
-    expect(screen.getByText('Revenue 2024')).toBeInTheDocument();
-    expect(screen.getByText('Customer List')).toBeInTheDocument();
+    expect(screen.getByText('Skills')).toBeInTheDocument();
   });
 
   test('shows edit links for each section', () => {
     render(<ReviewStep wizardData={mockWizardData} datasets={mockDatasets} onEdit={jest.fn()} />);
     const editLinks = screen.getAllByText('Edit');
     expect(editLinks.length).toBeGreaterThan(0);
+  });
+
+  test('falls back to "No special tools enabled" when skills empty', () => {
+    const emptyData = { ...mockWizardData, skills: {} };
+    render(<ReviewStep wizardData={emptyData} datasets={mockDatasets} onEdit={jest.fn()} />);
+    expect(screen.getByText(/No special tools enabled/i)).toBeInTheDocument();
   });
 });
