@@ -182,6 +182,10 @@ Slice the same data as Tier 2 but by health, not cost.
 - 2026-05-03: Tier 4 (#267) — Live activity feed (`LiveActivityFeed`
   component on dashboard, polls `/audit/agents` every 15s, pause
   toggle, hidden on 403). 6 frontend tests.
+- 2026-05-03: Tier 5 (#268) — Coalition replay viewer. New
+  `GET /insights/collaborations(/:id)` endpoints + `CoalitionReplayPage`
+  (list + detail). Reads persisted blackboard substrate from A2A
+  shipped 2026-04-12. 6 backend tests.
 
 ## Working agreements while this is in flight
 

@@ -64,6 +64,7 @@ from app.api.v1 import (
     agent_tests,
     insights_fleet_health,
     insights_cost,
+    insights_coalition_replay,
 )
 
 _logger = logging.getLogger(__name__)
@@ -115,6 +116,7 @@ router.include_router(features.router, prefix="/features", tags=["features"])
 router.include_router(tenant_analytics.router, prefix="/tenant-analytics", tags=["tenant-analytics"])
 # Tier 2 cost dashboard: GET /insights/cost
 router.include_router(insights_cost.router, prefix="/insights", tags=["insights"])
+router.include_router(insights_coalition_replay.router, prefix="/insights", tags=["insights"])
 router.include_router(integration_configs.router, prefix="/integration-configs", tags=["integration-configs"])
 router.include_router(integrations.router, prefix="/integrations", tags=["integrations"])
 router.include_router(skills_new.router, prefix="/skills", tags=["skills"])
