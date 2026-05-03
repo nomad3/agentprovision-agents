@@ -2,13 +2,13 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.tools.postgres import connect_postgres, verify_connection, list_source_tables
+from src.tools.postgres_tools import connect_postgres, verify_connection, list_source_tables
 
 
 @pytest.mark.asyncio
 async def test_connect_postgres_creates_data_source():
     """Test connect_postgres creates data source via API"""
-    with patch('src.tools.postgres.api') as mock_api:
+    with patch('src.tools.postgres_tools.api') as mock_api:
         mock_api.create_data_source = AsyncMock(return_value={
             "id": "ds-123",
             "name": "My Database"
@@ -32,8 +32,8 @@ async def test_connect_postgres_creates_data_source():
 @pytest.mark.asyncio
 async def test_verify_connection_success():
     """Test successful connection verification"""
-    with patch('src.tools.postgres.api') as mock_api, \
-         patch('src.tools.postgres.asyncpg') as mock_asyncpg:
+    with patch('src.tools.postgres_tools.api') as mock_api, \
+         patch('src.tools.postgres_tools.asyncpg') as mock_asyncpg:
 
         mock_api.get_data_source = AsyncMock(return_value={
             "id": "ds-123",
@@ -53,8 +53,8 @@ async def test_verify_connection_success():
 @pytest.mark.asyncio
 async def test_list_source_tables():
     """Test listing tables from source database"""
-    with patch('src.tools.postgres.api') as mock_api, \
-         patch('src.tools.postgres.asyncpg') as mock_asyncpg:
+    with patch('src.tools.postgres_tools.api') as mock_api, \
+         patch('src.tools.postgres_tools.asyncpg') as mock_asyncpg:
 
         mock_api.get_data_source = AsyncMock(return_value={
             "config": {"host": "localhost", "port": 5432, "database": "mydb", "user": "user", "password": "pass"}
