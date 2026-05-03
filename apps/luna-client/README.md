@@ -4,7 +4,7 @@ Native AI client — Tauri 2 desktop (macOS ARM64) + React + Vite, with PWA fall
 
 For full architecture see [`../../CLAUDE.md`](../../CLAUDE.md). For iOS-specific notes see [`IOS_BUILD.md`](IOS_BUILD.md).
 
-> **Note:** native audio push-to-talk described in older design docs is not currently in the tree. Voice input today is browser-based (MediaRecorder in the React layer); see `useLunaStream` and `MemoryPanel`.
+> **Note:** native audio push-to-talk described in older design docs (PR #154) is not currently in the tree — `cpal` is not in `src-tauri/Cargo.toml` and no `start_audio_capture`/`stop_audio_capture` functions exist. There is no native voice capture path in this app today; if a tenant wires voice in, it goes through the API's `/api/v1/media/transcribe` endpoint, not a Rust handler.
 
 ## Layout
 

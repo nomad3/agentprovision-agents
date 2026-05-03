@@ -1,6 +1,6 @@
 # apps/mcp-server
 
-FastMCP tool server. Serves **130+ tools across 26 modules** to CLI agent runtimes (Claude Code, Codex, Gemini, Copilot CLI) and the in-process local tool agent over MCP SSE.
+FastMCP tool server. Serves **130+ tools across 27 modules** (`@mcp.tool()` decorator count: 136) to CLI agent runtimes (Claude Code, Codex, Gemini, Copilot CLI) and the in-process local tool agent over MCP SSE.
 
 For full architecture see [`../../CLAUDE.md`](../../CLAUDE.md).
 
