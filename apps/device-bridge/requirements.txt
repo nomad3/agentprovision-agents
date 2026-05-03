@@ -6,3 +6,8 @@ aiohttp
 pydantic
 python-multipart
 opencv-python
+
+# Test deps (also installed by CI explicitly; pinned here for local runs)
+pytest>=7.4
+pytest-cov>=4.1
+pytest-asyncio>=0.23
