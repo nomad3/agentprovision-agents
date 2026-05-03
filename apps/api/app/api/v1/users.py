@@ -1,16 +1,20 @@
-"""Tenant user endpoints — self-service profile + member directory."""
+"""Tenant user endpoints — self-service profile + member directory + gesture bindings."""
+import json
 import logging
 import uuid
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.core.rate_limit import limiter
 from app.db.safe_ops import safe_rollback
 from app.models.user import User as UserModel
 from app.schemas import user as user_schema
+from app.schemas.gesture_binding import BindingsPayload, BindingsResponse
+from app.services import gesture_bindings_service
 
 logger = logging.getLogger(__name__)
 
@@ -135,3 +139,55 @@ def list_tenant_users(
         )
         for u in rows
     ]
+
+
+# ── Gesture bindings ───────────────────────────────────────────────────────
+# Stored in user_preferences (preference_type='gesture_bindings', value_json
+# JSONB column added in migration 114). 64KB cap enforced both here and via
+# CHECK constraint at the DB level. Rate-limited via slowapi consistent with
+# auth.py.
+
+MAX_BINDINGS_BYTES = 65_536
+
+
+@router.get("/me/gesture-bindings", response_model=BindingsResponse)
+@limiter.limit("60/minute")
+def get_my_gesture_bindings(
+    request: Request,
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    bindings = gesture_bindings_service.get_bindings_for_user(
+        db, current_user.tenant_id, current_user.id
+    )
+    updated_at = gesture_bindings_service.get_bindings_metadata(
+        db, current_user.tenant_id, current_user.id
+    )
+    return BindingsResponse(
+        bindings=bindings,
+        updated_at=updated_at.isoformat() if updated_at else None,
+    )
+
+
+@router.put("/me/gesture-bindings", status_code=204)
+@limiter.limit("10/minute")
+def put_my_gesture_bindings(
+    request: Request,
+    payload: BindingsPayload,
+    *,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    serialized = [b.model_dump(mode="json") for b in payload.bindings]
+    if len(json.dumps(serialized)) > MAX_BINDINGS_BYTES:
+        raise HTTPException(status_code=413, detail="bindings payload exceeds 64KB cap")
+    try:
+        gesture_bindings_service.save_bindings_for_user(
+            db, current_user.tenant_id, current_user.id, serialized
+        )
+        db.commit()
+    except Exception:
+        safe_rollback(db)
+        raise
+    return None

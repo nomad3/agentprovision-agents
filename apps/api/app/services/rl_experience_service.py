@@ -16,6 +16,7 @@ DECISION_POINTS = [
     "score_weighting", "sync_strategy", "execution_decision",
     "code_strategy", "deal_stage_advance", "change_significance",
     "code_task", "tier_selection",
+    "gesture_action",
 ]
 
 # Reward discount factor for backward propagation
