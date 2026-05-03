@@ -18,7 +18,8 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 ## Start Here
 
 - **New contributor?** Read [`../CLAUDE.md`](../CLAUDE.md) for the full architecture.
-- **What shipped this week?** [`changelog/2026-04-12-to-2026-04-19.md`](changelog/2026-04-12-to-2026-04-19.md)
+- **What shipped recently?** [`changelog/2026-04-19-to-2026-05-03.md`](changelog/2026-04-19-to-2026-05-03.md) (latest), [`changelog/2026-04-12-to-2026-04-19.md`](changelog/2026-04-12-to-2026-04-19.md) (prior).
+- **Quick agent reference?** [`../AGENTS.md`](../AGENTS.md)
 - **Deploying?** [`KUBERNETES_DEPLOYMENT.md`](KUBERNETES_DEPLOYMENT.md)
 - **Adding a new feature?** Follow the [writing-plans skill](#design-first-workflow) and save the plan to `plans/YYYY-MM-DD-<slug>.md`.
 
@@ -43,6 +44,14 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 | 2026-04-18 | [`plans/2026-04-18-memory-entities-seed-plan.md`](plans/2026-04-18-memory-entities-seed-plan.md) | Entity backfill strategy |
 | 2026-04-18 | [`plans/2026-04-18-skills-marketplace-redesign-plan.md`](plans/2026-04-18-skills-marketplace-redesign-plan.md) | Skills marketplace UX |
 | 2026-04-18 | [`plans/2026-04-18-security-fixes.md`](plans/2026-04-18-security-fixes.md) / [`remediation`](plans/2026-04-18-security-remediation-plan.md) | Security hardening + open-item tracker |
+| 2026-04-20 | [`plans/2026-04-20-design-system-audit.md`](plans/2026-04-20-design-system-audit.md) / [`unification`](plans/2026-04-20-design-system-unification-plan.md) | Ocean theme audit + unification |
+| 2026-04-22 | [`plans/2026-04-22-codebase-cleanup-plan.md`](plans/2026-04-22-codebase-cleanup-plan.md) | Repo-wide cleanup pass |
+| 2026-04-23 | [`plans/2026-04-23-luna-latency-reduction-plan.md`](plans/2026-04-23-luna-latency-reduction-plan.md) | **Latency campaign** — greeting fast-path, prompt trim, KV cache probe |
+| 2026-04-25 | [`plans/2026-04-25-luna-hallucination-reduction-plan.md`](plans/2026-04-25-luna-hallucination-reduction-plan.md) | **Hallucination reduction** |
+| 2026-04-26 | [`plans/2026-04-26-external-agents-and-a2a-enhancement-plan.md`](plans/2026-04-26-external-agents-and-a2a-enhancement-plan.md) | **External Agents + A2A v2** — Workflows-as-spine, Microsoft import |
+| 2026-04-26 | [`plans/2026-04-26-skills-fleet-alignment-plan.md`](plans/2026-04-26-skills-fleet-alignment-plan.md) | **Skills Marketplace v2** — `_bundled/` + `_tenant/<uuid>/`, library_revisions |
+| 2026-05-03 | [`plans/2026-05-03-visibility-roadmap-plan.md`](plans/2026-05-03-visibility-roadmap-plan.md) | Visibility roadmap — Tier 1 shipped, Tier 2-5 + ops + marketing scoped |
+| 2026-05-03 | [`plans/2026-05-03-documentation-refresh-plan.md`](plans/2026-05-03-documentation-refresh-plan.md) | This documentation refresh |
 
 ## Recent Reports
 

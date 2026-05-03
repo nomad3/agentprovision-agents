@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration platform. Routes tasks to **Gemini CLI** (primary, configurable per-tenant via `tenant_features.default_cli_platform`) via Temporal workflows. Agents are defined as marketplace skills, tools are served via **MCP** (81 tools), and the platform learns from user feedback via RL. Deployed on **Rancher Desktop K8s** with **Cloudflare Tunnel** (in-cluster pod) serving `agentprovision.com`.
+AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration platform. Routes tasks across four CLI runtimes (**Claude Code, Codex, Gemini CLI, GitHub Copilot CLI**) via Temporal workflows, with autodetect + quota-fallback chaining (#245) and per-tenant default selectable in `tenant_features.default_cli_platform`. Agents are governed via the ALM platform, tools are served via **MCP** (90+ tools), and the platform learns which runtime performs best per task type via RL. Deployed on **Rancher Desktop K8s** with **Cloudflare Tunnel** (in-cluster pod) serving `agentprovision.com`.
 
 **Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Memory Recall (pre-loaded context, pgvector) → Temporal → code-worker (Gemini CLI / Claude Code CLI / Codex CLI) → MCP tools (FastMCP, 81 tools) → response → PostChatMemoryWorkflow (async entity extraction via Gemma 4). Every response is auto-scored by a local Gemma 4 council. All scores logged as RL experiences.
 
@@ -165,13 +165,14 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - `classify_task_type()`: Message intent classification for agent routing
 - Models: `gemma4` (default fast + quality scoring + tool calling + provider review)
 
-**Skill Marketplace**: Three-tier file-based skill system with GitHub import:
-- **Native tier**: Bundled skills shipped with the container (read-only): sql_query, calculator, data_summary, entity_extraction, knowledge_search, lead_scoring, report_generation
-- **Community tier**: Imported from GitHub repos via `POST /skills/library/import-github`. Supports external formats (GWS `SKILL.md`, Claude Code superpowers). Auto-adapter normalizes frontmatter (semver→int, nested categories, engine mapping).
-- **Custom tier**: Per-tenant skills created/edited in the UI with versioning and CHANGELOG
-- **Engines**: `python` (script.py), `shell` (script.sh), `markdown` (prompt.md), `tool` (class registry)
-- **Semantic search**: Skills are embedded via pgvector for auto-trigger matching
-- **GitHub import**: Paste a repo URL → imports single skill or scans subdirectories. Supports GWS (92 skills), superpowers, or any repo with SKILL.md/skill.md files.
+**Skill Marketplace v2** (shipped 2026-04-26, PRs #182–#193): File-based skill library with two-folder layout on a shared volume:
+- **`_bundled/`** — read-only, ships with the container. Built-in skills: sql_query, calculator, data_summary, entity_extraction, knowledge_search, lead_scoring, report_generation.
+- **`_tenant/<tenant-uuid>/`** — per-tenant, custom + community-imported.
+- **Format**: Claude-Code-style `SKILL.md` (frontmatter + instructions). Engines: `python` (script.py), `shell` (script.sh), `markdown` (prompt.md), `tool` (class registry).
+- **Audit**: every change written to `library_revisions` (migration 110).
+- **Code-worker access**: via the **`read_library_skill` MCP tool**. The library is intentionally **not** mounted into the worker pod (see [`memory/library_mount_helm_decision.md`](.claude/projects/-Users-nomade-Documents-GitHub-servicetsunami-agents/memory/library_mount_helm_decision.md)).
+- **MCP CRUD**: `update_skill`, `update_agent`, `read_library_skill`. The legacy `match_skills_to_context` tool and the GitHub-import flow have been retired (auto-trigger uses pgvector embeddings).
+- **Auto-trigger**: skills are embedded via pgvector for context matching.
 
 **UI/UX (Ocean Theme)**:
 - **Design System**: Glassmorphic "Ocean Theme" with support for high-contrast light and dark modes.
@@ -199,7 +200,7 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - **Internal auth**: MCP tools use `/internal/*` endpoints with `X-Internal-Key` + `X-Tenant-Id` headers (accepts both `API_INTERNAL_KEY` and `MCP_API_KEY`).
 
 **Temporal workflows** (static — being migrated to dynamic): Durable workflow execution across four task queues:
-- `agentprovision-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `DynamicWorkflowExecutor`, `CoalitionWorkflow` (A2A), `AgentPerformanceSnapshotWorkflow` (hourly rollup).
+- `agentprovision-orchestration`: `TaskExecutionWorkflow`, `ChannelHealthMonitorWorkflow`, `FollowUpWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `TeamsMonitorWorkflow`, `DynamicWorkflowExecutor`, `CoalitionWorkflow` (A2A), `AgentPerformanceSnapshotWorkflow` (hourly rollup).
 - `agentprovision-postgres`: `DatasetSyncWorkflow`, `KnowledgeExtractionWorkflow`, `DataSourceSyncWorkflow`.
 - `agentprovision-code`: `CodeTaskWorkflow` (Claude Code / Gemini CLI / Codex CLI / GitHub Copilot CLI execution in isolated code-worker pod), `ChatCliWorkflow` (per-agent chat turn as a child workflow — used by CoalitionWorkflow).
 - `agentprovision-business`: Industry-specific flows:
@@ -384,7 +385,7 @@ Business logic layer (one service per model):
 ### Workers (`apps/api/app/workers/`)
 
 Temporal workers for async processing:
-- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow, DynamicWorkflowExecutor, CoalitionWorkflow, AgentPerformanceSnapshotWorkflow (queue: `agentprovision-orchestration`)
+- `orchestration_worker.py`: TaskExecutionWorkflow, ChannelHealthMonitorWorkflow, FollowUpWorkflow, InboxMonitorWorkflow, CompetitorMonitorWorkflow, **TeamsMonitorWorkflow** (#250, auto-starts on `/teams/enable`), DynamicWorkflowExecutor, CoalitionWorkflow, AgentPerformanceSnapshotWorkflow (queue: `agentprovision-orchestration`)
 - `postgres_worker.py`: DatasetSync, KnowledgeExtraction, DataSourceSync workflows (queue: `agentprovision-postgres`)
 - `scheduler_worker.py`: Automated pipeline execution (cron/interval scheduling, polls every 60s)
 
@@ -492,7 +493,7 @@ GOOGLE_CLIENT_SECRET=xxx
 - **Skill execution sandbox**: `_execute_python` and `_execute_shell` in `skill_manager.py` strip sensitive env vars (SECRET_KEY, ENCRYPTION_KEY, OAuth secrets, platform tokens) before spawning subprocess.
 - **Password reset**: tokens hashed with SHA-256 before DB insert, verification uses `hmac.compare_digest`, response message identical for existing vs. missing email (no enumeration). Rate-limited via `slowapi`: login 10/min, recovery 3/hour, confirm 5/hour.
 - **Media upload hardening**: transcription endpoint streams to disk instead of reading fully into memory (prevents OOM).
-- **Internal routes**: `/api/v1/*/internal/*` are still internet-reachable — Cloudflare tunnel `notFound` rule planned. See open items in `docs/plans/2026-04-18-security-remediation-plan.md`.
+- **Internal routes blocked from public internet** (#207, 2026-04-22): `/api/v1/*/internal/*` rejects external traffic at the Cloudflare tunnel. In-cluster service-to-service calls (MCP server, code-worker) still reach them via `X-Internal-Key` auth.
 - **Pentest reports**: `docs/report/2026-04-18-full-security-audit.md` (8 findings) and `docs/report/2026-04-18-pentest-verification.md` (black-hat verification).
 
 ### Web Configuration (`apps/web/.env.local`)

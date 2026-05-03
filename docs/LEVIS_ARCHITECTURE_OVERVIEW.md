@@ -165,7 +165,7 @@ Agents have access to 81+ tools through the **Model Context Protocol (MCP)**:
 *   **Backend:** Python 3.11 (FastAPI), Rust (embedding-service via fastembed/ONNX, memory-core via tonic gRPC + sqlx).
 *   **Database:** PostgreSQL 13 + pgvector (768-dim embeddings). 67 SQL migrations.
 *   **Orchestration:** Temporal.io (4 task queues: orchestration, postgres, code, business).
-*   **Inference:** Gemini CLI (primary, per-tenant OAuth) / Claude Code CLI / Codex CLI (fallbacks) + Gemma 4 via Ollama (local, zero cloud cost for scoring/extraction).
+*   **Inference:** Claude Code CLI / Codex CLI / Gemini CLI / GitHub Copilot CLI (per-tenant OAuth, autodetect + quota fallback chain) + Gemma 4 via Ollama (local, zero cloud cost for scoring, summarization, extraction, triage).
 *   **Embeddings:** nomic-embed-text-v1.5 (768-dim). Rust path: fastembed + ONNX Runtime. Python fallback: sentence-transformers.
 *   **Infrastructure:** Kubernetes (Rancher Desktop), Helm, Cloudflare Tunnel, GitHub Actions CI/CD.
 
