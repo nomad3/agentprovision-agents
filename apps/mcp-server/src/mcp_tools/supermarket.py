@@ -52,7 +52,7 @@ async def search_product_prices(
         - summary: Human-readable price comparison
         - errors: Products with no results
     """
-    resolved_tenant_id = resolve_tenant_id(tenant_id, ctx)
+    resolved_tenant_id = resolve_tenant_id(ctx) or tenant_id
     logger.info("search_product_prices: tenant=%s products=%s sites=%s",
                 str(resolved_tenant_id)[:8], products, sites)
 

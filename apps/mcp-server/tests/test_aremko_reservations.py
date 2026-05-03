@@ -13,6 +13,9 @@ class _DummyResponse:
     def json(self):
         return self._payload
 
+    def raise_for_status(self):
+        return None
+
 
 class _DummyClient:
     def __init__(self, recorder, payload):

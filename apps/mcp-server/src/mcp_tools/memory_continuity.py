@@ -65,7 +65,7 @@ async def synthesize_daily_journal(
     Args:
         tenant_id: Tenant UUID
     """
-    tid = resolve_tenant_id(tenant_id, ctx)
+    tid = resolve_tenant_id(ctx) or tenant_id
     result = await _internal("post", "/api/v1/internal/session-journals/synthesize-daily", tid)
     return result
 
@@ -84,7 +84,7 @@ async def synthesize_weekly_journal(
     Args:
         tenant_id: Tenant UUID
     """
-    tid = resolve_tenant_id(tenant_id, ctx)
+    tid = resolve_tenant_id(ctx) or tenant_id
     result = await _internal("post", "/api/v1/internal/session-journals/synthesize-weekly", tid)
     return result
 
@@ -105,7 +105,7 @@ async def get_morning_briefing(
         days_lookback: How many days of journals to include (default 7)
         tenant_id: Tenant UUID
     """
-    tid = resolve_tenant_id(tenant_id, ctx)
+    tid = resolve_tenant_id(ctx) or tenant_id
     result = await _internal("get", f"/api/v1/session-journals/morning-briefing?days_lookback={days_lookback}", tid)
     return result
 
@@ -131,7 +131,7 @@ async def expire_behavioral_signals(
     Args:
         tenant_id: Tenant UUID
     """
-    tid = resolve_tenant_id(tenant_id, ctx)
+    tid = resolve_tenant_id(ctx) or tenant_id
     result = await _internal("post", "/api/v1/internal/behavioral-signals/expire", tid)
     return result
 
@@ -153,6 +153,6 @@ async def get_learning_stats(
         days: Lookback window in days (default 14)
         tenant_id: Tenant UUID
     """
-    tid = resolve_tenant_id(tenant_id, ctx)
+    tid = resolve_tenant_id(ctx) or tenant_id
     result = await _internal("get", f"/api/v1/internal/behavioral-signals/stats?days={days}", tid)
     return result
