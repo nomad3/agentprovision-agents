@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration platform. Routes tasks across four CLI runtimes (**Claude Code, Codex, Gemini CLI, GitHub Copilot CLI**) via Temporal workflows, with autodetect + quota-fallback chaining (#245) and per-tenant default selectable in `tenant_features.default_cli_platform`. Agents are governed via the ALM platform, tools are served via **MCP** (90+ tools), and the platform learns which runtime performs best per task type via RL. Deployed on **Rancher Desktop K8s** with **Cloudflare Tunnel** (in-cluster pod) serving `agentprovision.com`.
 
-**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Memory Recall (pre-loaded context, pgvector) → Temporal → code-worker (Gemini CLI / Claude Code CLI / Codex CLI) → MCP tools (FastMCP, 81 tools) → response → PostChatMemoryWorkflow (async entity extraction via Gemma 4). Every response is auto-scored by a local Gemma 4 council. All scores logged as RL experiences.
+**Key architecture**: Chat → Agent Router (Python, zero LLM cost) → Memory Recall (pre-loaded context, pgvector) → Temporal → code-worker (Claude Code / Codex / Gemini CLI / GitHub Copilot CLI, with autodetect + quota fallback) → MCP tools (FastMCP, 90+ tools) → response → PostChatMemoryWorkflow (async entity extraction via Gemma 4). Every response is auto-scored by a local Gemma 4 council. All scores logged as RL experiences.
 
 **Memory-First Design** (Phase 1 shipped, Phase 2 in validation):
 - `apps/api/app/memory/` package: `recall()`, `record_*()`, `ingest_events()`
@@ -30,10 +30,10 @@ AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration p
 - **`apps/embedding-service`**: Rust gRPC service for fast vector embeddings. Uses fastembed (ONNX Runtime) with nomic-embed-text-v1.5 (768-dim). K8s: `embedding-service` on port 50051, 2Gi limit, 120s probe delay for model download.
 - **`apps/memory-core`**: Rust gRPC service for memory operations (Recall, RecordObservation, RecordCommitment, IngestEvents). Talks to embedding-service + PostgreSQL via pgvector. K8s: `memory-core` on port 50052.
 - **`apps/web`**: React SPA with nginx. Proxies `/api/*` to api service, `/ws/*` for WebSocket. K8s: `web` deployment.
-- **`apps/mcp-server`**: **Deprecated** — was the old Databricks/Playwright MCP server. Replaced by FastMCP tools integrated in the API.
+- **`apps/mcp-server`**: FastMCP tools server (90+ tools) over MCP SSE on port 8086. See full module list under "Monorepo Structure" below.
 - **`cloudflared`**: Runs as K8s pod (`kubernetes/cloudflared-deployment.yaml`), routes `agentprovision.com` to internal services by DNS name (`http://api:80`, `http://web:80`). No port-forwards needed.
 - **`temporal`**: Workflow engine (auto-setup image). K8s: `temporal` deployment on port 7233.
-- **`postgresql`**: pgvector/pgvector:pg13 with PVC protected by `helm.sh/resource-policy: keep`. 67 SQL migrations tracked in `_migrations` table.
+- **`postgresql`**: pgvector/pgvector:pg13 with PVC protected by `helm.sh/resource-policy: keep`. 90+ SQL migrations (latest: `113_tenant_github_primary_account.sql`) tracked in `_migrations` table.
 - **`redis`**: Session cache. K8s: `redis` deployment.
 - **`ollama`** (native host, port 11434): Runs natively on Mac M4 for GPU acceleration (~57 tok/s). Hosts Gemma 4 for auto-scoring, entity extraction, commitment classification. K8s pods reach it via `host.docker.internal:11434`.
 
@@ -63,7 +63,7 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 
 - **`apps/device-bridge`** (new 2026-04-19): Local IoT device + camera bridge used by Luna client Phase 2. See `apps/luna-client` integration.
 
-- **`apps/mcp-server`**: FastMCP tools server (81+ tools). Serves MCP over SSE on port 8086. Shipped tool modules in `src/mcp_tools/`: `drive`, `email`, `calendar`, `ads`, `competitor`, `knowledge`, `aremko`, `sales`, `devices`, `github`, `jira`, `shell`, `data`, `connectors`, `reports`, `memory_continuity`, `monitor`, `webhooks`, `skills`, `supermarket`, `mcp_servers`, `copilot_studio` (new 2026-04-18), `unsupervised_learning`, `dynamic_workflows`, `analytics`. Auth via `X-Internal-Key` + `X-Tenant-Id` headers.
+- **`apps/mcp-server`**: FastMCP tools server (90+ tools). Serves MCP over SSE on port 8086. Shipped tool modules in `src/mcp_tools/`: `ads`, `agent_messaging`, `analytics`, `aremko`, `calendar`, `competitor`, `connectors`, `copilot_studio`, `data`, `devices`, `drive`, `dynamic_workflows`, `email`, `github`, `jira`, `knowledge`, `mcp_servers`, `memory_continuity`, `monitor`, `reports`, `sales`, `shell`, `skills`, `supermarket`, `unsupervised_learning`, `webhooks`. Auth via `X-Internal-Key` + `X-Tenant-Id` headers.
 
 - **`apps/api/app/memory/`**: Memory-First package (Phase 1 shipped)
   - `recall.py`: Pre-loads context for chat hot path. 1500ms hard timeout, pgvector semantic search, token budget enforcement. Dual-read mode compares Python vs Rust (gRPC) results.
@@ -170,7 +170,7 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - **`_tenant/<tenant-uuid>/`** — per-tenant, custom + community-imported.
 - **Format**: Claude-Code-style `SKILL.md` (frontmatter + instructions). Engines: `python` (script.py), `shell` (script.sh), `markdown` (prompt.md), `tool` (class registry).
 - **Audit**: every change written to `library_revisions` (migration 110).
-- **Code-worker access**: via the **`read_library_skill` MCP tool**. The library is intentionally **not** mounted into the worker pod (see [`memory/library_mount_helm_decision.md`](.claude/projects/-Users-nomade-Documents-GitHub-servicetsunami-agents/memory/library_mount_helm_decision.md)).
+- **Code-worker access**: via the **`read_library_skill` MCP tool**. The library is intentionally **not** mounted into the worker pod — the MCP path keeps the worker stateless and the library a single source of truth.
 - **MCP CRUD**: `update_skill`, `update_agent`, `read_library_skill`. The legacy `match_skills_to_context` tool and the GitHub-import flow have been retired (auto-trigger uses pgvector embeddings).
 - **Auto-trigger**: skills are embedded via pgvector for context matching.
 
@@ -450,7 +450,7 @@ API_PORT=8000    # FastAPI backend
 WEB_PORT=8002    # React frontend
 DB_PORT=8003     # PostgreSQL
 MCP_PORT=8086    # MCP server (PostgreSQL)
-                 # MCP tools on 8087 (FastMCP, 81 tools)
+                 # MCP tools on 8087 (FastMCP, 90+ tools)
 ```
 
 ### API Configuration (`apps/api/.env`)

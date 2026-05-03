@@ -126,7 +126,7 @@ Response  →  Auto Quality Scorer (Gemma 4, 6-dim rubric)  →  RL experience
 - **Workers** (`app/workers/`) — Temporal worker registration (orchestration, postgres, scheduler).
 - **Workflows** (`app/workflows/`) — Temporal workflow definitions including `DynamicWorkflowExecutor`, `CoalitionWorkflow`, `InboxMonitorWorkflow`, `CompetitorMonitorWorkflow`, `TeamsMonitorWorkflow` (#250).
 - **Memory** (`app/memory/`) — recall / record / ingest / dispatch package.
-- **Skills** (`app/skills/`) — three-tier marketplace (bundled / tenant / community).
+- **Skills** (`app/skills/`) — file-based marketplace (`_bundled/` + `_tenant/<uuid>/`).
 
 `apps/web` — `pages/` (DashboardPage, ChatPage, AgentsPage, AgentDetailPage, WorkflowsPage, MemoryPage, IntegrationsPage, NotebooksPage, SettingsPage, BrandingPage, LLMSettingsPage), `components/` (Layout, NotificationBell, TaskTimeline, IntegrationsPanel, CollaborationPanel, workflows/*, wizard/*).
 
@@ -275,7 +275,7 @@ docker exec -i $PG psql -U postgres agentprovision \
 
 ### Skill Marketplace v2 (shipped 2026-04-26)
 
-Three-tier file layout:
+Two-folder file layout:
 - `_bundled/` — read-only, ships with the container.
 - `_tenant/<uuid>/` — per-tenant, custom + community.
 - Format: Claude-Code-style `SKILL.md` (frontmatter + instructions + optional `script.py`/`script.sh`/`prompt.md`).

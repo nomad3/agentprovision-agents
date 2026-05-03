@@ -327,7 +327,7 @@ Game-inspired transparent Tauri window (`Cmd+Shift+L`) for A2A visualization and
 
 ## Skills Marketplace v2
 
-File-based skills with three tiers stored on a shared volume. Shipped 2026-04-26 (PRs #182–#193).
+File-based skills laid out across two folders on a shared volume. Shipped 2026-04-26 (PRs #182–#193).
 
 ```
 skills/

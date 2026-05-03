@@ -125,7 +125,7 @@ Tools fail without it.
 
 ## Skill Marketplace v2 (shipped 2026-04-26)
 
-File-based skills with three tiers stored on a shared volume:
+File-based skills laid out across two folders on a shared volume:
 
 - `_bundled/` — read-only, ships with the container.
 - `_tenant/<uuid>/` — per-tenant skills (custom + community imports).
