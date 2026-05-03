@@ -26,7 +26,7 @@ AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration p
 **Kubernetes on Rancher Desktop** (migrated from Docker Compose 2026-04-10). All services deployed via Helm (`helm/charts/microservice` base chart). Cloudflare tunnel runs as an in-cluster pod.
 
 - **`apps/api`**: FastAPI backend — chat service, agent router, memory layer, RL, knowledge graph, skill marketplace. K8s: `api` deployment, 2Gi memory limit.
-- **`apps/code-worker`**: CLI execution via Temporal (Gemini CLI primary, Claude Code + Codex fallbacks). Has git, gh, gemini, claude, node. Fetches per-tenant OAuth tokens at runtime. K8s: `code-worker` deployment on `agentprovision-code` queue.
+- **`apps/code-worker`**: CLI execution via Temporal across all four runtimes (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI) with autodetect + quota fallback (#245). Has git, gh, claude, codex, gemini, copilot, node. Fetches per-tenant OAuth tokens at runtime. K8s: `code-worker` deployment on `agentprovision-code` queue.
 - **`apps/embedding-service`**: Rust gRPC service for fast vector embeddings. Uses fastembed (ONNX Runtime) with nomic-embed-text-v1.5 (768-dim). K8s: `embedding-service` on port 50051, 2Gi limit, 120s probe delay for model download.
 - **`apps/memory-core`**: Rust gRPC service for memory operations (Recall, RecordObservation, RecordCommitment, IngestEvents). Talks to embedding-service + PostgreSQL via pgvector. K8s: `memory-core` on port 50052.
 - **`apps/web`**: React SPA with nginx. Proxies `/api/*` to api service, `/ws/*` for WebSocket. K8s: `web` deployment.
@@ -357,7 +357,7 @@ Business logic layer (one service per model):
 - `embedding_service.py`: Local embedding generation via nomic-embed-text-v1.5 (768-dim). Functions: `embed_text()`, `embed_and_store()`, `search_similar()`, `recall()`. Used by knowledge, chat, memory, RL, skills.
 - `mcp_client.py`: MCP server client
 - `knowledge.py`, `knowledge_extraction.py`: Knowledge graph operations and extraction
-- `skill_manager.py`: Three-tier skill marketplace (native/community/custom). GitHub import with external format adapter (GWS SKILL.md support). Skill execution across 4 engines. Semantic auto-trigger matching.
+- `skill_manager.py`: Skills v2 file-based marketplace (`_bundled/` + `_tenant/<uuid>/`, Claude-Code-style SKILL.md, four engines: python/shell/markdown/tool). Every change is audited to `library_revisions` (migration 110). Code-worker access is via the `read_library_skill` MCP tool; the library is intentionally not mounted into the worker pod. Semantic auto-trigger via pgvector embeddings.
 - `skill_registry_service.py`: Sync file skills to DB + pgvector embeddings
 - `whatsapp_service.py`: Neonize-based WhatsApp integration with persistent typing indicator (refreshes composing presence every 4s until response sent)
 - `branding.py`, `features.py`, `tenant_analytics.py`: Tenant customization services

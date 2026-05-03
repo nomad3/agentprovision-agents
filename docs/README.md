@@ -39,12 +39,12 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 | 2026-04-12 | [`plans/2026-04-12-spatial-knowledge-exploration-design.md`](plans/2026-04-12-spatial-knowledge-exploration-design.md) | **Luna OS Spatial HUD** design |
 | 2026-04-17 | [`plans/2026-04-17-landing-page-redesign-design.md`](plans/2026-04-17-landing-page-redesign-design.md) / [`plan`](plans/2026-04-17-landing-page-redesign-plan.md) | Marketing site rewrite |
 | 2026-04-18 | [`plans/2026-04-18-agent-lifecycle-management-platform-plan.md`](plans/2026-04-18-agent-lifecycle-management-platform-plan.md) | **Agent Lifecycle Management Platform** |
-| 2026-04-18 | [`plans/2026-04-18-agent-fleet-enhancement-plan.md`](plans/2026-04-18-agent-fleet-enhancement-plan.md) | AgentsPage fleet restructure + AgentDetailPage |
-| 2026-04-18 | [`plans/2026-04-18-chat-ui-redesign-plan.md`](plans/2026-04-18-chat-ui-redesign-plan.md) | Chat UI modernization |
-| 2026-04-18 | [`plans/2026-04-18-memory-entities-seed-plan.md`](plans/2026-04-18-memory-entities-seed-plan.md) | Entity backfill strategy |
-| 2026-04-18 | [`plans/2026-04-18-skills-marketplace-redesign-plan.md`](plans/2026-04-18-skills-marketplace-redesign-plan.md) | Skills marketplace UX |
-| 2026-04-18 | [`plans/2026-04-18-security-fixes.md`](plans/2026-04-18-security-fixes.md) / [`remediation`](plans/2026-04-18-security-remediation-plan.md) | Security hardening + open-item tracker |
-| 2026-04-20 | [`plans/2026-04-20-design-system-audit.md`](plans/2026-04-20-design-system-audit.md) / [`unification`](plans/2026-04-20-design-system-unification-plan.md) | Ocean theme audit + unification |
+| 2026-04-18 | `plans/2026-04-18-agent-fleet-enhancement-plan.md` *(local-only)* | AgentsPage fleet restructure + AgentDetailPage |
+| 2026-04-18 | `plans/2026-04-18-chat-ui-redesign-plan.md` *(local-only)* | Chat UI modernization |
+| 2026-04-18 | `plans/2026-04-18-memory-entities-seed-plan.md` *(local-only)* | Entity backfill strategy |
+| 2026-04-18 | `plans/2026-04-18-skills-marketplace-redesign-plan.md` *(local-only)* | Skills marketplace UX (superseded by [`2026-04-26-skills-fleet-alignment-plan.md`](plans/2026-04-26-skills-fleet-alignment-plan.md)) |
+| 2026-04-18 | `plans/2026-04-18-security-fixes.md` *(local-only)* / [`remediation`](plans/2026-04-18-security-remediation-plan.md) | Security hardening + open-item tracker |
+| 2026-04-20 | [`plans/2026-04-20-design-system-audit.md`](plans/2026-04-20-design-system-audit.md) | Ocean theme audit (unification plan still local-only) |
 | 2026-04-22 | [`plans/2026-04-22-codebase-cleanup-plan.md`](plans/2026-04-22-codebase-cleanup-plan.md) | Repo-wide cleanup pass |
 | 2026-04-23 | [`plans/2026-04-23-luna-latency-reduction-plan.md`](plans/2026-04-23-luna-latency-reduction-plan.md) | **Latency campaign** — greeting fast-path, prompt trim, KV cache probe |
 | 2026-04-25 | [`plans/2026-04-25-luna-hallucination-reduction-plan.md`](plans/2026-04-25-luna-hallucination-reduction-plan.md) | **Hallucination reduction** |
