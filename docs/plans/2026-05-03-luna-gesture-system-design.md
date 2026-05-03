@@ -43,7 +43,7 @@ This system slots into existing platform patterns rather than introducing parall
 | **Auth + tenant scoping** | `deps.get_current_active_user` (already used by `users.py`) | No new auth pattern. User-scoped, tenant-isolated automatically through current_user. |
 | **Rate limiting** | `slowapi` (already used by login/recovery routes) | 10/min PUT, 60/min GET — consistent with existing limits. |
 | **Memory activity audit** | `services.memory_activity.log_activity()` | Every gesture-triggered action writes a `MemoryActivity` row with `source='gesture'`, `event_type='gesture_triggered'`, `event_metadata={gesture, action_kind, binding_id}`. Surfaces in the existing Memory page audit log without UI changes. |
-| **RL experience** | `services.rl_experience_service.create_experience()` | Each gesture-triggered action creates an RL experience with `decision_point='gesture_action'`, state=current screen + binding, action=action_kind, reward=user_kept_or_reverted. Lets the platform learn which bindings stick. |
+| **RL experience** | `services.rl_experience_service.log_experience()` then later `assign_reward()` | Each gesture-triggered action calls `log_experience(decision_point='gesture_action', ...)` returning an experience id; a passive observer calls `assign_reward(experience_id, reward, reward_components)` once the 24h "did the user keep this binding" window closes. Adds `gesture_action` to the `DECISION_POINTS` constant in `rl_experience_service.py`. |
 | **MCP tool dispatch** | Existing `POST /mcp/tools/{name}/invoke` | The `action.kind='mcp_tool'` binding type calls this endpoint. No new MCP plumbing. Eligible tools surface as bindable actions in `GestureBindingsPage` via `GET /mcp/tools` list. |
 | **Skill trigger** | Existing `skill_manager` invoke path | Optional `action.kind='skill'` reuses the same trigger surface that semantic auto-trigger uses. |
 | **Local inference / auto-scoring** | Not used in v1 | Geometric pose/motion classification doesn't need an LLM. Phase-3+ may add `local_inference` for confidence calibration; out of v1 scope. |
@@ -365,14 +365,17 @@ ALTER TABLE user_preferences
   ADD CONSTRAINT user_preferences_value_json_size_cap
   CHECK (value_json IS NULL OR octet_length(value_json::text) <= 65536);
 
+ALTER TABLE user_preferences
+  ALTER COLUMN value DROP NOT NULL;
+
 COMMENT ON COLUMN user_preferences.value_json IS
   'Optional rich JSON payload for preferences that exceed the 200-char value column. '
   'Used by gesture_bindings and similar preference types. Capped at 64KB.';
 ```
 
-Down migration `114_user_preferences_value_json.down.sql` drops the constraint and the column.
+Down migration `114_user_preferences_value_json.down.sql` drops the constraint, restores the NOT NULL on `value` (after backfilling any rows we created with NULL `value`), and drops the column.
 
-The existing `value` column stays nullable-or-string for backwards compatibility with simple-string preferences. Gesture bindings store an empty `value` and put the full payload in `value_json`. The model gains a `value_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)` field.
+Existing simple-string preferences (`response_length`, `tone`, etc.) continue to populate `value`. Gesture-bindings rows leave `value` NULL and store the full payload in `value_json`. The model gains a `value_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)` field and `value` becomes `Mapped[Optional[str]]`.
 
 ### API endpoints (extend `apps/api/app/api/v1/users.py`)
 
@@ -384,7 +387,7 @@ Both endpoints live in the existing `users` router; no new file. They call into 
 Hardening (consistent with the 2026-04-18 security posture and existing `users.py` patterns):
 - **Pydantic schema** in `apps/api/app/schemas/gesture_binding.py` mirroring the TS `Binding` type. Rejects unknown action kinds, unknown poses, out-of-range `magnitude`/`velocity`. List-of-bindings cap of 100 entries.
 - **Payload cap 64 KB**, also enforced by the DB CHECK constraint.
-- **Rate limit via `slowapi`:** PUT 10/min per user, GET 60/min per user. Decorator pattern matches existing `users.py` routes.
+- **Rate limit via `slowapi`:** PUT 10/min per user, GET 60/min per user. `users.py` has no slowapi decorators today; we import the shared `limiter` from the same module that `apps/api/app/api/v1/auth.py` uses (login 10/min, recovery 3/hour) and apply it as the first slowapi consumer in `users.py`.
 - **Authentication:** `deps.get_current_active_user` (the same dep `users.py` already uses). User-scoped, tenant-inherited from `current_user`.
 
 ### Audit + RL wiring (server-side, on action dispatch)
@@ -392,7 +395,7 @@ Hardening (consistent with the 2026-04-18 security posture and existing `users.p
 When the Tauri client fires a binding, the action handler that runs server-side (whether it's a memory call, MCP tool invoke, workflow run, etc.) writes two follow-up records using existing services. The client passes a `gesture_dispatch_id` header that the API forwards into both records:
 
 - `services.memory_activity.log_activity(db, tenant_id, event_type='gesture_triggered', source='gesture', description=<action label>, event_metadata={gesture: <pose+motion>, action_kind, binding_id, dispatch_id})`. Surfaces in the existing Memory page activity log.
-- `services.rl_experience_service.create_experience(decision_point='gesture_action', state=<screen+binding>, action=<action_kind>, reward_components={user_kept: bool, latency_ms, confidence})`. Reward is filled in later by a passive observer that watches whether the user reverts the binding within 24h (binding kept = reward 1, reverted = 0).
+- `services.rl_experience_service.log_experience(db, tenant_id, trajectory_id=<dispatch_uuid>, step_index=0, decision_point='gesture_action', state={screen, binding_id, frontmost_app}, action={'kind': action_kind})`. The returned experience id is stashed against the dispatch. A passive observer (cron or daily auto-dream activity) later calls `services.rl_experience_service.assign_reward(db, experience_id, reward=1.0_if_kept_else_0.0, reward_components={user_kept, latency_ms, confidence}, reward_source='binding_retention_observer')` once the 24h window closes.
 
 Both calls are best-effort: any exception in audit/RL is logged and swallowed; the user-facing action still completes.
 
@@ -502,7 +505,7 @@ For one-shot gestures like 3-finger swipe, pinch-to-zoom, 5-finger grab — thes
 - **New service** `apps/api/app/services/gesture_bindings_service.py` extends `services/base.py` CRUD pattern.
 - **New schema file** `apps/api/app/schemas/gesture_binding.py`.
 - **No new table** — extend existing `user_preferences` with `value_json JSONB` via migration `114_user_preferences_value_json.sql` (see "Server-side schema & migration"). Bindings are stored as `preference_type='gesture_bindings'`.
-- **Audit/RL wiring** uses existing `services.memory_activity.log_activity()` and `services.rl_experience_service.create_experience()`. No new audit or RL plumbing.
+- **Audit/RL wiring** uses existing `services.memory_activity.log_activity()` and `services.rl_experience_service.log_experience()` + `assign_reward()`. No new audit or RL plumbing. New `event_type='gesture_triggered'` is added to `MemoryActivity` (free-string column, no migration); not included in the existing `learned_today` rollup query unless we explicitly extend it. New `decision_point='gesture_action'` added to the `DECISION_POINTS` constant in `rl_experience_service.py`.
 - **Helm/Terraform** — no changes; no new env vars, ports, or services.
 
 ## Testing strategy
@@ -539,7 +542,7 @@ For one-shot gestures like 3-finger swipe, pinch-to-zoom, 5-finger grab — thes
 
 ### Phase 2 — Bindings UI (week 2)
 - `GestureBindingsPage`, `GestureRecorder`, `useGestureBindings`.
-- Migration `114_user_gesture_bindings.sql` + API endpoints (validation, rate limit, 64KB cap).
+- Migration `114_user_preferences_value_json.sql` (extends `user_preferences` with `value_json JSONB` + 64KB CHECK) + API endpoints (validation, rate limit, 64KB cap).
 - Conflict detection, scope toggles (`global`/`luna_only`/`hud_only`/`chat_only`), export/import.
 
 **Exit criteria:** user can record a custom gesture and bind it to any action; conflict warnings work; bindings round-trip through API and DB; payload size + rate limit enforced.
