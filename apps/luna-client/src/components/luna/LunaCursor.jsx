@@ -16,12 +16,15 @@ export default function LunaCursor() {
 
   if (wakeState !== 'armed' || !lastEvent || lastEvent.pose !== 'point') return null;
 
-  // tip_xy is [normalized_x, normalized_y] in [0, 1] image-space; map to the
-  // current viewport. Apple Vision returns mirrored x relative to the user's
-  // hand; the WebView is presented as a mirror to match user expectations.
+  // tip_xy is [normalized_x, normalized_y] in [0, 1] image-space (raw from
+  // Apple Vision; only y is flipped to image-space convention in the Swift
+  // bridge). Use the same coordinate orientation as `cursor.rs::move_abs`
+  // so the in-app overlay and the system cursor stay aligned. If we want
+  // selfie-mirror behavior (hand-right ↔ screen-right), the mirror should
+  // happen once in Rust before emitting GestureEvent + before move_abs.
   const tip = lastEvent.tip_xy;
   if (!Array.isArray(tip) || tip.length !== 2) return null;
-  const x = (1 - tip[0]) * window.innerWidth;  // mirror x
+  const x = tip[0] * window.innerWidth;
   const y = tip[1] * window.innerHeight;
 
   return (

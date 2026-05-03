@@ -508,14 +508,14 @@ pub fn run() {
                 setup_tray(app)?;
                 setup_global_shortcut(app)?;
 
-                // Install the AppHandle so the engine can emit Tauri events,
-                // but DO NOT start the engine automatically. The frontend
-                // calls `gesture_start` after a successful login, so we don't
-                // burn camera + Apple Vision cycles on the login screen.
-                let gesture_handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    crate::gesture::install_app_handle(gesture_handle).await;
-                });
+                // Install the AppHandle synchronously so a fast auto-login
+                // can call `gesture_start` immediately without racing the
+                // setup spawn. install_app_handle is now a sync function
+                // backed by a std::sync::Mutex.
+                crate::gesture::install_app_handle(app.handle().clone());
+                // Engine itself is NOT started here — the frontend calls
+                // `gesture_start` after a successful login so we don't burn
+                // camera + Apple Vision cycles on the login screen.
 
                 // Auto-updater: check on startup + every 30 min
                 let handle = app.handle().clone();
