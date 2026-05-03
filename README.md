@@ -535,8 +535,7 @@ FastAPI · React 18 · Tauri 2.0 (Rust + cpal) · Three.js + Framer Motion · Po
 - [`docs/plans/2026-04-25-luna-hallucination-reduction-plan.md`](docs/plans/2026-04-25-luna-hallucination-reduction-plan.md) — hallucination reduction
 - [`docs/plans/2026-04-18-agent-lifecycle-management-platform-plan.md`](docs/plans/2026-04-18-agent-lifecycle-management-platform-plan.md) — ALM design
 - [`docs/plans/2026-04-12-a2a-collaboration-demo-design.md`](docs/plans/2026-04-12-a2a-collaboration-demo-design.md) — A2A coalitions
-- [`docs/report/2026-04-18-full-security-audit.md`](docs/report/2026-04-18-full-security-audit.md) — security findings
-- [`docs/report/2026-04-18-pentest-verification.md`](docs/report/2026-04-18-pentest-verification.md) — black-hat verification
+- [`docs/report/2026-04-18-pentest-verification.md`](docs/report/2026-04-18-pentest-verification.md) — black-hat verification of the security hardening
 
 ---
 

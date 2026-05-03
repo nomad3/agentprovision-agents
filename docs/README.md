@@ -59,7 +59,7 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 |------|--------|---------|
 | 2026-04-13 | [`report/2026-04-13-a2a-coalition-verification-report.md`](report/2026-04-13-a2a-coalition-verification-report.md) | A2A demo verified working |
 | 2026-04-17 | [`report/2026-04-17-platform-security-audit.md`](report/2026-04-17-platform-security-audit.md) | Initial security audit (container + infra) |
-| 2026-04-18 | [`report/2026-04-18-full-security-audit.md`](report/2026-04-18-full-security-audit.md) | Full 8-finding audit (application + auth + container) |
+| 2026-04-18 | `report/2026-04-18-full-security-audit.md` *(local-only)* | Full 8-finding audit (application + auth + container) |
 | 2026-04-18 | [`report/2026-04-18-pentest-verification.md`](report/2026-04-18-pentest-verification.md) | Black-hat verification — 6 fixes confirmed, 4 open items tracked |
 
 ## Key References
