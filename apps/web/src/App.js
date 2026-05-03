@@ -10,6 +10,7 @@ import AgentDetailPage from './pages/AgentDetailPage';
 import AgentsPage from './pages/AgentsPage';
 import FleetHealthPage from './pages/FleetHealthPage';
 import CostInsightsPage from './pages/CostInsightsPage';
+import CoalitionReplayPage from './pages/CoalitionReplayPage';
 import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
@@ -119,6 +120,8 @@ function App() {
                 <Route path="/agents" element={<ProtectedRoute><AgentsPage /></ProtectedRoute>} />
                 <Route path="/insights/fleet-health" element={<ProtectedRoute><FleetHealthPage /></ProtectedRoute>} />
                 <Route path="/insights/cost" element={<ProtectedRoute><CostInsightsPage /></ProtectedRoute>} />
+                <Route path="/insights/collaborations" element={<ProtectedRoute><CoalitionReplayPage /></ProtectedRoute>} />
+                <Route path="/insights/collaborations/:id" element={<ProtectedRoute><CoalitionReplayPage /></ProtectedRoute>} />
                 <Route path="/agents/wizard" element={<ProtectedRoute><AgentWizardPage /></ProtectedRoute>} />
                 <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
                 <Route path="/datasets" element={<Navigate to="/integrations?tab=datasets" replace />} />

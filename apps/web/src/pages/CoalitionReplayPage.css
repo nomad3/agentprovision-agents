@@ -1,0 +1,21 @@
+.coalition-replay-page { max-width: 1100px; margin: 0 auto; }
+.coalition-timeline { list-style: none; padding: 0; margin: 0; }
+.coalition-entry {
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.5rem;
+  border-left: 3px solid rgba(43, 125, 233, 0.4);
+  background: rgba(43, 125, 233, 0.03);
+  border-radius: 0 8px 8px 0;
+}
+.coalition-entry-meta { margin-bottom: 0.5rem; font-size: 0.8rem; }
+.coalition-entry-content {
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  color: var(--ap-text, #1a2b3c);
+}
+.coalition-entry-resolution {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  color: rgba(45, 157, 120, 0.85);
+  font-style: italic;
+}
