@@ -3,6 +3,7 @@ import { Alert, Col, Row, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
+import LiveActivityFeed from '../components/dashboard/LiveActivityFeed';
 import Layout from '../components/Layout';
 import { getDashboardStats } from '../services/analytics';
 
@@ -109,6 +110,9 @@ const DashboardPage = () => {
             <p className="ap-page-subtitle">{t('subtitle')}</p>
           </div>
         </header>
+
+        {/* Tier 4 — Live activity feed at top of dashboard */}
+        <LiveActivityFeed />
 
         {/* System Status */}
         <div className="ap-section-label">{t('systemStatus')}</div>
