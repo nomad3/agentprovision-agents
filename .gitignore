@@ -62,3 +62,4 @@ apps/api/app/**/__pycache__
 *.pyo
 cloudflared/cert.pem
 cloudflared/credentials.json
+.claude/scheduled_tasks.lock
