@@ -98,9 +98,12 @@ router.include_router(gesture_dispatch.router, tags=["gestures"])
 router.include_router(data_sources.router, prefix="/data_sources", tags=["data_sources"])
 router.include_router(data_pipelines.router, prefix="/data_pipelines", tags=["data_pipelines"])
 router.include_router(notebooks.router, prefix="/notebooks", tags=["notebooks"])
-router.include_router(agents.router, prefix="/agents", tags=["agents"])
-# Tier 3 fleet-health endpoint mounts under /agents/fleet-health
+# IMPORTANT: insights_fleet_health MUST mount before agents.router. Both
+# share the /agents prefix, and agents.router has GET /{agent_id} which
+# would otherwise match "fleet-health" as a UUID path param and respond
+# with 422. FastAPI matches in registration order — specific first.
 router.include_router(insights_fleet_health.router, prefix="/agents", tags=["agents"])
+router.include_router(agents.router, prefix="/agents", tags=["agents"])
 router.include_router(agent_groups.router, prefix="/agent_groups", tags=["agent_groups"])
 router.include_router(agent_tasks.router, prefix="/tasks", tags=["tasks"])
 router.include_router(tools.router, prefix="/tools", tags=["tools"])

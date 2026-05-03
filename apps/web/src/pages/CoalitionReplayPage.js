@@ -17,6 +17,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { formatApiError } from '../services/apiError';
 import './CoalitionReplayPage.css';
 
 
@@ -42,7 +43,7 @@ const CoalitionListView = () => {
         const r = await api.get('/insights/collaborations');
         setRows(r.data?.rows || []);
       } catch (err) {
-        setError(err.response?.data?.detail || 'Failed to load coalitions.');
+        setError(formatApiError(err, 'Failed to load coalitions.'));
       } finally {
         setLoading(false);
       }
@@ -95,7 +96,7 @@ const CoalitionDetailView = ({ id }) => {
       const r = await api.get(`/insights/collaborations/${id}`);
       setData(r.data);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load coalition.');
+      setError(formatApiError(err, 'Failed to load coalition.'));
     } finally {
       setLoading(false);
     }

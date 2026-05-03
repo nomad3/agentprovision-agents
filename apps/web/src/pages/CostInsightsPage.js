@@ -33,6 +33,7 @@ import {
 
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { formatApiError } from '../services/apiError';
 import './CostInsightsPage.css';
 
 
@@ -106,7 +107,7 @@ const CostInsightsPage = () => {
       });
       setData(resp.data);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load cost insights.');
+      setError(formatApiError(err, 'Failed to load cost insights.'));
     } finally {
       setLoading(false);
     }
