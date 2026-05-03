@@ -1,6 +1,7 @@
 import logging
 from fastapi import APIRouter
 from app.api.v1 import (
+    admin_tenant_health,
     audit,
     auth,
     insights_resolver_metrics,
@@ -156,6 +157,7 @@ router.include_router(external_agents.router, prefix="/external-agents", tags=["
 router.include_router(agent_marketplace.router, prefix="/marketplace", tags=["marketplace"])
 router.include_router(agent_tests.router, prefix="/agents", tags=["agent-tests"])
 router.include_router(insights_resolver_metrics.router, prefix="/insights", tags=["insights"])
+router.include_router(admin_tenant_health.router, prefix="/admin", tags=["admin"])
 
 # Register optional modules that loaded successfully
 _optional_routes = {
