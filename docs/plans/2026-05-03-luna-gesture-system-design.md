@@ -577,3 +577,13 @@ For one-shot gestures like 3-finger swipe, pinch-to-zoom, 5-finger grab — thes
 
 ## Out of scope (recap)
 iOS/Android, eye tracking, ML-trained classifier, voice replacement, keyboard replacement.
+
+## Phase 3 deferrals (post-implementation, 2026-05-03)
+
+The following Phase 3 items were deferred to a follow-up phase rather than landing in the original PR:
+
+- **Two-handed frame gesture** — defining a "frame" pose where both thumbs+indexes form a rectangle for region-select. Recognizer's `ingest()` currently only consumes `hands.first()`. Re-introducing two-handed support requires landmark alignment across hands and a new pose classifier branch; ship as Phase 4.
+- **Display-aware cursor coords** — `cursor.rs` hardcodes 1920×1080 in v1. On Retina / multi-monitor the cursor lands wrong. Phase 4 reads `CGDisplayBounds(CGMainDisplayID())` once at startup.
+- **Cached frontmost-app probe** — `frontmost_is_luna()` shells out to `osascript` per cursor frame. Phase 4 caches at 1 Hz (or replaces with `NSWorkspace` via the existing Swift FFI bridge).
+- **`LunaCursor` overlay tip-tracking** — overlay currently sits at screen center as visual confirmation only; the system cursor (Rust) tracks correctly. Phase 4 ships `tip_xy` as part of `GestureEvent` so the overlay can move with the fingertip.
+- **Cursor task batching** — recognizer spawns one Tokio task per `point` frame. Phase 4 switches to a single watcher task fed by `tokio::sync::watch` for backpressure.

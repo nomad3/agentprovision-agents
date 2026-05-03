@@ -86,6 +86,12 @@ pub async fn start_engine() -> Result<(), String> {
         .clone()
         .ok_or_else(|| "app handle not installed".to_string())?;
 
+    // Probe Accessibility once at startup so cursor/click bindings work
+    // immediately when the user has already granted the permission. Skip
+    // probing in tests (which we detect via cfg).
+    #[cfg(target_os = "macos")]
+    let _ = crate::gesture::cursor::check_accessibility();
+
     let h = tokio::spawn(async move {
         let mut restarts = 0usize;
         while RUNNING.load(Ordering::SeqCst) && restarts <= MAX_RESTARTS {
