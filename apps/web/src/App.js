@@ -11,6 +11,7 @@ import AgentsPage from './pages/AgentsPage';
 import FleetHealthPage from './pages/FleetHealthPage';
 import CostInsightsPage from './pages/CostInsightsPage';
 import CoalitionReplayPage from './pages/CoalitionReplayPage';
+import TenantHealthPage from './pages/TenantHealthPage';
 import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
@@ -122,6 +123,7 @@ function App() {
                 <Route path="/insights/cost" element={<ProtectedRoute><CostInsightsPage /></ProtectedRoute>} />
                 <Route path="/insights/collaborations" element={<ProtectedRoute><CoalitionReplayPage /></ProtectedRoute>} />
                 <Route path="/insights/collaborations/:id" element={<ProtectedRoute><CoalitionReplayPage /></ProtectedRoute>} />
+                <Route path="/admin/tenant-health" element={<ProtectedRoute><TenantHealthPage /></ProtectedRoute>} />
                 <Route path="/agents/wizard" element={<ProtectedRoute><AgentWizardPage /></ProtectedRoute>} />
                 <Route path="/agents/:id" element={<ProtectedRoute><AgentDetailPage /></ProtectedRoute>} />
                 <Route path="/datasets" element={<Navigate to="/integrations?tab=datasets" replace />} />

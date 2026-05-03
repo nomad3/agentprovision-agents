@@ -1,0 +1,3 @@
+.tenant-health-page { max-width: 1200px; margin: 0 auto; }
+.tenant-row-stalled { opacity: 0.6; }
+.tenant-row-stalled td:first-child { color: rgba(150, 150, 160, 0.9); }

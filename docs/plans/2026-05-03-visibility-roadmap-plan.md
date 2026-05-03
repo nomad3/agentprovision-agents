@@ -192,6 +192,12 @@ Slice the same data as Tier 2 but by health, not cost.
   distribution, fallback rate, fallback reasons, chain-exhausted
   count, chain length p50/p95. Curated shape, no message IDs, no raw
   cli_chain_attempted. 10 tests pin invariants.
+- 2026-05-03: Op-2 (#271) — Tenant health admin page
+  (`GET /admin/tenant-health` superuser-only + `/admin/tenant-health`
+  React page). Cross-tenant snapshot — turns 24h, fallback rate,
+  chain-exhausted count, last activity, primary CLI, agent + user
+  counts. Stalled tenants surface as dimmed rows. 7 backend tests +
+  3 frontend tests.
 
 ## Working agreements while this is in flight
 
