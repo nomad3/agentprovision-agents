@@ -13,6 +13,7 @@ import { Alert, Badge, Card, Spinner, Table } from 'react-bootstrap';
 
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { formatApiError } from '../services/apiError';
 import './TenantHealthPage.css';
 
 
@@ -60,7 +61,7 @@ const TenantHealthPage = () => {
         if (err.response?.status === 403) {
           setError('Superuser access required.');
         } else {
-          setError(err.response?.data?.detail || 'Failed to load tenant health.');
+          setError(formatApiError(err, 'Failed to load tenant health.'));
         }
       } finally {
         setLoading(false);

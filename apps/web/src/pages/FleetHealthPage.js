@@ -25,6 +25,7 @@ import { useNavigate } from 'react-router-dom';
 
 import Layout from '../components/Layout';
 import api from '../services/api';
+import { formatApiError } from '../services/apiError';
 import './FleetHealthPage.css';
 
 
@@ -80,7 +81,7 @@ const FleetHealthPage = () => {
       setCursor(data.next_cursor || null);
       setHasMore(!!data.has_more);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load fleet health.');
+      setError(formatApiError(err, 'Failed to load fleet health.'));
     } finally {
       if (append) setLoadingMore(false); else setLoading(false);
     }
