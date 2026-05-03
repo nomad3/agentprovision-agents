@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { GestureProvider } from './context/GestureContext';
 import ChatInterface from './components/ChatInterface';
 import LoginForm from './components/LoginForm';
 import NotificationBell from './components/NotificationBell';
@@ -9,12 +10,67 @@ import CommandPalette from './components/CommandPalette';
 import ClipboardToast from './components/ClipboardToast';
 import WorkflowSuggestions from './components/WorkflowSuggestions';
 import SpatialHUD from './components/spatial/SpatialHUD';
+import GestureOverlay from './components/gestures/GestureOverlay';
+import GestureBindingsPage from './components/gestures/GestureBindingsPage';
+import GestureCalibration from './components/gestures/GestureCalibration';
+import LunaCursor from './components/luna/LunaCursor';
 import { useShellPresence } from './hooks/useShellPresence';
 import { useSessionEvents } from './hooks/useSessionEvents';
 import { useTrustProfile } from './hooks/useTrustProfile';
 import { useActivityTracker } from './hooks/useActivityTracker';
 import { apiJson } from './api';
 import './App.css';
+
+function dispatchGestureAction(binding, event) {
+  // Best-effort audit + RL log to the API. Fire-and-forget; never blocks UI.
+  import('./api').then(({ postGestureDispatch }) => {
+    postGestureDispatch({
+      binding_id: binding.id,
+      gesture: binding.gesture,
+      action_kind: binding.action.kind,
+      screen: window.location.hash || window.location.pathname,
+      frontmost_app: 'Luna',
+      latency_ms: typeof event?.ts === 'number' ? Date.now() - event.ts : null,
+      confidence: typeof event?.confidence === 'number' ? event.confidence : null,
+    });
+  }).catch(() => {});
+
+  switch (binding.action.kind) {
+    case 'nav_hud':
+      window.dispatchEvent(new Event('luna-toggle-hud'));
+      break;
+    case 'nav_chat':
+      window.dispatchEvent(new Event('luna-focus-chat'));
+      break;
+    case 'nav_command_palette':
+      window.dispatchEvent(new Event('toggle-palette'));
+      break;
+    case 'nav_bindings':
+      window.location.hash = '#/settings/gestures';
+      break;
+    case 'agent_next':
+      window.dispatchEvent(new Event('luna-agent-next'));
+      break;
+    case 'agent_prev':
+      window.dispatchEvent(new Event('luna-agent-prev'));
+      break;
+    case 'dismiss':
+      window.dispatchEvent(new Event('luna-dismiss'));
+      break;
+    case 'memory_record':
+      window.dispatchEvent(new CustomEvent('luna-memory-record', { detail: binding }));
+      break;
+    case 'scroll_up':
+      window.scrollBy({ top: -120, behavior: 'smooth' });
+      break;
+    case 'scroll_down':
+      window.scrollBy({ top: 120, behavior: 'smooth' });
+      break;
+    default:
+      // Unknown / Phase 3 actions handled elsewhere.
+      break;
+  }
+}
 
 function useTheme() {
   const [theme, setTheme] = useState(() => localStorage.getItem('luna_theme') || 'dark');
@@ -163,74 +219,99 @@ function AuthenticatedApp() {
       />
       <ClipboardToast />
       <WorkflowSuggestions visible={suggestionsOpen} onClose={() => setSuggestionsOpen(false)} />
+      <GestureOverlay />
+      <LunaCursor />
     </div>
   );
 }
 
-function AppContent() {
-  const { user, loading } = useAuth();
-  const [windowLabel, setWindowLabel] = useState(null);
-
-  useEffect(() => {
-    console.log('[Luna OS] Starting window detection...');
-    
-    // Safety fallback: default to 'main' after 1 second if detection is stuck
-    const timer = setTimeout(() => {
-      if (windowLabel === null) {
-        console.warn('[Luna OS] Window detection timed out -> main');
-        setWindowLabel('main');
-      }
-    }, 1000);
-
-    const detectWindow = async () => {
-      try {
-        // Use a more generic way to detect window label if the specific import fails
-        const tauriWebview = await import('@tauri-apps/api/webviewWindow').catch(() => null);
-        
-        if (tauriWebview && tauriWebview.getCurrentWebviewWindow) {
-          const appWindow = tauriWebview.getCurrentWebviewWindow();
-          console.log('[Luna OS] Detected window:', appWindow.label);
-          setWindowLabel(appWindow.label || 'main');
-        } else {
-          console.log('[Luna OS] Tauri internals not found -> main');
-          setWindowLabel('main');
-        }
-      } catch (e) {
-        console.error('[Luna OS] Detection error:', e);
-        setWindowLabel('main');
-      } finally {
-        clearTimeout(timer);
-      }
-    };
-
-    detectWindow();
-    return () => clearTimeout(timer);
-  }, []);
-
-  // While detecting, show a minimal loader. 
-  // If this stays frozen, it's a React render crash.
-  if (windowLabel === null) {
-    return (
-      <div className="luna-loading" style={{ background: '#000', color: '#64b4ff' }}>
-        Initializing Luna OS...
-      </div>
-    );
+// Children of GestureProvider so the SpatialHUD webview never registers
+// onAction (preventing double-fire of every binding).
+function GestureScope({ children, windowLabel }) {
+  if (windowLabel === 'spatial_hud') {
+    // HUD reads via useGesture() but doesn't dispatch actions.
+    return <GestureProvider onAction={undefined}>{children}</GestureProvider>;
   }
+  return <GestureProvider onAction={dispatchGestureAction}>{children}</GestureProvider>;
+}
+
+function useHashRoute() {
+  const [hash, setHash] = useState(() => window.location.hash || '');
+  useEffect(() => {
+    const handler = () => setHash(window.location.hash || '');
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, []);
+  return hash;
+}
+
+function AppContent({ windowLabel }) {
+  const { user, loading } = useAuth();
+  const hash = useHashRoute();
+  const [showCalibration, setShowCalibration] = useState(() => {
+    try { return !localStorage.getItem('gesture_calibrated'); } catch { return false; }
+  });
 
   if (windowLabel === 'spatial_hud') {
     return <SpatialHUD />;
   }
-
   if (loading) return <div className="luna-loading">Loading...</div>;
   if (!user) return <LoginForm />;
 
-  return <AuthenticatedApp />;
+  return (
+    <>
+      {hash.startsWith('#/settings/gestures') ? <GestureBindingsPage /> : <AuthenticatedApp />}
+      {showCalibration && (
+        <GestureCalibration onDone={() => setShowCalibration(false)} />
+      )}
+    </>
+  );
+}
+
+function RootShell() {
+  // Owns windowLabel detection so GestureProvider can decide whether to
+  // dispatch actions (HUD must not, or each binding fires twice — see
+  // Phase 1 review issue #5).
+  const [windowLabel, setWindowLabel] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled) setWindowLabel((cur) => cur ?? 'main');
+    }, 1000);
+    (async () => {
+      try {
+        const tauriWebview = await import('@tauri-apps/api/webviewWindow').catch(() => null);
+        if (tauriWebview && tauriWebview.getCurrentWebviewWindow) {
+          const w = tauriWebview.getCurrentWebviewWindow();
+          if (!cancelled) setWindowLabel(w.label || 'main');
+        } else if (!cancelled) {
+          setWindowLabel('main');
+        }
+      } catch {
+        if (!cancelled) setWindowLabel('main');
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
+  if (windowLabel === null) {
+    return <div className="luna-loading" style={{ background: '#000', color: '#64b4ff' }}>Initializing Luna OS...</div>;
+  }
+
+  return (
+    <GestureScope windowLabel={windowLabel}>
+      <AppContent windowLabel={windowLabel} />
+    </GestureScope>
+  );
 }
 
 export default function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <RootShell />
     </AuthProvider>
   );
 }

@@ -30,6 +30,7 @@ from app.api.v1 import (
     integration_configs,
     integrations,
     users,
+    gesture_dispatch,
     skills_new,
     mcp_bridge,
     workflows,
@@ -93,6 +94,7 @@ def read_root():
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(channels.router, prefix="/channels", tags=["channels"])
 router.include_router(users.router, prefix="/users", tags=["users"])
+router.include_router(gesture_dispatch.router, tags=["gestures"])
 router.include_router(data_sources.router, prefix="/data_sources", tags=["data_sources"])
 router.include_router(data_pipelines.router, prefix="/data_pipelines", tags=["data_pipelines"])
 router.include_router(notebooks.router, prefix="/notebooks", tags=["notebooks"])

@@ -44,6 +44,7 @@ const TABS = [
   { key: 'workspace', icon: FaBuilding,      label: 'Workspace' },
   { key: 'plan',      icon: FaTachometerAlt, label: 'Plan & Limits' },
   { key: 'database',  icon: FaDatabase,      label: 'Database' },
+  { key: 'gestures',  icon: FaPalette,       label: 'Gestures' },
 ];
 
 const CLI_LABELS = {
@@ -396,6 +397,8 @@ const SettingsPage = () => {
               </div>
             </article>
           )}
+
+          {activeTab === 'gestures' && <GesturesSection />}
         </div>
       </div>
     </Layout>
@@ -409,5 +412,53 @@ const LimitRow = ({ label, value }) => (
     <span className="settings-limit-value">{value}</span>
   </div>
 );
+
+// Read-only stub — full bindings editor lives in the Luna desktop client.
+const GesturesSection = () => {
+  const [bindings, setBindings] = useState(null);
+  const [updatedAt, setUpdatedAt] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/users/me/gesture-bindings');
+        if (cancelled) return;
+        setBindings(Array.isArray(res.data?.bindings) ? res.data.bindings : []);
+        setUpdatedAt(res.data?.updated_at || null);
+      } catch (e) {
+        if (!cancelled) setError(e?.response?.data?.detail || e?.message || 'failed to load');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <article className="ap-card">
+      <header className="ap-card-header">
+        <h2 className="ap-card-title">Gestures</h2>
+      </header>
+      <div className="ap-card-body">
+        <p style={{ marginBottom: 8 }}>
+          Hand-gesture bindings for Luna. Configure recording and binding edits in the Luna desktop client.
+        </p>
+        {error && <div style={{ color: '#c33', fontSize: 13 }}>Error: {String(error)}</div>}
+        {bindings === null && !error && <div>Loading…</div>}
+        {bindings !== null && (
+          <div style={{ fontSize: 13, color: '#456' }}>
+            <div>{bindings.length} binding{bindings.length === 1 ? '' : 's'} synced.</div>
+            {updatedAt && <div>Last updated: {new Date(updatedAt).toLocaleString()}</div>}
+            {bindings.length === 0 && (
+              <div style={{ marginTop: 6, opacity: 0.75 }}>
+                No bindings yet. Open the Luna desktop client to record gestures.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
+  );
+};
 
 export default SettingsPage;
