@@ -12,7 +12,8 @@ pub enum Pose {
     Peace,
     Three,
     Four,
-    Five,
+    // Note: "five fingers extended" geometry maps to OpenPalm in pose::classify;
+    // there is no separate `Five` variant. See pose.rs.
     ThumbUp,
     PinchPose,
     RotationPose,

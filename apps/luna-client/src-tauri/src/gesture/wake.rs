@@ -71,8 +71,17 @@ impl WakeMachine {
                 self.state = WakeState::Sleeping;
                 self.arming_started_at = None;
             }
-            (WakeState::Armed, WakeInput::Pose { .. }) => {
+            // A frame *with* a hand is real activity — refresh the idle baseline.
+            // A frame *without* a hand (pose: None) means the user lowered their
+            // hands; we leave last_activity_ms alone so the 5s idle counter
+            // continues to advance and the engine eventually disarms.
+            (WakeState::Armed, WakeInput::Pose { pose: Some(_), .. }) => {
                 self.last_activity_ms = now_ms;
+            }
+            (WakeState::Armed, WakeInput::Pose { pose: None, .. }) if !self.confirm_pending => {
+                if now_ms - self.last_activity_ms >= IDLE_TIMEOUT_MS {
+                    self.state = WakeState::Sleeping;
+                }
             }
             (WakeState::Armed, WakeInput::Idle) if !self.confirm_pending => {
                 if now_ms - self.last_activity_ms >= IDLE_TIMEOUT_MS {

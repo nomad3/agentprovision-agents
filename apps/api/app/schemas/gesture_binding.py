@@ -11,13 +11,12 @@ from pydantic import BaseModel, Field, conlist
 
 
 class Pose(str, Enum):
-    OPEN_PALM = "open_palm"
+    OPEN_PALM = "open_palm"  # also catches the "five" geometry — see pose.rs
     FIST = "fist"
     POINT = "point"
     PEACE = "peace"
     THREE = "three"
     FOUR = "four"
-    FIVE = "five"
     THUMB_UP = "thumb_up"
     PINCH_POSE = "pinch_pose"
     ROTATION_POSE = "rotation_pose"

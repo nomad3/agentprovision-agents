@@ -25,6 +25,9 @@ const ACTION_KINDS = [
 
 const SCOPES = ['global', 'luna_only', 'hud_only', 'chat_only'];
 
+// Mirror the API enum (apps/api/app/schemas/gesture_binding.py::Pose).
+// `five` is intentionally absent — pose::classify maps that geometry to open_palm.
+
 function sigKey(ev) {
   const m = ev.motion;
   if (!m || m.kind === 'none') return `${ev.pose}|none`;

@@ -53,10 +53,12 @@ impl Recognizer {
         };
         self.last_emit_ms = now_ms;
 
-        // Drive the system cursor directly from Rust on `point` pose so the
-        // tip-to-cursor latency stays under 16ms (bypasses React entirely
-        // per the design's two-budget split). Cursor.rs gates on
-        // Accessibility permission + frontmost-app rules.
+        // Drive the system cursor directly from Rust on `point` pose. This
+        // bypasses React entirely per the design's two-budget split, but the
+        // 80ms recognizer debounce caps cursor refresh at ~12.5 Hz in v1.
+        // Phase 4 will move cursor onto a dedicated tokio::sync::watch task
+        // outside the debounce. Cursor.rs gates on Accessibility permission
+        // + frontmost-app rules.
         if matches!(pose, Pose::Point) {
             let x = primary.landmarks[8].x;
             let y = primary.landmarks[8].y;

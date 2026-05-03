@@ -71,6 +71,30 @@ fn idle_5s_disarms() {
 }
 
 #[test]
+fn empty_frames_after_arming_disarm() {
+    // Issue #1 from holistic review: previously, every Pose frame (including
+    // pose: None) refreshed last_activity_ms, so the engine never disarmed
+    // while the camera kept feeding empty frames. This test guards against
+    // that regression.
+    let mut m = WakeMachine::new();
+    m.tick(
+        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        0,
+    );
+    m.tick(
+        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        600,
+    );
+    assert_eq!(m.state(), WakeState::Armed);
+
+    // Stream of "no hands detected" frames. Activity should NOT refresh.
+    for ts in (700..6000).step_by(33) {
+        m.tick(WakeInput::Pose { pose: None, confidence: 0.0 }, ts);
+    }
+    assert_eq!(m.state(), WakeState::Sleeping);
+}
+
+#[test]
 fn confirm_pending_freezes_idle_timer() {
     let mut m = WakeMachine::new();
     m.tick(

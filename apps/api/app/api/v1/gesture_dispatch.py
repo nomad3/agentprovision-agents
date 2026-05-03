@@ -25,6 +25,7 @@ from app.api import deps
 from app.core.rate_limit import limiter
 from app.db.safe_ops import safe_rollback
 from app.models.user import User as UserModel
+from app.schemas.gesture_binding import GestureSpec
 from app.services import memory_activity, rl_experience_service
 
 logger = logging.getLogger(__name__)
@@ -34,12 +35,15 @@ router = APIRouter()
 
 class GestureDispatch(BaseModel):
     binding_id: str = Field(..., max_length=64)
-    gesture: dict = Field(default_factory=dict)
+    # Validated via GestureSpec — limits unknown keys, enforces enum poses,
+    # and caps the structure so a compromised client can't push multi-MB
+    # blobs into memory_activity.event_metadata.
+    gesture: GestureSpec
     action_kind: str = Field(..., max_length=64)
     screen: Optional[str] = Field(default=None, max_length=256)
     frontmost_app: Optional[str] = Field(default=None, max_length=128)
-    latency_ms: Optional[int] = None
-    confidence: Optional[float] = None
+    latency_ms: Optional[int] = Field(default=None, ge=0, le=600_000)
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 @router.post("/gesture-dispatch", status_code=204)
@@ -51,7 +55,8 @@ def dispatch(
     db: Session = Depends(deps.get_db),
     current_user: UserModel = Depends(deps.get_current_active_user),
 ):
-    description = f"{payload.action_kind} via {payload.gesture.get('pose', '?')}"
+    gesture_payload = payload.gesture.model_dump(mode="json")
+    description = f"{payload.action_kind} via {gesture_payload.get('pose', '?')}"
 
     try:
         memory_activity.log_activity(
@@ -61,7 +66,7 @@ def dispatch(
             description=description,
             source="gesture",
             event_metadata={
-                "gesture": payload.gesture,
+                "gesture": gesture_payload,
                 "action_kind": payload.action_kind,
                 "binding_id": payload.binding_id,
                 "screen": payload.screen,
