@@ -69,6 +69,7 @@ const Layout = ({ children }) => {
         { path: '/chat', icon: ChatDotsFill, label: t('sidebar.chat'), description: t('sidebar_desc.chat') },
         { path: '/agents', icon: Robot, label: t('sidebar.agents'), description: t('sidebar_desc.agents') },
         { path: '/insights/fleet-health', icon: HeartbeatFill, label: t('sidebar.fleetHealth', 'Fleet Health'), description: t('sidebar_desc.fleetHealth', 'Imported-agent activity and zombies') },
+        { path: '/insights/cost', icon: ChartLine, label: t('sidebar.costInsights', 'Cost & Usage'), description: t('sidebar_desc.costInsights', 'Token + cost rollup across the fleet') },
         { path: '/workflows', icon: ProjectDiagramFill, label: t('sidebar.workflows'), description: t('sidebar_desc.workflows') },
         { path: '/memory', icon: DatabaseFill, label: t('sidebar.memory'), description: t('sidebar_desc.memory') },
         { path: '/skills', icon: PuzzlePiece, label: t('sidebar.skills'), description: t('sidebar_desc.skills') },

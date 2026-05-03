@@ -175,12 +175,19 @@ Slice the same data as Tier 2 but by health, not cost.
   C2 chain-exhausted, I1 first-err attribution, I2 autodetect,
   I3 E2E no-leak, I4 exception classification + M cleanup). 22 backend
   + 9 frontend tests.
-- 2026-05-03: Tier 3 — imported-agent fleet health. New
+- 2026-05-03: Tier 3 (#263) — imported-agent fleet health. New
   `GET /agents/fleet-health` endpoint (cursor pagination, audit_log
   aggregations, zombie / source / owner / team filters) + new
   `/insights/fleet-health` page. Lean response schema (no tenant_id,
   no nested config, owner-as-email-only). Drift detection deferred —
   needs MicrosoftAgentSyncWorkflow. 10 backend + 6 frontend tests.
+- 2026-05-03: Tier 2 (#265) — cost dashboard. New `GET /insights/cost`
+  endpoint (group_by=agent/team/owner; granularity=day/week;
+  range=7d/30d/90d) backed by `agent_performance_snapshots`. New
+  `/insights/cost` page with stacked bar (recharts), totals tiles,
+  top-10 agents table, quota-burn banner. `group_by=cli_platform`
+  intentionally deferred — snapshots don't carry per-call platform
+  attribution; needs schema work. 10 backend + 9 frontend tests.
 
 ## Working agreements while this is in flight
 

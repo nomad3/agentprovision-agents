@@ -1,0 +1,74 @@
+.cost-insights-page {
+  max-width: 1300px;
+  margin: 0 auto;
+}
+
+.cost-filters {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  align-items: end;
+}
+
+.cost-filter-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(100, 120, 145, 0.7);
+  margin-bottom: 0.35rem;
+  font-weight: 500;
+}
+
+.cost-totals-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.cost-total-tile {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: rgba(43, 125, 233, 0.04);
+  border: 1px solid rgba(180, 200, 220, 0.25);
+  border-radius: 12px;
+}
+
+.cost-tile-icon {
+  font-size: 1.4rem;
+  color: #2b7de9;
+  opacity: 0.85;
+}
+
+.cost-tile-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--ap-text, #1a2b3c);
+  line-height: 1.1;
+}
+
+.cost-tile-label {
+  font-size: 0.78rem;
+  color: var(--ap-text-muted, rgba(100, 120, 145, 0.72));
+  margin-top: 0.2rem;
+}
+
+.cost-chart-wrapper {
+  background: var(--ap-surface, #fff);
+  border: 1px solid rgba(180, 200, 220, 0.25);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+.cost-top-table th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgba(100, 120, 145, 0.7);
+}
+
+.cost-top-table tbody tr:hover {
+  background: rgba(43, 125, 233, 0.04);
+}
