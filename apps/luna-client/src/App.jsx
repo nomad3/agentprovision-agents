@@ -11,6 +11,7 @@ import ClipboardToast from './components/ClipboardToast';
 import WorkflowSuggestions from './components/WorkflowSuggestions';
 import SpatialHUD from './components/spatial/SpatialHUD';
 import GestureOverlay from './components/gestures/GestureOverlay';
+import GestureBindingsPage from './components/gestures/GestureBindingsPage';
 import { useShellPresence } from './hooks/useShellPresence';
 import { useSessionEvents } from './hooks/useSessionEvents';
 import { useTrustProfile } from './hooks/useTrustProfile';
@@ -18,7 +19,20 @@ import { useActivityTracker } from './hooks/useActivityTracker';
 import { apiJson } from './api';
 import './App.css';
 
-function dispatchGestureAction(binding /*, event */) {
+function dispatchGestureAction(binding, event) {
+  // Best-effort audit + RL log to the API. Fire-and-forget; never blocks UI.
+  import('./api').then(({ postGestureDispatch }) => {
+    postGestureDispatch({
+      binding_id: binding.id,
+      gesture: binding.gesture,
+      action_kind: binding.action.kind,
+      screen: window.location.hash || window.location.pathname,
+      frontmost_app: 'Luna',
+      latency_ms: typeof event?.ts === 'number' ? Date.now() - event.ts : null,
+      confidence: typeof event?.confidence === 'number' ? event.confidence : null,
+    });
+  }).catch(() => {});
+
   switch (binding.action.kind) {
     case 'nav_hud':
       window.dispatchEvent(new Event('luna-toggle-hud'));
@@ -28,6 +42,9 @@ function dispatchGestureAction(binding /*, event */) {
       break;
     case 'nav_command_palette':
       window.dispatchEvent(new Event('toggle-palette'));
+      break;
+    case 'nav_bindings':
+      window.location.hash = '#/settings/gestures';
       break;
     case 'agent_next':
       window.dispatchEvent(new Event('luna-agent-next'));
@@ -215,14 +232,28 @@ function GestureScope({ children, windowLabel }) {
   return <GestureProvider onAction={dispatchGestureAction}>{children}</GestureProvider>;
 }
 
+function useHashRoute() {
+  const [hash, setHash] = useState(() => window.location.hash || '');
+  useEffect(() => {
+    const handler = () => setHash(window.location.hash || '');
+    window.addEventListener('hashchange', handler);
+    return () => window.removeEventListener('hashchange', handler);
+  }, []);
+  return hash;
+}
+
 function AppContent({ windowLabel }) {
   const { user, loading } = useAuth();
+  const hash = useHashRoute();
 
   if (windowLabel === 'spatial_hud') {
     return <SpatialHUD />;
   }
   if (loading) return <div className="luna-loading">Loading...</div>;
   if (!user) return <LoginForm />;
+  if (hash.startsWith('#/settings/gestures')) {
+    return <GestureBindingsPage />;
+  }
   return <AuthenticatedApp />;
 }
 

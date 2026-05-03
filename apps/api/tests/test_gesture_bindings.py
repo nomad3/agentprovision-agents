@@ -206,3 +206,49 @@ def test_put_rejects_oversize(db_session, auth_headers):
         headers=auth_headers,
     )
     assert r.status_code in (413, 422)
+
+
+# ── Dispatch endpoint (audit + RL) ─────────────────────────────────────────
+
+def test_dispatch_logs_memory_activity_and_rl(db_session, auth_headers):
+    me = client.get("/api/v1/users/me", headers=auth_headers).json()
+    tenant_id = me.get("tenant_id") or (me.get("tenant") or {}).get("id")
+    assert tenant_id, "couldn't pull tenant_id from /users/me"
+
+    payload = {
+        "binding_id": "b1",
+        "gesture": {"pose": "three", "motion": {"kind": "swipe", "direction": "up"}},
+        "action_kind": "nav_hud",
+        "screen": "/chat",
+        "frontmost_app": "Luna",
+        "latency_ms": 42,
+        "confidence": 0.92,
+    }
+    r = client.post("/api/v1/gesture-dispatch", json=payload, headers=auth_headers)
+    assert r.status_code == 204
+
+    from app.models.memory_activity import MemoryActivity
+    from app.models.rl_experience import RLExperience
+
+    activity = db_session.query(MemoryActivity).filter(
+        MemoryActivity.tenant_id == uuid.UUID(tenant_id),
+        MemoryActivity.event_type == "gesture_triggered",
+    ).first()
+    assert activity is not None
+    assert activity.source == "gesture"
+
+    exp = db_session.query(RLExperience).filter(
+        RLExperience.tenant_id == uuid.UUID(tenant_id),
+        RLExperience.decision_point == "gesture_action",
+    ).first()
+    assert exp is not None
+    assert exp.action.get("kind") == "nav_hud"
+
+
+def test_dispatch_rejects_unauthenticated():
+    r = client.post("/api/v1/gesture-dispatch", json={
+        "binding_id": "b1",
+        "gesture": {"pose": "open_palm"},
+        "action_kind": "nav_hud",
+    })
+    assert r.status_code in (401, 403)

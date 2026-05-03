@@ -55,6 +55,31 @@ export async function apiJson(path, options = {}) {
   return res.json();
 }
 
+// ── Gesture bindings ──────────────────────────────────────────────────────
+
+export async function getGestureBindings() {
+  return apiJson('/api/v1/users/me/gesture-bindings');
+}
+
+export async function saveGestureBindings(bindings) {
+  await apiFetch('/api/v1/users/me/gesture-bindings', {
+    method: 'PUT',
+    body: JSON.stringify({ bindings }),
+  });
+}
+
+export async function postGestureDispatch(payload) {
+  // Best-effort audit + RL log; never blocks UI.
+  try {
+    await apiFetch('/api/v1/gesture-dispatch', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // swallowed — auditing failures must not surface to the user
+  }
+}
+
 export function apiStream(path, body, signal) {
   const token = localStorage.getItem('luna_token');
   let cleanPath = path.startsWith('/') ? path : `/${path}`;
