@@ -30,6 +30,34 @@ The system is **wake-gesture activated** (open palm held 500ms) so always-on cam
 - Always use feature branch + PR (per `feedback_pr_workflow.md`).
 - Replicate any infra changes into Helm/Terraform if they touch the API or shared services (per global CLAUDE.md).
 
+## Alignment with existing architecture (reuse map)
+
+This system slots into existing platform patterns rather than introducing parallel ones. The table below is the source of truth for "what we reuse vs. what we add":
+
+| Concern | Reuse | Notes |
+|---|---|---|
+| **API user routes** | Extend `apps/api/app/api/v1/users.py` (existing `/me`, `/me` PUT) | No new route file. New endpoints `GET/PUT /users/me/gesture-bindings` registered through the existing `users.router` already mounted in `routes.py`. |
+| **User preferences storage** | Extend existing `user_preferences` table | The table already exists (`apps/api/app/models/user_preference.py`) keyed by `(tenant_id, user_id, preference_type)`. We add a JSONB `value_json` column via migration 114 so the table can hold richer preferences than the current `String(200) value` allows. Bindings live as `preference_type='gesture_bindings'`. **No new table.** |
+| **Service layer** | New `apps/api/app/services/gesture_bindings_service.py` extending `services/base.py` CRUD | Mirrors the existing service-per-resource pattern. Uses tenant + user scoping. |
+| **Schemas** | New `apps/api/app/schemas/gesture_binding.py` | Standard `BindingCreate`/`BindingUpdate`/`BindingInDB` triplet, matching the project schema convention. |
+| **Auth + tenant scoping** | `deps.get_current_active_user` (already used by `users.py`) | No new auth pattern. User-scoped, tenant-isolated automatically through current_user. |
+| **Rate limiting** | `slowapi` (already used by login/recovery routes) | 10/min PUT, 60/min GET — consistent with existing limits. |
+| **Memory activity audit** | `services.memory_activity.log_activity()` | Every gesture-triggered action writes a `MemoryActivity` row with `source='gesture'`, `event_type='gesture_triggered'`, `event_metadata={gesture, action_kind, binding_id}`. Surfaces in the existing Memory page audit log without UI changes. |
+| **RL experience** | `services.rl_experience_service.create_experience()` | Each gesture-triggered action creates an RL experience with `decision_point='gesture_action'`, state=current screen + binding, action=action_kind, reward=user_kept_or_reverted. Lets the platform learn which bindings stick. |
+| **MCP tool dispatch** | Existing `POST /mcp/tools/{name}/invoke` | The `action.kind='mcp_tool'` binding type calls this endpoint. No new MCP plumbing. Eligible tools surface as bindable actions in `GestureBindingsPage` via `GET /mcp/tools` list. |
+| **Skill trigger** | Existing `skill_manager` invoke path | Optional `action.kind='skill'` reuses the same trigger surface that semantic auto-trigger uses. |
+| **Local inference / auto-scoring** | Not used in v1 | Geometric pose/motion classification doesn't need an LLM. Phase-3+ may add `local_inference` for confidence calibration; out of v1 scope. |
+| **Tauri command shape** | `#[tauri::command] async fn gesture_*` | Mirrors existing `capture_screenshot`, `start_audio_capture`, `start_spatial_capture` naming + signature pattern in `lib.rs`. |
+| **Tauri shared state** | `lazy_static! { static ref ENGINE_RUNNING: Arc<AtomicBool> }` | Mirrors existing `CAPTURE_RUNNING` AtomicBool pattern in `lib.rs`. |
+| **Frontend API client** | Existing `apps/luna-client/src/api.js` (`import.meta.env.VITE_API_BASE_URL`) | New `getGestureBindings()`/`saveGestureBindings()` helpers added to `api.js`. |
+| **React provider tree** | New `GestureProvider` wrapping app shell next to existing `AuthProvider` in `App.jsx` | Same pattern as the planned `VoiceProvider`. Single subscription point. |
+| **Frontend pages** | Add `GestureBindingsPage` to **SETTINGS** section of the web `Layout.js` nav | Lives next to `SettingsPage`/`LLMSettingsPage`, not a top-level page. Path `/settings/gestures`. |
+| **Web frontend (apps/web)** | A read-only "Gestures" tab in `SettingsPage.js` linking out to the desktop client | The full bindings editor only ships in the Luna Tauri client (where the camera is). The web app shows a "Configure on desktop" message + last-synced bindings summary. |
+| **Spatial HUD integration** | Replace `spatial/GestureController.jsx`; migrate `KnowledgeNebula.jsx` to `useGesture()` | Audit confirmed only those two files reference `luna-gesture-move`. Single-engine, two-window consumption. |
+| **Migrations** | Manual SQL in `apps/api/migrations/`, registered in `_migrations` table | Per `migration_apply_pattern.md`. New migration `114_user_preferences_value_json.sql` plus `.down.sql`. Apply via `kubectl cp` + `psql -f` in K8s, or `docker exec` in compose, per the local deploy state. |
+| **Helm/Terraform** | No changes anticipated | No new env vars, no new services, no new ports. The gesture engine runs entirely inside the desktop client; the API change is one column + two routes. |
+| **PR + CI** | Feature branch `feat/luna-gesture-system` + PR (per `feedback_pr_workflow.md`); CI builds the macOS DMG via existing `luna-client-build.yaml` | Per `feedback_use_pipeline.md` — never build Tauri locally. |
+
 ## Architecture
 
 ```
@@ -175,13 +203,16 @@ Module inside the existing `luna_lib` crate. Owns one Tokio task pool. No separa
 
 ### 2. Tauri main wiring — `apps/luna-client/src-tauri/src/lib.rs` (extend existing)
 
-The gesture engine runs as a Tokio task started during the existing `tauri::Builder::default()...setup` closure (alongside `setup_tray` and audio capture). New Tauri commands:
+The gesture engine runs as a Tokio task started during the existing `tauri::Builder::default()...setup` closure (alongside `setup_tray` and the existing `start_audio_capture` / `start_spatial_capture` commands). All new commands follow the existing file's conventions: `#[tauri::command] async fn` with `Result<T, String>` return signatures and a `lazy_static! AtomicBool` for run-state (mirroring the existing `CAPTURE_RUNNING` pattern).
 
-- `gesture_start()` / `gesture_stop()` — spawn or join the engine task.
+New Tauri commands:
+- `gesture_start()` / `gesture_stop()` — spawn or join the engine task. Toggles `ENGINE_RUNNING: AtomicBool`.
 - `gesture_pause()` / `gesture_resume()` — soft-disable (kill-switch); `pause` releases the camera handle.
 - `gesture_status() -> EngineStatus`.
 - `gesture_list_cameras() -> Vec<CameraInfo>`.
 - `gesture_set_camera_index(i: usize)`.
+
+All commands registered in `tauri::generate_handler![...]` block alongside the existing `capture_screenshot`, `start_audio_capture`, `stop_audio_capture`, `start_spatial_capture` etc.
 
 Persistence:
 - Bindings: `~/Library/Application Support/luna/gesture-bindings.json` (canonical local copy, written atomically via `tempfile::persist`).
@@ -253,9 +284,13 @@ Global shortcut additions (extending existing `tauri-plugin-global-shortcut` blo
 - `NSAccessibilityUsageDescription` — "Luna uses Accessibility access to move the cursor and click via hand gestures."
 
 **Routing & integration:**
-- Add `/gestures` route to `App.jsx` rendering `GestureBindingsPage`.
-- `GestureContext` provider wraps the authenticated app shell (alongside existing `VoiceProvider`).
+- Add `/settings/gestures` route to `App.jsx` rendering `GestureBindingsPage` (under SETTINGS, not a top-level page) — matches the platform's existing nav grouping (`SettingsPage`, `LLMSettingsPage`, `BrandingPage` all live under settings).
+- `GestureProvider` wraps the authenticated app shell **next to existing `AuthProvider`** in `App.jsx` (and alongside `VoiceProvider` once that lands). Single subscription point for `gesture-event` / `wake-state-changed` / `engine-status` Tauri events.
 - First-launch detection in `App.jsx` triggers `GestureCalibration` wizard.
+- `apps/luna-client/src/api.js` gains `getGestureBindings()` / `saveGestureBindings(bindings)` helpers; reuses existing `import.meta.env.VITE_API_BASE_URL` + auth header pattern.
+
+**Web app (`apps/web`) integration:**
+- Read-only "Gestures" subsection added to existing `SettingsPage.js`. Shows last-synced binding count + "Configure on desktop" deep-link. The full editor only ships in the Luna Tauri client (where the camera lives). No new top-level web page.
 
 ## Data model
 
@@ -316,33 +351,50 @@ type Binding = {
 
 ### Server-side schema & migration
 
-Verified `apps/api/app/models/user.py` has **no** `preferences` column today (fields: id, full_name, email, hashed_password, is_active, is_superuser, password_reset_token, password_reset_expires, tenant_id). Latest migration is `113`.
+The existing `user_preferences` table (`apps/api/app/models/user_preference.py`, columns: `id, tenant_id, user_id, preference_type, value:String(200), confidence, evidence_count, updated_at`) is keyed by `(tenant_id, user_id, preference_type)` and is already used for learned simple-string preferences (`response_length`, `tone`, `emoji_usage` etc., written from `auto_dream_activities.learn_user_preferences`).
 
-Decision: add a **dedicated table** `user_gesture_bindings` rather than overload `User` with a JSONB grab-bag. This keeps the model focused and avoids a future "what else lives in `preferences`?" debate.
+`String(200)` is too small for serialized bindings, so we **extend the existing table** with a nullable JSONB column rather than creating a parallel table. This generalizes the table for richer preferences and keeps a single canonical "user preferences" surface.
 
-Migration `apps/api/migrations/114_user_gesture_bindings.sql`:
+Migration `apps/api/migrations/114_user_preferences_value_json.sql`:
 
 ```sql
-CREATE TABLE user_gesture_bindings (
-  user_id    UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  bindings   JSONB NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT bindings_size_cap CHECK (octet_length(bindings::text) <= 65536)
-);
+ALTER TABLE user_preferences
+  ADD COLUMN value_json JSONB NULL;
+
+ALTER TABLE user_preferences
+  ADD CONSTRAINT user_preferences_value_json_size_cap
+  CHECK (value_json IS NULL OR octet_length(value_json::text) <= 65536);
+
+COMMENT ON COLUMN user_preferences.value_json IS
+  'Optional rich JSON payload for preferences that exceed the 200-char value column. '
+  'Used by gesture_bindings and similar preference types. Capped at 64KB.';
 ```
 
-Down migration `114_user_gesture_bindings.down.sql` drops the table.
+Down migration `114_user_preferences_value_json.down.sql` drops the constraint and the column.
 
-### API endpoints (`apps/api/app/api/v1/users.py`)
+The existing `value` column stays nullable-or-string for backwards compatibility with simple-string preferences. Gesture bindings store an empty `value` and put the full payload in `value_json`. The model gains a `value_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)` field.
 
-- `GET /api/v1/users/me/gesture-bindings` → `{ bindings: Binding[] }`.
+### API endpoints (extend `apps/api/app/api/v1/users.py`)
+
+- `GET /api/v1/users/me/gesture-bindings` → `{ bindings: Binding[], updated_at: ISO8601 }`.
 - `PUT /api/v1/users/me/gesture-bindings` body `{ bindings: Binding[] }` → 204.
 
-Hardening (consistent with the 2026-04-18 security posture):
-- **Pydantic schema validation** mirroring the TS `Binding` type. Reject unknown action kinds, unknown poses, and out-of-range `magnitude`/`velocity`.
-- **Payload cap 64 KB** (also enforced by the DB CHECK constraint).
-- **Rate limit via `slowapi`:** PUT 10/min per user, GET 60/min per user — consistent with existing route limits.
-- **Authentication:** standard `deps.get_current_user`. No tenant-cross access (user-scoped only).
+Both endpoints live in the existing `users` router; no new file. They call into a new `apps/api/app/services/gesture_bindings_service.py` (extends `services/base.py`) that owns the read/write of the `preference_type='gesture_bindings'` row.
+
+Hardening (consistent with the 2026-04-18 security posture and existing `users.py` patterns):
+- **Pydantic schema** in `apps/api/app/schemas/gesture_binding.py` mirroring the TS `Binding` type. Rejects unknown action kinds, unknown poses, out-of-range `magnitude`/`velocity`. List-of-bindings cap of 100 entries.
+- **Payload cap 64 KB**, also enforced by the DB CHECK constraint.
+- **Rate limit via `slowapi`:** PUT 10/min per user, GET 60/min per user. Decorator pattern matches existing `users.py` routes.
+- **Authentication:** `deps.get_current_active_user` (the same dep `users.py` already uses). User-scoped, tenant-inherited from `current_user`.
+
+### Audit + RL wiring (server-side, on action dispatch)
+
+When the Tauri client fires a binding, the action handler that runs server-side (whether it's a memory call, MCP tool invoke, workflow run, etc.) writes two follow-up records using existing services. The client passes a `gesture_dispatch_id` header that the API forwards into both records:
+
+- `services.memory_activity.log_activity(db, tenant_id, event_type='gesture_triggered', source='gesture', description=<action label>, event_metadata={gesture: <pose+motion>, action_kind, binding_id, dispatch_id})`. Surfaces in the existing Memory page activity log.
+- `services.rl_experience_service.create_experience(decision_point='gesture_action', state=<screen+binding>, action=<action_kind>, reward_components={user_kept: bool, latency_ms, confidence})`. Reward is filled in later by a passive observer that watches whether the user reverts the binding within 24h (binding kept = reward 1, reverted = 0).
+
+Both calls are best-effort: any exception in audit/RL is logged and swallowed; the user-facing action still completes.
 
 ## Default bindings
 
@@ -444,10 +496,14 @@ For one-shot gestures like 3-finger swipe, pinch-to-zoom, 5-finger grab — thes
   - No other consumers in the repo (verified via `grep -rln "luna-gesture-move" apps/luna-client/src`).
 - **Coexists** with `VoiceProvider` and `useVoice`: voice and gesture are independent. Push-to-talk gesture (e.g. open-palm hold) can call `voiceStart()`.
 - **Reuses** existing API endpoints for the action targets: memory (`apps/api/app/memory/recall.py`, `record.py`), workflows (`POST /workflows/{id}/run`), MCP (`POST /mcp/tools/{name}/invoke`), notifications (`PUT /notifications/{id}/read`).
-- **New API endpoints** (`apps/api/app/api/v1/users.py`):
+- **New API endpoints in existing `apps/api/app/api/v1/users.py`** (no new route file; mounted via existing `users.router` in `routes.py`):
   - `GET /users/me/gesture-bindings` — fetch user's binding set.
   - `PUT /users/me/gesture-bindings` — replace user's binding set (validates schema, 64KB cap, rate-limited 10/min).
-- **New table** `user_gesture_bindings` via migration `114_user_gesture_bindings.sql` (see "Server-side schema & migration" above). Replicate to Helm values if any API env-var tuning is required (not anticipated).
+- **New service** `apps/api/app/services/gesture_bindings_service.py` extends `services/base.py` CRUD pattern.
+- **New schema file** `apps/api/app/schemas/gesture_binding.py`.
+- **No new table** — extend existing `user_preferences` with `value_json JSONB` via migration `114_user_preferences_value_json.sql` (see "Server-side schema & migration"). Bindings are stored as `preference_type='gesture_bindings'`.
+- **Audit/RL wiring** uses existing `services.memory_activity.log_activity()` and `services.rl_experience_service.create_experience()`. No new audit or RL plumbing.
+- **Helm/Terraform** — no changes; no new env vars, ports, or services.
 
 ## Testing strategy
 
