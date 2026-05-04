@@ -12,6 +12,19 @@
   "app": {
     "windows": [
       {
+        "title": "Luna OS",
+        "label": "spatial_hud",
+        "fullscreen": false,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "visible": true,
+        "maximized": true,
+        "shadow": true,
+        "center": true
+      },
+      {
         "title": "Luna",
         "label": "main",
         "width": 420,
@@ -21,19 +34,8 @@
         "resizable": true,
         "decorations": true,
         "transparent": false,
-        "center": true
-      },
-      {
-        "title": "Luna Spatial HUD",
-        "label": "spatial_hud",
-        "fullscreen": false,
-        "resizable": true,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
         "visible": false,
-        "maximized": true,
-        "shadow": false
+        "center": true
       }
     ],
     "trayIcon": {
