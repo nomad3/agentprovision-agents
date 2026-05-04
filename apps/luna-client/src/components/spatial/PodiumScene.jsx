@@ -23,6 +23,7 @@ import Podium from './Podium';
 import Score from './Score';
 import InboxMelody from './InboxMelody';
 import VoiceDispatch from './VoiceDispatch';
+import Movements from './Movements';
 import { VoiceProvider } from '../../context/VoiceContext';
 
 const EMPTY_SNAPSHOT = {
@@ -36,11 +37,32 @@ const EMPTY_SNAPSHOT = {
   error: null,
 };
 
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
 export default function PodiumScene() {
   const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
   useFleetSnapshot(setSnapshot);
   useFleetStream(setSnapshot);
   useDispatchOnPoint();
+
+  // Movements: morning overture (auto, once per day) + evening finale
+  // (on-demand via window event `luna-finale`).
+  const [movement, setMovement] = useState(null); // 'overture' | 'finale' | null
+  useEffect(() => {
+    const last = (() => {
+      try { return localStorage.getItem('luna_overture_played'); } catch { return null; }
+    })();
+    if (last !== todayKey()) {
+      setMovement('overture');
+      try { localStorage.setItem('luna_overture_played', todayKey()); } catch {}
+    }
+    const showFinale = () => setMovement('finale');
+    window.addEventListener('luna-finale', showFinale);
+    return () => window.removeEventListener('luna-finale', showFinale);
+  }, []);
 
   const { wakeState } = useGesture();
   const armed = wakeState === 'armed';
@@ -80,6 +102,29 @@ export default function PodiumScene() {
         <VoiceDispatch />
       </VoiceProvider>
 
+      {/* Finale trigger — manual review of the day's performance. Pairs
+          with the auto-firing morning overture. */}
+      <button
+        onClick={() => window.dispatchEvent(new Event('luna-finale'))}
+        style={{
+          position: 'absolute',
+          bottom: 16,
+          right: 88,
+          padding: '6px 14px',
+          borderRadius: 18,
+          border: '1px solid #4cf',
+          background: 'rgba(20,40,80,0.5)',
+          color: '#cce',
+          cursor: 'pointer',
+          fontFamily: 'ui-sans-serif',
+          fontSize: 13,
+          zIndex: 12,
+        }}
+        title="Review the day's performance"
+      >
+        Finale
+      </button>
+
       <InboxMelody
         notifications={snapshot.notifications || []}
         commitments={snapshot.commitments || []}
@@ -104,6 +149,11 @@ export default function PodiumScene() {
       >
         {wakeState.toUpperCase()}
       </div>
+
+      {/* Movements — morning overture / evening finale overlay */}
+      {movement && (
+        <Movements kind={movement} onDone={() => setMovement(null)} />
+      )}
 
       {/* Loading skeleton for first-paint */}
       {!snapshot.loaded && (
