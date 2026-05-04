@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Union
 
@@ -29,10 +30,15 @@ def create_access_token(
         expire = now + expires_delta
     else:
         expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    # Use time.time() for iat (always Unix-epoch UTC) instead of
+    # datetime.utcnow().timestamp() — the latter treats a naive datetime as
+    # local time on .timestamp(), which would skew iat by the local UTC
+    # offset on non-UTC hosts. Prod K8s is UTC; this just removes the latent
+    # footgun for dev laptops.
     to_encode = {
         "exp": expire,
         "sub": str(subject),
-        "iat": iat if iat is not None else int(now.timestamp()),
+        "iat": iat if iat is not None else int(time.time()),
     }
     if additional_claims:
         to_encode.update(additional_claims)
