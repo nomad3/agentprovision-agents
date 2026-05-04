@@ -10,7 +10,7 @@
  * GestureProvider — this scene just consumes wake state and dispatches
  * point-and-voice events.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { PerspectiveCamera, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
@@ -20,7 +20,11 @@ import { useFleetStream } from '../../hooks/useFleetStream';
 import { useDispatchOnPoint } from '../../hooks/useDispatchOnPoint';
 import { useGesture } from '../../hooks/useGesture';
 import Podium from './Podium';
+import Score from './Score';
 import InboxMelody from './InboxMelody';
+import VoiceDispatch from './VoiceDispatch';
+import Movements from './Movements';
+import { VoiceProvider } from '../../context/VoiceContext';
 
 const EMPTY_SNAPSHOT = {
   agents: [],
@@ -28,15 +32,46 @@ const EMPTY_SNAPSHOT = {
   active_collaborations: [],
   notifications: [],
   commitments: [],
+  running_workflows: [],
   loaded: false,
   error: null,
 };
+
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
 
 export default function PodiumScene() {
   const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
   useFleetSnapshot(setSnapshot);
   useFleetStream(setSnapshot);
   useDispatchOnPoint();
+
+  // Movements: morning overture (auto, once per day) + evening finale
+  // (on-demand via window event `luna-finale`).
+  const [movement, setMovement] = useState(null); // 'overture' | 'finale' | null
+  useEffect(() => {
+    const last = (() => {
+      try { return localStorage.getItem('luna_overture_played'); } catch { return null; }
+    })();
+    if (last !== todayKey()) {
+      setMovement('overture');
+    }
+    const showFinale = () => setMovement('finale');
+    window.addEventListener('luna-finale', showFinale);
+    return () => window.removeEventListener('luna-finale', showFinale);
+  }, []);
+
+  // Persist the "overture played" flag only when the user actually finishes
+  // (or dismisses) the overlay — not on mount. A reload during the overture
+  // shouldn't burn the day's briefing.
+  const handleMovementDone = useCallback(() => {
+    if (movement === 'overture') {
+      try { localStorage.setItem('luna_overture_played', todayKey()); } catch {}
+    }
+    setMovement(null);
+  }, [movement]);
 
   const { wakeState } = useGesture();
   const armed = wakeState === 'armed';
@@ -64,12 +99,40 @@ export default function PodiumScene() {
         <fog attach="fog" args={['#040816', 12, 32]} />
 
         <Podium snapshot={snapshot} armed={armed} />
+        <Score runs={snapshot.running_workflows || []} />
 
         <EffectComposer>
           <Bloom luminanceThreshold={0.25} luminanceSmoothing={0.6} intensity={0.9} mipmapBlur />
           <Vignette eskil={false} offset={0.18} darkness={0.85} />
         </EffectComposer>
       </Canvas>
+
+      <VoiceProvider>
+        <VoiceDispatch />
+      </VoiceProvider>
+
+      {/* Finale trigger — manual review of the day's performance. Pairs
+          with the auto-firing morning overture. */}
+      <button
+        onClick={() => window.dispatchEvent(new Event('luna-finale'))}
+        style={{
+          position: 'absolute',
+          bottom: 16,
+          right: 88,
+          padding: '6px 14px',
+          borderRadius: 18,
+          border: '1px solid #4cf',
+          background: 'rgba(20,40,80,0.5)',
+          color: '#cce',
+          cursor: 'pointer',
+          fontFamily: 'ui-sans-serif',
+          fontSize: 13,
+          zIndex: 12,
+        }}
+        title="Review the day's performance"
+      >
+        Finale
+      </button>
 
       <InboxMelody
         notifications={snapshot.notifications || []}
@@ -95,6 +158,11 @@ export default function PodiumScene() {
       >
         {wakeState.toUpperCase()}
       </div>
+
+      {/* Movements — morning overture / evening finale overlay */}
+      {movement && (
+        <Movements kind={movement} onDone={handleMovementDone} />
+      )}
 
       {/* Loading skeleton for first-paint */}
       {!snapshot.loaded && (

@@ -22,6 +22,7 @@ from app.models.agent import Agent
 from app.models.agent_group import AgentGroup
 from app.models.agent_performance_snapshot import AgentPerformanceSnapshot
 from app.models.notification import Notification
+from app.models.dynamic_workflow import DynamicWorkflow, WorkflowRun, WorkflowStepLog
 
 
 def _agent_to_dict(a: Agent, latest_snapshot: Optional[AgentPerformanceSnapshot]) -> Dict[str, Any]:
@@ -222,6 +223,73 @@ def build_snapshot(db: Session, tenant_id: uuid.UUID) -> Dict[str, Any]:
     except Exception:
         commitments_payload = []
 
+    # ── The Score (Phase B) — running workflows + their last few steps ──────
+    # Surface workflow_runs that are running OR completed within the last
+    # 10 minutes (so finishing flourishes are visible). Each run carries a
+    # compact step list so the spatial Score zone can draw the flowing
+    # graph without an extra round-trip.
+    running_workflows: List[Dict[str, Any]] = []
+    try:
+        ten_min_ago = now - timedelta(minutes=10)
+        runs = (
+            db.query(WorkflowRun)
+            .filter(
+                WorkflowRun.tenant_id == tenant_id,
+                (
+                    (WorkflowRun.status == "running")
+                    | (WorkflowRun.completed_at >= ten_min_ago)
+                ),
+            )
+            .order_by(desc(WorkflowRun.started_at))
+            .limit(15)
+            .all()
+        )
+        run_ids = [r.id for r in runs]
+        steps_by_run: Dict[uuid.UUID, List[WorkflowStepLog]] = {}
+        if run_ids:
+            step_rows = (
+                db.query(WorkflowStepLog)
+                .filter(WorkflowStepLog.run_id.in_(run_ids))
+                .order_by(WorkflowStepLog.started_at.asc().nullslast())
+                .all()
+            )
+            for s in step_rows:
+                steps_by_run.setdefault(s.run_id, []).append(s)
+
+        # Best-effort lookup of workflow names for display labels.
+        workflow_ids = list({r.workflow_id for r in runs if r.workflow_id})
+        wf_names: Dict[uuid.UUID, str] = {}
+        if workflow_ids:
+            for wf in db.query(DynamicWorkflow).filter(DynamicWorkflow.id.in_(workflow_ids)).all():
+                wf_names[wf.id] = wf.name
+
+        for r in runs:
+            steps = steps_by_run.get(r.id, [])[:12]  # cap per run
+            running_workflows.append({
+                "id": str(r.id),
+                "workflow_id": str(r.workflow_id) if r.workflow_id else None,
+                "workflow_name": wf_names.get(r.workflow_id) if r.workflow_id else None,
+                "status": r.status,
+                "current_step": r.current_step,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "completed_at": r.completed_at.isoformat() if r.completed_at else None,
+                "duration_ms": r.duration_ms,
+                "platform": r.platform,
+                "steps": [
+                    {
+                        "id": str(s.id),
+                        "step_id": s.step_id,
+                        "step_type": s.step_type,
+                        "step_name": s.step_name,
+                        "status": s.status,
+                        "duration_ms": s.duration_ms,
+                    }
+                    for s in steps
+                ],
+            })
+    except Exception:  # pragma: no cover — defensive for schema variants
+        running_workflows = []
+
     return {
         "captured_at": now.isoformat(),
         "agents": agents_payload,
@@ -229,4 +297,5 @@ def build_snapshot(db: Session, tenant_id: uuid.UUID) -> Dict[str, Any]:
         "active_collaborations": active_collaborations,
         "notifications": notifications_payload,
         "commitments": commitments_payload,
+        "running_workflows": running_workflows,
     }
