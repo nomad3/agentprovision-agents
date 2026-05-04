@@ -10,7 +10,7 @@
  * GestureProvider — this scene just consumes wake state and dispatches
  * point-and-voice events.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { PerspectiveCamera, Stars } from '@react-three/drei';
 import { EffectComposer, Bloom, Vignette } from '@react-three/postprocessing';
@@ -57,12 +57,21 @@ export default function PodiumScene() {
     })();
     if (last !== todayKey()) {
       setMovement('overture');
-      try { localStorage.setItem('luna_overture_played', todayKey()); } catch {}
     }
     const showFinale = () => setMovement('finale');
     window.addEventListener('luna-finale', showFinale);
     return () => window.removeEventListener('luna-finale', showFinale);
   }, []);
+
+  // Persist the "overture played" flag only when the user actually finishes
+  // (or dismisses) the overlay — not on mount. A reload during the overture
+  // shouldn't burn the day's briefing.
+  const handleMovementDone = useCallback(() => {
+    if (movement === 'overture') {
+      try { localStorage.setItem('luna_overture_played', todayKey()); } catch {}
+    }
+    setMovement(null);
+  }, [movement]);
 
   const { wakeState } = useGesture();
   const armed = wakeState === 'armed';
@@ -152,7 +161,7 @@ export default function PodiumScene() {
 
       {/* Movements — morning overture / evening finale overlay */}
       {movement && (
-        <Movements kind={movement} onDone={() => setMovement(null)} />
+        <Movements kind={movement} onDone={handleMovementDone} />
       )}
 
       {/* Loading skeleton for first-paint */}

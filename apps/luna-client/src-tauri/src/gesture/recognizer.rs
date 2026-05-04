@@ -105,10 +105,14 @@ impl Recognizer {
             }
         }
 
-        // Clear the motion buffer after emitting a successful swipe/pinch/tap
-        // so the same gesture doesn't keep firing as the buffer scrolls.
+        // Clear the motion buffer after emitting a successful one-shot
+        // gesture so the same magnitude doesn't re-classify on subsequent
+        // frames. Includes Sweep and Rotate (both were missed previously).
         if let Some(m) = motion {
-            if matches!(m.kind, MotionKind::Swipe | MotionKind::Pinch | MotionKind::Tap) {
+            if matches!(
+                m.kind,
+                MotionKind::Swipe | MotionKind::Sweep | MotionKind::Pinch | MotionKind::Tap | MotionKind::Rotate
+            ) {
                 self.motion.clear();
             }
         }

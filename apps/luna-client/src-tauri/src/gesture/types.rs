@@ -93,19 +93,20 @@ pub struct GestureEvent {
     pub two_handed: Option<TwoHanded>,
 }
 
-/// Compact summary of the secondary hand when two are present, plus
-/// whether their motion is mirrored (rising/falling/framing).
+/// Snapshot of both-hand state in a single frame. The recognizer doesn't
+/// keep per-hand history yet, so these are *instantaneous* features. The
+/// React side integrates them over its own short window to detect rising
+/// (crescendo) / falling (diminuendo) / framing-open vs framing-close.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwoHanded {
     pub other_pose: Pose,
     pub other_hand: Hand,
-    /// Vertical motion of both palms over the last ~600ms. Positive =
-    /// both palms rising in image-space y (which is screen-down due to
-    /// y-flip in the Swift bridge → user is moving them up).
+    /// Negated mean palm y of both hands in [0,1] image-space. Lower y =
+    /// higher in the world (Swift flips y), so a more-negative value means
+    /// hands are higher. Per-frame, not a delta.
     pub coordinated_dy: f32,
-    /// Horizontal spread between the two palms over the last ~600ms.
-    /// Positive = palms moving apart (frame opening), negative = palms
-    /// closing (frame closing).
+    /// Absolute horizontal distance between the two palms (palm.x delta,
+    /// non-negative). Per-frame, not a delta.
     pub spread_dx: f32,
 }
 

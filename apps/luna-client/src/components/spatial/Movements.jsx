@@ -68,13 +68,23 @@ function buildPanels(briefing, kind) {
 
 export default function Movements({ kind, onDone }) {
   // kind: 'overture' | 'finale'
-  const { briefing, fetchBriefing } = useBriefing();
+  const { briefing, error: briefingError, fetchBriefing } = useBriefing();
   const [panelIdx, setPanelIdx] = useState(0);
   const timerRef = useRef(null);
 
   useEffect(() => {
     fetchBriefing();
   }, [fetchBriefing]);
+
+  // If briefing fetch fails, don't trap the conductor on a black screen —
+  // bail out shortly so the parent can clear its movement state and the
+  // podium becomes interactive again.
+  useEffect(() => {
+    if (briefingError) {
+      const t = setTimeout(() => onDone?.(), 800);
+      return () => clearTimeout(t);
+    }
+  }, [briefingError, onDone]);
 
   const panels = useMemo(() => buildPanels(briefing, kind), [briefing, kind]);
 

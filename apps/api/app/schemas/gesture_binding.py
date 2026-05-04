@@ -57,7 +57,7 @@ class ActionKind(str, Enum):
 
 class MotionSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["swipe", "pinch", "rotate", "tap", "none"]
+    kind: Literal["swipe", "sweep", "pinch", "rotate", "tap", "none"]
     direction: Optional[Literal["up", "down", "left", "right", "in", "out", "cw", "ccw"]] = None
 
 

@@ -6,7 +6,7 @@ you last looked" for the morning overture / evening finale animations.
 
 No new database tables. Pure read-only aggregation over existing models.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -53,9 +53,11 @@ def get_fleet_briefing(
     if since:
         try:
             parsed_since = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            # Convert tz-aware → naive UTC to match service layer convention
+            # Normalize tz-aware → UTC-naive to match the service layer's
+            # `datetime.utcnow()` comparisons. The previous astimezone(its_own_tz)
+            # was a no-op and silently shifted non-UTC offsets.
             if parsed_since.tzinfo is not None:
-                parsed_since = parsed_since.astimezone(parsed_since.tzinfo).replace(tzinfo=None)
+                parsed_since = parsed_since.astimezone(timezone.utc).replace(tzinfo=None)
         except ValueError:
             raise HTTPException(status_code=422, detail="`since` must be ISO 8601")
     return briefing_service.build_briefing(db, current_user.tenant_id, since=parsed_since)
