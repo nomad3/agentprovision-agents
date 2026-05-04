@@ -20,7 +20,10 @@ import { useFleetStream } from '../../hooks/useFleetStream';
 import { useDispatchOnPoint } from '../../hooks/useDispatchOnPoint';
 import { useGesture } from '../../hooks/useGesture';
 import Podium from './Podium';
+import Score from './Score';
 import InboxMelody from './InboxMelody';
+import VoiceDispatch from './VoiceDispatch';
+import { VoiceProvider } from '../../context/VoiceContext';
 
 const EMPTY_SNAPSHOT = {
   agents: [],
@@ -28,6 +31,7 @@ const EMPTY_SNAPSHOT = {
   active_collaborations: [],
   notifications: [],
   commitments: [],
+  running_workflows: [],
   loaded: false,
   error: null,
 };
@@ -64,12 +68,17 @@ export default function PodiumScene() {
         <fog attach="fog" args={['#040816', 12, 32]} />
 
         <Podium snapshot={snapshot} armed={armed} />
+        <Score runs={snapshot.running_workflows || []} />
 
         <EffectComposer>
           <Bloom luminanceThreshold={0.25} luminanceSmoothing={0.6} intensity={0.9} mipmapBlur />
           <Vignette eskil={false} offset={0.18} darkness={0.85} />
         </EffectComposer>
       </Canvas>
+
+      <VoiceProvider>
+        <VoiceDispatch />
+      </VoiceProvider>
 
       <InboxMelody
         notifications={snapshot.notifications || []}

@@ -24,6 +24,7 @@ export function useFleetSnapshot(setSnapshot) {
           active_collaborations: body.active_collaborations || [],
           notifications: body.notifications || [],
           commitments: body.commitments || [],
+          running_workflows: body.running_workflows || [],
           captured_at: body.captured_at,
           loaded: true,
           error: null,

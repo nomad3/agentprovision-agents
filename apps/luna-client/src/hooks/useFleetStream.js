@@ -29,6 +29,7 @@ export function useFleetStream(setSnapshot) {
           active_collaborations: body.active_collaborations || prev.active_collaborations,
           notifications: body.notifications || prev.notifications,
           commitments: body.commitments || prev.commitments,
+          running_workflows: body.running_workflows || prev.running_workflows,
           captured_at: body.captured_at,
         }));
       } catch {
