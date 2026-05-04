@@ -194,6 +194,58 @@ async fn gesture_get_cursor_global() -> Result<bool, String> {
     Ok(gesture::global_mode())
 }
 
+/// Whether the updater is configured with a non-empty signing pubkey. When
+/// false, `download_and_install` would fail at the verification step after
+/// a wasteful full DMG download — `tauri-plugin-updater` calls
+/// `verify_signature` unconditionally and an empty pubkey decodes to an
+/// error. So we fail fast with a clear message and let the React banner
+/// fall back to opening the GitHub Releases page.
+///
+/// The pubkey value is read from `tauri.conf.json` at build time via
+/// `build.rs`, which sets `LUNA_UPDATER_PUBKEY` as a rustc env var.
+fn updater_signing_configured() -> bool {
+    !env!("LUNA_UPDATER_PUBKEY").trim().is_empty()
+}
+
+#[tauri::command]
+async fn updater_signing_status() -> Result<bool, String> {
+    Ok(updater_signing_configured())
+}
+
+/// Download and apply the latest available update, then restart the app.
+/// Requires updater signing to be configured (non-empty pubkey + matching
+/// `TAURI_SIGNING_PRIVATE_KEY` GitHub secret signing each release).
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    if !updater_signing_configured() {
+        return Err(
+            "auto-install requires updater signing to be configured \
+             (set TAURI_SIGNING_PRIVATE_KEY secret and embed pubkey in \
+             tauri.conf.json). Falling back to manual download."
+                .to_string(),
+        );
+    }
+    use tauri_plugin_updater::UpdaterExt;
+    let updater = app.updater().map_err(|e| format!("updater init: {e}"))?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|e| format!("check: {e}"))?
+        .ok_or_else(|| "no update available".to_string())?;
+    let mut downloaded: usize = 0;
+    update
+        .download_and_install(
+            |chunk_len, _content_length| {
+                downloaded += chunk_len;
+                log::debug!("update: downloaded {} bytes", downloaded);
+            },
+            || log::info!("update: download complete; restarting"),
+        )
+        .await
+        .map_err(|e| format!("install: {e}"))?;
+    app.restart();
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct ProjectionResult {
     id: String,
@@ -517,7 +569,10 @@ pub fn run() {
                 // `gesture_start` after a successful login so we don't burn
                 // camera + Apple Vision cycles on the login screen.
 
-                // Auto-updater: check on startup + every 30 min
+                // Auto-updater: check on startup + every 30 min, emit
+                // `update-available` so the React banner shows. The actual
+                // download + install happens in `install_update` when the
+                // user clicks the banner button.
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     loop {
@@ -525,7 +580,7 @@ pub fn run() {
                         tauri::async_runtime::block_on(async move {
                             let updater = match tauri_plugin_updater::UpdaterExt::updater(&h) {
                                 Ok(u) => u,
-                                Err(e) => { log::debug!("Updater init failed: {}", e); return; }
+                                Err(e) => { log::warn!("Updater init failed: {}", e); return; }
                             };
                             match updater.check().await {
                                 Ok(Some(update)) => {
@@ -533,7 +588,7 @@ pub fn run() {
                                     let _ = tauri::Emitter::emit(&h, "update-available", update.version.clone());
                                 }
                                 Ok(None) => log::info!("No update available"),
-                                Err(e) => log::debug!("Update check failed: {}", e),
+                                Err(e) => log::warn!("Update check failed: {}", e),
                             }
                         });
                         std::thread::sleep(std::time::Duration::from_secs(1800));
@@ -694,6 +749,8 @@ pub fn run() {
             gesture_check_accessibility,
             gesture_set_cursor_global,
             gesture_get_cursor_global,
+            install_update,
+            updater_signing_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Luna");

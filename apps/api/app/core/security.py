@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, Union
 
@@ -15,14 +16,30 @@ def create_access_token(
     subject: Union[str, Any],
     expires_delta: timedelta | None = None,
     additional_claims: Dict[str, Any] | None = None,
+    iat: int | None = None,
 ) -> str:
+    """Issue a signed access token.
+
+    `iat` is the original issued-at Unix timestamp. On a fresh login it
+    defaults to `now`. On `/auth/refresh` the caller passes the original
+    iat from the incoming token so the chain has a bounded lifetime — see
+    `MAX_TOKEN_CHAIN_AGE_SECONDS` in `auth.py`.
+    """
+    now = datetime.utcnow()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-    to_encode = {"exp": expire, "sub": str(subject)}
+        expire = now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    # Use time.time() for iat (always Unix-epoch UTC) instead of
+    # datetime.utcnow().timestamp() — the latter treats a naive datetime as
+    # local time on .timestamp(), which would skew iat by the local UTC
+    # offset on non-UTC hosts. Prod K8s is UTC; this just removes the latent
+    # footgun for dev laptops.
+    to_encode = {
+        "exp": expire,
+        "sub": str(subject),
+        "iat": iat if iat is not None else int(time.time()),
+    }
     if additional_claims:
         to_encode.update(additional_claims)
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)

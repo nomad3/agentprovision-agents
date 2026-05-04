@@ -128,6 +128,89 @@ def test_read_users_me(db_session, test_user_token):
     assert "email" in response.json()
     assert "id" in response.json()
 
+
+def test_refresh_token_with_valid_bearer(db_session, test_user_token):
+    response = client.post(
+        "/api/v1/auth/refresh",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["token_type"] == "bearer"
+    assert isinstance(body["access_token"], str) and body["access_token"]
+
+    # Decode both tokens to confirm the refreshed one carries the same
+    # identity claims and an `exp` not earlier than the original.
+    from jose import jwt as _jwt
+    from app.core.config import settings as _settings
+
+    old = _jwt.decode(test_user_token, _settings.SECRET_KEY, algorithms=[_settings.ALGORITHM])
+    new = _jwt.decode(body["access_token"], _settings.SECRET_KEY, algorithms=[_settings.ALGORITHM])
+    assert new["sub"] == old["sub"]
+    assert new.get("user_id") == old.get("user_id")
+    assert new.get("tenant_id") == old.get("tenant_id")
+    assert new["exp"] >= old["exp"]
+
+
+def test_refresh_token_rejects_unauthenticated(db_session):
+    response = client.post("/api/v1/auth/refresh")
+    assert response.status_code in (401, 403)
+
+
+def test_refresh_preserves_original_iat(db_session, test_user_token):
+    """A refreshed token must carry the *original* iat so the chain is bounded."""
+    from jose import jwt as _jwt
+    from app.core.config import settings as _settings
+
+    original = _jwt.decode(test_user_token, _settings.SECRET_KEY, algorithms=[_settings.ALGORITHM])
+    response = client.post(
+        "/api/v1/auth/refresh",
+        headers={"Authorization": f"Bearer {test_user_token}"},
+    )
+    assert response.status_code == 200
+    refreshed = _jwt.decode(
+        response.json()["access_token"],
+        _settings.SECRET_KEY,
+        algorithms=[_settings.ALGORITHM],
+    )
+    assert refreshed["iat"] == original["iat"]
+    assert refreshed["exp"] >= original["exp"]
+
+
+def test_refresh_rejects_old_session(db_session, test_user_data):
+    """Tokens whose original iat is older than the chain cap are rejected."""
+    import time
+    from app.core import security as _sec
+    from app.core.config import settings as _settings
+    from app.api.v1.auth import MAX_TOKEN_CHAIN_AGE_SECONDS
+
+    # Register a user so the email resolves to a real account.
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "user_in": {
+                "email": test_user_data["email"],
+                "password": test_user_data["password"],
+                "full_name": test_user_data["full_name"],
+            },
+            "tenant_in": {"name": test_user_data["tenant_name"]},
+        },
+    )
+    # Forge a still-valid token (exp in the future) but with iat older than
+    # the chain cap. This is what a 7+ day refresh chain would look like.
+    old_iat = int(time.time()) - MAX_TOKEN_CHAIN_AGE_SECONDS - 60
+    forged = _sec.create_access_token(
+        test_user_data["email"],
+        expires_delta=None,
+        iat=old_iat,
+    )
+    response = client.post(
+        "/api/v1/auth/refresh",
+        headers={"Authorization": f"Bearer {forged}"},
+    )
+    assert response.status_code == 401
+    assert "too old" in response.json()["detail"].lower()
+
 def test_get_analytics_summary(db_session, test_user_token):
     response = client.get(
         "/api/v1/analytics/summary",
