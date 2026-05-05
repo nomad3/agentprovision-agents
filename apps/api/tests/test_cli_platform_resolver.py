@@ -214,15 +214,20 @@ def test_chain_gemini_cli_via_google_integration(monkeypatch):
 
 def test_default_priority_when_multiple_clis_connected(monkeypatch):
     """No explicit preference + multiple connected → use the default
-    priority order (claude_code > copilot_cli > gemini_cli > codex >
-    opencode). If product preferences change, this test changes too —
-    that's a feature, not a bug."""
+    priority order. As of 2026-05-05 the order is
+    gemini_cli > codex > copilot_cli > claude_code > opencode (most
+    tenants only have Google integrations connected, which auto-grant
+    gemini for free, so we lead with that). If product preferences
+    change, update _DEFAULT_PRIORITY in cli_platform_resolver.py and
+    this test changes too — that's a feature, not a bug."""
     _stub_connected(monkeypatch, {"github", "claude_code", "gemini_cli", "codex"})
     chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
     # opencode always last
     assert chain[-1] == "opencode"
-    # claude_code is the first in the default priority
-    assert chain[0] == "claude_code"
+    # gemini_cli is the new first in the default priority
+    assert chain[0] == "gemini_cli"
+    # codex is second
+    assert chain[1] == "codex"
     # All connected CLIs appear
-    for cli in ("copilot_cli", "gemini_cli", "codex"):
+    for cli in ("copilot_cli", "claude_code"):
         assert cli in chain
