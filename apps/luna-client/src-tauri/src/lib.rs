@@ -597,13 +597,35 @@ pub fn run() {
 
     builder
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Logging in BOTH debug and release. The release build was
+            // previously gated behind `cfg!(debug_assertions)`, leaving
+            // production Luna completely silent — no Luna.log, no
+            // stderr output, no os_log entries (Tauri's tracing
+            // backend does not auto-bridge to unified logging). Field
+            // diagnostics on the gesture engine, auto-updater, and
+            // gemini quota fallbacks were all blocked by this gap.
+            // Defaulting release to Info-level keeps the per-frame
+            // gesture spam out (those are at Debug) while preserving
+            // engine-status, errors, and lifecycle messages.
+            let log_level = if cfg!(debug_assertions) {
+                log::LevelFilter::Debug
+            } else {
+                log::LevelFilter::Info
+            };
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log_level)
+                    // Write to the standard macOS log location plus the
+                    // WebView console (so the React side can read its own
+                    // logs) plus stderr (so terminal-launch shows them
+                    // live without needing a file tail).
+                    .targets([
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: None }),
+                        tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    ])
+                    .build(),
+            )?;
 
             #[cfg(desktop)]
             {
