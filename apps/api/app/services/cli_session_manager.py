@@ -108,6 +108,7 @@ def generate_cli_instructions(
     memory_context: Dict[str, Any],
     agent_slug: str = "luna",
     tier: str = "full",
+    connected_integrations: list | None = None,
 ) -> str:
     """Generate provider-neutral instruction markdown from agent skill + tenant context."""
     limits = TIER_LIMITS.get(tier, TIER_LIMITS["full"])
@@ -157,6 +158,39 @@ def generate_cli_instructions(
     lines.append("- NEVER present a guess as a fact. One clear hedge is enough — don't over-qualify every sentence.")
     lines.append(f"You are {agent_slug}, an AI agent with full access to email, calendar, knowledge graph, Jira, and code tools.")
     lines.append("")
+
+    # Connected integrations — load-bearing context. Without this, the
+    # agent has no positive signal that gmail / calendar / github are
+    # actually wired up for THIS tenant, so it defaults to "let me have
+    # you re-authorize" / "I don't have permission to access X" even
+    # when credentials exist (2026-05-04 incident: Luna kept asking the
+    # user to reconnect Gmail despite 204 active gmail credentials in
+    # integration_credentials).
+    if connected_integrations:
+        lines.append("## Connected Integrations")
+        lines.append("These tenant integrations are CONNECTED and READY TO USE. Do not ask the user to (re)authorize unless a tool call actually fails with an auth error:")
+        # De-duplicate by (integration_name, account_email) so multi-credential rows don't spam the list.
+        seen: set = set()
+        for ci in connected_integrations:
+            if not isinstance(ci, dict):
+                continue
+            name = ci.get("integration_name") or ci.get("name")
+            email = ci.get("account_email") or ci.get("email") or ""
+            enabled = ci.get("enabled", True)
+            if not name or not enabled:
+                continue
+            key = (name, email)
+            if key in seen:
+                continue
+            seen.add(key)
+            if email:
+                lines.append(f"- **{name}** — account: `{email}`")
+            else:
+                lines.append(f"- **{name}**")
+        lines.append("")
+        lines.append("If the user references one of these accounts, proceed directly with the tool call. Treat absence from this list as truly missing (then it is appropriate to ask the user to connect it).")
+        lines.append("")
+
     lines.append(ANTI_HALLUCINATION_PREAMBLE)
     lines.append("")
 
@@ -890,6 +924,34 @@ def run_agent_session(
         except Exception:
             safe_rollback(db)
             user_name = str(user_id)
+    # Pull the tenant's connected integrations so the agent's CLAUDE.md
+    # carries an explicit "## Connected Integrations" section. Without
+    # this, models default to asking the user to (re)authorize gmail /
+    # calendar / github even when credentials are present (the 2026-05-04
+    # symptom that prompted this fix). Exception-tolerant: if the query
+    # fails, we fall back to the generic prompt rather than crash chat.
+    connected_integrations: list = []
+    try:
+        rows = (
+            db.query(
+                IntegrationConfig.integration_name,
+                IntegrationConfig.account_email,
+                IntegrationConfig.enabled,
+            )
+            .filter(
+                IntegrationConfig.tenant_id == tenant_id,
+                IntegrationConfig.enabled.is_(True),
+            )
+            .all()
+        )
+        connected_integrations = [
+            {"integration_name": r[0], "account_email": r[1], "enabled": r[2]}
+            for r in rows
+        ]
+    except Exception:
+        safe_rollback(db)
+        connected_integrations = []
+
     instruction_md_content = generate_cli_instructions(
         skill_body=skill_body,
         tenant_name=tenant_name,
@@ -899,6 +961,7 @@ def run_agent_session(
         memory_context=memory_context,
         agent_slug=agent_slug,
         tier=agent_tier,
+        connected_integrations=connected_integrations,
     )
 
     internal_key = settings.MCP_API_KEY or "dev_mcp_key"
