@@ -48,10 +48,15 @@ logger = logging.getLogger(__name__)
 # product preferences change — there's no reason to spread this list
 # across the codebase.
 _DEFAULT_PRIORITY: tuple[str, ...] = (
-    "claude_code",
-    "copilot_cli",
+    # 2026-05-05 product call: gemini first because most tenants only
+    # have Google integrations connected (gmail / calendar / drive
+    # auto-grant gemini_cli access for free), then codex / copilot_cli /
+    # claude_code for tenants that pay for those CLI subscriptions, and
+    # finally opencode as the always-available local-Gemma floor.
     "gemini_cli",
     "codex",
+    "copilot_cli",
+    "claude_code",
     "opencode",
 )
 
