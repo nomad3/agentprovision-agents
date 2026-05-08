@@ -141,7 +141,7 @@ jobs:
         working-directory: apps/api
         run: |
           pip install -r requirements.txt
-          pip install pytest-cov
+          pip install pytest-cov pytest-timeout
       - name: Wait for Postgres
         env:
           PGPASSWORD: postgres
@@ -194,6 +194,7 @@ jobs:
         run: |
           pytest -m integration \
                  --cov=app --cov-report=xml --cov-report=term \
+                 --timeout=60 --timeout-method=thread \
                  --maxfail=200 -q || true
       - uses: actions/upload-artifact@v4
         if: always()
