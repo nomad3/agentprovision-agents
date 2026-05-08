@@ -106,12 +106,22 @@ impl WakeMachine {
                 self.state = WakeState::Sleeping;
                 self.arming_started_at = None;
             }
-            // Idle tick during Arming — same abort path so the wake gesture
-            // doesn't stick around indefinitely without pose input.
-            (WakeState::Arming, WakeInput::Idle) => {
-                self.state = WakeState::Sleeping;
-                self.arming_started_at = None;
-            }
+            // Idle ticks must NOT reset Arming — the supervisor calls
+            // `wake.tick(WakeInput::Idle, now_ms)` after every Pose
+            // tick on every frame, so resetting on Idle was creating an
+            // arm-then-immediately-disarm loop that made the 500ms
+            // hold permanently unreachable. Live diagnostic 2026-05-08
+            // (Luna 0.1.66 with pose+wake heartbeat) showed
+            // pose=OpenPalm confidence=1.0 wake_state=Sleeping for 6+
+            // seconds straight — the 'Arming → Idle → Sleeping' arm
+            // I added in PR #294 was the culprit.
+            //
+            // The legitimate "user dropped their hand" abort path is
+            // already covered by the (Arming, Pose { pose: None, .. })
+            // arm above — when the hand goes away the Pose tick fires
+            // with pose=None and that already drops to Sleeping.
+            // Idle ticks during Arming are just noise; ignore them.
+            (WakeState::Arming, WakeInput::Idle) => {}
             // A frame *with* a hand is real activity — refresh the idle baseline.
             // A frame *without* a hand (pose: None) means the user lowered their
             // hands; we leave last_activity_ms alone so the 5s idle counter
