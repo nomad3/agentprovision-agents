@@ -202,12 +202,17 @@ impl MemoryCore for MyMemoryCore {
         }).collect();
 
         // 5. Search episodes
+        // NOTE: conversation_episodes.created_at is `timestamp without time zone` in
+        // the Postgres schema. The Rust side reads it as `DateTime<Utc>` which sqlx
+        // maps to TIMESTAMPTZ — without the explicit `AT TIME ZONE 'UTC'` cast every
+        // query panics with `mismatched types ... TIMESTAMPTZ vs TIMESTAMP`. We treat
+        // stored values as UTC because that's the convention everywhere else.
         let episode_rows = sqlx::query(
             r#"
             SELECT
                 id::text as id,
                 summary,
-                created_at,
+                (created_at AT TIME ZONE 'UTC') as created_at,
                 (1 - (embedding <=> $2::vector)) as similarity
             FROM conversation_episodes
             WHERE tenant_id = $1
@@ -229,6 +234,8 @@ impl MemoryCore for MyMemoryCore {
         }).collect();
 
         // 6. Search commitments (open/in_progress, not fulfilled/broken/cancelled)
+        // NOTE: commitment_records.due_at is `timestamp without time zone`; cast to
+        // TIMESTAMPTZ so sqlx can decode into `Option<DateTime<Utc>>`.
         let commitment_rows = sqlx::query(
             r#"
             SELECT
@@ -236,7 +243,7 @@ impl MemoryCore for MyMemoryCore {
                 title,
                 commitment_type,
                 state,
-                due_at,
+                (due_at AT TIME ZONE 'UTC') as due_at,
                 owner_agent_slug
             FROM commitment_records
             WHERE tenant_id = $1 AND state NOT IN ('fulfilled', 'broken', 'cancelled')
@@ -262,13 +269,15 @@ impl MemoryCore for MyMemoryCore {
         }).collect();
 
         // 7. Search past conversations (chat_message embeddings, vector similarity)
+        // NOTE: embeddings.created_at is `timestamp without time zone`; cast to
+        // TIMESTAMPTZ so sqlx can decode into `Option<DateTime<Utc>>`.
         let conversation_rows = sqlx::query(
             r#"
             SELECT
                 e.content_id as session_id,
                 e.text_content as content,
                 'user' as role,
-                e.created_at,
+                (e.created_at AT TIME ZONE 'UTC') as created_at,
                 (1 - (e.embedding <=> $2::vector)) as similarity
             FROM embeddings e
             WHERE e.tenant_id = $1 AND e.content_type = 'chat_message'
