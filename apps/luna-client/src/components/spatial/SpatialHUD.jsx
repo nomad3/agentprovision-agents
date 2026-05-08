@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
 import KnowledgeNebula from './KnowledgeNebula';
+import OrchestrationNebula from './OrchestrationNebula';
 import HandPortraitVisualizer from '../gestures/HandPortraitVisualizer';
 import { apiJson } from '../../api';
 import { useGesture } from '../../hooks/useGesture';
@@ -166,6 +167,12 @@ export default function SpatialHUD() {
   return (
     <div className={`spatial-hud-container ${consensus >= 90 ? 'consensus-glow' : ''}`}>
       <KnowledgeNebula nodes={nodes} agents={agents} beams={beams} />
+      {/* Layered on top of the knowledge nebula: the orchestrator's
+          living state — agents as nodes, workflows as orbiting rings,
+          recent actions as light pulses radiating to the center. Fills
+          the void when the knowledge graph is empty / no A2A coalition
+          is running, which is the default state for most tenants. */}
+      <OrchestrationNebula />
       <SpatialHudGestureSync onSyncChange={setTrackingActive} />
 
       {/* Live portrait of the user's hand with detected MediaPipe
