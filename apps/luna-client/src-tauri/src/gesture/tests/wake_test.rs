@@ -221,3 +221,38 @@ fn confirm_pending_freezes_idle_timer() {
     m.tick(WakeInput::Idle, 13000);
     assert_eq!(m.state(), WakeState::Sleeping);
 }
+
+#[test]
+fn arming_survives_per_frame_idle_ticks() {
+    // Regression for the 2026-05-08 incident: the supervisor calls
+    //   wake.tick(WakeInput::Pose { ... }, now_ms);
+    //   wake.tick(WakeInput::Idle, now_ms);
+    // on EVERY frame. Before this fix the (Arming, Idle) arm reset to
+    // Sleeping immediately, so wake bounced Arming → Sleeping every
+    // single frame and the 500ms hold could never accumulate. Live
+    // diagnostic showed pose=OpenPalm confidence=1.0 wake_state=Sleeping
+    // for 6+ seconds despite ideal conditions.
+    //
+    // This test simulates ~600ms of supervisor frames at 30fps with
+    // alternating Pose+Idle ticks per frame and asserts wake reaches
+    // Armed.
+    let mut m = WakeMachine::new();
+    let frames_per_sec = 30;
+    let total_ms: i64 = 600;
+    let frame_dt_ms = 1000 / frames_per_sec;
+    let mut t: i64 = 0;
+    while t <= total_ms {
+        m.tick(
+            WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.95 },
+            t,
+        );
+        m.tick(WakeInput::Idle, t);
+        t += frame_dt_ms as i64;
+    }
+    assert_eq!(
+        m.state(),
+        WakeState::Armed,
+        "wake must reach Armed after 600ms of OpenPalm frames even when \
+         the supervisor double-ticks Pose+Idle per frame"
+    );
+}
