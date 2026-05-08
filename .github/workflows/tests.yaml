@@ -99,7 +99,7 @@ jobs:
         with:
           name: coverage-api
           path: apps/api/coverage.xml
-          if-no-files-found: ignore
+          if-no-files-found: error  # api job MUST produce coverage; missing = collection failure (Phase 1.5 hotfix)
 
   # ─── apps/api integration (route handlers + Postgres/pgvector) ───────────
   # Phase 1.5: route handlers in app/api/*.py need a real Postgres + pgvector
@@ -201,7 +201,7 @@ jobs:
         with:
           name: coverage-api-integration
           path: apps/api/coverage.xml
-          if-no-files-found: ignore
+          if-no-files-found: error  # api integration MUST produce coverage; missing = collection failure (Phase 1.5 hotfix)
 
   # ─── apps/web ────────────────────────────────────────────────────────────
   web:
