@@ -256,3 +256,42 @@ fn arming_survives_per_frame_idle_ticks() {
          the supervisor double-ticks Pose+Idle per frame"
     );
 }
+
+#[test]
+fn arming_completes_when_user_switches_to_non_wake_pose_mid_hold() {
+    // Live 2026-05-08 trap: user shows OpenPalm briefly to start
+    // arming, then transitions to ThumbUp during the 500ms hold.
+    // Before this fix the (Arming, non-wake-pose) arm was a no-op,
+    // so the hold counter never advanced and wake stayed in Arming
+    // forever (5+ seconds observed). Now the flicker-tolerant arm
+    // also completes the hold once 500ms has elapsed — any confident
+    // hand visible to the camera is enough intent signal.
+    let mut m = WakeMachine::new();
+    m.tick(
+        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.95 },
+        0,
+    );
+    assert_eq!(m.state(), WakeState::Arming);
+    // User immediately switches to ThumbUp and holds it
+    m.tick(
+        WakeInput::Pose { pose: Some(Pose::ThumbUp), confidence: 0.95 },
+        100,
+    );
+    assert_eq!(m.state(), WakeState::Arming, "still arming during hold");
+    m.tick(
+        WakeInput::Pose { pose: Some(Pose::ThumbUp), confidence: 0.95 },
+        300,
+    );
+    assert_eq!(m.state(), WakeState::Arming, "still arming under 500ms");
+    m.tick(
+        WakeInput::Pose { pose: Some(Pose::ThumbUp), confidence: 0.95 },
+        600,
+    );
+    assert_eq!(
+        m.state(),
+        WakeState::Armed,
+        "ThumbUp held past 500ms must reach Armed even though it's \
+         not in the wake-pose set — confident hand visible is enough \
+         intent signal once the user has already committed to arming"
+    );
+}

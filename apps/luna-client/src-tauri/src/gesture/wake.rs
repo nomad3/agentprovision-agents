@@ -90,16 +90,29 @@ impl WakeMachine {
                 }
             }
             // Hand still visible at decent confidence but classifier flickered
-            // to a non-OpenPalm pose — keep counting toward the hold instead
-            // of resetting to Sleeping. Real users can't hold an exact pose
-            // for 500ms at 30fps without ANY misclassified frames; the old
-            // catch-all aborted the hold every single time. Bug fix 2026-05-05.
+            // to a non-wake pose (Fist / Point / ThumbUp / Peace / Custom).
+            // Keep counting AND complete the hold if 500ms has elapsed.
+            //
+            // The previous version was a pure no-op: if the user showed
+            // OpenPalm briefly and then switched to ThumbUp, the hold
+            // counter never advanced and wake stayed Arming forever (live
+            // diagnostic 2026-05-08, user held ThumbUp for 5+ seconds
+            // with wake_state=Arming the whole time). Now any confident
+            // hand visible to the camera completes the hold.
+            //
+            // Bug fix 2026-05-05 (don't reset on flicker) +
+            //         2026-05-08 (also advance hold on flicker).
             (
                 WakeState::Arming,
                 WakeInput::Pose { pose: Some(_), confidence },
             ) if confidence >= ARM_ABORT_CONFIDENCE => {
-                // No-op: stay in Arming. The next OpenPalm frame will check
-                // whether the hold time has elapsed.
+                if let Some(start) = self.arming_started_at {
+                    if now_ms - start >= ARM_HOLD_MS {
+                        self.state = WakeState::Armed;
+                        self.last_activity_ms = now_ms;
+                        self.arming_started_at = None;
+                    }
+                }
             }
             // Hand disappeared OR confidence collapsed — real abort signal.
             (WakeState::Arming, WakeInput::Pose { .. }) => {
