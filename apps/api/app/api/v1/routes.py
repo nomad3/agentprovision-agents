@@ -5,6 +5,7 @@ from app.api.v1 import (
     audit,
     auth,
     insights_resolver_metrics,
+    spatial_orchestration,
     channels,
     data_sources,
     data_pipelines,
@@ -164,6 +165,7 @@ router.include_router(external_agents.router, prefix="/external-agents", tags=["
 router.include_router(agent_marketplace.router, prefix="/marketplace", tags=["marketplace"])
 router.include_router(agent_tests.router, prefix="/agents", tags=["agent-tests"])
 router.include_router(insights_resolver_metrics.router, prefix="/insights", tags=["insights"])
+router.include_router(spatial_orchestration.router, prefix="/spatial", tags=["spatial"])
 router.include_router(admin_tenant_health.router, prefix="/admin", tags=["admin"])
 
 # Register optional modules that loaded successfully
