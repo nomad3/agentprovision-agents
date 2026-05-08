@@ -2,14 +2,14 @@ use tonic::{transport::Server, Request, Response, Status};
 use tonic_health::server::health_reporter;
 use memory::v1::memory_core_server::{MemoryCore, MemoryCoreServer};
 use memory::v1::{
-    RecallRequest, RecallResponse, Entity, Observation, Relation, EpisodeSummary,
+    RecallRequest, RecallResponse, Entity, Observation, EpisodeSummary,
     CommitmentSummary, GoalSummary, ConversationSnippet, ContradictionSummary, RecallMetadata,
     RecordObservationRequest, RecordCommitmentRequest, IngestRequest, IngestResponse,
 };
 use sqlx::postgres::PgPoolOptions;
-use sqlx::Row;
-use uuid::Uuid;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use uuid::Uuid;
 
 pub mod memory {
     pub mod v1 {
@@ -23,8 +23,8 @@ pub mod embedding {
     }
 }
 
-use embedding::v1::embedding_service_client::EmbeddingServiceClient;
-use embedding::v1::EmbedRequest;
+mod store;
+use store::{MemoryStore, PgStore};
 
 // ─── pure helpers (no I/O, unit-tested below) ───────────────────────────────
 
@@ -80,34 +80,41 @@ pub(crate) fn default_source_type(provided: &str) -> String {
     }
 }
 
+/// gRPC handler shell — owns nothing but an `Arc<dyn MemoryStore>`.
+///
+/// All I/O lives behind the trait so each handler is unit-testable with
+/// a fake store (see `mod tests` below). Production wires this up with
+/// a `PgStore` in `main()`. Refactor introduced 2026-05-05 (phase 5.5):
+/// the handlers are a 1:1 lift of the previous inline-SQL bodies.
 pub struct MyMemoryCore {
-    pool: sqlx::PgPool,
-    embedding_client: EmbeddingServiceClient<tonic::transport::Channel>,
+    store: Arc<dyn MemoryStore>,
 }
 
 impl MyMemoryCore {
-    pub async fn new(pool: sqlx::PgPool, embedding_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let embedding_client = EmbeddingServiceClient::connect(embedding_url.to_string()).await?;
-        Ok(Self { pool, embedding_client })
+    /// Production constructor: build a `PgStore` and wrap it.
+    pub async fn new(
+        pool: sqlx::PgPool,
+        embedding_url: &str,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let store = PgStore::new(pool, embedding_url).await?;
+        Ok(Self {
+            store: Arc::new(store),
+        })
     }
 
-    async fn get_embedding(&self, text: &str, task_type: &str) -> Result<Vec<f32>, Status> {
-        // tonic channels are cloneable and safe for concurrent use
-        let mut client = self.embedding_client.clone();
-
-        let request = Request::new(EmbedRequest {
-            text: text.to_string(),
-            task_type: task_type.to_string(),
-        });
-
-        let response = client.embed(request).await?;
-        Ok(response.into_inner().vector)
+    /// Constructor for unit tests — accepts any `MemoryStore` impl.
+    #[cfg(test)]
+    pub(crate) fn from_store(store: Arc<dyn MemoryStore>) -> Self {
+        Self { store }
     }
 }
 
 #[tonic::async_trait]
 impl MemoryCore for MyMemoryCore {
-    async fn recall(&self, request: Request<RecallRequest>) -> Result<Response<RecallResponse>, Status> {
+    async fn recall(
+        &self,
+        request: Request<RecallRequest>,
+    ) -> Result<Response<RecallResponse>, Status> {
         let start = Instant::now();
         let req = request.into_inner();
         let tenant_id = parse_tenant_id(&req.tenant_id)?;
@@ -115,192 +122,39 @@ impl MemoryCore for MyMemoryCore {
         println!("Recalling for tenant {} query: {}", tenant_id, req.query);
 
         // 1. Embed the query
-        let query_vec = self.get_embedding(&req.query, "search_query").await?;
-        let query_vec_str = format_pgvector(&query_vec);
+        let query_vec = self.store.embed(&req.query, "search_query").await?;
 
         // 2. Search entities
-        let entity_rows = sqlx::query(
-            r#"
-            SELECT
-                ke.id::text as id,
-                ke.name,
-                ke.entity_type,
-                ke.category,
-                ke.description,
-                (1 - (e.embedding <=> $2::vector)) as similarity
-            FROM embeddings e
-            JOIN knowledge_entities ke ON e.content_id = ke.id::text
-            WHERE e.tenant_id = $1 AND e.content_type = 'entity' AND ke.deleted_at IS NULL
-            ORDER BY e.embedding <=> $2::vector
-            LIMIT $3
-            "#
-        )
-        .bind(tenant_id)
-        .bind(&query_vec_str)
-        .bind(req.top_k_per_type as i64)
-        .fetch_all(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error (entities): {}", e)))?;
-
-        let entities: Vec<Entity> = entity_rows.iter().map(|r| Entity {
-            id: r.get("id"),
-            name: r.get("name"),
-            entity_type: r.get("entity_type"),
-            category: r.get("category"),
-            description: r.get("description"),
-            similarity: r.get::<f64, _>("similarity") as f32,
-        }).collect();
+        let entities: Vec<Entity> = self
+            .store
+            .fetch_entities(tenant_id, &query_vec, req.top_k_per_type as i64)
+            .await?;
 
         // 3. Search observations
         let entity_ids: Vec<String> = entities.iter().map(|e| e.id.clone()).collect();
-        let observation_rows = sqlx::query(
-            r#"
-            SELECT
-                id::text as id,
-                entity_id::text as entity_id,
-                observation_text as content,
-                (1 - (embedding <=> $2::vector)) as similarity
-            FROM knowledge_observations
-            WHERE tenant_id = $1 AND entity_id::text = ANY($3)
-            ORDER BY embedding <=> $2::vector
-            LIMIT $4
-            "#
-        )
-        .bind(tenant_id)
-        .bind(&query_vec_str)
-        .bind(&entity_ids)
-        .bind(req.top_k_per_type as i64)
-        .fetch_all(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error (observations): {}", e)))?;
-
-        let observations: Vec<Observation> = observation_rows.iter().map(|r| Observation {
-            id: r.get("id"),
-            entity_id: r.get("entity_id"),
-            content: r.get("content"),
-            similarity: r.get::<f64, _>("similarity") as f32,
-        }).collect();
+        let observations: Vec<Observation> = self
+            .store
+            .fetch_observations(tenant_id, &query_vec, &entity_ids, req.top_k_per_type as i64)
+            .await?;
 
         // 4. Search relations
-        let relation_rows = sqlx::query(
-            r#"
-            SELECT
-                from_entity_id::text as from_entity,
-                to_entity_id::text as to_entity,
-                relation_type
-            FROM knowledge_relations
-            WHERE tenant_id = $1 AND (from_entity_id::text = ANY($2) OR to_entity_id::text = ANY($2))
-            "#
-        )
-        .bind(tenant_id)
-        .bind(&entity_ids)
-        .fetch_all(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error (relations): {}", e)))?;
+        let relations = self.store.fetch_relations(tenant_id, &entity_ids).await?;
 
-        let relations: Vec<Relation> = relation_rows.iter().map(|r| Relation {
-            from_entity: r.get("from_entity"),
-            to_entity: r.get("to_entity"),
-            relation_type: r.get("relation_type"),
-        }).collect();
-
-        // 5. Search episodes
-        // NOTE: conversation_episodes.created_at is `timestamp without time zone` in
-        // the Postgres schema. The Rust side reads it as `DateTime<Utc>` which sqlx
-        // maps to TIMESTAMPTZ — without the explicit `AT TIME ZONE 'UTC'` cast every
-        // query panics with `mismatched types ... TIMESTAMPTZ vs TIMESTAMP`. We treat
-        // stored values as UTC because that's the convention everywhere else.
-        let episode_rows = sqlx::query(
-            r#"
-            SELECT
-                id::text as id,
-                summary,
-                (created_at AT TIME ZONE 'UTC') as created_at,
-                (1 - (embedding <=> $2::vector)) as similarity
-            FROM conversation_episodes
-            WHERE tenant_id = $1
-            ORDER BY embedding <=> $2::vector
-            LIMIT $3
-            "#
-        )
-        .bind(tenant_id)
-        .bind(&query_vec_str)
-        .bind(5i64)
-        .fetch_all(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error (episodes): {}", e)))?;
-
-        let episodes: Vec<EpisodeSummary> = episode_rows.iter().map(|r| EpisodeSummary {
-            id: r.get("id"),
-            summary: r.get("summary"),
-            created_at: Some(chrono_to_proto_ts(r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"))),
-            similarity: r.get::<f64, _>("similarity") as f32,
-        }).collect();
+        // 5. Search episodes (limit fixed at 5 to match prior behaviour)
+        let episodes: Vec<EpisodeSummary> =
+            self.store.fetch_episodes(tenant_id, &query_vec, 5).await?;
 
         // 6. Search commitments (open/in_progress, not fulfilled/broken/cancelled)
-        // NOTE: commitment_records.due_at is `timestamp without time zone`; cast to
-        // TIMESTAMPTZ so sqlx can decode into `Option<DateTime<Utc>>`.
-        let commitment_rows = sqlx::query(
-            r#"
-            SELECT
-                id::text as id,
-                title,
-                commitment_type,
-                state,
-                (due_at AT TIME ZONE 'UTC') as due_at,
-                owner_agent_slug
-            FROM commitment_records
-            WHERE tenant_id = $1 AND state NOT IN ('fulfilled', 'broken', 'cancelled')
-            ORDER BY due_at ASC NULLS LAST
-            LIMIT $2
-            "#
-        )
-        .bind(tenant_id)
-        .bind(req.top_k_per_type as i64)
-        .fetch_all(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error (commitments): {}", e)))?;
-
-        let commitments: Vec<CommitmentSummary> = commitment_rows.iter().map(|r| {
-            let due_at: Option<chrono::DateTime<chrono::Utc>> = r.get("due_at");
-            CommitmentSummary {
-                id: r.get("id"),
-                title: r.get("title"),
-                commitment_type: r.get("commitment_type"),
-                status: r.get("state"),
-                due_at: due_at.map(chrono_to_proto_ts),
-                owner_agent_slug: r.get("owner_agent_slug"),
-            }
-        }).collect();
+        let commitments: Vec<CommitmentSummary> = self
+            .store
+            .fetch_commitments(tenant_id, req.top_k_per_type as i64)
+            .await?;
 
         // 7. Search past conversations (chat_message embeddings, vector similarity)
-        // NOTE: embeddings.created_at is `timestamp without time zone`; cast to
-        // TIMESTAMPTZ so sqlx can decode into `Option<DateTime<Utc>>`.
-        let conversation_rows = sqlx::query(
-            r#"
-            SELECT
-                e.content_id as session_id,
-                e.text_content as content,
-                'user' as role,
-                (e.created_at AT TIME ZONE 'UTC') as created_at,
-                (1 - (e.embedding <=> $2::vector)) as similarity
-            FROM embeddings e
-            WHERE e.tenant_id = $1 AND e.content_type = 'chat_message'
-            ORDER BY e.embedding <=> $2::vector
-            LIMIT $3
-            "#
-        )
-        .bind(tenant_id)
-        .bind(&query_vec_str)
-        .bind(req.top_k_per_type as i64)
-        .fetch_all(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error (conversations): {}", e)))?;
-
-        let past_conversations: Vec<ConversationSnippet> = conversation_rows.iter().map(|r| {
-            let dt: Option<chrono::DateTime<chrono::Utc>> = r.get("created_at");
-            ConversationSnippet {
-                session_id: r.get("session_id"),
-                content: r.get("content"),
-                role: r.get("role"),
-                created_at: dt.map(chrono_to_proto_ts),
-                similarity: r.get::<f64, _>("similarity") as f32,
-            }
-        }).collect();
+        let past_conversations: Vec<ConversationSnippet> = self
+            .store
+            .fetch_past_conversations(tenant_id, &query_vec, req.top_k_per_type as i64)
+            .await?;
 
         // 8. Goals — empty for now (no goals table yet)
         let goals: Vec<GoalSummary> = Vec::new();
@@ -310,7 +164,13 @@ impl MemoryCore for MyMemoryCore {
 
         // 10. Build metadata
         let query_time_ms = start.elapsed().as_millis() as i32;
-        let total_tokens_estimate = estimate_tokens(&entities, &observations, &episodes, &commitments, &past_conversations);
+        let total_tokens_estimate = estimate_tokens(
+            &entities,
+            &observations,
+            &episodes,
+            &commitments,
+            &past_conversations,
+        );
 
         let metadata = Some(RecallMetadata {
             query_time_ms,
@@ -319,7 +179,10 @@ impl MemoryCore for MyMemoryCore {
             degradation_reason: String::new(),
         });
 
-        println!("Recall completed in {}ms, ~{} tokens", query_time_ms, total_tokens_estimate);
+        println!(
+            "Recall completed in {}ms, ~{} tokens",
+            query_time_ms, total_tokens_estimate
+        );
 
         Ok(Response::new(RecallResponse {
             entities,
@@ -334,58 +197,45 @@ impl MemoryCore for MyMemoryCore {
         }))
     }
 
-    async fn record_observation(&self, request: Request<RecordObservationRequest>) -> Result<Response<()>, Status> {
+    async fn record_observation(
+        &self,
+        request: Request<RecordObservationRequest>,
+    ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let tenant_id = parse_tenant_id(&req.tenant_id)?;
         let entity_id = parse_entity_id(&req.entity_id)?;
 
         // Embed the observation text
-        let embedding = self.get_embedding(&req.content, "search_document").await?;
-        let embedding_str = format_pgvector(&embedding);
+        let embedding = self.store.embed(&req.content, "search_document").await?;
 
         let obs_id = Uuid::new_v4();
         let source_type = default_source_type(&req.source_type);
 
-        // INSERT into knowledge_observations
-        sqlx::query(
-            r#"
-            INSERT INTO knowledge_observations
-                (id, tenant_id, entity_id, observation_text, observation_type, source_type, confidence, embedding, created_at)
-            VALUES ($1, $2, $3, $4, 'fact', $5, $6, $7::vector, NOW())
-            "#
-        )
-        .bind(obs_id)
-        .bind(tenant_id)
-        .bind(entity_id)
-        .bind(&req.content)
-        .bind(&source_type)
-        .bind(req.confidence)
-        .bind(&embedding_str)
-        .execute(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error inserting observation: {}", e)))?;
+        self.store
+            .insert_observation_with_activity(
+                tenant_id,
+                entity_id,
+                obs_id,
+                &req.content,
+                &source_type,
+                req.confidence,
+                &embedding,
+                &req.actor_slug,
+            )
+            .await?;
 
-        // INSERT audit trail into memory_activities
-        sqlx::query(
-            r#"
-            INSERT INTO memory_activities
-                (id, tenant_id, event_type, description, source, entity_id, created_at)
-            VALUES ($1, $2, 'observation_created', $3, $4, $5, NOW())
-            "#
-        )
-        .bind(Uuid::new_v4())
-        .bind(tenant_id)
-        .bind(format!("Observation recorded for entity {}", entity_id))
-        .bind(&req.actor_slug)
-        .bind(entity_id)
-        .execute(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error inserting memory_activity: {}", e)))?;
-
-        println!("RecordObservation: tenant={} entity={} obs_id={}", tenant_id, entity_id, obs_id);
+        println!(
+            "RecordObservation: tenant={} entity={} obs_id={}",
+            tenant_id, entity_id, obs_id
+        );
 
         Ok(Response::new(()))
     }
 
-    async fn record_commitment(&self, request: Request<RecordCommitmentRequest>) -> Result<Response<()>, Status> {
+    async fn record_commitment(
+        &self,
+        request: Request<RecordCommitmentRequest>,
+    ) -> Result<Response<()>, Status> {
         let req = request.into_inner();
         let tenant_id = parse_tenant_id(&req.tenant_id)?;
 
@@ -394,45 +244,30 @@ impl MemoryCore for MyMemoryCore {
         // Convert optional protobuf Timestamp to chrono DateTime
         let due_at: Option<chrono::DateTime<chrono::Utc>> = proto_ts_to_chrono(req.due_at);
 
-        // INSERT into commitment_records
-        sqlx::query(
-            r#"
-            INSERT INTO commitment_records
-                (id, tenant_id, owner_agent_slug, title, description, commitment_type, state, due_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, 'open', $7, NOW())
-            "#
-        )
-        .bind(commitment_id)
-        .bind(tenant_id)
-        .bind(&req.owner_agent_slug)
-        .bind(&req.title)
-        .bind(&req.description)
-        .bind(&req.commitment_type)
-        .bind(due_at)
-        .execute(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error inserting commitment: {}", e)))?;
+        self.store
+            .insert_commitment_with_activity(
+                tenant_id,
+                commitment_id,
+                &req.owner_agent_slug,
+                &req.title,
+                &req.description,
+                &req.commitment_type,
+                due_at,
+            )
+            .await?;
 
-        // INSERT audit trail into memory_activities
-        sqlx::query(
-            r#"
-            INSERT INTO memory_activities
-                (id, tenant_id, event_type, description, source, created_at)
-            VALUES ($1, $2, 'commitment_created', $3, $4, NOW())
-            "#
-        )
-        .bind(Uuid::new_v4())
-        .bind(tenant_id)
-        .bind(format!("Commitment created: {}", req.title))
-        .bind(&req.owner_agent_slug)
-        .execute(&self.pool).await
-        .map_err(|e| Status::internal(format!("DB error inserting memory_activity: {}", e)))?;
-
-        println!("RecordCommitment: tenant={} id={} title={}", tenant_id, commitment_id, req.title);
+        println!(
+            "RecordCommitment: tenant={} id={} title={}",
+            tenant_id, commitment_id, req.title
+        );
 
         Ok(Response::new(()))
     }
 
-    async fn ingest_events(&self, request: Request<IngestRequest>) -> Result<Response<IngestResponse>, Status> {
+    async fn ingest_events(
+        &self,
+        request: Request<IngestRequest>,
+    ) -> Result<Response<IngestResponse>, Status> {
         let req = request.into_inner();
         let tenant_id = parse_tenant_id(&req.tenant_id)?;
 
@@ -443,50 +278,18 @@ impl MemoryCore for MyMemoryCore {
                 if entity_name.trim().is_empty() {
                     continue;
                 }
-
-                // Check if entity already exists for this tenant
-                let existing = sqlx::query(
-                    r#"
-                    SELECT id FROM knowledge_entities
-                    WHERE tenant_id = $1 AND name = $2 AND deleted_at IS NULL
-                    LIMIT 1
-                    "#
-                )
-                .bind(tenant_id)
-                .bind(entity_name)
-                .fetch_optional(&self.pool).await
-                .map_err(|e| Status::internal(format!("DB error checking entity: {}", e)))?;
-
-                if let Some(row) = existing {
-                    // Update the existing entity's updated_at
-                    let entity_id: Uuid = row.get("id");
-                    sqlx::query(
-                        r#"UPDATE knowledge_entities SET updated_at = NOW() WHERE id = $1"#
-                    )
-                    .bind(entity_id)
-                    .execute(&self.pool).await
-                    .map_err(|e| Status::internal(format!("DB error updating entity: {}", e)))?;
-                } else {
-                    // Insert new entity
-                    sqlx::query(
-                        r#"
-                        INSERT INTO knowledge_entities
-                            (id, tenant_id, name, entity_type, category, confidence, created_at, updated_at)
-                        VALUES ($1, $2, $3, 'unknown', 'unknown', 0.5, NOW(), NOW())
-                        "#
-                    )
-                    .bind(Uuid::new_v4())
-                    .bind(tenant_id)
-                    .bind(entity_name)
-                    .execute(&self.pool).await
-                    .map_err(|e| Status::internal(format!("DB error inserting entity: {}", e)))?;
-                }
-
+                // upsert_entity_by_name returns true on insert, false on
+                // update. Both branches still count toward `processed` —
+                // matches the pre-refactor behaviour exactly.
+                let _ = self.store.upsert_entity_by_name(tenant_id, entity_name).await?;
                 processed += 1;
             }
         }
 
-        println!("IngestEvents: tenant={} processed={} entities", tenant_id, processed);
+        println!(
+            "IngestEvents: tenant={} processed={} entities",
+            tenant_id, processed
+        );
 
         Ok(Response::new(IngestResponse { processed }))
     }
@@ -758,5 +561,571 @@ mod tests {
         let entities = vec![entity("aaaaaaa", "", "", "")]; // 7
         let n = estimate_tokens(&entities, &[], &[], &[], &[]);
         assert_eq!(n, 1);
+    }
+
+    // ── handler unit tests via FakeStore ────────────────────────────────
+    //
+    // These cover the four gRPC methods on `MyMemoryCore` without touching
+    // Postgres or the embedding-service. The fake lets each test
+    // (a) assert the call dispatch order/arguments and (b) inject errors
+    // to exercise the failure branches.
+    //
+    // Refactor introduced 2026-05-05 (phase 5.5) — see `src/store.rs`.
+
+    use crate::memory::v1::memory_core_server::MemoryCore;
+    use crate::memory::v1::{
+        IngestRequest, MemoryEvent, RecallRequest, RecordCommitmentRequest,
+        RecordObservationRequest,
+    };
+    use crate::store::MemoryStore;
+    use std::sync::{Arc, Mutex};
+    use tonic::Code;
+
+    #[derive(Default)]
+    struct FakeStoreState {
+        embed_calls: Vec<(String, String)>,
+        upsert_calls: Vec<(Uuid, String)>,
+        observation_inserts: Vec<(Uuid, Uuid, Uuid, String, String, f32, String)>,
+        commitment_inserts:
+            Vec<(Uuid, Uuid, String, String, String, Option<chrono::DateTime<chrono::Utc>>)>,
+    }
+
+    /// Configurable in-memory `MemoryStore` for handler tests.
+    #[derive(Default)]
+    struct FakeStore {
+        state: Mutex<FakeStoreState>,
+        // ── inject ──
+        embed_result: Option<Vec<f32>>,
+        embed_fail: bool,
+        entities_result: Vec<Entity>,
+        entities_fail: bool,
+        observations_result: Vec<Observation>,
+        relations_result: Vec<crate::memory::v1::Relation>,
+        episodes_result: Vec<EpisodeSummary>,
+        commitments_result: Vec<CommitmentSummary>,
+        conversations_result: Vec<ConversationSnippet>,
+        observation_insert_fail: bool,
+        commitment_insert_fail: bool,
+        // for ingest: sequence of bool returns (true = inserted, false = updated).
+        upsert_returns: Mutex<Vec<bool>>,
+        upsert_fail_on_name: Option<String>,
+    }
+
+    impl FakeStore {
+        fn arc(self) -> Arc<dyn MemoryStore> {
+            Arc::new(self)
+        }
+    }
+
+    #[tonic::async_trait]
+    impl MemoryStore for FakeStore {
+        async fn embed(&self, text: &str, task_type: &str) -> Result<Vec<f32>, Status> {
+            self.state
+                .lock()
+                .unwrap()
+                .embed_calls
+                .push((text.to_string(), task_type.to_string()));
+            if self.embed_fail {
+                return Err(Status::unavailable("embed boom"));
+            }
+            Ok(self.embed_result.clone().unwrap_or_else(|| vec![0.1, 0.2, 0.3]))
+        }
+
+        async fn fetch_entities(
+            &self,
+            _t: Uuid,
+            _v: &[f32],
+            _k: i64,
+        ) -> Result<Vec<Entity>, Status> {
+            if self.entities_fail {
+                return Err(Status::internal("DB error (entities): pool exhausted"));
+            }
+            Ok(self.entities_result.clone())
+        }
+
+        async fn fetch_observations(
+            &self,
+            _t: Uuid,
+            _v: &[f32],
+            _ids: &[String],
+            _k: i64,
+        ) -> Result<Vec<Observation>, Status> {
+            Ok(self.observations_result.clone())
+        }
+
+        async fn fetch_relations(
+            &self,
+            _t: Uuid,
+            _ids: &[String],
+        ) -> Result<Vec<crate::memory::v1::Relation>, Status> {
+            Ok(self.relations_result.clone())
+        }
+
+        async fn fetch_episodes(
+            &self,
+            _t: Uuid,
+            _v: &[f32],
+            _l: i64,
+        ) -> Result<Vec<EpisodeSummary>, Status> {
+            Ok(self.episodes_result.clone())
+        }
+
+        async fn fetch_commitments(
+            &self,
+            _t: Uuid,
+            _k: i64,
+        ) -> Result<Vec<CommitmentSummary>, Status> {
+            Ok(self.commitments_result.clone())
+        }
+
+        async fn fetch_past_conversations(
+            &self,
+            _t: Uuid,
+            _v: &[f32],
+            _k: i64,
+        ) -> Result<Vec<ConversationSnippet>, Status> {
+            Ok(self.conversations_result.clone())
+        }
+
+        async fn insert_observation_with_activity(
+            &self,
+            tenant_id: Uuid,
+            entity_id: Uuid,
+            obs_id: Uuid,
+            content: &str,
+            source_type: &str,
+            confidence: f32,
+            _embedding: &[f32],
+            actor_slug: &str,
+        ) -> Result<(), Status> {
+            if self.observation_insert_fail {
+                return Err(Status::internal(
+                    "DB error inserting observation: connection refused",
+                ));
+            }
+            self.state.lock().unwrap().observation_inserts.push((
+                tenant_id,
+                entity_id,
+                obs_id,
+                content.to_string(),
+                source_type.to_string(),
+                confidence,
+                actor_slug.to_string(),
+            ));
+            Ok(())
+        }
+
+        async fn insert_commitment_with_activity(
+            &self,
+            tenant_id: Uuid,
+            commitment_id: Uuid,
+            owner_agent_slug: &str,
+            title: &str,
+            description: &str,
+            commitment_type: &str,
+            due_at: Option<chrono::DateTime<chrono::Utc>>,
+        ) -> Result<(), Status> {
+            if self.commitment_insert_fail {
+                return Err(Status::internal(
+                    "DB error inserting commitment: connection refused",
+                ));
+            }
+            self.state.lock().unwrap().commitment_inserts.push((
+                tenant_id,
+                commitment_id,
+                owner_agent_slug.to_string(),
+                title.to_string(),
+                description.to_string(),
+                due_at,
+            ));
+            let _ = (commitment_type,);
+            Ok(())
+        }
+
+        async fn upsert_entity_by_name(
+            &self,
+            tenant_id: Uuid,
+            entity_name: &str,
+        ) -> Result<bool, Status> {
+            if let Some(ref bad) = self.upsert_fail_on_name {
+                if bad == entity_name {
+                    return Err(Status::internal("DB error checking entity: timeout"));
+                }
+            }
+            self.state
+                .lock()
+                .unwrap()
+                .upsert_calls
+                .push((tenant_id, entity_name.to_string()));
+            // Pop a queued bool, default to true (insert) if none queued.
+            let next = {
+                let mut g = self.upsert_returns.lock().unwrap();
+                if g.is_empty() {
+                    true
+                } else {
+                    g.remove(0)
+                }
+            };
+            Ok(next)
+        }
+    }
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    fn ent(id: &str) -> Entity {
+        Entity {
+            id: id.into(),
+            name: format!("name-{}", id),
+            entity_type: "person".into(),
+            category: "internal".into(),
+            description: "desc".into(),
+            similarity: 0.9,
+        }
+    }
+
+    // ── Recall ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn recall_invalid_tenant_returns_invalid_argument() {
+        let svc = MyMemoryCore::from_store(FakeStore::default().arc());
+        let req = Request::new(RecallRequest {
+            tenant_id: "not-a-uuid".into(),
+            agent_slug: "luna".into(),
+            query: "anything".into(),
+            user_id: "".into(),
+            chat_session_id: "".into(),
+            top_k_per_type: 5,
+            total_token_budget: 0,
+        });
+        let err = rt().block_on(svc.recall(req)).expect_err("must reject");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn recall_happy_path_assembles_full_response() {
+        let mut fake = FakeStore::default();
+        fake.entities_result = vec![ent("e1"), ent("e2")];
+        fake.observations_result = vec![Observation {
+            id: "o1".into(),
+            entity_id: "e1".into(),
+            content: "obs".into(),
+            similarity: 0.8,
+        }];
+        let svc = MyMemoryCore::from_store(fake.arc());
+
+        let tid = Uuid::new_v4();
+        let req = Request::new(RecallRequest {
+            tenant_id: tid.to_string(),
+            agent_slug: "luna".into(),
+            query: "what is up".into(),
+            user_id: "".into(),
+            chat_session_id: "".into(),
+            top_k_per_type: 3,
+            total_token_budget: 0,
+        });
+
+        let resp = rt().block_on(svc.recall(req)).expect("ok").into_inner();
+        assert_eq!(resp.entities.len(), 2);
+        assert_eq!(resp.observations.len(), 1);
+        // Goals + contradictions are still empty stubs.
+        assert!(resp.goals.is_empty());
+        assert!(resp.contradictions.is_empty());
+        let md = resp.metadata.expect("metadata present");
+        assert!(!md.degraded);
+        assert!(md.degradation_reason.is_empty());
+    }
+
+    #[test]
+    fn recall_propagates_embed_failure_as_status() {
+        let fake = FakeStore {
+            embed_fail: true,
+            ..Default::default()
+        };
+        let svc = MyMemoryCore::from_store(fake.arc());
+        let req = Request::new(RecallRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            agent_slug: "luna".into(),
+            query: "q".into(),
+            user_id: "".into(),
+            chat_session_id: "".into(),
+            top_k_per_type: 5,
+            total_token_budget: 0,
+        });
+        let err = rt().block_on(svc.recall(req)).expect_err("embed err must surface");
+        // embed errors are tonic Status; whatever code the embedder emitted is
+        // forwarded to the caller (here `Unavailable`).
+        assert_eq!(err.code(), Code::Unavailable);
+    }
+
+    #[test]
+    fn recall_db_failure_on_entities_returns_internal() {
+        let fake = FakeStore {
+            entities_fail: true,
+            ..Default::default()
+        };
+        let svc = MyMemoryCore::from_store(fake.arc());
+        let req = Request::new(RecallRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            agent_slug: "luna".into(),
+            query: "q".into(),
+            user_id: "".into(),
+            chat_session_id: "".into(),
+            top_k_per_type: 5,
+            total_token_budget: 0,
+        });
+        let err = rt().block_on(svc.recall(req)).expect_err("entity fetch must fail");
+        assert_eq!(err.code(), Code::Internal);
+        assert!(err.message().contains("entities"));
+    }
+
+    // ── RecordObservation ───────────────────────────────────────────────
+
+    #[test]
+    fn record_observation_invalid_tenant_rejected() {
+        let svc = MyMemoryCore::from_store(FakeStore::default().arc());
+        let req = Request::new(RecordObservationRequest {
+            tenant_id: "garbage".into(),
+            entity_id: Uuid::new_v4().to_string(),
+            content: "x".into(),
+            confidence: 1.0,
+            source_type: "".into(),
+            source_id: "".into(),
+            actor_slug: "luna".into(),
+        });
+        let err = rt()
+            .block_on(svc.record_observation(req))
+            .expect_err("tenant gate must fire first");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("tenant_id"));
+    }
+
+    #[test]
+    fn record_observation_invalid_entity_rejected_with_distinct_message() {
+        let svc = MyMemoryCore::from_store(FakeStore::default().arc());
+        let req = Request::new(RecordObservationRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            entity_id: "garbage".into(),
+            content: "x".into(),
+            confidence: 1.0,
+            source_type: "".into(),
+            source_id: "".into(),
+            actor_slug: "luna".into(),
+        });
+        let err = rt().block_on(svc.record_observation(req)).expect_err("must reject");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("entity_id"));
+    }
+
+    #[test]
+    fn record_observation_happy_path_dispatches_with_default_source() {
+        let fake = Arc::new(FakeStore::default());
+        let svc = MyMemoryCore::from_store(fake.clone() as Arc<dyn MemoryStore>);
+
+        let tid = Uuid::new_v4();
+        let eid = Uuid::new_v4();
+        let req = Request::new(RecordObservationRequest {
+            tenant_id: tid.to_string(),
+            entity_id: eid.to_string(),
+            content: "hello world".into(),
+            confidence: 0.7,
+            source_type: "".into(), // empty -> defaults to "agent"
+            source_id: "".into(),
+            actor_slug: "luna".into(),
+        });
+        rt().block_on(svc.record_observation(req)).expect("ok");
+
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.embed_calls.len(), 1);
+        assert_eq!(st.embed_calls[0].1, "search_document");
+        assert_eq!(st.observation_inserts.len(), 1);
+        let (got_t, got_e, _obs_id, content, src, conf, actor) =
+            &st.observation_inserts[0];
+        assert_eq!(*got_t, tid);
+        assert_eq!(*got_e, eid);
+        assert_eq!(content, "hello world");
+        assert_eq!(src, "agent"); // default applied
+        assert!((*conf - 0.7).abs() < 1e-6);
+        assert_eq!(actor, "luna");
+    }
+
+    #[test]
+    fn record_observation_db_failure_maps_to_internal() {
+        let fake = FakeStore {
+            observation_insert_fail: true,
+            ..Default::default()
+        };
+        let svc = MyMemoryCore::from_store(fake.arc());
+        let req = Request::new(RecordObservationRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            entity_id: Uuid::new_v4().to_string(),
+            content: "x".into(),
+            confidence: 1.0,
+            source_type: "user".into(),
+            source_id: "".into(),
+            actor_slug: "luna".into(),
+        });
+        let err = rt().block_on(svc.record_observation(req)).expect_err("db boom");
+        assert_eq!(err.code(), Code::Internal);
+        assert!(err.message().contains("observation"));
+    }
+
+    // ── RecordCommitment ────────────────────────────────────────────────
+
+    #[test]
+    fn record_commitment_invalid_tenant_rejected() {
+        let svc = MyMemoryCore::from_store(FakeStore::default().arc());
+        let req = Request::new(RecordCommitmentRequest {
+            tenant_id: "garbage".into(),
+            owner_agent_slug: "luna".into(),
+            title: "t".into(),
+            description: "d".into(),
+            commitment_type: "deliverable".into(),
+            due_at: None,
+        });
+        let err = rt().block_on(svc.record_commitment(req)).expect_err("must reject");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn record_commitment_with_due_at_propagates_timestamp() {
+        let fake = Arc::new(FakeStore::default());
+        let svc = MyMemoryCore::from_store(fake.clone() as Arc<dyn MemoryStore>);
+
+        let tid = Uuid::new_v4();
+        let due = prost_types::Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+        };
+        let req = Request::new(RecordCommitmentRequest {
+            tenant_id: tid.to_string(),
+            owner_agent_slug: "luna".into(),
+            title: "Send the report".into(),
+            description: "Friday EOD".into(),
+            commitment_type: "deliverable".into(),
+            due_at: Some(due),
+        });
+        rt().block_on(svc.record_commitment(req)).expect("ok");
+
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.commitment_inserts.len(), 1);
+        let (got_t, _id, owner, title, desc, due_at) = &st.commitment_inserts[0];
+        assert_eq!(*got_t, tid);
+        assert_eq!(owner, "luna");
+        assert_eq!(title, "Send the report");
+        assert_eq!(desc, "Friday EOD");
+        assert_eq!(due_at.unwrap().timestamp(), 1_700_000_000);
+        // Embed is NOT called for commitments — they aren't vector-searched.
+        assert_eq!(st.embed_calls.len(), 0);
+    }
+
+    #[test]
+    fn record_commitment_db_failure_maps_to_internal() {
+        let fake = FakeStore {
+            commitment_insert_fail: true,
+            ..Default::default()
+        };
+        let svc = MyMemoryCore::from_store(fake.arc());
+        let req = Request::new(RecordCommitmentRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            owner_agent_slug: "luna".into(),
+            title: "t".into(),
+            description: "d".into(),
+            commitment_type: "deliverable".into(),
+            due_at: None,
+        });
+        let err = rt().block_on(svc.record_commitment(req)).expect_err("db boom");
+        assert_eq!(err.code(), Code::Internal);
+        assert!(err.message().contains("commitment"));
+    }
+
+    // ── IngestEvents ────────────────────────────────────────────────────
+
+    #[test]
+    fn ingest_invalid_tenant_rejected() {
+        let svc = MyMemoryCore::from_store(FakeStore::default().arc());
+        let req = Request::new(IngestRequest {
+            tenant_id: "garbage".into(),
+            events: vec![],
+        });
+        let err = rt().block_on(svc.ingest_events(req)).expect_err("must reject");
+        assert_eq!(err.code(), Code::InvalidArgument);
+    }
+
+    #[test]
+    fn ingest_skips_blank_names_and_counts_only_real_ones() {
+        let fake = Arc::new(FakeStore::default());
+        let svc = MyMemoryCore::from_store(fake.clone() as Arc<dyn MemoryStore>);
+
+        let tid = Uuid::new_v4();
+        let req = Request::new(IngestRequest {
+            tenant_id: tid.to_string(),
+            events: vec![MemoryEvent {
+                source_type: "gmail".into(),
+                source_id: "msg-1".into(),
+                proposed_entities: vec![
+                    "Acme Corp".into(),
+                    "".into(),       // skipped
+                    "   ".into(),    // skipped (whitespace only)
+                    "Jane Doe".into(),
+                ],
+                actor_slug: "luna".into(),
+            }],
+        });
+        let resp = rt().block_on(svc.ingest_events(req)).expect("ok").into_inner();
+        assert_eq!(resp.processed, 2);
+
+        let st = fake.state.lock().unwrap();
+        assert_eq!(st.upsert_calls.len(), 2);
+        assert_eq!(st.upsert_calls[0].1, "Acme Corp");
+        assert_eq!(st.upsert_calls[1].1, "Jane Doe");
+    }
+
+    #[test]
+    fn ingest_counts_both_insert_and_update_branches() {
+        // Ensure the `processed` counter increments regardless of whether
+        // the upsert created or updated the row — both branches must count.
+        let fake = FakeStore {
+            upsert_returns: Mutex::new(vec![true, false, true]),
+            ..Default::default()
+        };
+        let fake = Arc::new(fake);
+        let svc = MyMemoryCore::from_store(fake.clone() as Arc<dyn MemoryStore>);
+
+        let req = Request::new(IngestRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            events: vec![MemoryEvent {
+                source_type: "".into(),
+                source_id: "".into(),
+                proposed_entities: vec!["A".into(), "B".into(), "C".into()],
+                actor_slug: "luna".into(),
+            }],
+        });
+        let resp = rt().block_on(svc.ingest_events(req)).expect("ok").into_inner();
+        assert_eq!(resp.processed, 3);
+    }
+
+    #[test]
+    fn ingest_propagates_store_failure() {
+        let fake = FakeStore {
+            upsert_fail_on_name: Some("Bad Entity".into()),
+            ..Default::default()
+        };
+        let svc = MyMemoryCore::from_store(fake.arc());
+        let req = Request::new(IngestRequest {
+            tenant_id: Uuid::new_v4().to_string(),
+            events: vec![MemoryEvent {
+                source_type: "".into(),
+                source_id: "".into(),
+                proposed_entities: vec!["Bad Entity".into()],
+                actor_slug: "luna".into(),
+            }],
+        });
+        let err = rt().block_on(svc.ingest_events(req)).expect_err("must surface");
+        assert_eq!(err.code(), Code::Internal);
     }
 }
