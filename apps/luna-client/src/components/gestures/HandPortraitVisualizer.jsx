@@ -54,12 +54,23 @@ export default function HandPortraitVisualizer({ width = 240, height = 320 }) {
   const canvasRef = useRef(null);
   const [streamError, setStreamError] = useState(null);
   const [latest, setLatest] = useState(null);
+  const [streamReady, setStreamReady] = useState(false);
+
+  // Mount log — lands in Luna.log via tauri-plugin-log Webview target.
+  // Used to confirm the component actually renders in production builds
+  // (the 2026-05-08 incident was 'visualizer never appeared' and we had
+  // no idea if it was mounting / crashing / rendering invisible).
+  useEffect(() => {
+    console.log('[HandPortraitVisualizer] mounted');
+    return () => console.log('[HandPortraitVisualizer] unmounted');
+  }, []);
 
   // Open webcam.
   useEffect(() => {
     let cancelled = false;
     let stream = null;
     (async () => {
+      console.log('[HandPortraitVisualizer] requesting getUserMedia');
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'user', width: 640, height: 480 },
@@ -69,11 +80,19 @@ export default function HandPortraitVisualizer({ width = 240, height = 320 }) {
           stream.getTracks().forEach((t) => t.stop());
           return;
         }
+        console.log('[HandPortraitVisualizer] getUserMedia ok, attaching to <video>');
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => {});
+          try {
+            await videoRef.current.play();
+            console.log('[HandPortraitVisualizer] video.play() ok');
+            setStreamReady(true);
+          } catch (playErr) {
+            console.warn('[HandPortraitVisualizer] video.play() failed:', playErr);
+          }
         }
       } catch (e) {
+        console.error('[HandPortraitVisualizer] getUserMedia failed:', e);
         setStreamError(e?.message || String(e));
       }
     })();
@@ -166,8 +185,14 @@ export default function HandPortraitVisualizer({ width = 240, height = 320 }) {
         height,
         borderRadius: 12,
         overflow: 'hidden',
+        // Bright outline so the visualizer is unmissable even if the
+        // video stream never starts (helped diagnose the 'I don't see
+        // it' report from 0.1.66 — the visualizer was actually mounted
+        // but invisible because the camera wasn't yielding frames).
         background: '#000',
-        boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
+        outline: '2px solid #39d98a',
+        outlineOffset: 0,
+        boxShadow: '0 4px 24px rgba(0,0,0,0.6), 0 0 16px rgba(57,217,138,0.35)',
       }}
     >
       <video
@@ -225,9 +250,28 @@ export default function HandPortraitVisualizer({ width = 240, height = 320 }) {
             fontSize: 11,
             padding: 12,
             textAlign: 'center',
+            background: 'rgba(0,0,0,0.85)',
           }}
         >
-          camera unavailable: {streamError}
+          camera unavailable:<br />{streamError}
+        </div>
+      )}
+      {!streamError && !streamReady && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#9ca3af',
+            fontSize: 11,
+            padding: 12,
+            textAlign: 'center',
+            fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+          }}
+        >
+          opening camera…
         </div>
       )}
     </div>
