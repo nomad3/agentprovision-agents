@@ -9,10 +9,10 @@
 ## TL;DR
 
 - **A Pulse-facing API exists**, but it is gated behind the **Covetrus Connect Technology Integration Partner Program** (a.k.a. "Covetrus Connect API"). It is described by Covetrus as *"the only authenticated and supported way to integrate with Covetrus practice management software."* [1]
-- **Authentication is OAuth-style** (client_id + client_secret pairs are the documented credential format used by integration partners such as ezyVet). [2]
+- **Authentication is OAuth-style** (client_id + client_secret pairs are the documented credential format used by integration partners such as ezyVet). [2] **Caveat:** the `client_id`/`client_secret` shape is verified from the **ezyVet procurement-API docs**, not from a Pulse-side primary source — the Pulse-specific OAuth flow is not publicly documented. Confirm at partner intake.
 - **A live developer-portal hostname is reachable** at `https://api.covetrus.com/` (header reads "Covetrus NA API", environment label `ex-prod01`) but the public surface is empty — endpoint reference, sandbox URLs, and OAuth flow are gated behind partner approval. [3]
 - **Approval timeline:** Covetrus's own pages say partners are contacted by the Partnerships team **within 6–8 weeks** of submitting the online registration. [1][4]
-- **HIPAA / BAA** is **not advertised** on Pulse's terms or partner pages (HIPAA does not strictly apply to veterinary records anyway). Covetrus does publish a **Data Processing Addendum** for GDPR purposes [5] and is referenced by third parties as **SOC 2 Type II–aligned**, but I could not locate a primary Covetrus document confirming SOC 2 status (mark this as **unverified**).
+- **HIPAA / BAA** is **not advertised** on Pulse's terms or partner pages (HIPAA does not strictly apply to veterinary records anyway). The privacy framework that DOES touch this stack is **CCPA/CPRA** — the Animal Doctor SOC is California-based, the persona surfaces pet-owner PII (name + phone + pet record), and CCPA's "personal information" definition reaches owner records held about California residents. Treat any Pulse-data egress as CCPA-covered: respect deletion / access requests, contractually flow CCPA terms through to AgentProvision via the partner agreement. Covetrus publishes a **Data Processing Addendum** for GDPR purposes [5] (CCPA terms typically ride on the same DPA) and is referenced by third parties as **SOC 2 Type II–aligned**, but I could not locate a primary Covetrus document confirming SOC 2 status (mark this as **unverified**).
 - **The premise that "VetDodo proves the Pulse API exists" is partially wrong.** VetDodo (now `dodo.ai/vet`) publicly documents a deep, bi-directional API integration with **ezyVet** (also a Covetrus product), not with Pulse. [6][7] That still proves Covetrus runs a real partner-API program — just on the ezyVet side of the house. Pulse's own partner directory shows ~40+ live partners in domains close to ours (Birdeye, Boomerang Vet, Otto, SmartFlow, Anipanion, Axion) [8][9], so the path is real, just not VetDodo-proven for Pulse specifically.
 
 ## What I verified
@@ -105,7 +105,10 @@ Option B is worth a *parallel low-cost probe* (literally 30 minutes — log into
    - SOC 2 Type II report under NDA
    - confirmation the Pulse Connect API supports the scopes: patients, appointments, invoices+line-items, payments, inventory, SOAP notes
 3. **Quick 30-min Option-B probe:** have Angelo log into his Pulse instance and screenshot Settings → Integrations. If a self-serve API token tab exists, that's a free pre-partner unblock for read-only scopes; if it doesn't, we lose nothing.
-4. **Reach out to Otto** ([https://otto.vet](https://otto.vet)) for an informal partner-experience reference call — they are the closest behavioral analog to our Pet Health Concierge on Pulse, and a 20-min call can de-risk the timeline and surface fee structure before we sign anything blind.
+4. **Reach out to Otto** for an informal partner-experience reference call — they are the closest behavioral analog to our Pet Health Concierge on Pulse, and a 20-min call can de-risk the timeline and surface fee structure before we sign anything blind. Direct paths:
+   - Partner / sales contact form: `https://otto.vet/contact/` (preferred)
+   - General inquiries: hello@otto.vet (referenced on otto.vet)
+   - LinkedIn outreach to Otto's CEO/CTO is also reasonable for a 20-min reference chat — they actively market Pulse compatibility on `https://otto.vet/integrations/covetrus/`.
 
 ## Sandbox / playground URL
 
