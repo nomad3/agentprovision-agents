@@ -20,6 +20,7 @@ dependencies = [
     "einops",
     "sqlalchemy",
     "psycopg2-binary",
+    "redis>=5.0.0",
 ]
 
 [project.optional-dependencies]

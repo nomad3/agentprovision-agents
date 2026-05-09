@@ -6,7 +6,12 @@ from sqlalchemy.orm import Session
 from app import schemas
 from app.api import deps
 from app.services import integration_configs as integration_config_service
-from app.services.orchestration.credential_vault import store_credential, revoke_credential
+from app.services.orchestration.credential_vault import (
+    store_credential,
+    revoke_credential,
+    retrieve_credentials_for_skill,
+)
+from app.services import integration_test_service
 from app.models.user import User
 from app.models.integration_credential import IntegrationCredential
 import uuid
@@ -185,6 +190,20 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
              "help": "From TikTok Business Center > Developer Portal > My Apps"},
             {"key": "advertiser_id", "label": "Advertiser ID", "type": "text", "required": True,
              "help": "Found in TikTok Ads Manager > Account Info"},
+        ],
+    },
+    "brightlocal": {
+        "display_name": "BrightLocal",
+        "description": "Local SEO rank tracking. Powers the daily SEO Sentinel workflow.",
+        "icon": "FaSearch",
+        "auth_type": "api_key",
+        "credentials": [
+            {"key": "api_key", "label": "API Key", "type": "password", "required": True,
+             "help": "From BrightLocal account: Profile > API > Manage API Keys"},
+            {"key": "api_secret", "label": "API Secret", "type": "password", "required": False,
+             "help": "Required for production keys. Trial keys may share a single value with API Key."},
+            {"key": "account_id", "label": "Account ID", "type": "text", "required": False,
+             "help": "Optional. Found in BrightLocal Account Settings; useful when one agent manages multiple BrightLocal accounts."},
         ],
     },
     # NOTE: Direct-API LLM cards (`anthropic_llm`, `gemini_llm`) were
@@ -399,3 +418,33 @@ def get_credential_status(
     return {
         "stored_keys": [c[0] for c in credentials],
     }
+
+
+# ---------------------------------------------------------------------------
+# Live credential test
+# ---------------------------------------------------------------------------
+
+@router.post("/{integration_config_id}/test")
+async def test_integration_credentials(
+    *,
+    db: Session = Depends(deps.get_db),
+    integration_config_id: uuid.UUID,
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """
+    Hit the upstream provider with the stored credentials to confirm they
+    work. Returns ``{"ok": true, ...}`` on success or ``{"ok": false, "error": ...}``.
+
+    Lightweight endpoint per integration — chosen so a "Test" button doesn't
+    burn paid quota. Currently supported: ``brightlocal``. Other integrations
+    return ``{"ok": false, "error": "Test not supported for ..."}``.
+    """
+    config = integration_config_service.get_integration_config(db, integration_config_id=integration_config_id)
+    if not config or str(config.tenant_id) != str(current_user.tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Integration config not found")
+
+    creds = retrieve_credentials_for_skill(db, config.id, current_user.tenant_id)
+    if not creds:
+        return {"ok": False, "error": "No credentials stored for this integration."}
+
+    return await integration_test_service.test_integration(config.integration_name, creds)

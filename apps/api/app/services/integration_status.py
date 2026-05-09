@@ -58,6 +58,11 @@ TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     "get_tiktok_campaign_insights": "tiktok_ads",
     "pause_tiktok_campaign": "tiktok_ads",
     "search_tiktok_creative_center": "tiktok_ads",
+    # BrightLocal (Local SEO rank tracking — powers SEO Sentinel)
+    "brightlocal_list_keywords": "brightlocal",
+    "brightlocal_get_rankings": "brightlocal",
+    "brightlocal_rank_changes": "brightlocal",
+    "brightlocal_competitor_check": "brightlocal",
     # Tools that don't need any integration
     "create_entity": None,
     "find_entities": None,
@@ -98,6 +103,7 @@ INTEGRATION_DISPLAY: Dict[str, Dict[str, str]] = {
     "claude_code": {"name": "Claude Code", "icon": "FaTerminal"},
     "codex": {"name": "Codex CLI", "icon": "FaTerminal"},
     "gemini_cli": {"name": "Gemini CLI", "icon": "FaGoogle"},
+    "brightlocal": {"name": "BrightLocal", "icon": "FaSearch"},
 }
 
 
