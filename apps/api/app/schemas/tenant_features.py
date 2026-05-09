@@ -32,6 +32,11 @@ class TenantFeaturesBase(BaseModel):
     default_cli_platform: Optional[str] = "claude_code"
     # Pinned GitHub account for MCP repo operations (null = autodetect across all)
     github_primary_account: Optional[str] = None
+    # CPA software export format for the Bookkeeper Agent's weekly output.
+    # AAHA stays canonical; this picks which adapter writes the file.
+    # Valid: xlsx | csv | quickbooks_iif | quickbooks_qbo | xero_csv |
+    #        sage_intacct_csv
+    cpa_export_format: Optional[str] = "xlsx"
     # Reinforcement Learning
     rl_enabled: bool = False
     rl_settings: Optional[Dict[str, Any]] = None
@@ -61,6 +66,7 @@ class TenantFeaturesUpdate(BaseModel):
     cli_orchestrator_enabled: Optional[bool] = None
     default_cli_platform: Optional[str] = None
     github_primary_account: Optional[str] = None
+    cpa_export_format: Optional[str] = None
     rl_enabled: Optional[bool] = None
     rl_settings: Optional[Dict[str, Any]] = None
 

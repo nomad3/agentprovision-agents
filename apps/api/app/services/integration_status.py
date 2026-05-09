@@ -67,6 +67,10 @@ TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     "scribblevet_list_recent_notes": "scribblevet",
     "scribblevet_get_note": "scribblevet",
     "scribblevet_search": "scribblevet",
+    # Covetrus Pulse (PMS — powers Pet Health Concierge + Multi-Site Revenue Sync)
+    "pulse_get_patient": "covetrus_pulse",
+    "pulse_list_appointments": "covetrus_pulse",
+    "pulse_query_invoices": "covetrus_pulse",
     # Tools that don't need any integration
     "create_entity": None,
     "find_entities": None,
@@ -109,6 +113,7 @@ INTEGRATION_DISPLAY: Dict[str, Dict[str, str]] = {
     "gemini_cli": {"name": "Gemini CLI", "icon": "FaGoogle"},
     "brightlocal": {"name": "BrightLocal", "icon": "FaSearch"},
     "scribblevet": {"name": "ScribbleVet", "icon": "FaNotesMedical"},
+    "covetrus_pulse": {"name": "Covetrus Pulse", "icon": "FaHeartbeat"},
 }
 
 
