@@ -102,8 +102,16 @@ class TenantExportMetadata:
 
 @dataclass(frozen=True)
 class ExportResult:
-    """The bytes + metadata an adapter returns."""
+    """The bytes + metadata an adapter returns.
+
+    `line_item_count` and `format` were added post-merge (PR #331 review
+    Important #4 / Minor #6) so the API layer doesn't have to filename-
+    sniff the format or report `-1` line-items to Luna. Adapters must
+    set both fields explicitly.
+    """
 
     content: bytes
     filename: str
     mime_type: str
+    line_item_count: int = 0
+    format: str = ""

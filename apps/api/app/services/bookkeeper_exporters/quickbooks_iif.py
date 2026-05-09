@@ -80,8 +80,15 @@ ENDTRNS_HEADER = ("!ENDTRNS",)
 
 
 def _iif_date(d: date) -> str:
-    """IIF date format: M/D/YYYY (no leading zeros)."""
-    return f"{d.month}/{d.day}/{d.year}"
+    """IIF date format: MM/DD/YYYY zero-padded.
+
+    Intuit's published IIF reference (and the QBO CSV adapter we ship)
+    use zero-padded dates. The original adapter used unpadded values
+    (`5/8/2026`) which some QuickBooks Desktop versions tolerate but
+    the canonical importer expects `05/08/2026`. Aligning with QBO +
+    Intuit's spec — review feedback PR #331 Critical #3.
+    """
+    return f"{d.month:02d}/{d.day:02d}/{d.year}"
 
 
 def _iif_amount(amount: float) -> str:
@@ -185,4 +192,6 @@ def export(
         content=content,
         filename=filename,
         mime_type="application/iif",
+        line_item_count=len(items),
+        format="quickbooks_iif",
     )

@@ -150,4 +150,6 @@ def export(
         content=content,
         filename=filename,
         mime_type="text/csv",
+        line_item_count=len(items),
+        format="sage_intacct_csv",
     )

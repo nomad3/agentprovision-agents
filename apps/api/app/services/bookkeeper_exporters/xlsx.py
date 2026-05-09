@@ -283,4 +283,6 @@ def export(
         mime_type=(
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
+        line_item_count=len(items),
+        format="xlsx",
     )
