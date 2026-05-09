@@ -20,10 +20,10 @@ Angelo — to wire AgentProvision into your practice cleanly we need to know exa
 |---|---|---|
 | PMS (practice mgmt) | **Covetrus Pulse** | ✅ confirmed |
 | AI scribe | **ScribbleVet** | ✅ confirmed |
-| Radiology AI | **Antec** | ✅ confirmed |
+| Radiology AI | Antec / **Antech Imaging Services** / SignalPET / Vetology / Other: _______ — confirm ☐ | ❓ (notes show "Antec" — likely Antech Imaging) |
 | In-house lab analyzers | IDEXX / Heska / Abaxis / Other: _______ | ❓ |
 | Outside lab | IDEXX Reference / Antech / Other: _______ | ❓ |
-| Imaging (digital x-ray, US) | IDEXX-CR / Sound / Other: _______ | ❓ |
+| Imaging (digital x-ray, ultrasound) | IDEXX-CR / Sound / Other: _______ | ❓ |
 | Anesthesia monitor | Cardell / Bionet / Other: _______ | ❓ |
 | Telemedicine | TeleVet / Anipanion / Other: _______ / **none** | ❓ |
 
@@ -31,7 +31,7 @@ Angelo — to wire AgentProvision into your practice cleanly we need to know exa
 
 | Layer | Options | Status |
 |---|---|---|
-| Practice email host | **Microsoft 365** | ✅ confirmed |
+| Practice email host | **Microsoft 365** (assumed from theanimaldoctorsoc.com billing inboxes) — confirm ☐ vs Google Workspace | ❓ |
 | Calendar | **Google Calendar** | ✅ confirmed |
 | Clinic phone / VOIP | RingCentral / Vonage / Spectrum Business / Spruce / OpenPhone / Weave / Other: _______ | ❓ |
 | Voicemail transcription | included w/ phone / Otter / Rev / Other: _______ / none | ❓ |
@@ -44,7 +44,7 @@ Angelo — to wire AgentProvision into your practice cleanly we need to know exa
 |---|---|---|
 | SEO / local listings | **BrightLocal** | ✅ confirmed |
 | Marketing agency | **Genius Events** (current — flag if being replaced ☐) | ✅ confirmed |
-| Website CMS | WordPress / Squarespace / Wix / ProSites / IDA Vet / Other: _______ | ❓ |
+| Website CMS | WordPress / Squarespace / Wix / ProSites / iVET360 (formerly IDA Vet) / Other: _______ | ❓ |
 | Hosting | self-hosted / WordPress.com / Bluehost / Other: _______ | ❓ |
 | Domain registrar | GoDaddy / Namecheap / Google Domains / Other: _______ | ❓ |
 | Google Business Profile | yes (one per location) / no | ❓ |
@@ -57,25 +57,25 @@ Angelo — to wire AgentProvision into your practice cleanly we need to know exa
 
 | Layer | Options | Status |
 |---|---|---|
-| Home-delivery pharmacy | Covetrus Vets First Choice / Vetsource / Chewy Pharmacy / Other: _______ | ❓ |
+| Home-delivery pharmacy | Covetrus Vets First Choice / Vetsource / Chewy Pharmacy / Mixlab (compounding) / Wedgewood Connect (compounding) / Other: _______ | ❓ |
 | In-clinic dispensing | manual via Pulse / external: _______ | ❓ |
-| Controlled-substance log | paper / e-log (RxLog / DAW) / Other: _______ | ❓ |
+| Controlled-substance log | paper / e-log (Cubex / CompuMed / VetLogic / DEA-DASH) / Other: _______ | ❓ |
 
 ## 5. Finance + Billing
 
 | Layer | Options | Status |
 |---|---|---|
-| Accounting | QuickBooks Desktop / QuickBooks Online / Xero / Sage Intacct / FreshBooks / Wave / Other: _______ | ❓ |
+| Accounting | QuickBooks Desktop / QuickBooks Online / Xero / Sage Intacct / NetSuite / FreshBooks / Wave / Other: _______ | ❓ |
 | CPA name + email | _________________________ | ❓ |
-| Payment processor | CardConnect / Square / Heartland / Stripe / Other: _______ | ❓ |
-| Client financing | CareCredit / Scratchpay / Wells Fargo Health Advantage / Other: _______ / none | ❓ |
+| Payment processor | OpenEdge (Pulse default) / CardConnect / Square / Heartland / Stripe / Other: _______ | ❓ |
+| Client financing | CareCredit / Scratchpay / Sunbit / Wells Fargo Health Advantage / Other: _______ / none | ❓ |
 | Pet insurance verifier | Trupanion Express / Pawlicy Advisor / Other: _______ / none | ❓ |
 | Wellness plan billing | manual / SimplePractice / Other: _______ / none | ❓ |
 
 ## 6. Insurance carriers (for claim pre-fill)
 
 Circle every carrier you see regularly:
-**Trupanion** / **Nationwide** / **Pets Best** / **Healthy Paws** / **Embrace** / **Lemonade** / Other: _______
+**Trupanion** / **Nationwide** / **Pets Best** / **Healthy Paws** / **Embrace** / **Lemonade** / **Spot** / **Figo** / **ASPCA** / **MetLife Pet** / Other: _______
 
 Estimated % of clients with pet insurance: **____%**
 
