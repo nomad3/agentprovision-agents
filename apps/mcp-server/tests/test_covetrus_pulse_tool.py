@@ -294,6 +294,49 @@ async def test_oauth_token_is_cached_across_calls(patch_creds, patch_httpx, mock
 
 
 @pytest.mark.asyncio
+async def test_cache_is_tenant_scoped(patch_creds, patch_httpx, mock_ctx, force_oauth_flow):
+    """Critical multi-tenancy guard (PR #330 review Important #2).
+
+    A cache hit on tenant_a's patient lookup must NOT serve tenant_b's
+    same-patient_id call. Cache keys are namespaced as
+    ``covetrus_pulse:{tenant_id}:{suffix}`` — verify the upstream is
+    actually called twice when the only difference is tenant_id.
+    """
+    patch_creds({"client_id": "cid", "client_secret": "csec", "practice_id": "p"})
+
+    upstream_calls = {"patient": 0}
+
+    def _route(method, url, kwargs):
+        from tests.conftest import _DummyResponse
+
+        if "/oauth/token" in url:
+            return _DummyResponse(200, fx.OAUTH_TOKEN_RESPONSE)
+        if "/v1/patients/" in url:
+            upstream_calls["patient"] += 1
+            return _DummyResponse(200, fx.PATIENT_FULL)
+        return _DummyResponse(200, {})
+
+    patch_httpx(side_effect=_route)
+
+    # Tenant A primes the cache for patient pat_8472
+    a = await cp.pulse_get_patient(
+        patient_id="pat_8472", tenant_id="tenant_a", ctx=mock_ctx
+    )
+    # Same patient_id, different tenant — must hit upstream, NOT cache
+    b = await cp.pulse_get_patient(
+        patient_id="pat_8472", tenant_id="tenant_b", ctx=mock_ctx
+    )
+
+    assert a["status"] == "success"
+    assert b["status"] == "success"
+    # Two distinct upstream calls — proves the cache key includes tenant_id
+    assert upstream_calls["patient"] == 2, (
+        "cross-tenant cache leak: same patient_id served from cache "
+        "across different tenant_id"
+    )
+
+
+@pytest.mark.asyncio
 async def test_oauth_token_failure_surfaces_clean_error(patch_creds, patch_httpx, mock_ctx, force_oauth_flow):
     patch_creds({"client_id": "cid", "client_secret": "csec", "practice_id": "p"})
 

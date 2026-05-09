@@ -1,6 +1,12 @@
--- Migration 117: Wire the Multi-Site Revenue Sync workflow to the real
+-- Migration 119: Wire the Multi-Site Revenue Sync workflow to the real
 -- pulse_query_invoices MCP tool, AND update the Pet Health Concierge
 -- persona to call pulse_get_patient when the client is authenticated.
+--
+-- Slot history: originally drafted as 117, renamed to 118 to avoid a
+-- perceived collision, then renamed again to 119 because PR #331
+-- (AAHA export formats) legitimately claimed both 117 (cpa_export_format
+-- column) and 118 (bookkeeper workflow rewire) — both PRs landed in the
+-- same batch.
 --
 -- Originally the workflow was created with a placeholder
 -- query_data_source step against the legacy 'covetrus_pulse' data source
@@ -94,5 +100,5 @@ WHERE tenant_id = '7f632730-1a38-41f1-9f99-508d696dbcf1'
 -- ── Self-record migration ─────────────────────────────────────────────────
 -- Per the convention followed by 110/111/112/113/114/115/116 and the
 -- migration_apply_pattern memory note.
-INSERT INTO _migrations(filename) VALUES ('118_pulse_revenue_sync_wiring.sql')
+INSERT INTO _migrations(filename) VALUES ('119_pulse_revenue_sync_wiring.sql')
 ON CONFLICT DO NOTHING;
