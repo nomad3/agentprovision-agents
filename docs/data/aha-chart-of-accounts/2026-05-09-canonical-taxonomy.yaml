@@ -1,0 +1,533 @@
+# AAHA / Veterinary Practice Chart of Accounts — Canonical Taxonomy
+#
+# Best-effort taxonomy for The Animal Doctor SOC, modelled on the AAHA
+# (American Animal Hospital Association) Chart of Accounts framework that
+# is the de-facto standard among US private-practice CPAs.
+#
+# The full AAHA Chart of Accounts is paywalled behind AAHA membership.
+# This file is a synthesis of:
+#   - AAHA's publicly published "Chart of Accounts" structure summary
+#   - VMG-shared chart-of-accounts conventions used by member practices
+#   - QuickBooks for Veterinary Practice templates (Patterson, AVImark,
+#     Henry Schein guides)
+#   - Common GL code ranges used by vet-CPAs (Burzenski, KatzSapper, VMG)
+#
+# CONFIRM-WITH-CPA: Angelo's CPA should review the leaf categories
+# against actual practice books before this is treated as ground truth.
+#
+# Conventions used:
+#   GL code blocks (typical, not strict):
+#     1xxx — Assets
+#     2xxx — Liabilities
+#     3xxx — Equity
+#     4xxx — Revenue / Income
+#     5xxx — Cost of Goods Sold
+#     6xxx — Personnel / Payroll
+#     7xxx — Facility / Occupancy
+#     8xxx — Marketing & General Admin
+#     9xxx — Other / Below the line
+#
+# Each leaf carries:
+#   name              human-friendly leaf label
+#   gl_code           4-digit code from the typical AAHA-aligned ranges
+#   description       1-line explanation
+#   keyword_anchors   words/phrases the bookkeeper agent should match in
+#                     vendor names, invoice descriptions, statement memos
+#   typical_vendors   real-world vendor names commonly seen on this leaf
+#   confidence_floor  minimum confidence threshold; vendors not seen
+#                     before should auto-flag below this
+#
+# Leaf entities will be seeded into the knowledge graph as
+# entity_type='account_category', category='aha_taxonomy', and embedded
+# so the Bookkeeper Agent can semantic-search them.
+
+version: "2026-05-09"
+source: "best-effort synthesis (AAHA + VMG + QuickBooks-for-vet templates)"
+needs_cpa_review: true
+
+categories:
+  # ------------------------------------------------------------------
+  - top_level: REVENUE
+    description: "Income earned by the practice from professional services and product sales"
+    subcategories:
+      - name: "Professional services - DVM exam"
+        gl_code: "4100"
+        description: "Office visit, consultation, recheck, wellness exam revenue"
+        keyword_anchors: [office visit, exam, consultation, recheck, wellness, annual, sick visit]
+        typical_vendors: []
+      - name: "Professional services - Surgery"
+        gl_code: "4110"
+        description: "Surgical procedure revenue (spay/neuter, soft tissue, orthopedic)"
+        keyword_anchors: [surgery, surgical, spay, neuter, orthopedic, soft tissue, anesthesia fee]
+        typical_vendors: []
+      - name: "Professional services - Dental"
+        gl_code: "4120"
+        description: "Dental cleaning, extraction, prophylaxis revenue"
+        keyword_anchors: [dental, prophy, prophylaxis, extraction, cleaning, COHAT]
+        typical_vendors: []
+      - name: "Professional services - Diagnostics"
+        gl_code: "4130"
+        description: "In-house lab, imaging, ECG, ultrasound interpretation"
+        keyword_anchors: [diagnostic, in-house lab, ECG, ultrasound, radiograph, x-ray reading]
+        typical_vendors: []
+      - name: "Professional services - Hospitalization"
+        gl_code: "4140"
+        description: "In-patient care, IV fluids, monitoring, ICU"
+        keyword_anchors: [hospitalization, in-patient, IV fluids, ICU, hospitalized]
+        typical_vendors: []
+      - name: "Professional services - Emergency"
+        gl_code: "4150"
+        description: "After-hours and emergency consultation revenue"
+        keyword_anchors: [emergency, after hours, urgent, ER]
+        typical_vendors: []
+      - name: "Product sales - Pharmacy"
+        gl_code: "4200"
+        description: "In-house pharmacy product sales (drugs, parasiticides)"
+        keyword_anchors: [pharmacy, prescription, parasite prevention, heartworm, flea, tick]
+        typical_vendors: []
+      - name: "Product sales - Diet / food (resale)"
+        gl_code: "4210"
+        description: "Therapeutic and OTC diet sales"
+        keyword_anchors: [diet, food, prescription diet, hills, royal canin, purina pro plan]
+        typical_vendors: []
+      - name: "Product sales - Retail / OTC"
+        gl_code: "4220"
+        description: "Retail OTC products, leashes, supplements, dental chews"
+        keyword_anchors: [retail, OTC, supplement, dental chew, accessory]
+        typical_vendors: []
+      - name: "Boarding / grooming / daycare"
+        gl_code: "4300"
+        description: "Boarding, grooming, daycare service revenue"
+        keyword_anchors: [boarding, grooming, bath, daycare]
+        typical_vendors: []
+      - name: "Lab fees - markup income"
+        gl_code: "4400"
+        description: "Markup on outside lab work passed to client"
+        keyword_anchors: [lab markup, outside lab fee]
+        typical_vendors: []
+      - name: "Other income"
+        gl_code: "4900"
+        description: "Misc income — records release fees, certificates, late fees"
+        keyword_anchors: [records, certificate, health certificate, late fee, rebooking fee]
+        typical_vendors: []
+      - name: "Returns / refunds / discounts"
+        gl_code: "4990"
+        description: "Contra-revenue: client refunds, employee discount, courtesy"
+        keyword_anchors: [refund, discount, employee comp, courtesy, write-off]
+        typical_vendors: []
+
+  # ------------------------------------------------------------------
+  - top_level: COGS
+    description: "Direct cost of medical supplies, drugs, food, and outside lab/imaging consumed in delivering services"
+    subcategories:
+      - name: "Drugs - injectable / pharmaceutical"
+        gl_code: "5100"
+        description: "Injectable drugs, anesthetics, antibiotics, controlled substances"
+        keyword_anchors: [drug, pharmacy, vaccine, antibiotic, injectable, controlled, propofol, dexmedetomidine]
+        typical_vendors: ["Patterson Veterinary", "MWI Animal Health", "Henry Schein", "Covetrus", "Midwest Veterinary"]
+        confidence_floor: 0.85
+      - name: "Vaccines"
+        gl_code: "5110"
+        description: "Core and non-core vaccines"
+        keyword_anchors: [vaccine, DAPP, DHPP, rabies, bordetella, lepto, FVRCP, FeLV]
+        typical_vendors: ["Zoetis", "Merck Animal Health", "Boehringer Ingelheim", "Elanco"]
+      - name: "Parasiticides (resale stock)"
+        gl_code: "5120"
+        description: "Heartworm, flea, tick prevention purchased for resale"
+        keyword_anchors: [heartgard, nexgard, simparica, bravecto, frontline, revolution, interceptor, credelio]
+        typical_vendors: ["Boehringer Ingelheim", "Merck Animal Health", "Elanco", "Zoetis"]
+      - name: "Medical supplies - consumable"
+        gl_code: "5200"
+        description: "Sutures, gauze, syringes, IV catheters, gloves"
+        keyword_anchors: [suture, gauze, syringe, needle, catheter, glove, drape, sterile, bandage]
+        typical_vendors: ["Patterson Veterinary", "MWI Animal Health", "Henry Schein", "Covetrus", "Midmark"]
+      - name: "Diet / food (resale inventory)"
+        gl_code: "5300"
+        description: "Therapeutic and OTC pet food purchased for resale"
+        keyword_anchors: [hills, royal canin, purina pro plan, science diet, prescription diet, food cost]
+        typical_vendors: ["Hill's Pet Nutrition", "Royal Canin", "Purina Pro Plan Vet Direct"]
+      - name: "Outside lab fees"
+        gl_code: "5400"
+        description: "Reference lab work sent out (CBC, chem, cytology, histo)"
+        keyword_anchors: [idexx reference, antech, lab fee, pathology, cytology, histopathology, CBC]
+        typical_vendors: ["IDEXX Reference Laboratories", "Antech Diagnostics", "Zoetis Reference Labs", "Texas A&M GI Lab"]
+      - name: "Outside imaging / specialist fees"
+        gl_code: "5410"
+        description: "Outside radiology reads, ultrasound consults, cardiology, oncology"
+        keyword_anchors: [radiograph read, telerad, antec, cardiology consult, oncology consult, specialist fee]
+        typical_vendors: ["Antec", "VetCT", "Veterinary Imaging Specialists", "VDIC"]
+      - name: "In-house lab consumables"
+        gl_code: "5420"
+        description: "IDEXX SNAP tests, in-house chem reagents, cytology stains"
+        keyword_anchors: [snap test, idexx, reagent, slide, stain, fecal kit]
+        typical_vendors: ["IDEXX Laboratories", "Heska", "Abaxis"]
+      - name: "Surgical supplies"
+        gl_code: "5500"
+        description: "Surgical-pack consumables, drapes, sterilization wraps, scrub brushes"
+        keyword_anchors: [surgical pack, autoclave, sterilization, scrub, drape, surgical glove]
+        typical_vendors: ["Patterson Veterinary", "MWI Animal Health", "Henry Schein"]
+      - name: "Dental supplies"
+        gl_code: "5510"
+        description: "Dental burs, polish paste, fluoride, prophy angles, scaler tips"
+        keyword_anchors: [dental bur, prophy paste, fluoride, scaler, polish]
+        typical_vendors: ["Patterson Veterinary", "Henry Schein", "iM3"]
+      - name: "Cremation / disposal"
+        gl_code: "5600"
+        description: "Cremation, biohazard, sharps disposal services"
+        keyword_anchors: [cremation, sharps, biohazard, medical waste, stericycle]
+        typical_vendors: ["Stericycle", "PetCremationServices", "Hospice Vets", "Faithful Companion"]
+
+  # ------------------------------------------------------------------
+  - top_level: PERSONNEL
+    description: "All employee compensation, benefits, payroll taxes, and contractor labor"
+    subcategories:
+      - name: "DVM compensation - salary"
+        gl_code: "6100"
+        description: "Veterinarian base salary"
+        keyword_anchors: [DVM salary, veterinarian payroll, doctor base]
+        typical_vendors: ["Gusto", "ADP", "Paychex", "Rippling"]
+      - name: "DVM compensation - production / pro-sal"
+        gl_code: "6110"
+        description: "Production-based DVM compensation (ProSal model)"
+        keyword_anchors: [DVM production, ProSal, doctor commission, production bonus]
+        typical_vendors: ["Gusto", "ADP", "Paychex"]
+      - name: "DVM CE / license / dues"
+        gl_code: "6120"
+        description: "Continuing education, license, professional dues for DVMs"
+        keyword_anchors: [CE, continuing education, AVMA, DVM license, board exam, VIN]
+        typical_vendors: ["AVMA", "VIN", "AAHA", "State Veterinary Board"]
+      - name: "LVT / RVT / tech wages"
+        gl_code: "6200"
+        description: "Licensed/registered/credentialed veterinary technician wages"
+        keyword_anchors: [LVT, RVT, CVT, tech wages, technician payroll]
+        typical_vendors: ["Gusto", "ADP", "Paychex"]
+      - name: "Assistant / kennel wages"
+        gl_code: "6210"
+        description: "Vet assistant, kennel staff, treatment-area support wages"
+        keyword_anchors: [assistant wages, kennel, treatment assistant]
+        typical_vendors: ["Gusto", "ADP", "Paychex"]
+      - name: "Reception / CSR wages"
+        gl_code: "6220"
+        description: "Front desk, client service representative wages"
+        keyword_anchors: [reception, CSR, front desk, client service]
+        typical_vendors: ["Gusto", "ADP", "Paychex"]
+      - name: "Manager / admin wages"
+        gl_code: "6230"
+        description: "Practice manager and administrative staff wages"
+        keyword_anchors: [practice manager, admin, office manager, hospital manager]
+        typical_vendors: ["Gusto", "ADP", "Paychex"]
+      - name: "Owner draw / shareholder comp"
+        gl_code: "6240"
+        description: "Owner-DVM compensation and shareholder distributions"
+        keyword_anchors: [owner draw, shareholder distribution, owner comp]
+        typical_vendors: []
+      - name: "Payroll taxes (employer)"
+        gl_code: "6300"
+        description: "Employer-side FICA, FUTA, SUTA, Medicare match"
+        keyword_anchors: [payroll tax, FICA, FUTA, SUTA, EDD, employer tax]
+        typical_vendors: ["Gusto", "ADP", "Paychex", "EDD"]
+      - name: "Health / dental / vision insurance"
+        gl_code: "6310"
+        description: "Employee benefit insurance premiums"
+        keyword_anchors: [health insurance, dental insurance, vision, anthem, blue shield, kaiser, gusto benefits]
+        typical_vendors: ["Anthem", "Blue Shield", "Kaiser Permanente", "Gusto Benefits"]
+      - name: "Retirement match / 401(k)"
+        gl_code: "6320"
+        description: "Employer 401(k) or SIMPLE IRA match"
+        keyword_anchors: ["401k", "401(k)", retirement match, simple ira, guideline]
+        typical_vendors: ["Guideline", "Human Interest", "ADP Retirement", "Vanguard"]
+      - name: "Workers' compensation insurance"
+        gl_code: "6330"
+        description: "Workers' comp insurance premium"
+        keyword_anchors: [workers comp, workers compensation, WC insurance]
+        typical_vendors: ["The Hartford", "Travelers", "AmTrust", "State Fund"]
+      - name: "Tech / staff CE"
+        gl_code: "6340"
+        description: "CE, license, dues for non-DVM clinical staff"
+        keyword_anchors: [tech CE, RVT license, NAVTA, vetfolio]
+        typical_vendors: ["NAVTA", "VetFolio", "AAHA"]
+      - name: "Contract labor / 1099"
+        gl_code: "6400"
+        description: "Relief vets and 1099 contractor labor"
+        keyword_anchors: [relief vet, locum, 1099, contractor, relief DVM]
+        typical_vendors: []
+      - name: "Recruiting / hiring fees"
+        gl_code: "6500"
+        description: "Job-board, recruiter, and pre-hire screening costs"
+        keyword_anchors: [indeed, ziprecruiter, recruiter fee, background check, drug screen]
+        typical_vendors: ["Indeed", "ZipRecruiter", "LinkedIn Talent", "Checkr"]
+
+  # ------------------------------------------------------------------
+  - top_level: FACILITY
+    description: "Occupancy and physical plant costs"
+    subcategories:
+      - name: "Rent / lease"
+        gl_code: "7100"
+        description: "Office space rent or property lease"
+        keyword_anchors: [rent, lease payment, landlord, suite]
+        typical_vendors: []
+      - name: "Mortgage interest (if owned)"
+        gl_code: "7110"
+        description: "Mortgage interest on owned facility"
+        keyword_anchors: [mortgage, mortgage interest]
+        typical_vendors: []
+      - name: "Property tax"
+        gl_code: "7120"
+        description: "Real-estate property tax (owned facility)"
+        keyword_anchors: [property tax, parcel tax, county tax]
+        typical_vendors: ["Orange County Tax Collector"]
+      - name: "Utilities - electric"
+        gl_code: "7200"
+        description: "Electricity service"
+        keyword_anchors: [electric, electricity, edison, SCE, kWh]
+        typical_vendors: ["Southern California Edison", "SCE"]
+      - name: "Utilities - gas"
+        gl_code: "7210"
+        description: "Natural gas service"
+        keyword_anchors: [gas company, socalgas, natural gas]
+        typical_vendors: ["SoCalGas"]
+      - name: "Utilities - water / sewer"
+        gl_code: "7220"
+        description: "Water and sewer service"
+        keyword_anchors: [water, sewer, sanitation]
+        typical_vendors: ["City Water Department"]
+      - name: "Utilities - trash / waste"
+        gl_code: "7230"
+        description: "Trash, biohazard, sharps pickup"
+        keyword_anchors: [waste management, trash, refuse, pickup]
+        typical_vendors: ["Waste Management", "Republic Services", "Athens Services"]
+      - name: "Internet / phone / VOIP"
+        gl_code: "7240"
+        description: "Internet, business phone, VOIP service"
+        keyword_anchors: [internet, comcast, spectrum, ATT, verizon, ringcentral, dialpad, fiber]
+        typical_vendors: ["Spectrum Business", "AT&T", "Comcast Business", "RingCentral", "Dialpad"]
+      - name: "Cleaning / janitorial"
+        gl_code: "7300"
+        description: "Janitorial service, cleaning supplies, laundry service"
+        keyword_anchors: [janitorial, cleaning service, laundry, towels, mat service, cintas]
+        typical_vendors: ["Cintas", "Aramark", "Local Janitorial"]
+      - name: "Repairs / maintenance"
+        gl_code: "7310"
+        description: "Building repairs, HVAC service, pest control, handyman"
+        keyword_anchors: [repair, maintenance, HVAC, plumbing, pest control, handyman, electrician]
+        typical_vendors: ["Orkin", "Terminix", "Local HVAC"]
+      - name: "Property / liability insurance"
+        gl_code: "7400"
+        description: "General liability, property, business owner policy"
+        keyword_anchors: [property insurance, liability insurance, BOP, business owner]
+        typical_vendors: ["The Hartford", "Hub International", "AVMA PLIT"]
+      - name: "Security / alarm"
+        gl_code: "7500"
+        description: "Alarm monitoring, security system, cameras"
+        keyword_anchors: [alarm, security, ADT, ring, brinks]
+        typical_vendors: ["ADT", "Brinks", "Ring Alarm"]
+
+  # ------------------------------------------------------------------
+  - top_level: EQUIPMENT
+    description: "Capital equipment purchases, leases, depreciation, and service contracts"
+    subcategories:
+      - name: "Capex - equipment purchase"
+        gl_code: "1500"
+        description: "Capitalized equipment purchase (depreciable, balance-sheet)"
+        keyword_anchors: [equipment purchase, capex, capital, ultrasound, x-ray machine, anesthesia machine, monitor, autoclave]
+        typical_vendors: ["Sound Technologies", "GE Healthcare", "Midmark", "Cubex", "VetCare"]
+      - name: "Equipment lease payments"
+        gl_code: "7600"
+        description: "Operating leases on x-ray, ultrasound, anesthesia"
+        keyword_anchors: [equipment lease, lease payment, finance lease]
+        typical_vendors: ["Patterson Financial", "Henry Schein Financial Services"]
+      - name: "Equipment service contracts"
+        gl_code: "7610"
+        description: "Maintenance contracts on imaging, lab, surgical equipment"
+        keyword_anchors: [service contract, maintenance contract, calibration]
+        typical_vendors: ["IDEXX", "Sound Technologies", "Heska", "Midmark"]
+      - name: "Equipment repairs (non-capex)"
+        gl_code: "7620"
+        description: "Out-of-warranty equipment repairs expensed"
+        keyword_anchors: [equipment repair, repair invoice]
+        typical_vendors: []
+      - name: "Depreciation expense"
+        gl_code: "7700"
+        description: "Periodic depreciation of capital assets"
+        keyword_anchors: [depreciation]
+        typical_vendors: []
+
+  # ------------------------------------------------------------------
+  - top_level: PROFESSIONAL_SERVICES
+    description: "Outside professional services, software subscriptions, business insurance"
+    subcategories:
+      - name: "Accounting / bookkeeping"
+        gl_code: "8100"
+        description: "External CPA, bookkeeping, tax prep services"
+        keyword_anchors: [accountant, CPA, bookkeeping, tax prep, quickbooks, intuit, xero]
+        typical_vendors: ["Burzenski & Co", "VMG Bookkeeping", "Local CPA"]
+      - name: "Legal"
+        gl_code: "8110"
+        description: "Attorney fees, business legal counsel"
+        keyword_anchors: [attorney, legal fees, law firm, counsel]
+        typical_vendors: []
+      - name: "Consulting / coaching"
+        gl_code: "8120"
+        description: "Practice consultants, business coaching, VMG dues"
+        keyword_anchors: [consulting, coaching, VMG, AAHA accreditation, practice consultant]
+        typical_vendors: ["VMG", "AAHA", "Patterson Pro Advantage"]
+      - name: "PMS subscription"
+        gl_code: "8200"
+        description: "Practice management software subscription"
+        keyword_anchors: [covetrus pulse, pulse subscription, avimark, cornerstone, ezyvet, vetspire, PMS]
+        typical_vendors: ["Covetrus Pulse", "AVImark", "IDEXX Cornerstone", "ezyVet", "Vetspire"]
+      - name: "Clinical SaaS"
+        gl_code: "8210"
+        description: "AI scribe, AI receptionist, telemedicine, imaging-AI subscriptions"
+        keyword_anchors: [scribblevet, vetdodo, antec, otto, dispatch, vetster, airvet, talkatoo]
+        typical_vendors: ["ScribbleVet", "VetDodo", "Antec", "Otto", "Talkatoo"]
+      - name: "Business SaaS / software"
+        gl_code: "8220"
+        description: "General business SaaS — Office 365, Slack, AgentProvision, etc."
+        keyword_anchors: [microsoft 365, office 365, slack, zoom, dropbox, google workspace, agentprovision, wolfpoint, asana, notion]
+        typical_vendors: ["Microsoft", "Google Workspace", "Slack", "Zoom", "AgentProvision"]
+      - name: "Malpractice / professional liability"
+        gl_code: "8300"
+        description: "DVM malpractice (e.g., AVMA PLIT)"
+        keyword_anchors: [malpractice, professional liability, AVMA PLIT, PLIT]
+        typical_vendors: ["AVMA PLIT", "HUB International"]
+      - name: "Cyber / data insurance"
+        gl_code: "8310"
+        description: "Cyber liability and data breach insurance"
+        keyword_anchors: [cyber insurance, data breach, cyber liability]
+        typical_vendors: []
+      - name: "Payment processing fees"
+        gl_code: "8400"
+        description: "Credit card processing, merchant fees, Square fees, Stripe fees"
+        keyword_anchors: [merchant fee, credit card fee, square, stripe, clover, openedge, processing fee, interchange]
+        typical_vendors: ["Square", "Stripe", "Clover", "OpenEdge", "Heartland"]
+      - name: "Banking fees"
+        gl_code: "8410"
+        description: "Bank service charges, wire fees, NSF fees"
+        keyword_anchors: [bank fee, service charge, wire fee, NSF, overdraft]
+        typical_vendors: ["Chase", "Bank of America", "Wells Fargo", "Citizens"]
+
+  # ------------------------------------------------------------------
+  - top_level: MARKETING
+    description: "Marketing, advertising, SEO, community sponsorships"
+    subcategories:
+      - name: "Agency retainer"
+        gl_code: "8500"
+        description: "Marketing agency monthly retainer"
+        keyword_anchors: [agency, retainer, marketing agency, genius events]
+        typical_vendors: ["Genius Events"]
+      - name: "Digital advertising - Google"
+        gl_code: "8510"
+        description: "Google Ads, YouTube ads, Performance Max"
+        keyword_anchors: [google ads, adwords, youtube ads, performance max]
+        typical_vendors: ["Google Ads"]
+      - name: "Digital advertising - Meta"
+        gl_code: "8520"
+        description: "Facebook and Instagram advertising"
+        keyword_anchors: [meta ads, facebook ads, instagram ads]
+        typical_vendors: ["Meta Platforms"]
+      - name: "Digital advertising - other"
+        gl_code: "8530"
+        description: "Yelp, Nextdoor, TikTok, programmatic"
+        keyword_anchors: [yelp ads, nextdoor, tiktok ads, programmatic]
+        typical_vendors: ["Yelp", "Nextdoor", "TikTok"]
+      - name: "SEO / local listings"
+        gl_code: "8540"
+        description: "SEO tools, local-listing tools, review software"
+        keyword_anchors: [brightlocal, semrush, ahrefs, yext, podium, birdeye, review tool]
+        typical_vendors: ["BrightLocal", "Yext", "Podium", "Birdeye", "SEMrush"]
+      - name: "Website / hosting / domain"
+        gl_code: "8550"
+        description: "Website hosting, domain registration, CMS subscription"
+        keyword_anchors: [godaddy, namecheap, wpengine, squarespace, wix, hosting, domain]
+        typical_vendors: ["GoDaddy", "WP Engine", "Squarespace", "Cloudflare"]
+      - name: "Print / collateral / signage"
+        gl_code: "8560"
+        description: "Brochures, business cards, signage, exterior branding"
+        keyword_anchors: [print, brochure, business cards, signage, banner, vistaprint, fastsigns]
+        typical_vendors: ["Vistaprint", "FastSigns", "Local Print Shop"]
+      - name: "Community sponsorship / events"
+        gl_code: "8570"
+        description: "Local sponsorships, charity, community events"
+        keyword_anchors: [sponsorship, charity, community event, donation, fundraiser]
+        typical_vendors: []
+      - name: "Client referral / loyalty"
+        gl_code: "8580"
+        description: "Client referral rewards, loyalty programs, gifts"
+        keyword_anchors: [referral reward, loyalty, gift card, thank you gift]
+        typical_vendors: []
+
+  # ------------------------------------------------------------------
+  - top_level: OFFICE_GENERAL_ADMIN
+    description: "Day-to-day office and administrative expenses"
+    subcategories:
+      - name: "Office supplies"
+        gl_code: "8600"
+        description: "Pens, paper, printer ink, general office consumables"
+        keyword_anchors: [office supply, staples, office depot, paper, printer ink, toner]
+        typical_vendors: ["Staples", "Office Depot", "Amazon Business"]
+      - name: "Postage / shipping / courier"
+        gl_code: "8610"
+        description: "USPS, FedEx, UPS, courier"
+        keyword_anchors: [usps, postage, fedex, ups, courier, shipping]
+        typical_vendors: ["USPS", "FedEx", "UPS"]
+      - name: "Subscriptions / publications"
+        gl_code: "8620"
+        description: "Journal subscriptions, AAHA Trends, JAVMA"
+        keyword_anchors: [journal, JAVMA, AAHA trends, subscription, publication]
+        typical_vendors: ["AVMA", "AAHA", "DVM360"]
+      - name: "Travel / mileage"
+        gl_code: "8630"
+        description: "Business travel, mileage reimbursement, hotel, airfare"
+        keyword_anchors: [travel, mileage, hotel, airfare, uber, lyft, conference travel]
+        typical_vendors: []
+      - name: "Meals / staff appreciation"
+        gl_code: "8640"
+        description: "Staff meals, lunch-and-learn, holiday party"
+        keyword_anchors: [meal, lunch, doordash, grubhub, uber eats, staff appreciation, holiday party, catering]
+        typical_vendors: ["DoorDash", "Uber Eats", "Grubhub", "Local Catering"]
+      - name: "Uniforms / scrubs"
+        gl_code: "8650"
+        description: "Staff scrubs, lab coats, uniforms"
+        keyword_anchors: [scrubs, uniform, lab coat, figs, jaanuu]
+        typical_vendors: ["FIGS", "Jaanuu", "Scrubs & Beyond"]
+
+  # ------------------------------------------------------------------
+  - top_level: OTHER
+    description: "Below-the-line, non-operating, and miscellaneous"
+    subcategories:
+      - name: "Interest expense"
+        gl_code: "9100"
+        description: "Loan interest (non-mortgage), line-of-credit interest"
+        keyword_anchors: [interest expense, loan interest, LOC interest]
+        typical_vendors: []
+      - name: "State / federal income tax"
+        gl_code: "9200"
+        description: "Income tax payments and estimated tax"
+        keyword_anchors: [federal tax, IRS, FTB, california tax, estimated tax, 1040ES]
+        typical_vendors: ["IRS", "California Franchise Tax Board"]
+      - name: "Sales / use tax remittance"
+        gl_code: "9210"
+        description: "Sales tax remitted to state (on retail food, OTC)"
+        keyword_anchors: [sales tax, use tax, CDTFA, BOE]
+        typical_vendors: ["CDTFA"]
+      - name: "Bad debt / write-offs"
+        gl_code: "9300"
+        description: "Uncollectible client account write-offs"
+        keyword_anchors: [bad debt, write off, uncollectible, AR write-off]
+        typical_vendors: []
+      - name: "Charity / pro bono care"
+        gl_code: "9400"
+        description: "Free/discounted care for shelters, rescues, hardship"
+        keyword_anchors: [pro bono, charity care, shelter discount, rescue, hardship]
+        typical_vendors: []
+      - name: "Owner personal (not business)"
+        gl_code: "9900"
+        description: "Owner personal expense run through business — RECLASSIFY"
+        keyword_anchors: [personal, owner personal, reclassify]
+        typical_vendors: []
+      - name: "Uncategorized / needs review"
+        gl_code: "9999"
+        description: "Catch-all — flag for human review"
+        keyword_anchors: []
+        typical_vendors: []
