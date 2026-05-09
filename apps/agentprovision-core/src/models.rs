@@ -79,11 +79,14 @@ pub struct ChatMessageRequest<'a> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatTurn {
-    #[serde(default)]
-    pub user: Option<ChatMessage>,
-    #[serde(default)]
-    pub assistant: Option<ChatMessage>,
-    #[serde(default)]
+    /// The user's message in this turn. Backend serialises as `user_message`;
+    /// `user` is kept as an alias for older payloads.
+    #[serde(rename = "user_message", alias = "user")]
+    pub user: ChatMessage,
+    /// The assistant's reply.
+    #[serde(rename = "assistant_message", alias = "assistant")]
+    pub assistant: ChatMessage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<ChatSession>,
 }
 
