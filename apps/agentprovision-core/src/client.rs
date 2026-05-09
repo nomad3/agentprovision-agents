@@ -33,7 +33,10 @@ impl ApiClient {
     pub fn new(base_url: &str) -> Result<Self> {
         let base = Url::parse(base_url)?;
         let inner = Client::builder()
-            .timeout(Duration::from_secs(60))
+            // Chat turns can run >60s (agent router → Temporal → MCP → LLM).
+            // The streaming SSE endpoints aren't bounded by this timeout
+            // because they consume `bytes_stream`, which is fine.
+            .timeout(Duration::from_secs(180))
             .user_agent(concat!("agentprovision-core/", env!("CARGO_PKG_VERSION")))
             .build()?;
         Ok(Self {
