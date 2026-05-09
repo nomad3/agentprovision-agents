@@ -1796,14 +1796,27 @@ NATIVE_TEMPLATES = [
     {
         "name": "ScribbleVet Note Sync",
         "description": (
-            "Every 15 minutes: pull ScribbleVet notes finalized in the "
-            "last window, find or create the patient entity, and record "
-            "each SOAP body as a `clinical_note` observation with "
-            "embedding. Powers Pet Health Concierge prior-history recall."
+            "⚠️ DRAFT — do NOT install on a live tenant until follow-up "
+            "PR ships. Per PR #333 review: (a) the `search_knowledge` "
+            "idempotency precheck queries entities, not observations, so "
+            "every 15-min run would re-record every note as a fresh "
+            "observation; (b) the workflow's `condition` step `then`/"
+            "`else` step-id branching isn't honored by the executor "
+            "today, so all branches always run. Both must be fixed "
+            "before activation. Fix path: add UNIQUE INDEX on "
+            "knowledge_observations(tenant_id, source_ref) AND replace "
+            "the conditional ingest with a single server-side "
+            "`scribblevet_ingest_note` MCP tool that does atomic find-"
+            "or-create. \n\n"
+            "Once activation-ready: every 15 min pull ScribbleVet notes "
+            "finalized in the last window, find or create the patient "
+            "entity, and record each SOAP body as a `clinical_note` "
+            "observation with embedding. Powers Pet Health Concierge "
+            "prior-history recall."
         ),
         "tier": "native",
-        "public": True,
-        "tags": ["veterinary", "scribblevet", "ingest", "knowledge-graph", "clinical-note"],
+        "public": False,  # ⚠ NOT public until C1+C2 fix lands — see description
+        "tags": ["veterinary", "scribblevet", "ingest", "knowledge-graph", "clinical-note", "draft"],
         "trigger_config": {
             "type": "cron",
             "schedule": "*/15 * * * *",
