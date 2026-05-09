@@ -87,6 +87,25 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         "icon": "FaWhatsapp",
         "credentials": [],
     },
+    "twilio_sms": {
+        # SMS via Twilio. Apple iMessage / "Messages for Business" is gated
+        # behind Apple's enterprise approval (4-12 weeks via
+        # https://register.apple.com/business/messages) — when that lands the
+        # card here will gain an `imessage_business_id` field. Until then
+        # this card is SMS only.
+        "display_name": "SMS (Twilio)",
+        "description": "Send and receive SMS via a Twilio phone number. Configure the Twilio Console webhook to POST to /api/v1/integrations/twilio/inbound.",
+        "icon": "FaSms",
+        "auth_type": "manual",
+        "credentials": [
+            {"key": "account_sid", "label": "Account SID", "type": "text", "required": True,
+             "help": "Twilio Console > Account Info > Account SID (starts with AC)"},
+            {"key": "auth_token", "label": "Auth Token", "type": "password", "required": True,
+             "help": "Twilio Console > Account Info > Auth Token. Used to verify inbound webhook signatures and authorize outbound REST calls."},
+            {"key": "phone_number", "label": "Clinic Phone Number", "type": "text", "required": True,
+             "help": "E.164 format (e.g. +17145551234). The Twilio number that receives inbound SMS for this tenant."},
+        ],
+    },
     "notion": {
         "display_name": "Notion",
         "description": "Read and write Notion pages and databases",

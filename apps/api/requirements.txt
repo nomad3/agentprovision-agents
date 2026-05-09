@@ -29,6 +29,11 @@ pyyaml
 cryptography
 websockets
 neonize>=0.3.14
+# Twilio SMS — only used by app/api/v1/twilio_webhook.py for the SDK's
+# RequestValidator. Webhook will fall back to a pure-Python HMAC-SHA1
+# verifier when the SDK is missing, but pinning makes the canonical Twilio
+# algorithm authoritative. Lightweight (no native deps).
+twilio>=9.3.0
 segno
 pdfplumber>=0.10.0
 pgvector>=0.3.6
