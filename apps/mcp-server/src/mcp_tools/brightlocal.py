@@ -131,10 +131,19 @@ def _build_auth_params(api_key: str, api_secret: str) -> Dict[str, str]:
 def _extract_credentials(creds: dict) -> Optional[Dict[str, str]]:
     """Pull the api_key + api_secret out of a vault payload.
 
-    BrightLocal uses ``api_key`` + ``api_secret``. To stay compatible with
-    plans that only stored a single shared field, we accept a few aliases:
-    ``api_secret`` falls back to ``secret`` and finally to ``api_key`` (some
-    BrightLocal trial accounts use the same value for both).
+    BrightLocal's official API requires distinct ``api_key`` + ``api_secret``
+    (verified against their published spec). We accept the camelCase alias
+    ``apiSecret`` and the bare ``secret`` alias as ergonomic helpers, but if
+    only ``api_key`` is supplied without a matching secret we fall back to
+    using the key itself as the secret.
+
+    NOTE: that single-key fallback is best-effort. It is NOT documented by
+    BrightLocal as an officially-supported flow — it only works for the
+    rare case where the operator literally entered the same value into both
+    fields. If signing fails with INVALID_API_KEY in production, the most
+    likely fix is to add a separate ``api_secret`` from the BrightLocal API
+    settings page (https://tools.brightlocal.com/seo-tools/api/) rather
+    than rely on this fallback. Logged loudly so operators notice.
     """
     if not creds:
         return None
@@ -143,9 +152,14 @@ def _extract_credentials(creds: dict) -> Optional[Dict[str, str]]:
     account_id = creds.get("account_id") or creds.get("accountId")
     if not api_key:
         return None
-    # BrightLocal returns INVALID_API_KEY if signing is wrong; if no secret
-    # was uploaded we use the api_key as the secret (matches how some
-    # legacy trial keys were issued).
+    if not api_secret:
+        logger.warning(
+            "BrightLocal credentials: api_secret missing — falling back to "
+            "api_key as the signing secret. This works only when the "
+            "operator entered the same value in both fields. If signing "
+            "fails with INVALID_API_KEY, supply a separate api_secret from "
+            "the BrightLocal API settings page."
+        )
     return {
         "api_key": api_key,
         "api_secret": api_secret or api_key,
