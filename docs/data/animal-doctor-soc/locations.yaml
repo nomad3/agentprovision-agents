@@ -247,23 +247,54 @@ emergency_hospitals:
       state: "CA"
       zip: "92692"
     phone: "(949) 716-9270"
-    is_24_7: true
-    is_24_7_source: "https://brightcarevet.com/emergency/  (own site: 'open 24-hours a day for seven days a week')"
-    is_24_7_verified: true
+    # CRITICAL CORRECTION (review of PR #322): the 2026-05-08 seed claimed
+    # this site is 24/7 walk-in for emergencies. That is NOT borne out by
+    # the cited sources. cccvetservice.com (one of the seed's own
+    # corroborators) explicitly says: "Regular hours: Mon-Fri 7:30 AM –
+    # 11:00 PM, Weekends 8 AM – 9 PM. Hospitalization services 24/7."
+    # "Hospitalization services 24/7" means already-admitted inpatients
+    # are monitored overnight — the door is locked to walk-ins. Sending
+    # a worried client here at 2am would find the building closed.
+    # Setting is_24_7=false until phone verification of the actual
+    # walk-in policy is performed and a different MV ER (e.g.
+    # VCA California Veterinary Specialists Mission Viejo at 25800
+    # Jeronimo Rd, or OC Veterinary Medical Center in Tustin) is
+    # confirmed.
+    is_24_7: false
+    is_24_7_source: "https://cccvetservice.com/our-locations/brightcare-veterinary-group-mission-viejo-california/  — explicit hours: Mon-Fri 7:30am-11pm, weekends 8am-9pm; only INPATIENT hospitalization is 24/7"
+    is_24_7_verified: false
     services:
-      - "24/7 emergency"
+      - "Daytime emergency triage (Mon-Fri 7:30am-11pm, Sat-Sun 8am-9pm)"
+      - "24/7 inpatient hospitalization (already-admitted patients only)"
       - "Critical care"
       - "Board-certified neurology"
       - "MRI / CT on-site"
-    notes: "Same city as The Animal Doctor SOC Mission Viejo (~2 mi away on Marguerite Pkwy). Note: brightcarevet.com root returned 500 during research; 24/7 claim corroborated by brightcarevet.com/emergency/ + Yelp listing + cccvetservice.com partner page."
+    notes: |
+      DO NOT use as a 24/7 walk-in ER until verified by phone. brightcarevet.com root returned
+      500 during research (primary source unreachable); the 24/7 claim previously seeded was
+      contradicted by the cccvetservice.com partner page that was used as one of the original
+      corroborators. Flagged as Critical in code review of PR #322.
+      Action items for Simon:
+        1. Phone (949) 716-9270 and ask "are you open 24/7 walk-in for emergencies, or do you
+           close at 11pm weekdays / 9pm weekends?"
+        2. If not 24/7 walk-in, identify a real OC 24/7 partner. Candidates to verify:
+           - VCA California Veterinary Specialists Mission Viejo (25800 Jeronimo Rd)
+           - OC Veterinary Medical Center (3021 Edinger Ave, Tustin, ~10 mi from MV)
+        3. Update this entry + the nearest_er map below once verified.
     sources:
-      - "https://brightcarevet.com/emergency/"
+      - "https://brightcarevet.com/emergency/  (HTTP 500 at research time — 2026-05-09)"
       - "https://www.yelp.com/biz/brightcare-animal-er-emergency-veterinarian-mission-viejo"
-      - "https://cccvetservice.com/our-locations/brightcare-veterinary-group-mission-viejo-california/"
+      - "https://cccvetservice.com/our-locations/brightcare-veterinary-group-mission-viejo-california/  (explicit CONTRADICTION of the 24/7 claim)"
 
 # nearest_er assignments — which ER is closest for each hospital.
 # Format: hospital_slug -> er_slug
+# IMPORTANT: when the seeder reads this map, an entry of `null` (or omission)
+# means "do not create a nearest_er relation for this hospital". The Pet
+# Health Concierge persona will then fall back to its generic guidance
+# ("call us, or go to the nearest 24/7 emergency vet") without naming a
+# specific routing target — safer than naming a closed building.
 nearest_er:
-  anaheim: case-anaheim          # ~3-4 mi east in same city
-  buena-park: case-anaheim       # ~3.3 mi / 8-9 min east per CASE's own copy
-  mission-viejo: brightcare-mission-viejo  # ~2 mi away, same city, same Pkwy
+  anaheim: case-anaheim          # ~3-4 mi east in same city — verified 24/7 walk-in
+  buena-park: case-anaheim       # ~3.3 mi / 8-9 min east per CASE's own copy — verified 24/7 walk-in
+  mission-viejo: null            # CRITICAL: BrightCare MV is NOT 24/7 walk-in (review of PR #322).
+                                 # Phone-verify a real 24/7 partner before re-assigning.

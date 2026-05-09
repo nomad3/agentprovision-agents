@@ -194,6 +194,32 @@ def _upsert_relation(
     return rel, True
 
 
+def _delete_relations_by_type(
+    db: Session,
+    *,
+    from_entity_id: uuid.UUID,
+    relation_type: str,
+) -> int:
+    """Delete every relation of `relation_type` originating from `from_entity_id`.
+
+    Used by the YAML-driven seeder to converge the DB to match the YAML state.
+    If the YAML lists `nearest_er` for a hospital as null (no verified 24/7
+    walk-in ER known), any pre-existing relation for that hospital must be
+    removed so the Pet Health Concierge persona doesn't keep routing clients
+    to a building that may be closed.
+    """
+    deleted = (
+        db.query(KnowledgeRelation)
+        .filter(
+            KnowledgeRelation.tenant_id == TENANT_ID,
+            KnowledgeRelation.from_entity_id == from_entity_id,
+            KnowledgeRelation.relation_type == relation_type,
+        )
+        .delete(synchronize_session=False)
+    )
+    return int(deleted or 0)
+
+
 def _upsert_er_entity(db: Session, er: dict[str, Any]) -> KnowledgeEntity:
     """Upsert an emergency-hospital entity by (tenant_id, name)."""
     name = er["name"]
@@ -453,14 +479,56 @@ def main() -> None:
             er_by_slug[er["slug"]] = ent
 
         # 3. nearest_er relations.
+        # IMPORTANT (PR #322 review fix): an entry of `null` means we do NOT
+        # have a verified 24/7 walk-in ER for that hospital. Skip relation
+        # creation rather than seed wrong data — the Pet Health Concierge
+        # persona will fall back to generic emergency guidance instead of
+        # routing to a building that's locked at 2am.
+        #
+        # We also DELETE any pre-existing `nearest_er` relation for hospitals
+        # that the YAML now lists as null. This handles the case where an
+        # earlier seed run wrote a bogus relation (the BrightCare MV bug
+        # that this PR fixes) — the YAML is the single source of truth, so
+        # seeding it again must converge the DB to match.
         hosp_by_slug = {h["slug"]: h for h in data["hospitals"]}
         for hosp_slug, er_slug in data["nearest_er"].items():
+            if er_slug is None:
+                hosp = hosp_by_slug.get(hosp_slug)
+                if hosp and hosp.get("entity_id"):
+                    from_id = uuid.UUID(hosp["entity_id"])
+                    deleted = _delete_relations_by_type(
+                        db,
+                        from_entity_id=from_id,
+                        relation_type="nearest_er",
+                    )
+                    if deleted:
+                        log.warning(
+                            "Removed %d stale nearest_er relation(s) for %s "
+                            "(YAML now null — verified 24/7 walk-in ER pending).",
+                            deleted, hosp_slug,
+                        )
+                log.warning(
+                    "Skipping nearest_er creation for hospital %s — no "
+                    "verified 24/7 walk-in ER. Update locations.yaml once an "
+                    "alternative is phone-verified.",
+                    hosp_slug,
+                )
+                continue
+            # Pull 24/7 verification status from the ER entity itself, not a
+            # hardcoded True. If the YAML's `is_24_7_verified` is False the
+            # relation is still recorded but evidence is tagged honestly so
+            # downstream agents know not to treat it as 24/7.
+            er_record = next(
+                (e for e in data["emergency_hospitals"] if e["slug"] == er_slug),
+                {},
+            )
             hosp = hosp_by_slug[hosp_slug]
             er_ent = er_by_slug[er_slug]
             from_id = uuid.UUID(hosp["entity_id"])
             evidence = {
                 "selected_by": "geographic_proximity",
-                "verified_24_7": True,
+                "verified_24_7": bool(er_record.get("is_24_7_verified", False)),
+                "is_24_7": bool(er_record.get("is_24_7", False)),
                 "captured_at": str(data.get("captured_at")),
                 "er_slug": er_slug,
                 "er_phone": next(
