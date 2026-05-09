@@ -17,10 +17,13 @@ pub struct Cli {
     #[arg(long, global = true, env = "AGENTPROVISION_SERVER")]
     pub server: Option<String>,
 
-    /// Override the default tenant for this invocation.
-    #[arg(long, global = true, env = "AGENTPROVISION_TENANT")]
-    pub tenant: Option<String>,
-
+    // PR #332 review Critical #3: a `--tenant` flag was removed before
+    // initial ship. None of the user-facing subcommands in this PR
+    // (login/logout/status/chat) consume `X-Tenant-Id` — it's an
+    // MCP-server header. Shipping the flag would have given users a
+    // silent no-op and a false sense of multi-tenancy support. The
+    // tenant override will return in PR-C alongside the first
+    // subcommand that actually needs it (e.g. `tenant switch`).
     /// Emit machine-readable JSON instead of pretty output.
     #[arg(long, global = true)]
     pub json: bool,

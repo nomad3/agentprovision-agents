@@ -33,14 +33,14 @@ impl Context {
     pub async fn new(args: &Cli) -> anyhow::Result<Self> {
         let config_path = config::config_path()?;
         let mut cfg = config::load_from(&config_path)?;
-        // Honour --tenant / --server overrides for this invocation only.
+        // Honour --server override for this invocation only. The `--tenant`
+        // flag was removed (PR #332 review Critical #3); `cfg.tenant_id`
+        // still loads from config.toml so PR-C can light up the override
+        // alongside the first MCP-bound subcommand.
         if let Some(s) = &args.server {
             cfg.server = s.clone();
         } else if cfg.server.is_empty() {
             cfg.server = DEFAULT_BASE_URL.into();
-        }
-        if let Some(t) = &args.tenant {
-            cfg.tenant_id = Some(t.clone());
         }
 
         let token_store: Arc<dyn TokenStore> =

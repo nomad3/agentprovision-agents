@@ -6,13 +6,26 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Token {
     pub access_token: String,
     #[serde(default = "default_token_type")]
     pub token_type: String,
+}
+
+// PR #332 review Critical #1 fix: never let the bearer token print
+// through the default `#[derive(Debug)]` impl — even with -vv on the
+// CLI, the only thing log lines should ever see is `Token { access_token: <redacted>, .. }`.
+impl fmt::Debug for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Token")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 fn default_token_type() -> String {

@@ -20,7 +20,17 @@ async fn main() {
         1 => "info",
         _ => "debug",
     };
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(log_level))
+    // PR #332 review Critical #1 fix: scope the verbose filter to our
+    // own crates only, and pin reqwest/hyper to `warn` regardless of
+    // -v count. Without this scoping, `-vv` flips reqwest+hyper into
+    // `debug` which logs request/response bodies including the
+    // `Authorization: Bearer …` header — that's the CLI's most
+    // sensitive secret leaking to stderr.
+    let filter = format!(
+        "agentprovision_cli={lvl},agentprovision_core={lvl},reqwest=warn,hyper=warn",
+        lvl = log_level
+    );
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&filter))
         .target(env_logger::Target::Stderr)
         .try_init();
 
