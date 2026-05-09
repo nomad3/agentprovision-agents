@@ -63,6 +63,10 @@ TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     "brightlocal_get_rankings": "brightlocal",
     "brightlocal_rank_changes": "brightlocal",
     "brightlocal_competitor_check": "brightlocal",
+    # ScribbleVet (AI-scribe note ingest — powers Pet Health Concierge prior-history recall + Clinical Triage intake context)
+    "scribblevet_list_recent_notes": "scribblevet",
+    "scribblevet_get_note": "scribblevet",
+    "scribblevet_search": "scribblevet",
     # Tools that don't need any integration
     "create_entity": None,
     "find_entities": None,
@@ -104,6 +108,7 @@ INTEGRATION_DISPLAY: Dict[str, Dict[str, str]] = {
     "codex": {"name": "Codex CLI", "icon": "FaTerminal"},
     "gemini_cli": {"name": "Gemini CLI", "icon": "FaGoogle"},
     "brightlocal": {"name": "BrightLocal", "icon": "FaSearch"},
+    "scribblevet": {"name": "ScribbleVet", "icon": "FaNotesMedical"},
 }
 
 

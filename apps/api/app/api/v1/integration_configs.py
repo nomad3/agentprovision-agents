@@ -206,6 +206,32 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
              "help": "Optional. Found in BrightLocal Account Settings; useful when one agent manages multiple BrightLocal accounts."},
         ],
     },
+    "scribblevet": {
+        # ScribbleVet is the AI scribe DVMs use in the exam room — see
+        # docs/research/2026-05-09-scribblevet-api-research.md for the
+        # API-access posture. ScribbleVet itself does not publish a
+        # public API today; this card scaffolds against the OAuth2
+        # client_credentials shape expected from Instinct Science's
+        # Partner API (Instinct acquired ScribbleVet 2026-01-16). The
+        # adapter activates the moment partner intake delivers
+        # credentials. Until then this card is the "request access"
+        # surface — operators can save the values they receive from
+        # partner intake without any further engineering.
+        "display_name": "ScribbleVet",
+        "description": "Veterinary AI scribe partner integration. Ingests finalized SOAP notes into the knowledge graph so Pet Health Concierge can recall prior visits and Clinical Triage can pre-load history into intake summaries. Requires ScribbleVet/Instinct partner credentials.",
+        "icon": "FaNotesMedical",
+        "auth_type": "oauth_partner",
+        "credentials": [
+            {"key": "client_id", "label": "Client ID", "type": "text", "required": True,
+             "help": "Issued by ScribbleVet / Instinct partner intake. OAuth2 client_credentials grant."},
+            {"key": "client_secret", "label": "Client Secret", "type": "password", "required": True,
+             "help": "Issued alongside the Client ID. Treat as a password; rotate via the partner portal."},
+            {"key": "practice_id", "label": "Practice ID", "type": "text", "required": True,
+             "help": "ScribbleVet practice identifier. The Animal Doctor SOC runs all 3 sites on a single ScribbleVet account with one practice_id."},
+            {"key": "environment", "label": "Environment", "type": "text", "required": False,
+             "help": "Either 'sandbox' or 'prod' (default 'prod'). Sandbox URL is issued at partner intake."},
+        ],
+    },
     # NOTE: Direct-API LLM cards (`anthropic_llm`, `gemini_llm`) were
     # removed. The platform routes chat agents through CLI OAuth
     # subscriptions only — Claude Code, Gemini CLI, GitHub Copilot CLI,

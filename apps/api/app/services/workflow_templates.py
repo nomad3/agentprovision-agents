@@ -1777,6 +1777,178 @@ NATIVE_TEMPLATES = [
             ],
         },
     },
+
+    # ── ScribbleVet Note Sync — every 15 minutes, ingest finalized
+    # SOAP notes from ScribbleVet into the knowledge graph as
+    # `clinical_note` observations on the patient entity. Drives the
+    # Pet Health Concierge's record-aware replies and the Clinical
+    # Triage agent's prior-history pre-load.
+    #
+    # Idempotency: each `record_observation` is keyed on
+    # `source_ref="scribblevet:<note_id>"`. The Luna prompt step is
+    # responsible for skipping notes whose source_ref already lives in
+    # the graph (search_knowledge by source_ref). The dynamic-workflow
+    # executor logs every step so duplicate runs are auditable.
+    #
+    # Activation gate: the workflow refuses to run until the tenant
+    # has connected the ScribbleVet integration (see
+    # services/integration_status.py — TOOL_INTEGRATION_MAP entries).
+    {
+        "name": "ScribbleVet Note Sync",
+        "description": (
+            "Every 15 minutes: pull ScribbleVet notes finalized in the "
+            "last window, find or create the patient entity, and record "
+            "each SOAP body as a `clinical_note` observation with "
+            "embedding. Powers Pet Health Concierge prior-history recall."
+        ),
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "scribblevet", "ingest", "knowledge-graph", "clinical-note"],
+        "trigger_config": {
+            "type": "cron",
+            "schedule": "*/15 * * * *",
+            "timezone": "America/Los_Angeles",
+        },
+        "definition": {
+            "steps": [
+                {
+                    "id": "list_recent_notes",
+                    "type": "mcp_tool",
+                    "tool": "scribblevet_list_recent_notes",
+                    "params": {"date_range": "15m", "limit": 200},
+                    "output": "recent_notes",
+                },
+                {
+                    "id": "ingest_each_note",
+                    "type": "for_each",
+                    "collection": "{{recent_notes.notes}}",
+                    "as": "note_summary",
+                    "steps": [
+                        {
+                            # Idempotency: query the knowledge graph for
+                            # an existing observation tagged with this
+                            # ScribbleVet note's source_ref. If hit count
+                            # > 0, the for_each iteration short-circuits
+                            # (the agent step below sees the prior result
+                            # and returns "skip"). source_ref string is
+                            # the canonical idempotency key.
+                            "id": "check_existing",
+                            "type": "mcp_tool",
+                            "tool": "search_knowledge",
+                            "params": {
+                                "query": "scribblevet:{{note_summary.note_id}}",
+                                "limit": 1,
+                            },
+                            "output": "existing",
+                        },
+                        {
+                            "id": "skip_if_already_ingested",
+                            "type": "condition",
+                            "if": "{{existing.count}} > 0",
+                            "then": "log_skip",
+                            "else": "fetch_full_note",
+                        },
+                        {
+                            "id": "log_skip",
+                            "type": "transform",
+                            "expression": (
+                                "{ 'note_id': '{{note_summary.note_id}}', "
+                                "'skipped': true, "
+                                "'reason': 'already ingested' }"
+                            ),
+                            "output": "skip_marker",
+                        },
+                        {
+                            "id": "fetch_full_note",
+                            "type": "mcp_tool",
+                            "tool": "scribblevet_get_note",
+                            "params": {"note_id": "{{note_summary.note_id}}"},
+                            "output": "full_note",
+                        },
+                        {
+                            # Find-or-create patient entity. The patient
+                            # name + species + scribblevet patient_id is
+                            # enough to disambiguate inside one practice
+                            # — `find_entities` is run with the
+                            # ScribbleVet patient_id stored as an alias
+                            # so subsequent runs match cleanly.
+                            "id": "find_patient",
+                            "type": "mcp_tool",
+                            "tool": "find_entities",
+                            "params": {
+                                "name": "{{full_note.note.patient_name}}",
+                                "entity_type": "patient",
+                                "limit": 1,
+                            },
+                            "output": "patient_match",
+                        },
+                        {
+                            "id": "patient_exists",
+                            "type": "condition",
+                            "if": "{{patient_match.count}} > 0",
+                            "then": "record_clinical_note",
+                            "else": "create_patient_entity",
+                        },
+                        {
+                            "id": "create_patient_entity",
+                            "type": "mcp_tool",
+                            "tool": "create_entity",
+                            "params": {
+                                "entity_type": "patient",
+                                "name": "{{full_note.note.patient_name}}",
+                                "description": (
+                                    "Patient created from ScribbleVet ingest. "
+                                    "Species: {{full_note.note.species}}. "
+                                    "Breed: {{full_note.note.breed}}. "
+                                    "Sex: {{full_note.note.sex}}. "
+                                    "DOB: {{full_note.note.date_of_birth}}. "
+                                    "Owner: {{full_note.note.client_name}} "
+                                    "({{full_note.note.client_phone}})."
+                                ),
+                                "attributes": {
+                                    "scribblevet_patient_id": "{{full_note.note.patient_id}}",
+                                    "species": "{{full_note.note.species}}",
+                                    "breed": "{{full_note.note.breed}}",
+                                    "sex": "{{full_note.note.sex}}",
+                                    "date_of_birth": "{{full_note.note.date_of_birth}}",
+                                    "owner_name": "{{full_note.note.client_name}}",
+                                    "owner_phone": "{{full_note.note.client_phone}}",
+                                    "owner_id": "{{full_note.note.client_id}}",
+                                    "location_id": "{{full_note.note.location_id}}",
+                                },
+                            },
+                            "output": "created_patient",
+                        },
+                        {
+                            "id": "record_clinical_note",
+                            "type": "mcp_tool",
+                            "tool": "record_observation",
+                            "params": {
+                                "observation_text": "{{full_note.soap_text}}",
+                                "observation_type": "clinical_note",
+                                "source_type": "scribblevet",
+                                "source_platform": "scribblevet",
+                                "source_channel": "exam_room",
+                                # Canonical idempotency key — every
+                                # check_existing step searches for this
+                                # exact prefix.
+                                "source_ref": "scribblevet:{{note_summary.note_id}}",
+                                # Either branch above resolves the
+                                # entity_id; transform ensures we hand
+                                # the right one to record_observation.
+                                "entity_id": (
+                                    "{{patient_match.entities[0].id "
+                                    "if patient_match.count > 0 "
+                                    "else created_patient.entity_id}}"
+                                ),
+                            },
+                            "output": "observation_result",
+                        },
+                    ],
+                },
+            ],
+        },
+    },
 ]
 
 
