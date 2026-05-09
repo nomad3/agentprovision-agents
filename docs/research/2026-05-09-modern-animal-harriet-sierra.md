@@ -13,7 +13,7 @@
 ### Founders, funding, footprint
 
 - Founded in 2018 by **Steven Eidelman** (CEO) and Ben Jacobs in Culver City, CA. Eidelman previously sold the dog-collar company Whistle for $119M in 2016. [Crunchbase / Fortune] [1][2]
-- Funding ladder (cumulative ≈ $229M as of March 2024 + Series D in Sept 2025):
+- Funding ladder (cumulative ≈ $229M per Crunchbase [1] as of March 2024, plus the Series D in Sept 2025; Fortune does not disclose a cumulative total directly):
   - Seed (Oct 2019): $13.5M, Founders Fund led
   - Series A + B (2020–21): $75M
   - Series C (Aug 2022): $75M
@@ -87,7 +87,7 @@ The *general* Modern Animal app holds 4.9★, but reviews predate Herriot's broa
 
 - Founded by **Bret Taylor** (Salesforce co-CEO, Quip, CTO Facebook, co-creator of Google Maps) and **Clay Bavor** (18 yrs at Google, Google Labs, Project Starline). [Sierra About] [16]
 - Founded Feb 2024; **$100M ARR in 7 quarters** (achieved Nov 2025); current valuation **$10B** on a $350M Greenoaks-led round (Sep 2025). [TechCrunch] [17]
-- Customer roster spans regulated and consumer brands: **healthcare** (Sutter Health, Cigna, Clover Health, WeightWatchers, Cedar, Curative, Thriveworks), **fintech** (SoFi, Ramp, Rocket Mortgage, Prudential), **commerce** (Vans, Bissell, Casper, Minted, Wayfair, Sonos), **media** (DIRECTV, SiriusXM, Tubi, Discord), **mobility** (Rivian, Deliveroo). Modern Animal is the only veterinary-vertical customer publicly listed. [Sierra About / 100M ARR blog] [16][18]
+- Customer roster spans regulated and consumer brands. Sierra's own About page renders only a small set of logos directly (CLEAR, Casper, Minted); the broader roster is reconstructed from the Sierra $100M-ARR blog post and TechCrunch coverage: **healthcare** (Sutter Health, Cigna, Clover Health, WeightWatchers, Cedar, Curative, Thriveworks), **fintech** (SoFi, Ramp, Rocket Mortgage, Prudential), **commerce** (Vans, Bissell, Casper, Minted, Wayfair, Sonos), **media** (DIRECTV, SiriusXM, Tubi, Discord), **mobility** (Rivian, Deliveroo). TechCrunch directly attributes Deliveroo, Discord, Ramp, Rivian, SoFi, Tubi, ADT, Bissell, Vans, Cigna, SiriusXM. Modern Animal is the only veterinary-vertical customer publicly listed. [Sierra $100M ARR blog, TechCrunch] [18][17]
 
 ### Product architecture (as publicly disclosed)
 
@@ -96,8 +96,7 @@ Sierra calls its platform **Agent OS** (v2.0 announced Nov 2025). Layers, in the
 1. **Agent Studio 2.0** — natural-language "Journeys" authoring. Non-engineers configure agent behavior; declarative.
 2. **Agent SDK** — code-first for engineers. Express customer journeys as code, version-control them, attach deterministic guardrails ("orders can only be returned within 30 days"). [Develop Your Agent] [20]
 3. **Agent Data Platform (ADP)** — memory layer. Unifies unstructured conversation data with structured systems (billing, EHR, CRM). This is the closest analog to AgentProvision's memory-first design.
-4. **Knowledge engine** — RAG over policy docs, FAQs, internal documentation.
-5. **Systems integrations** — typed connectors into EHR/PMS/CRM/order-management. Not generic HTTP — integration-specific contracts.
+4. **Integrations** — typed connectors into EHR/PMS/CRM/order-management. Not generic HTTP; integration-specific contracts. *(Sierra describes "integrations" but the Agent OS 2.0 launch announcement does not brand it as a discrete named product surface, and the related RAG-over-policy-docs pattern is described in their material but is not branded as a discrete "Knowledge engine" layer either — keeping it as a general capability rather than a named layer.)*
 6. **Insights 2.0 / Explorer** — analytics + interaction-replay.
 7. **Live Assist** — human-in-the-loop, hands the conversation off cleanly with a structured summary.
 
