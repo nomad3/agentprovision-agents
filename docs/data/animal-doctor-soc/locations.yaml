@@ -1,0 +1,300 @@
+# The Animal Doctor SOC — Hospital location data
+#
+# Tenant: 7f632730-1a38-41f1-9f99-508d696dbcf1
+# Purpose: Seed location facts (address, phone, hours, after-hours policy,
+#          accepting-new-clients flag, languages, parking) and the closest
+#          24/7 emergency partner for each hospital. Used by the
+#          Pet Health Concierge persona which references {hospital_phone},
+#          {hours}, {nearest_er} placeholders.
+#
+# Source policy: every field has at least 2 corroborating public sources
+# OR is explicitly marked verified: false so Simon can fill it in.
+# Wrong nearest-ER data is high-stakes — each ER is verified 24/7 from
+# the ER's OWN website, not just Google Maps hours.
+#
+# Data captured: 2026-05-09
+
+tenant_id: 7f632730-1a38-41f1-9f99-508d696dbcf1
+captured_at: "2026-05-09"
+
+hospitals:
+  - entity_id: 8fb15d1c-3633-4d06-9405-e2698417b45f
+    slug: anaheim
+    name: "The Animal Doctor SOC — Anaheim"
+    address:
+      street: "1715 W La Palma Ave"
+      city: "Anaheim"
+      state: "CA"
+      zip: "92801"
+      verified: true
+      sources:
+        - "https://www.theanimaldoctorsoc.com/locations/anaheim"
+        - "https://www.yelp.com/biz/the-animal-doctors-anaheim-4"
+    phone: "(714) 535-1141"
+    phone_verified: true
+    phone_sources:
+      - "https://www.theanimaldoctorsoc.com/locations/anaheim"
+      - "https://www.yelp.com/biz/the-animal-doctors-anaheim-4"
+    formerly_known_as: "La Palma Veterinary Hospital"
+    hours:
+      doctor_hours:
+        mon: "08:00-18:00"
+        tue: "08:00-18:00"
+        wed: "08:00-18:00"
+        thu: "08:00-18:00"
+        fri: "08:00-18:00"
+        sat: "08:00-13:00"
+        sun: "closed"
+      client_care_hours:
+        mon: "07:00-20:00"
+        tue: "07:00-20:00"
+        wed: "07:00-20:00"
+        thu: "07:00-20:00"
+        fri: "07:00-20:00"
+        sat: "08:00-16:00"
+        sun: "closed"
+      verified: true
+      sources:
+        - "https://www.theanimaldoctorsoc.com/locations/anaheim"
+        - "https://www.petscare.com/care/anaheim/the-animal-doctors-of-anaheim-formerly-la-palma-veterinary-hospital-anaheim"
+    after_hours_policy:
+      summary: "When the hospital is closed, clients are referred to the nearest 24/7 emergency partner."
+      verified: false
+      note: "Persona references {hours} and {nearest_er} placeholders; verify exact verbatim policy from front-desk script before going live."
+    accepting_new_clients:
+      value: true
+      verified: false
+      note: "theanimaldoctorsoc.com hero copy says 'New Clients Welcome' for the SOC family of locations; confirm the Anaheim location specifically still onboarding before going live."
+    languages:
+      - "English"
+      - "Spanish"
+    languages_verified: false
+    languages_note: "Spanish is plausible given Orange County demographics; confirm with Angelo / front desk."
+    parking:
+      summary: "On-site lot at 1715 W La Palma Ave."
+      verified: false
+      note: "Confirm number of spaces, accessibility, street-parking fallback."
+    services:
+      - "Routine wellness exams"
+      - "Vaccinations"
+      - "Diagnostic testing"
+      - "Surgery"
+      - "Dentistry"
+      - "End-of-life care"
+    services_verified: true
+    services_sources:
+      - "https://www.theanimaldoctorsoc.com/locations/anaheim"
+      - "https://www.poyst.com/business/the-animal-doctors"
+
+  - entity_id: 2d3c7d08-f380-4f06-84d5-4afaeac2c302
+    slug: buena-park
+    name: "The Animal Doctor SOC — Buena Park"
+    address:
+      street: "7912 Orangethorpe Ave"
+      city: "Buena Park"
+      state: "CA"
+      zip: "90621"
+      verified: true
+      sources:
+        - "https://www.theanimaldoctorsoc.com/locations/buena-park"
+        - "https://www.yelp.com/biz/the-animal-doctors-buena-park"
+    phone: "(714) 521-4595"
+    phone_verified: true
+    phone_sources:
+      - "https://www.theanimaldoctorsoc.com/locations/buena-park"
+      - "https://www.yelp.com/biz/the-animal-doctors-buena-park"
+    formerly_known_as: "Orangethorpe Animal Aid Hospital"
+    hours:
+      doctor_hours:
+        mon: "08:00-20:00"
+        tue: "08:00-20:00"
+        wed: "08:00-20:00"
+        thu: "08:00-20:00"
+        fri: "08:00-20:00"
+        sat: "08:00-16:00"
+        sun: "closed"
+      verified: true
+      sources:
+        - "https://www.yelp.com/biz/the-animal-doctors-buena-park"
+        - "https://local.yahoo.com/info-35733416-the-animal-doctors-of-buena-park-buena-park"
+    after_hours_policy:
+      summary: "When the hospital is closed, clients are referred to the nearest 24/7 emergency partner."
+      verified: false
+      note: "Persona references {hours} and {nearest_er} placeholders; confirm exact verbatim policy."
+    accepting_new_clients:
+      value: true
+      verified: false
+      note: "Buena Park location page is literally titled 'Join Our Vet Family — New Clients Welcome Today!' (search snippet) — strong signal but confirm with team."
+    languages:
+      - "English"
+      - "Spanish"
+    languages_verified: false
+    languages_note: "Spanish plausible given Buena Park demographics; confirm."
+    parking:
+      summary: "On-site lot at 7912 Orangethorpe Ave."
+      verified: false
+      note: "Confirm number of spaces, accessibility."
+    services:
+      - "Routine wellness exams"
+      - "Vaccinations"
+      - "Diagnostics"
+      - "Surgery"
+      - "Dentistry"
+    services_verified: true
+    services_sources:
+      - "https://theanimaldoctorsoc.com/buena-park/"
+      - "https://the-animal-doctors-of-buena-park-formerly-orangethorpe.wheree.com/"
+
+  - entity_id: 788b00b7-f9cd-465d-90fe-e44ce8cbdd27
+    slug: mission-viejo
+    name: "The Animal Doctor SOC — Mission Viejo"
+    address:
+      street: "27855 Santa Margarita Pkwy, Suite G"
+      city: "Mission Viejo"
+      state: "CA"
+      zip: "92691"
+      verified: true
+      sources:
+        - "https://theanimaldoctorsoc.com/mission-viejo/"
+        - "https://www.yelp.com/biz/animal-doctors-mission-viejo"
+    phone: "(949) 472-3555"
+    phone_verified: true
+    phone_sources:
+      - "https://theanimaldoctorsoc.com/mission-viejo/"
+      - "https://www.yelp.com/biz/animal-doctors-mission-viejo"
+    formerly_known_as: null
+    hours:
+      doctor_hours:
+        mon: "08:00-17:00"
+        tue: "08:00-17:00"
+        wed: "08:00-17:00"
+        thu: "08:00-17:00"
+        fri: "08:00-17:00"
+        sat: "closed"
+        sun: "closed"
+      client_care_hours:
+        mon: "07:00-20:00"
+        tue: "07:00-20:00"
+        wed: "07:00-20:00"
+        thu: "07:00-20:00"
+        fri: "07:00-20:00"
+        sat: "08:00-16:00"
+        sun: "closed"
+      verified: true
+      sources:
+        - "https://theanimaldoctorsoc.com/mission-viejo/"
+        - "https://www.yelp.com/biz/animal-doctors-mission-viejo"
+    after_hours_policy:
+      summary: "When the hospital is closed (and on weekends), clients are referred to the nearest 24/7 emergency partner."
+      verified: false
+      note: "Mission Viejo is the most weekend-light of the 3 (Sat+Sun closed for doctors); confirm verbatim policy."
+    accepting_new_clients:
+      value: true
+      verified: false
+      note: "SOC-wide 'New Clients Welcome' messaging; confirm Mission Viejo capacity."
+    languages:
+      - "English"
+    languages_verified: false
+    languages_note: "Confirm with Angelo / front desk."
+    parking:
+      summary: "Strip-mall lot at 27855 Santa Margarita Pkwy, Suite G."
+      verified: false
+      note: "Confirm number of spaces, accessibility."
+    services:
+      - "Routine wellness exams"
+      - "Vaccinations"
+      - "Diagnostics (conservative approach)"
+      - "Surgery"
+      - "Dentistry"
+    services_verified: true
+    services_sources:
+      - "https://theanimaldoctorsoc.com/mission-viejo/"
+      - "https://www.atly.com/location/TheAnimalDoctors1"
+
+# 24/7 emergency partners — one per hospital, picked by geographic
+# proximity. 24/7 status is verified from the ER's own website (not just
+# Google Maps), per the plan's high-stakes-data rule.
+emergency_hospitals:
+  - slug: case-anaheim
+    name: "CASE Animal Hospital — Anaheim"
+    entity_type: organization
+    category: emergency_hospital
+    address:
+      street: "1400 N Burton Pl"
+      city: "Anaheim"
+      state: "CA"
+      zip: "92806"
+    phone: "(657) 999-1150"
+    is_24_7: true
+    is_24_7_source: "https://casevets.com/  (own site: 'Open 24 Hours a Day' Mon-Sun, '24 hours a day, 365 days a year')"
+    is_24_7_verified: true
+    services:
+      - "24/7 emergency"
+      - "Critical care"
+      - "Specialty"
+    notes: "CASE explicitly markets to Anaheim, Fullerton, Buena Park, Orange. ~3.3 mi / 8-9 min from Fullerton (per their own copy)."
+    sources:
+      - "https://casevets.com/"
+      - "https://casevets.com/animal-hospital-fullerton/"
+
+  - slug: brightcare-mission-viejo
+    name: "BrightCare Animal ER — Mission Viejo"
+    entity_type: organization
+    category: emergency_hospital
+    address:
+      street: "26012 Marguerite Pkwy, Suite O"
+      city: "Mission Viejo"
+      state: "CA"
+      zip: "92692"
+    phone: "(949) 716-9270"
+    # CRITICAL CORRECTION (review of PR #322): the 2026-05-08 seed claimed
+    # this site is 24/7 walk-in for emergencies. That is NOT borne out by
+    # the cited sources. cccvetservice.com (one of the seed's own
+    # corroborators) explicitly says: "Regular hours: Mon-Fri 7:30 AM –
+    # 11:00 PM, Weekends 8 AM – 9 PM. Hospitalization services 24/7."
+    # "Hospitalization services 24/7" means already-admitted inpatients
+    # are monitored overnight — the door is locked to walk-ins. Sending
+    # a worried client here at 2am would find the building closed.
+    # Setting is_24_7=false until phone verification of the actual
+    # walk-in policy is performed and a different MV ER (e.g.
+    # VCA California Veterinary Specialists Mission Viejo at 25800
+    # Jeronimo Rd, or OC Veterinary Medical Center in Tustin) is
+    # confirmed.
+    is_24_7: false
+    is_24_7_source: "https://cccvetservice.com/our-locations/brightcare-veterinary-group-mission-viejo-california/  — explicit hours: Mon-Fri 7:30am-11pm, weekends 8am-9pm; only INPATIENT hospitalization is 24/7"
+    is_24_7_verified: false
+    services:
+      - "Daytime emergency triage (Mon-Fri 7:30am-11pm, Sat-Sun 8am-9pm)"
+      - "24/7 inpatient hospitalization (already-admitted patients only)"
+      - "Critical care"
+      - "Board-certified neurology"
+      - "MRI / CT on-site"
+    notes: |
+      DO NOT use as a 24/7 walk-in ER until verified by phone. brightcarevet.com root returned
+      500 during research (primary source unreachable); the 24/7 claim previously seeded was
+      contradicted by the cccvetservice.com partner page that was used as one of the original
+      corroborators. Flagged as Critical in code review of PR #322.
+      Action items for Simon:
+        1. Phone (949) 716-9270 and ask "are you open 24/7 walk-in for emergencies, or do you
+           close at 11pm weekdays / 9pm weekends?"
+        2. If not 24/7 walk-in, identify a real OC 24/7 partner. Candidates to verify:
+           - VCA California Veterinary Specialists Mission Viejo (25800 Jeronimo Rd)
+           - OC Veterinary Medical Center (3021 Edinger Ave, Tustin, ~10 mi from MV)
+        3. Update this entry + the nearest_er map below once verified.
+    sources:
+      - "https://brightcarevet.com/emergency/  (HTTP 500 at research time — 2026-05-09)"
+      - "https://www.yelp.com/biz/brightcare-animal-er-emergency-veterinarian-mission-viejo"
+      - "https://cccvetservice.com/our-locations/brightcare-veterinary-group-mission-viejo-california/  (explicit CONTRADICTION of the 24/7 claim)"
+
+# nearest_er assignments — which ER is closest for each hospital.
+# Format: hospital_slug -> er_slug
+# IMPORTANT: when the seeder reads this map, an entry of `null` (or omission)
+# means "do not create a nearest_er relation for this hospital". The Pet
+# Health Concierge persona will then fall back to its generic guidance
+# ("call us, or go to the nearest 24/7 emergency vet") without naming a
+# specific routing target — safer than naming a closed building.
+nearest_er:
+  anaheim: case-anaheim          # ~3-4 mi east in same city — verified 24/7 walk-in
+  buena-park: case-anaheim       # ~3.3 mi / 8-9 min east per CASE's own copy — verified 24/7 walk-in
+  mission-viejo: null            # CRITICAL: BrightCare MV is NOT 24/7 walk-in (review of PR #322).
+                                 # Phone-verify a real 24/7 partner before re-assigning.
