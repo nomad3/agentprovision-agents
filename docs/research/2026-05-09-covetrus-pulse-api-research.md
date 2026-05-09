@@ -49,7 +49,7 @@ Pulse partners' product pages give us a usable lower bound on accessible scopes 
 
 So the scopes we care about for AgentProvision's three Pulse-dependent workflows are demonstrably reachable through Covetrus Connect today:
 
-- **Pet Health Concierge ("Harriet replacement"):** patient signalment, weight, vaccines, current meds, allergies, diagnoses, last-visit summary → Otto already does the equivalent. [13]
+- **Pet Health Concierge ("Herriot replacement" — competitor agent name verified per `docs/research/2026-05-09-modern-animal-harriet-sierra.md`; the discovery transcript previously called it "Harriet"):** patient signalment, weight, vaccines, current meds, allergies, diagnoses, last-visit summary → Otto already does the equivalent. [13]
 - **Multi-Site Revenue Sync:** invoices and line items with location filtering → SmartFlow + Otto-class partners do this on Pulse. [13][15]
 - **Bookkeeper cross-reference:** invoice + payment write-throughs → Otto explicitly documents posting payments back into Pulse. [13]
 

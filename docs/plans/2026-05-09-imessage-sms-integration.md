@@ -2,7 +2,7 @@
 
 **Owner:** Integration scaffolding + design
 **Tenant:** The Animal Doctor SOC (`7f632730-1a38-41f1-9f99-508d696dbcf1`)
-**Why:** Dr. Castillo explicitly preferred iMessage / SMS over WhatsApp for client-facing comms (US market). The Pet Health Concierge persona already references iMessage/SMS as a roadmap channel. This unlocks the second-most-requested channel surface for the Harriet replacement.
+**Why:** Dr. Castillo explicitly preferred iMessage / SMS over WhatsApp for client-facing comms (US market). The Pet Health Concierge persona already references iMessage/SMS as a roadmap channel. This unlocks the second-most-requested channel surface for the Herriot replacement (Modern Animal's competitor agent — see `docs/research/2026-05-09-modern-animal-harriet-sierra.md` for the naming correction; we previously called it "Harriet").
 
 ## Goal
 
