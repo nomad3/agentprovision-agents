@@ -156,8 +156,11 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/agentprovision
       - API_BASE_URL=http://api:8000
+      # 4h cache for BrightLocal rank pulls (and any future MCP tool that opts in)
+      - REDIS_URL=redis://redis:6379/0
     depends_on:
       - db
+      - redis
     restart: unless-stopped
     # FastMCP only exposes streaming endpoints (`/sse`, etc.) — the upstream
     # `curl -sf http://localhost:8086/sse` healthcheck times out on the long-
