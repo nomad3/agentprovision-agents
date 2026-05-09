@@ -235,3 +235,81 @@ def test_resolve_tenant_returns_none_when_no_configs(monkeypatch):
         lambda *a, **k: {},
     )
     assert tw._resolve_tenant_for_to_number(fake_db, "+17145551234") is None
+
+
+# ---------------------------------------------------------------------------
+# Critical fixes from PR #323 review
+# ---------------------------------------------------------------------------
+
+def test_resolve_tenant_raises_on_duplicate_to_number(monkeypatch):
+    """PR #323 Critical #2: two tenants registering the same Twilio number
+    must NOT silently route to whichever was created first. The resolver
+    raises TwilioNumberCollision; the caller turns this into a 503.
+    """
+    import uuid as _uuid
+
+    tenant_a = _uuid.uuid4()
+    tenant_b = _uuid.uuid4()
+
+    class _Cfg:
+        def __init__(self, cid, tid):
+            self.id = cid
+            self.tenant_id = tid
+
+    cfg_a = _Cfg(_uuid.uuid4(), tenant_a)
+    cfg_b = _Cfg(_uuid.uuid4(), tenant_b)
+
+    creds_map = {
+        # SAME phone_number on both — operator misconfiguration
+        cfg_a.id: {"account_sid": "ACa", "auth_token": "t_a", "phone_number": "+17145551234"},
+        cfg_b.id: {"account_sid": "ACb", "auth_token": "t_b", "phone_number": "+17145551234"},
+    }
+    fake_db = _FakeDB([cfg_a, cfg_b], creds_map)
+
+    def fake_retrieve(_db, config_id, _tid):
+        return creds_map[config_id]
+
+    monkeypatch.setattr(
+        "app.api.v1.twilio_webhook.retrieve_credentials_for_skill", fake_retrieve,
+    )
+
+    import pytest
+    with pytest.raises(tw.TwilioNumberCollision) as excinfo:
+        tw._resolve_tenant_for_to_number(fake_db, "+17145551234")
+
+    # Both tenants surface in the exception so the operator can resolve
+    assert tenant_a in excinfo.value.tenant_ids
+    assert tenant_b in excinfo.value.tenant_ids
+    assert excinfo.value.target == "+17145551234"
+
+
+def test_resolve_tenant_returns_single_match_when_only_one(monkeypatch):
+    """Sanity: the new collection-based resolver still returns a single
+    match cleanly when only one tenant owns the number.
+    """
+    import uuid as _uuid
+
+    tenant_a = _uuid.uuid4()
+
+    class _Cfg:
+        def __init__(self, cid, tid):
+            self.id = cid
+            self.tenant_id = tid
+
+    cfg_a = _Cfg(_uuid.uuid4(), tenant_a)
+    creds_map = {
+        cfg_a.id: {"account_sid": "AC", "auth_token": "t", "phone_number": "+17145551234"},
+    }
+    fake_db = _FakeDB([cfg_a], creds_map)
+
+    def fake_retrieve(_db, config_id, _tid):
+        return creds_map[config_id]
+
+    monkeypatch.setattr(
+        "app.api.v1.twilio_webhook.retrieve_credentials_for_skill", fake_retrieve,
+    )
+
+    result = tw._resolve_tenant_for_to_number(fake_db, "+17145551234")
+    assert result is not None
+    tid, _, _ = result
+    assert tid == tenant_a

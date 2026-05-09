@@ -77,10 +77,32 @@ def _normalize_phone(value: str | None) -> str:
 # Tenant + agent resolution
 # ---------------------------------------------------------------------------
 
+class TwilioNumberCollision(Exception):
+    """Two or more tenants registered the same Twilio number. We refuse to
+    route the message rather than silently picking one — see review of
+    PR #323, Critical #2."""
+
+    def __init__(self, target: str, tenant_ids: list[uuid.UUID]):
+        self.target = target
+        self.tenant_ids = tenant_ids
+        super().__init__(
+            f"Twilio number {target} is registered by {len(tenant_ids)} tenants: "
+            f"{tenant_ids}. Administrator must resolve before routing resumes."
+        )
+
+
 def _resolve_tenant_for_to_number(db: Session, to_number: str) -> Optional[tuple[uuid.UUID, IntegrationConfig, dict]]:
     """Find the tenant whose Twilio integration owns this `To` phone number.
 
     Returns (tenant_id, integration_config, decrypted_creds) or None.
+
+    CRITICAL (review feedback PR #323 Critical #2): if two tenants
+    accidentally register the same Twilio number — operator error or
+    stale config — we MUST NOT silently pick the first match. Doing so
+    would route one tenant's inbound SMS into another tenant's chat
+    history (cross-tenant data leak). We collect ALL matches; if there
+    is more than one, raise TwilioNumberCollision and let the caller
+    return 503/409 with a loud admin alert instead of routing.
     """
     target = _normalize_phone(to_number)
     if not target:
@@ -97,12 +119,23 @@ def _resolve_tenant_for_to_number(db: Session, to_number: str) -> Optional[tuple
         )
         .all()
     )
+    matches: list[tuple[uuid.UUID, IntegrationConfig, dict]] = []
     for cfg in configs:
         creds = retrieve_credentials_for_skill(db, cfg.id, cfg.tenant_id)
         stored = _normalize_phone(creds.get("phone_number"))
         if stored and stored == target:
-            return cfg.tenant_id, cfg, creds
-    return None
+            matches.append((cfg.tenant_id, cfg, creds))
+
+    if not matches:
+        return None
+    if len(matches) > 1:
+        # Don't return any of them — refusing to route is the safer move.
+        # The caller turns this into a 503 with an admin alert.
+        raise TwilioNumberCollision(
+            target=target,
+            tenant_ids=[m[0] for m in matches],
+        )
+    return matches[0]
 
 
 def _pick_agent(db: Session, tenant_id: uuid.UUID) -> Optional[Agent]:
@@ -290,7 +323,22 @@ async def twilio_inbound_sms(request: Request) -> Response:
 
     db = SessionLocal()
     try:
-        resolved = _resolve_tenant_for_to_number(db, to_number)
+        try:
+            resolved = _resolve_tenant_for_to_number(db, to_number)
+        except TwilioNumberCollision as exc:
+            # CRITICAL: two or more tenants registered the same Twilio
+            # number. Refuse to route — the alternative is cross-tenant
+            # data leak. Log loudly so an operator notices.
+            logger.error(
+                "Twilio inbound REFUSED: number-collision target=%s tenants=%s. "
+                "Administrator must resolve which tenant owns this number "
+                "before routing resumes.",
+                exc.target, exc.tenant_ids,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Number registered by multiple tenants — administrator must resolve",
+            )
         if not resolved:
             logger.warning("Twilio inbound: no tenant matches To=%s", to_number)
             # Don't reveal whether the number is registered — return generic 404.
@@ -299,7 +347,34 @@ async def twilio_inbound_sms(request: Request) -> Response:
         tenant_id, cfg, creds = resolved
         auth_token = creds.get("auth_token") or ""
         account_sid = creds.get("account_sid") or ""
-        clinic_number = creds.get("phone_number") or to_number
+        # Fail closed if phone_number didn't decrypt — never trust the
+        # attacker-controlled `To` value as a fallback (review feedback PR
+        # #323 Minor M2).
+        clinic_number = creds.get("phone_number")
+        if not clinic_number:
+            logger.error(
+                "Twilio inbound: tenant=%s integration_config=%s missing phone_number "
+                "in vault — cannot proceed safely.",
+                tenant_id, cfg.id,
+            )
+            raise HTTPException(status_code=503, detail="Integration not configured")
+
+        # CRITICAL fail-closed (review feedback PR #323 Critical #1):
+        # If credential decryption silently dropped the auth_token,
+        # `creds.get("auth_token") or ""` lands here as "". Computing
+        # HMAC-SHA1 with an empty key is a footgun — an attacker who
+        # could observe the empty-key state could forge signatures.
+        # Refuse to verify against an empty key; surface the
+        # misconfiguration as 503 (config error), not 403 (which would
+        # mask it as a "real" signature failure).
+        if not auth_token:
+            logger.error(
+                "Twilio inbound: tenant=%s integration_config=%s has no "
+                "auth_token in vault — refusing to verify signature against "
+                "empty key.",
+                tenant_id, cfg.id,
+            )
+            raise HTTPException(status_code=503, detail="Integration not configured")
 
         # Signature verification — guard the endpoint
         if _signature_required():
