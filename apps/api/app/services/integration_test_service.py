@@ -90,11 +90,97 @@ async def _test_brightlocal(creds: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# ScribbleVet — exchanges OAuth2 client_credentials so the operator
+# learns immediately whether their partner-issued client_id/secret pair
+# is valid. Until ScribbleVet/Instinct's partner program issues real
+# credentials this will fail with a friendly "ScribbleVet rejected the
+# credentials" message — that's the expected state for any tenant who
+# hasn't completed partner intake yet.
+# ---------------------------------------------------------------------------
+
+import os as _os
+
+DEFAULT_SCRIBBLEVET_BASE_URL_PROD = "https://api.scribblevet.com"
+DEFAULT_SCRIBBLEVET_BASE_URL_SANDBOX = "https://api.scribblevet.com/sandbox"
+
+
+def _scribblevet_base_url(environment: str) -> str:
+    if (environment or "").lower() == "sandbox":
+        return _os.environ.get(
+            "SCRIBBLEVET_BASE_URL_SANDBOX", DEFAULT_SCRIBBLEVET_BASE_URL_SANDBOX
+        ).rstrip("/")
+    return _os.environ.get(
+        "SCRIBBLEVET_BASE_URL_PROD", DEFAULT_SCRIBBLEVET_BASE_URL_PROD
+    ).rstrip("/")
+
+
+async def _test_scribblevet(creds: Dict[str, Any]) -> Dict[str, Any]:
+    client_id = creds.get("client_id") or creds.get("clientId")
+    client_secret = creds.get("client_secret") or creds.get("clientSecret")
+    environment = (creds.get("environment") or "prod").lower()
+
+    if not client_id or not client_secret:
+        return {
+            "ok": False,
+            "integration": "scribblevet",
+            "error": "Missing Client ID or Client Secret. Add both in the credential form and try again.",
+        }
+
+    base_url = _scribblevet_base_url(environment)
+    url = f"{base_url}/oauth/token"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+                headers={"Accept": "application/json"},
+            )
+            text_preview = (resp.text or "")[:300]
+            try:
+                body = resp.json()
+            except Exception:
+                body = {"raw": text_preview}
+
+            if resp.status_code == 200 and isinstance(body, dict) and body.get("access_token"):
+                return {
+                    "ok": True,
+                    "integration": "scribblevet",
+                    "message": f"Authenticated successfully against ScribbleVet ({environment}).",
+                }
+            err = (
+                body.get("error_description")
+                or body.get("error")
+                if isinstance(body, dict)
+                else None
+            )
+            return {
+                "ok": False,
+                "integration": "scribblevet",
+                "status_code": resp.status_code,
+                "error": (
+                    f"ScribbleVet rejected the credentials: {err or text_preview or resp.status_code}. "
+                    "If you haven't completed partner intake yet, this is expected — see "
+                    "docs/research/2026-05-09-scribblevet-api-research.md for the access path."
+                ),
+            }
+    except httpx.TimeoutException:
+        return {"ok": False, "integration": "scribblevet", "error": "ScribbleVet request timed out"}
+    except Exception as exc:
+        logger.exception("scribblevet credential test failed")
+        return {"ok": False, "integration": "scribblevet", "error": f"ScribbleVet request failed: {exc}"}
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 
 _TESTERS: Dict[str, Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = {
     "brightlocal": _test_brightlocal,
+    "scribblevet": _test_scribblevet,
 }
 
 
