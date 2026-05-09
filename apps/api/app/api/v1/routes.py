@@ -47,6 +47,7 @@ from app.api.v1 import (
     gemini_cli_auth,
     notifications,
     reports,
+    bookkeeper_exports,
     rl,
     local_ml,
     dynamic_workflows,
@@ -147,6 +148,11 @@ router.include_router(codex_auth.router, prefix="/codex-auth", tags=["codex-auth
 router.include_router(gemini_cli_auth.router, prefix="/gemini-cli-auth", tags=["gemini-cli-auth"])
 router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
 router.include_router(reports.router, prefix="/reports", tags=["reports"])
+router.include_router(
+    bookkeeper_exports.router,
+    prefix="/bookkeeper-exports",
+    tags=["bookkeeper-exports"],
+)
 router.include_router(rl.router, prefix="/rl", tags=["reinforcement-learning"])
 router.include_router(local_ml.router, prefix="/local-ml", tags=["local-ml"])
 router.include_router(dynamic_workflows.router, prefix="/dynamic-workflows", tags=["dynamic-workflows"])
