@@ -331,6 +331,7 @@ Land alongside the implementation, focused, no broad refactor sweep.
 - `tests/cli_orchestrator/test_mcp_agent_auth_round_trip.py` — leaf calls `recall_memory` with valid agent JWT, succeeds; `execution_trace` row written with `parent_task_id` populated
 - `tests/cli_orchestrator/test_mcp_scope_enforcement.py` — leaf with `scope=["recall_memory"]` calling `dispatch_agent` is rejected **403** + audit-logged (review's added Phase 4 second gate)
 - `tests/cli_orchestrator/test_tenancy_precedence.py` — when `kind=agent_token`, `tenant_id` claim is authoritative and `X-Tenant-Id` header is ignored (mismatch does NOT change behaviour, but is audit-logged)
+- `tests/cli_orchestrator/test_heartbeat_rejects_non_agent_token.py` — `/api/v1/agents/internal/heartbeat` rejects tenant JWT and `X-Internal-Key` with 403 + audit-log entry (defence in depth — Cloudflare `/internal/*` block is network-layer; the route enforces auth-tier in code too). Covers the M-C/§10.2/§10.3(c) hardening.
 
 **Adapter integration tier (review M4):** lives in `tests/cli_orchestrator/integration/` and runs the actual `claude --version` / `codex --version` / etc. binaries to validate `preflight()` against real installations. **Marker `@pytest.mark.cli_integration`**, opt-in (CI runs it on the code-worker image only, not the API image — that's where the binaries are).
 
@@ -586,9 +587,9 @@ Every CLI subcommand maps to existing endpoints. The CLI is not a new surface; i
 
 After the third-review correction (the prior draft's ♻ reuse claims for `agent dispatch`, `code task`, `memory recall`, `memory record-observation`, `tool list`, `tool call` were structurally wrong — endpoint existed at the verb/path level but couldn't actually serve the subcommand because semantics or filters didn't match):
 
-- **✅ shipped**: 33 rows — every cited line + verb verified against the actual route file. Includes `memory recall → /memories/search` and `code task-show / task-trace → /tasks/{id}*` after the reroute.
-- **🆕 new**: 3 rows — `/api/v1/agent-tasks/dispatch` (real Temporal-dispatching endpoint that the existing `POST /tasks` doesn't provide), `/api/v1/knowledge/entities/{id}/observations` (no current REST write to `knowledge_observations` for tenant-JWT clients), `/api/v1/agents/internal/heartbeat` (leaf-side Phase 4 telemetry).
-- **⏭ deferred**: 2 rows — `tool list` / `tool call`. The `/api/v1/mcp` bridge is skill-only; humans use `skill list` / `skill run` today; a tenant-JWT REST surface for the broader FastMCP catalog is a separate PR-D follow-up.
+- **✅ shipped**: 40 rows — every cited line + verb verified against the actual route file. Includes `memory recall → /memories/search` and `code task-show / task-trace → /tasks/{id}*` after the reroute.
+- **🆕 new endpoints**: 3 — `/api/v1/agent-tasks/dispatch` (serves both `agent dispatch` and `code task` — 2 CLI subcommands, 1 endpoint), `/api/v1/knowledge/entities/{id}/observations`, `/api/v1/agents/internal/heartbeat`. Specs in §10.3.
+- **⏭ deferred**: 1 row covering 2 subcommands (`tool list` / `tool call`). The `/api/v1/mcp` bridge is skill-only; humans use `skill list` / `skill run` today; a tenant-JWT REST surface for the broader FastMCP catalog is a separate PR-D follow-up.
 
 ### §10.2 Auth model per row
 
@@ -608,11 +609,22 @@ The 3 🆕 rows ship as small, well-bounded routes. Each is its own commit insid
   "branch": "<base-branch>"           // optional, code only, defaults main
 }
 ```
-Response: `{ "task_id": "<uuid>", "workflow_id": "<temporal-id>", "status": "running" }` (201 Created). Implementation: writes `agent_tasks` row + dispatches `CodeTaskWorkflow` (task_type=code) or `TaskExecutionWorkflow` (task_type=delegate) via the existing Temporal client. Subsumes the dispatch logic that today lives only on the chat hot path (`cli_session_manager.py:1028`).
+Response: `{ "task_id": "<uuid>", "workflow_id": "<temporal-id>", "status": "running" }` (201 Created). Implementation: writes `agent_tasks` row + dispatches `CodeTaskWorkflow` (task_type=code) or `TaskExecutionWorkflow` (task_type=delegate) via the existing Temporal client. **Mirrors the chat hot-path dispatch shape** (`client.execute_workflow` from `cli_session_manager.py:1028`), **not** the in-workflow `workflow.execute_child_workflow` call at `dynamic_executor.py:161`. Subsumes the dispatch logic that today lives only on the chat hot path.
 
 **(b) `POST /api/v1/knowledge/entities/{entity_id}/observations`** — Phase 3 (alongside metadata). Auth: tenant JWT. Request body: `{ "text": "<string>", "source_ref": "<optional-string>" }`. Response: `{ "observation_id": "<uuid>", "embedding_dim": 768 }` (201). Implementation: insert into `knowledge_observations` + embed via `embed_text()` + write `memory_activities` row. Mirrors the existing entity-score endpoint shape at `knowledge.py:198`.
 
-**(c) `POST /api/v1/agents/internal/heartbeat`** — Phase 4 leaf telemetry. Auth: **agent-token JWT only** (`kind=agent_token`); tenant JWT and `X-Internal-Key` are explicitly rejected with 403 + audit-log entry. Request body: `{ "task_id": "<uuid>", "tool_name": "<string>", "ts": <unix-seconds> }`. Response: 204 No Content. Implementation: bumps last-seen on the in-flight `agent_tasks` row keyed by JWT-claim `task_id`; if the bump arrives after `2 * heartbeat_interval`, fires `event` trigger payload `execution.heartbeat_missed` per §11.3.
+**(c) `POST /api/v1/agents/internal/heartbeat`** — Phase 4 leaf telemetry. Auth: **agent-token JWT only** (`kind=agent_token`); tenant JWT and `X-Internal-Key` are explicitly rejected with 403 + audit-log entry. Request body: `{ "task_id": "<uuid>", "tool_name": "<string>", "ts": <unix-seconds> }`. Response: 204 No Content.
+
+Implementation: bumps last-seen on the in-flight `agent_tasks` row keyed by JWT-claim `task_id`; if the bump arrives after `2 * heartbeat_interval`, fires `event` trigger payload `execution.heartbeat_missed` per §11.3.
+
+**Schema dependency (Phase 4 ships this migration):** the `agent_tasks` table today has only `started_at` + `completed_at` (`apps/api/app/models/agent_task.py:50-51`). The heartbeat endpoint needs a `last_seen_at` column. **Migration `124_agent_task_last_seen.sql`** adds:
+```sql
+ALTER TABLE agent_tasks ADD COLUMN last_seen_at TIMESTAMP NULL;
+CREATE INDEX idx_agent_tasks_last_seen_at ON agent_tasks(last_seen_at)
+    WHERE status IN ('running', 'queued');
+-- partial index — we only sweep in-flight rows for missed heartbeats
+```
+Reuse of `updated_at` was rejected (gets bumped by every status change — no signal). A separate `agent_task_heartbeats` time-series table was rejected as overkill for a freshness check; if heartbeat history becomes a feature later, it can land then without changing this endpoint's contract.
 
 ---
 
@@ -672,7 +684,11 @@ Subscribers configure these via the existing `register_webhook` MCP tool. No new
 ### §11.4 Tests
 
 - `test_webhook_trigger_executor.py` — workflow with a `webhook_trigger` step suspends, inbound POST to `/in/{slug}` resumes it with payload as step input
-- `test_webhook_secret_encryption.py` — round-trip via the Fernet vault; old plaintext rows still read correctly during the transition release; both `_deliver_outbound` (outbound HMAC sign at `webhook_connectors.py:252-257`) and the inbound `/in/{slug}` handler (HMAC verify at `webhook_connectors.py:238`) read through a **single shared helper** `_resolve_secret(webhook)` that returns `decrypt(secret_v2) if secret_v2 else secret`. This is the seam the dual-read plan depends on; one helper, four call sites.
+- `test_webhook_secret_encryption.py` — round-trip via the Fernet vault; old plaintext rows still read correctly during the transition release. Both call sites read through a **single shared helper** `_resolve_secret(webhook)` that returns `decrypt(secret_v2) if secret_v2 else secret`:
+  - **outbound HMAC sign + Bearer + Basic auth** in `apps/api/app/services/webhook_connectors.py:252-257` (`_deliver_outbound`)
+  - **inbound HMAC verify** in `apps/api/app/api/v1/webhook_connectors.py:238` (the `/in/{slug}` route handler)
+
+  One helper, two files, four call paths (sign + bearer + basic on outbound, verify on inbound). This is the seam the dual-read plan depends on.
 - **`test_webhook_inbound_hmac_dual_read.py`** *(resolves review I-D)* — covers the cross-release boundary case: an inbound webhook signed against the plaintext-era secret arriving during release N+1's read-only-`secret_v2` window. Asserts the inbound HMAC verify still succeeds because the **secret material is unchanged** — only its storage location changed. Same `_resolve_secret(webhook)` helper as the outbound path.
 - `test_webhook_outbound_retry.py` — 5xx / connection error triggers `WebhookDeliveryWorkflow`; 4xx does not; backoff ladder matches spec
 - `test_webhook_inbound_idempotency.py` — same `X-Webhook-Idempotency-Key` within 24h returns 200 + `dedup=true` without re-firing the workflow
