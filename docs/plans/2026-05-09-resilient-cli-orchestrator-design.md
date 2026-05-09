@@ -5,6 +5,28 @@
 **Author:** Simon (with Luna design input)
 **Branch:** `design/resilient-cli-orchestrator`
 
+## §0 — Architectural principle (load-bearing)
+
+**The CLI is a thin client. The backend is canonical.**
+
+Every resilience concern in this document — error normalization, fallback policy, redaction, preflight, durable metadata — lives **server-side**, behind the same API endpoints the web SPA already calls. The `agentprovision` CLI binary, MCP tools, web SPA, Luna desktop client, Twilio webhook, WhatsApp adapter, and any future surface are **clients of the same control plane**. None of them re-implement orchestration logic.
+
+Concretely:
+- **Chat** is `POST /api/v1/chat/sessions/{id}/messages[/stream]` — already wired to `ChatCliWorkflow` on the `agentprovision-code` Temporal queue. The CLI calls this endpoint. The web SPA calls this endpoint. The MCP tool layer calls this endpoint.
+- **Code task dispatch** is `CodeTaskWorkflow` reached via the same chat path with a code intent (or via `/api/v1/agent-tasks/` for direct dispatch).
+- **Workflow runs** are `POST /api/v1/workflows/{id}/run` — already wired to `DynamicWorkflowExecutor`.
+- **Agent fleet operations** are `/api/v1/agents/*` — list, discover, dispatch, heartbeat, audit, rollback.
+- **Memory ops** are `/api/v1/memory/*` and the `memory_continuity` MCP module — pgvector, gRPC `memory-core` Rust service.
+- **Skill ops** are `/api/v1/skills/*` and the `skills` MCP module.
+
+This principle has three structural consequences for the rest of the document:
+
+1. **Phase 1–3 (resilient orchestrator) live entirely in `apps/api` + `apps/code-worker` Python.** The CLI binary doesn't even know `Status` exists — it sees a normalized HTTP response with `actionable_hint` when a fallback exhausted itself, and renders that hint to the user. Same as the web SPA will.
+2. **Phase 4 (leaf-agent inbound) reuses the existing `apps/mcp-server` (port 8086).** It is not a new control plane; it is an additional auth tier on the existing MCP server (§8 revision below).
+3. **Webhooks reuse the existing `WebhookConnector` model + `webhook_delivery_logs` table + `fire_outbound_event` service** (§11). We fix the documented gaps (broken `webhook_trigger` executor, plaintext secrets, no retry, no idempotency) instead of paralleling them.
+
+If a future PR proposes "add resilience logic to the CLI" or "make the CLI talk directly to Temporal" — that PR is wrong by construction; reject it.
+
 ## Problem
 
 Today's CLI execution path (`apps/code-worker/workflows.py`, `apps/api/app/services/cli_session_manager.py`) leaks raw provider behaviour upward in three ways:
@@ -242,28 +264,53 @@ Land alongside the implementation, focused, no broad refactor sweep.
 - `tests/cli_orchestrator/test_preflight.py` — binary missing, creds missing, trust missing, API disabled, queue unreachable; each returns the right Status
 - `tests/cli_orchestrator/test_metadata_emission.py` — happy path emits one ExecutionMetadata with `attempt_count == 1`, `platform_attempted == [winner]`, `status == EXECUTION_SUCCEEDED`; failure path emits the full attempt chain and matching decision lists
 
-## §8 — CLI as agent control-plane (Phase 4)
+## §8 — Leaf-agent inbound surface (revised — MCP, not CLI)
 
-The `agentprovision` CLI binary doubles as the inbound surface for leaf agents (Claude Code / Codex / Gemini / Copilot subprocesses + sandboxed skills). When the orchestrator dispatches a task to a runtime, it mints a short-lived **agent-scoped JWT** and propagates:
+**Revision (2026-05-09).** The original §8 had leaf agents (Claude Code / Codex / Gemini / Copilot subprocesses + sandboxed skills) shell out to the `agentprovision` CLI binary to call back into the orchestrator. After confirming the Claude Code feature inventory, that's structurally wrong. The right surface is **MCP-over-SSE on our existing `apps/mcp-server` (port 8086)**.
 
-- `AGENTPROVISION_AGENT_TOKEN` — JWT bound to `(agent_id, task_id, parent_workflow_id)`, TTL = activity heartbeat timeout × 2
-- `AGENTPROVISION_TASK_ID` — same UUID as `ExecutionMetadata.run_id`
-- `AGENTPROVISION_PARENT_WORKFLOW_ID`
+Why:
+- Claude Code's MCP support is first-class — versioned tool contracts, error isolation, parallel calls, no subprocess management.
+- `apps/mcp-server` already exposes `agent_messaging`, `memory_continuity`, `dynamic_workflows`, `skills`, `webhooks`, `agents`, `knowledge` modules. Most of the inbound surface already exists.
+- Claude Code emits **no outbound webhooks** (confirmed). Hooks-shelling-to-curl was the only alternative — strictly worse.
+- `CronCreate` is **session-scoped only** (expires after 7 days, dies on session close). Durable schedules MUST live in our Temporal `DynamicWorkflow` (which already supports `cron`/`interval`/`webhook`/`event`/`manual`/`agent` triggers).
 
-CLI's `Context::new` already supports a token-store priority chain (PR #332). New tier inserted at the top: **env-token store** (read-only, no save/clear) — when both env vars are set, that's the active store. Falls through to keychain → file as today.
+**The CLI binary stays in its lane.** It is the **human terminal user**'s surface — same backend endpoints, different ergonomics (rich rendering, REPL, OS keychain). Leaves call MCP. Humans call CLI. They are siblings, not competing surfaces.
 
-**Inbound subcommands** (Phase 4 implementation, not Phase 1–3):
-- `agentprovision agent dispatch <id> --goal "…"` — delegate to a peer; returns child run_id, links to parent via `parent_task_id`
-- `agentprovision blackboard write|read --pattern <name> --phase <name>` — A2A coordination
-- `agentprovision memory recall <query>` / `record-observation` / `record-commitment`
-- `agentprovision workflow run <template> --input @args.json` — child workflow trigger
-- `agentprovision approval request "…"` — HITL gate; returns approval token
+### How Phase 4 actually lands
 
-**Scope = `agent_policy`.** The minted JWT inherits the dispatching agent's `agent_policy` row — `allowed_tools`, `blocked_actions`, `rate_limits`. A leaf cannot escalate beyond what its dispatching agent could do. The API's existing `deps.require_agent_permission` enforces this; the new mint just stamps the right claims.
+1. **Mint agent-scoped JWT at task dispatch time** (`code_session_manager.run_agent_session` / `code_worker.execute_chat_cli` / `code_worker.execute_code_task`). Claims:
+   ```
+   { sub: "agent:<agent_id>",
+     kind: "agent_token",
+     tenant_id, agent_id, task_id, parent_workflow_id,
+     scope: <agent_policy.allowed_tools as array>,
+     iat, exp }   # exp = heartbeat_timeout * 2
+   ```
+2. **Inject MCP server config** into the leaf's environment before subprocess spawn. For Claude Code: write `.claude.json` into the working dir with:
+   ```json
+   { "mcpServers": { "agentprovision": {
+       "type": "sse",
+       "url": "https://mcp.agentprovision.com/sse",
+       "headers": { "Authorization": "Bearer <agent-jwt>" } } } }
+   ```
+3. **Add a third auth tier to `apps/mcp-server`.** Today the server accepts `X-Internal-Key` (service-to-service) and tenant JWT (user-on-behalf-of). New tier: agent-scoped JWT with `kind=agent_token`, validated against `agent_policy.allowed_tools` per-call. The existing `deps.require_agent_permission` is the enforcement seam.
+4. **Audit linkage.** Every MCP call from a leaf writes an `execution_trace` row with `parent_task_id` (= the agent_token's `task_id` claim). The trace tree reflects actual delegation, not just dispatch.
 
-**Audit linkage.** Every inbound call writes an `execution_trace` row with `parent_task_id` set, so the trace tree reflects actual delegation. The `RLExperience` from the inbound work links back to the parent's `trajectory_id`.
+### What this kills from the original §8
 
-**Closes the resilience loop.** When a leaf hits `QUOTA_EXHAUSTED` mid-task and policy says fall-back, the leaf itself can `agentprovision agent dispatch <peer>` to do the handoff — recursive resilient orchestration without per-runtime SDKs.
+| Originally proposed CLI subcommand | Replaced by existing MCP tool |
+|------------------------------------|-------------------------------|
+| `agentprovision agent dispatch` | `dispatch_agent` (`agents` module — to be added; trivial) |
+| `agentprovision blackboard write\|read` | `blackboard_write` / `blackboard_read` (`agent_messaging`) |
+| `agentprovision memory recall\|record-*` | `recall_memory`, `record_observation`, `record_commitment` (`memory_continuity`) |
+| `agentprovision workflow run` | `run_workflow` (`dynamic_workflows`) |
+| `agentprovision approval request` | `request_human_approval` (to be added — minor) |
+
+The `agentprovision` CLI binary keeps these same subcommands for **humans in terminals** — they hit the same backend endpoints, just with a different UX layer (rich rendering, prompts). One control plane, two clients.
+
+### Closes the resilience loop
+
+When a leaf hits `QUOTA_EXHAUSTED` mid-task and policy says fall-back, it calls `dispatch_agent` MCP tool with `target_capability="<same as me>"`. The dispatching call is `ResilientExecutor.execute(req)` server-side — recursive resilient orchestration without any per-runtime SDK or extra control-plane code.
 
 ## Phased rollout
 
