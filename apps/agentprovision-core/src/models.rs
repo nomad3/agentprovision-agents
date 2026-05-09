@@ -142,3 +142,27 @@ pub struct DeviceCodeResponse {
 fn default_interval() -> u64 {
     5
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks down the Critical #1 fix: a Token must never expose its
+    /// `access_token` through `Debug` formatting. If a future refactor
+    /// re-derives `Debug` on `Token`, this test fails.
+    #[test]
+    fn token_debug_redacts_access_token() {
+        let t = Token {
+            access_token: "very-secret-bearer-1234567890".into(),
+            token_type: "bearer".into(),
+        };
+        let dbg = format!("{t:?}");
+        assert!(
+            !dbg.contains("very-secret-bearer"),
+            "Token Debug leaked access_token: {dbg}"
+        );
+        assert!(dbg.contains("<redacted>"), "expected <redacted>: {dbg}");
+        // token_type should still print so logs remain useful.
+        assert!(dbg.contains("bearer"), "token_type should remain: {dbg}");
+    }
+}

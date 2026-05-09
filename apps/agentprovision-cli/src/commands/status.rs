@@ -9,6 +9,10 @@ struct Status {
     server: String,
     cli_version: &'static str,
     authenticated: bool,
+    /// Human-readable name of the active token-store backend ("OS keychain"
+    /// or "token file"). Useful when debugging why a session looks logged
+    /// out — common cause is the keychain probe falling back to file.
+    token_store: &'static str,
     user: Option<UserSummary>,
 }
 
@@ -42,6 +46,7 @@ pub async fn run(ctx: Context) -> anyhow::Result<()> {
         server: ctx.server.clone(),
         cli_version: env!("CARGO_PKG_VERSION"),
         authenticated: user.is_some(),
+        token_store: ctx.token_store_kind.human(),
         user,
     };
 
@@ -49,6 +54,7 @@ pub async fn run(ctx: Context) -> anyhow::Result<()> {
         let style_h = |t: &str| console::style(t).bold().to_string();
         println!("{}: {}", style_h("server"), s.server);
         println!("{}: {}", style_h("cli"), s.cli_version);
+        println!("{}: {}", style_h("token store"), s.token_store);
         println!(
             "{}: {}",
             style_h("authenticated"),

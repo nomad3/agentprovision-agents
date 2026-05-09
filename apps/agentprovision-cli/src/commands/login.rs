@@ -71,7 +71,10 @@ pub async fn run(args: LoginArgs, ctx: Context) -> anyhow::Result<()> {
             "Logged in as {} ({}), tenant {}",
             label, me.email, tenant
         ));
-        output::info("Token saved to OS keychain.");
+        output::info(format!(
+            "Token saved to {}.",
+            ctx.token_store_kind.human()
+        ));
     }
     Ok(())
 }

@@ -36,6 +36,24 @@ async fn main() {
 
     if let Err(e) = run(args).await {
         eprintln!("{} {}", console::style("error:").red().bold(), e);
+        // I4 from review: when the failure is a 401 from the API, point the
+        // user at `agentprovision login` instead of leaving them to guess.
+        // We downcast through anyhow's error chain — both the immediate
+        // `Error::Unauthorized` and a 401 returned via `Error::Api` count.
+        let auth_failed = e
+            .chain()
+            .any(|src| match src.downcast_ref::<agentprovision_core::error::Error>() {
+                Some(agentprovision_core::error::Error::Unauthorized) => true,
+                Some(agentprovision_core::error::Error::Api { status: 401, .. }) => true,
+                _ => false,
+            });
+        if auth_failed {
+            eprintln!(
+                "{} run `{}` to authenticate.",
+                console::style("hint:").yellow().bold(),
+                console::style("agentprovision login").bold()
+            );
+        }
         std::process::exit(1);
     }
 }
