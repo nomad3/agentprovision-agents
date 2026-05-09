@@ -42,6 +42,7 @@ import { notificationService } from '../services/notifications';
 
 import DefaultCliSelector from './DefaultCliSelector';
 import GithubPrimaryAccountSelector from './GithubPrimaryAccountSelector';
+import CpaExportFormatSelector from './CpaExportFormatSelector';
 import WhatsAppChannelCard from './WhatsAppChannelCard';
 
 // Map icon name strings from the registry to actual React icon components
@@ -1552,6 +1553,14 @@ const IntegrationsPanel = () => {
           configs={configs}
           credentialStatuses={credentialStatuses}
         />
+
+        {/*
+          CPA export format — picks which file format the Bookkeeper
+          Agent's weekly AAHA-categorized output ships in. AAHA stays
+          canonical; this only changes the adapter that writes the
+          file the practice's CPA imports. Migration 117.
+        */}
+        <CpaExportFormatSelector />
 
         {loading ? (
           <div className="text-center py-4">

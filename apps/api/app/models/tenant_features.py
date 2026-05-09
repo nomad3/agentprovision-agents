@@ -60,6 +60,15 @@ class TenantFeatures(Base):
     cli_orchestrator_enabled = Column(Boolean, default=False)
     default_cli_platform = Column(String(50), default="claude_code")
 
+    # CPA software export format for the Bookkeeper Agent's weekly
+    # categorized output. AAHA stays canonical — the Bookkeeper still
+    # categorizes against the AAHA chart of accounts; this just picks
+    # which format adapter converts the categorized rows into the
+    # CPA's preferred import file. Migration 117.
+    # Valid values: xlsx | csv | quickbooks_iif | quickbooks_qbo |
+    #               xero_csv | sage_intacct_csv
+    cpa_export_format = Column(String(32), nullable=False, default="xlsx")
+
     # GitHub primary account for repo operations.
     # Pins which connected GitHub account the MCP github tools use as
     # default when the caller doesn't pass an explicit account_email.

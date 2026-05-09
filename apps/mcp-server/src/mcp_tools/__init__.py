@@ -26,3 +26,4 @@ from src.mcp_tools import devices  # noqa: F401
 from src.mcp_tools import memory_continuity  # noqa: F401
 from src.mcp_tools import agent_messaging  # noqa: F401
 from src.mcp_tools import sms  # noqa: F401
+from src.mcp_tools import bookkeeper_export  # noqa: F401
