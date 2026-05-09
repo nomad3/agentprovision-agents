@@ -39,6 +39,7 @@ from app.api.v1 import (
     remedia,
     webhook_connectors,
     webhooks,
+    twilio_webhook,
     mcp_server_connectors,
     oauth,
     claude_auth,
@@ -135,6 +136,10 @@ router.include_router(workflows.router, prefix="/workflows", tags=["workflows"])
 router.include_router(remedia.router, prefix="/remedia", tags=["remedia"])
 router.include_router(webhook_connectors.router, prefix="/webhook-connectors", tags=["webhook-connectors"])
 router.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
+# Twilio SMS — webhook + internal send/list/read (mounted at root because the
+# Twilio Console wants the public URL to be /api/v1/integrations/twilio/inbound,
+# which already matches the route declared in twilio_webhook.py).
+router.include_router(twilio_webhook.router, tags=["twilio-sms"])
 router.include_router(mcp_server_connectors.router, prefix="/mcp-servers", tags=["mcp-servers"])
 router.include_router(oauth.router, prefix="/oauth", tags=["oauth"])
 router.include_router(claude_auth.router, prefix="/claude-auth", tags=["claude-auth"])
