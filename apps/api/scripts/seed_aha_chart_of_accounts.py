@@ -334,6 +334,24 @@ def main() -> int:
         print(f"  relations + : {related_new}")
         print(f"  embedded    : {embedded} / {leaf_count}")
         print(f"seeded {created + updated} categories")
+
+        # Fail-loud on partial embed runs (review feedback, PR #321 Important #1).
+        # The Bookkeeper Agent persona was rewritten to depend on retrieval-by-
+        # embedding. A run with N < leaf_count embedded leaves the system
+        # silently degraded — the Bookkeeper can't find categories that didn't
+        # get embedded. If embedding-service is down for maintenance, pass
+        # --skip-embed to acknowledge the degraded state explicitly.
+        if not args.skip_embed and embedded < leaf_count:
+            missing = leaf_count - embedded
+            print(
+                f"\nERROR: {missing} of {leaf_count} leaves did not get an "
+                f"embedding. The Bookkeeper Agent retrieves categories via "
+                f"semantic search, so missing embeddings will cause silent "
+                f"miscategorization. Re-run once embedding-service is healthy, "
+                f"or pass --skip-embed if you explicitly want to ship a "
+                f"degraded taxonomy."
+            )
+            return 2
         return 0
     except Exception as e:
         db.rollback()
