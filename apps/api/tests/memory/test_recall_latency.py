@@ -8,11 +8,22 @@ This test is opt-in via -m latency to avoid slowing the regular test
 suite. Run before merging Phase 1 to validate against the §11 SLO.
 """
 import os, time, pytest
-from app.memory.recall import recall
+from uuid import UUID
+from app.memory import recall
+from app.memory.types import RecallRequest
+
+PROD_TENANT = UUID("0f134606-3906-44a5-9e88-6c2020f0f776")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _warm_embedding_model():
+    """Pre-load embedding model to measure steady-state performance."""
+    from app.services import embedding_service
+    embedding_service.embed_text("warmup", task_type="RETRIEVAL_QUERY")
 
 
 @pytest.mark.latency
-def test_recall_latency_p50(db_session, real_tenant):
+def test_recall_latency_p50(db_session):
     queries = [
         "who is Ray Aristy",
         "open commitments",
@@ -27,8 +38,13 @@ def test_recall_latency_p50(db_session, real_tenant):
     ]
     latencies = []
     for q in queries * 3:  # 30 samples
+        req = RecallRequest(
+            tenant_id=PROD_TENANT,
+            agent_slug="luna",
+            query=q,
+        )
         t0 = time.perf_counter()
-        recall(db_session, real_tenant.id, "luna", q)
+        recall(db_session, req)
         latencies.append((time.perf_counter() - t0) * 1000)
     latencies.sort()
     p50 = latencies[len(latencies)//2]
