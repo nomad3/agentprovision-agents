@@ -9,6 +9,7 @@ from src.mcp_tools import data  # noqa: F401
 from src.mcp_tools import ads  # noqa: F401
 from src.mcp_tools import competitor  # noqa: F401
 from src.mcp_tools import brightlocal  # noqa: F401
+from src.mcp_tools import covetrus_pulse  # noqa: F401
 from src.mcp_tools import monitor  # noqa: F401
 from src.mcp_tools import sales  # noqa: F401
 from src.mcp_tools import reports  # noqa: F401

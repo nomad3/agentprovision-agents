@@ -206,6 +206,33 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
              "help": "Optional. Found in BrightLocal Account Settings; useful when one agent manages multiple BrightLocal accounts."},
         ],
     },
+    "covetrus_pulse": {
+        # Covetrus Connect Technology Integration Partner Program — issued
+        # at partner intake (~6-8wk approval cycle as of 2026-05-09). Both
+        # the OAuth client_credentials flow and the HMAC fallback are
+        # scaffolded; the active flow is selected by PULSE_AUTH_FLOW env
+        # var (default "oauth"). The credential shape below is the union
+        # of both — the operator fills in client_id + client_secret +
+        # practice_id; environment defaults to "prod"; location_ids is an
+        # optional comma-separated allowlist that filters appointment +
+        # invoice queries to a subset of practice locations.
+        "display_name": "Covetrus Pulse",
+        "description": "Veterinary PMS partner integration. Powers Pet Health Concierge (record-aware client replies) and Multi-Site Revenue Sync. Requires Covetrus Connect partner credentials.",
+        "icon": "FaHeartbeat",
+        "auth_type": "oauth_partner",
+        "credentials": [
+            {"key": "client_id", "label": "Client ID", "type": "text", "required": True,
+             "help": "Issued by Covetrus Connect at partner enrollment. Format follows OAuth2 client_credentials grant."},
+            {"key": "client_secret", "label": "Client Secret", "type": "password", "required": True,
+             "help": "Issued by Covetrus Connect alongside the Client ID. Treat as a password; rotate via the Covetrus partner portal."},
+            {"key": "practice_id", "label": "Practice ID", "type": "text", "required": True,
+             "help": "Covetrus Pulse practice identifier. The Animal Doctor SOC runs all 3 sites on a single Pulse instance with one practice_id."},
+            {"key": "environment", "label": "Environment", "type": "text", "required": False,
+             "help": "Either 'sandbox' or 'prod' (default 'prod'). Sandbox URL is issued at partner intake."},
+            {"key": "location_ids", "label": "Location ID Allowlist", "type": "text", "required": False,
+             "help": "Optional comma-separated list of Pulse location IDs (e.g. 'anaheim,buena_park,mission_viejo'). Filters appointment + invoice queries; leave blank to allow all locations on the practice."},
+        ],
+    },
     # NOTE: Direct-API LLM cards (`anthropic_llm`, `gemini_llm`) were
     # removed. The platform routes chat agents through CLI OAuth
     # subscriptions only — Claude Code, Gemini CLI, GitHub Copilot CLI,
