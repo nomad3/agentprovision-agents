@@ -3,7 +3,7 @@
 Two entry points:
   - POST /generate                 — JWT-authenticated (UI / agent dashboards)
   - POST /internal/generate        — header-authenticated (MCP tool path)
-  - GET  /download/{file_id}       — serves the previously-generated file
+  - GET  /download/{file_id}       — HMAC-signed URL (no headers needed)
 
 The actual format adapter lives in
 `app.services.bookkeeper_exporters.*`. This router just plumbs the
@@ -11,10 +11,23 @@ HTTP layer in front of `app.services.bookkeeper_export.export_aaha`.
 
 Files land in /tmp/agentprovision_bookkeeper with a 24-hour TTL so the
 downstream Luna email + WhatsApp delivery have time to attach them.
+
+SECURITY (PR #331 review Critical #1): the download path was originally
+unauthenticated — anyone who learned a (file_id, tenant_id) pair could
+fetch a tenant's full week of categorized financial line items. Now
+every download URL is HMAC-signed (sig + expiry encoded as query
+params). The signature is computed over file_id + tenant_id + expiry
+with `settings.SECRET_KEY` as the key; the verifier uses
+`hmac.compare_digest`. Email + WhatsApp recipients open the link
+directly; no auth headers required, but anyone without the signed URL
+gets 403.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac as _hmac
 import logging
 import time
 import uuid
@@ -32,6 +45,36 @@ from app.core.config import settings
 from app.models.user import User
 from app.services.bookkeeper_export import export_aaha
 from app.services.bookkeeper_exporters import SUPPORTED_FORMATS
+
+
+# ---------------------------------------------------------------------------
+# HMAC-signed download URLs (PR #331 Critical #1 fix)
+# ---------------------------------------------------------------------------
+
+_DOWNLOAD_SIG_TTL_SECONDS = EXPORT_TTL_HOURS_PLACEHOLDER = 24 * 3600  # matches EXPORTS_DIR TTL
+
+
+def _sign_download(file_id: str, tenant_id: str, expires_at: int) -> str:
+    """HMAC-SHA256 signature for download URLs.
+
+    Signed payload: ``f"{file_id}|{tenant_id}|{expires_at}"``. Truncated
+    to 128 bits + URL-safe base64 (32 chars without padding) — same
+    strength as a UUID4, no signature-collision risk in practice.
+    """
+    secret = settings.SECRET_KEY.encode("utf-8")
+    payload = f"{file_id}|{tenant_id}|{expires_at}".encode("utf-8")
+    digest = _hmac.new(secret, payload, hashlib.sha256).digest()[:16]
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def _verify_download(
+    file_id: str, tenant_id: str, expires_at: int, sig: str
+) -> bool:
+    """Constant-time verify — returns False on any mismatch or expiry."""
+    if expires_at < int(time.time()):
+        return False
+    expected = _sign_download(file_id, tenant_id, expires_at)
+    return _hmac.compare_digest(expected, sig)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -149,26 +192,30 @@ def _do_export(
         tenant_id,
     )
 
-    expires_at = (
-        datetime.utcnow() + timedelta(hours=EXPORT_TTL_HOURS)
-    ).isoformat()
+    expires_ts = int(time.time()) + EXPORT_TTL_HOURS * 3600
+    expires_at = datetime.utcfromtimestamp(expires_ts).isoformat()
+    sig = _sign_download(file_id, tenant_id, expires_ts)
     download_url = (
-        f"/api/v1/bookkeeper-exports/download/{file_id}?tenant_id={tenant_id}"
+        f"/api/v1/bookkeeper-exports/download/{file_id}"
+        f"?tenant_id={tenant_id}&expires={expires_ts}&sig={sig}"
     )
 
-    # We don't have direct access to the count without re-running export
-    # internals, but the adapter's filename includes period — so we
-    # re-load the count cheaply by scanning the raw output isn't worth
-    # it. Return a soft count (file size in bytes) instead so the MCP
-    # tool surfaces something useful.
+    # Resolved format: adapter returns it explicitly now (review feedback
+    # PR #331 Minor #6). Fall back to filename-sniff only if the adapter
+    # didn't populate the field (legacy callers); never return 'unknown'
+    # back to the user when we can derive it.
+    resolved_format = (
+        payload.format
+        or getattr(result, "format", "")
+        or _format_from_filename(result.filename)
+    )
     return {
         "file_id": file_id,
         "filename": result.filename,
         "download_url": download_url,
         "mime_type": result.mime_type,
-        "format": payload.format
-        or _format_from_filename(result.filename),
-        "line_item_count": -1,
+        "format": resolved_format,
+        "line_item_count": getattr(result, "line_item_count", 0),
         "expires_at": expires_at,
     }
 
@@ -227,14 +274,27 @@ def generate_export_internal(
 def download_export(
     file_id: str,
     tenant_id: str = Query(...),
+    expires: int = Query(..., description="Unix-seconds expiry from the signed URL"),
+    sig: str = Query(..., description="HMAC-SHA256 signature; URL-safe base64"),
 ):
-    """Serve a previously generated bookkeeper export for download."""
+    """Serve a previously generated bookkeeper export for download.
+
+    SECURITY (PR #331 Critical #1): the URL must be HMAC-signed by
+    /generate. Without a valid signature this returns 403 — enforces
+    tenant isolation since the signature is bound to (file_id, tenant_id,
+    expiry) and computed with the platform's SECRET_KEY. Path-traversal
+    sanitization is kept as defense-in-depth.
+    """
     if ".." in file_id or "/" in file_id or "\\" in file_id:
         raise HTTPException(status_code=400, detail="Invalid file_id")
     if ".." in tenant_id or "/" in tenant_id or "\\" in tenant_id:
         raise HTTPException(status_code=400, detail="Invalid tenant_id")
 
-    # Find the file regardless of extension — we don't know it from the URL
+    # Reject unsigned / expired / forged URLs before any filesystem touch.
+    if not _verify_download(file_id, tenant_id, expires, sig):
+        # Don't disclose whether the file exists or only the signature failed.
+        raise HTTPException(status_code=403, detail="Invalid or expired download link")
+
     matches = list(EXPORTS_DIR.glob(f"{tenant_id}_{file_id}.*"))
     if not matches:
         raise HTTPException(status_code=404, detail="Export not found or expired")

@@ -68,4 +68,4 @@ def export(
     filename = (
         f"{tenant_metadata.safe_practice_slug()}_AAHA_{tenant_metadata.period_slug()}.csv"
     )
-    return ExportResult(content=content, filename=filename, mime_type="text/csv")
+    return ExportResult(content=content, filename=filename, mime_type="text/csv", line_item_count=len(items), format="csv")
