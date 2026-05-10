@@ -465,6 +465,73 @@ in-line block — no migration step needed for revert. Migration 121
 columns can be dropped via `121_*.down.sql` in a follow-up if the
 flag is permanently removed.
 
+### Phase 3 ship-gate (post-merge)
+
+Phase 3 ships preflight composition + ExecutionMetadata + RL mirror +
+webhook event emission + i18n + Prometheus exposition + heartbeat-missed
+endpoint. **No new database migration** — RLExperience JSONB columns
+absorb the mirror; the existing `tenant_features.use_resilient_executor`
+flag (migration 121) still gates the executor path.
+
+Ship gates (must hold for 24h before declaring success):
+
+  - **Preflight latency**: `cli_orchestrator_preflight_duration_ms` p95
+    inside the design §6 budget table per (helper, platform) — the
+    latency-budget test enforces this in CI; the dashboard alerts in
+    monitoring/alerts/cli-orchestrator.yaml flag regressions in prod.
+  - **UNKNOWN_FAILURE rate < 1%** over any rolling 1-hour window
+    (design §4.1 SLO). The classifier-drift Pager alert fires at >5%
+    over 15min as a tripwire.
+  - **RL mirror non-blocking**: zero chat-response failures attributable
+    to mirror exceptions in the structured log over 24h. Audited via
+    the existing `agent_router.logger.debug` "RL mirror write failed"
+    line and the `cli_orchestrator_status_total` counter staying flat
+    across mirror failures.
+  - **Webhook delivery**: outbound `execution.*` webhooks deliver with
+    `webhook_delivery_logs.success` >= 95% over 24h. 4xx remains
+    permanent-failure (no retry); 5xx + connection errors will retry
+    once the Phase 3 follow-up `WebhookDeliveryWorkflow` lands (NOT
+    shipping in this PR — see "What this PR does NOT ship" below).
+  - **i18n actionable_hint**: every `cli.errors.<status>[.<platform>]`
+    key emitted by `policy._hint_key` resolves through the
+    `RoutingFooter.resolveActionableHint` fallback chain without
+    falling all the way to the English literal. Tracked via a
+    one-shot grep audit during the 24h soak.
+  - **Heartbeat-missed event delivery**: zero 5xx responses on the new
+    `/api/v1/internal/orchestrator/events` endpoint over 24h. Worker
+    POST is fire-and-forget so a 5xx doesn't kill the activity, but a
+    sustained 5xx rate signals a downstream webhook misconfiguration.
+
+Rollback: Phase 3 is **additive** at flag-OFF — every code path runs
+only when `use_resilient_executor=TRUE` (or only inside the executor
+itself, which is no-op at flag-OFF). Revert is mechanical:
+
+  - Each commit reverts cleanly via `git revert <commit-sha>` — no
+    cross-commit state.
+  - The `cli_orchestrator_preflight_duration_ms` Histogram drops out
+    of the metrics output but the `/api/v1/metrics` endpoint stays up.
+  - The Grafana dashboard JSON + PrometheusRule alerts stay deployed
+    even on full revert; they just emit zero data, which is the same
+    state as pre-Phase-3.
+
+### What this PR does NOT ship (deliberate Phase 3 scope cut)
+
+The following are scoped out of Phase 3 and ship as their own follow-ups:
+
+  - **Webhook secret encryption (`secret_v2` column)** — design §11.2.
+    Has its own dual-read migration plan (migrations 121 → 122) and
+    needs a security review. Tracked separately.
+  - **`webhook_trigger` workflow step executor** — design §11.2.
+    Shares the workflow-suspension primitive with `human_approval`;
+    needs its own design pass for backpressure semantics.
+  - **`WebhookDeliveryWorkflow` retry policy** — design §11.2 row 5.
+    `RetryPolicy(initial_interval=1s, backoff_coefficient=8.0,
+    maximum_interval=3600s, maximum_attempts=6)` for transient
+    failures (5xx + connection errors). Lands as a sibling PR.
+  - **Per-tenant credential Redis cache** — design §6 row 2 hint.
+    Vault hot path stays sub-5ms today; cache lands as an
+    optimisation when the latency-budget panel shows pressure.
+
 ## How to verify locally (per phase)
 
 ```bash
