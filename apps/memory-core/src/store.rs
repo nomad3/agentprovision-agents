@@ -185,14 +185,28 @@ impl MemoryStore for PgStore {
         .await
         .map_err(|e| Status::internal(format!("DB error (entities): {}", e)))?;
 
+        // NOTE: knowledge_entities.category and .description are nullable in the schema
+        // (VARCHAR(50) / TEXT, no NOT NULL). The proto Entity defines them as `string`
+        // (non-nullable, defaults to ""). Bare `r.get()` panics on NULL with sqlx
+        // ColumnDecode { UnexpectedNullError } — instead pull them as Option<String>
+        // and default to "". Keep id/name/entity_type as bare get since those columns
+        // are NOT NULL in the schema.
         Ok(rows
             .iter()
             .map(|r| Entity {
                 id: r.get("id"),
                 name: r.get("name"),
                 entity_type: r.get("entity_type"),
-                category: r.get("category"),
-                description: r.get("description"),
+                category: r
+                    .try_get::<Option<String>, _>("category")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
+                description: r
+                    .try_get::<Option<String>, _>("description")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 similarity: r.get::<f64, _>("similarity") as f32,
             })
             .collect())
