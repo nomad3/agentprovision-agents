@@ -1,0 +1,190 @@
+#!/bin/sh
+# shellcheck shell=sh
+# install.sh — POSIX installer for the `agentprovision` CLI.
+#
+# Usage (typical):
+#   curl -fsSL https://agentprovision.com/install.sh | sh
+#
+# Usage (pin a version):
+#   AGENTPROVISION_VERSION=0.1.0 curl -fsSL https://agentprovision.com/install.sh | sh
+#
+# Or with flags (after downloading the script first):
+#   curl -fsSL https://agentprovision.com/install.sh -o install.sh
+#   sh install.sh --version 0.1.0 --prefix $HOME/.local --add-to-path
+#
+# What it does:
+#   1. Refuses to run as root (`--no-modify-path` to system locations).
+#   2. Detects OS + arch, maps to a target triple (mac arm64/x64, linux x64
+#      via the static musl binary, windows users use install.ps1 instead).
+#   3. Resolves a concrete version (latest stable, or AGENTPROVISION_VERSION).
+#   4. Downloads the matching release archive + its SHA256 sidecar.
+#   5. Verifies SHA256.
+#   6. Extracts to a temp dir; moves `agentprovision` → ~/.local/bin/.
+#   7. Drops the man page at ~/.local/share/man/man1/agentprovision.1.
+#   8. Prints PATH-export instructions if ~/.local/bin isn't already on PATH.
+#   9. Cleans up.
+#
+# Idempotent: re-running upgrades cleanly. Use `agentprovision upgrade`
+# instead once you have an install.
+
+set -eu
+
+REPO="nomad3/servicetsunami-agents"
+INSTALL_DIR="$HOME/.local/bin"
+MAN_DIR="$HOME/.local/share/man/man1"
+ADD_TO_PATH=0
+QUIET=0
+VERSION="${AGENTPROVISION_VERSION:-latest}"
+
+# ── arg parsing ────────────────────────────────────────────────────────────
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) VERSION="$2"; shift 2 ;;
+        --prefix) INSTALL_DIR="$2/bin"; MAN_DIR="$2/share/man/man1"; shift 2 ;;
+        --add-to-path) ADD_TO_PATH=1; shift ;;
+        --no-modify-path) ADD_TO_PATH=0; shift ;;
+        --quiet) QUIET=1; shift ;;
+        --help|-h)
+            sed -n '2,30p' "$0" | sed 's/^# \?//'
+            exit 0
+            ;;
+        *) printf 'Unknown flag: %s\n' "$1" >&2; exit 2 ;;
+    esac
+done
+
+say() { [ "$QUIET" = "1" ] || printf '%s\n' "$*"; }
+err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+
+# ── refuse sudo ────────────────────────────────────────────────────────────
+if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    err "do not run with sudo. agentprovision installs into \$HOME/.local/bin (no admin needed). If you need a system-wide install, set --prefix /usr/local explicitly and run as that user."
+fi
+
+# ── detect OS + arch ───────────────────────────────────────────────────────
+OS=$(uname -s 2>/dev/null || echo unknown)
+ARCH=$(uname -m 2>/dev/null || echo unknown)
+
+case "$ARCH" in
+    arm64|aarch64) ARCH=aarch64 ;;
+    x86_64|amd64)  ARCH=x86_64 ;;
+    *) err "unsupported architecture: $ARCH" ;;
+esac
+
+case "$OS" in
+    Darwin)
+        TRIPLE="${ARCH}-apple-darwin"
+        ARCHIVE_EXT=tar.gz
+        ;;
+    Linux)
+        # Linux ships as static musl, runs on any glibc / Alpine / RHEL.
+        # NOTE: linux targets ship in PR-D-1.5 — until then this prints a
+        # clear message instead of attempting a 404 download.
+        err "Linux binaries ship in PR-D-1.5. For now: \`cargo install --git https://github.com/$REPO --branch main --bin agentprovision\` requires a Rust toolchain but works today."
+        ;;
+    MINGW*|MSYS*|CYGWIN*)
+        err "Windows: use install.ps1 instead. Run in PowerShell:\n    iwr -useb https://agentprovision.com/install.ps1 | iex"
+        ;;
+    *) err "unsupported OS: $OS" ;;
+esac
+
+# ── tools we need ─────────────────────────────────────────────────────────
+need() { command -v "$1" >/dev/null 2>&1 || err "missing required tool: $1"; }
+need curl
+need tar
+need mkdir
+need mv
+need chmod
+# sha256sum on Linux, shasum -a 256 on macOS — pick whichever exists.
+if command -v sha256sum >/dev/null 2>&1; then
+    SHACMD="sha256sum"
+elif command -v shasum >/dev/null 2>&1; then
+    SHACMD="shasum -a 256"
+else
+    err "missing sha256sum / shasum"
+fi
+
+# ── resolve version → tag ─────────────────────────────────────────────────
+if [ "$VERSION" = "latest" ]; then
+    say "Resolving latest version from github.com/$REPO/releases/latest..."
+    # The release-redirect trick: HEAD /releases/latest 302s to the actual
+    # tag URL. Avoids a JSON dep (jq) and works without auth.
+    TAG=$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+            "https://github.com/$REPO/releases/latest" \
+          | sed -E 's|.*/tag/||')
+    if [ -z "$TAG" ]; then err "could not resolve latest release tag"; fi
+    VERSION="${TAG#cli-v}"
+else
+    TAG="cli-v$VERSION"
+fi
+say "Installing agentprovision $VERSION ($TRIPLE)"
+
+# ── download ──────────────────────────────────────────────────────────────
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+ARCHIVE="agentprovision-${TRIPLE}.${ARCHIVE_EXT}"
+URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE"
+SHA_URL="https://github.com/$REPO/releases/download/$TAG/${ARCHIVE}.sha256"
+
+say "Downloading $ARCHIVE..."
+curl -fsSL --retry 3 --retry-delay 2 -o "$TMP/$ARCHIVE" "$URL" \
+    || err "download failed: $URL"
+curl -fsSL --retry 3 --retry-delay 2 -o "$TMP/${ARCHIVE}.sha256" "$SHA_URL" \
+    || err "sha256 sidecar download failed: $SHA_URL"
+
+# ── verify ────────────────────────────────────────────────────────────────
+say "Verifying SHA256..."
+EXPECTED=$(awk '{print $1}' "$TMP/${ARCHIVE}.sha256")
+ACTUAL=$($SHACMD "$TMP/$ARCHIVE" | awk '{print $1}')
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+    err "checksum mismatch! expected=$EXPECTED actual=$ACTUAL"
+fi
+
+# ── extract + install ─────────────────────────────────────────────────────
+say "Extracting..."
+mkdir -p "$TMP/extract"
+tar -xzf "$TMP/$ARCHIVE" -C "$TMP/extract"
+
+# The archive contains a single directory `agentprovision-<triple>/`.
+SRC_DIR="$TMP/extract/agentprovision-${TRIPLE}"
+if [ ! -d "$SRC_DIR" ]; then
+    # Some older releases extracted flat; fall back to "any dir we find".
+    SRC_DIR=$(find "$TMP/extract" -maxdepth 2 -name agentprovision -type f -print -quit | xargs -n1 dirname 2>/dev/null || echo "$TMP/extract")
+fi
+
+mkdir -p "$INSTALL_DIR"
+mv -f "$SRC_DIR/agentprovision" "$INSTALL_DIR/agentprovision"
+chmod +x "$INSTALL_DIR/agentprovision"
+say "Installed: $INSTALL_DIR/agentprovision"
+
+if [ -f "$SRC_DIR/agentprovision.1" ]; then
+    mkdir -p "$MAN_DIR"
+    cp -f "$SRC_DIR/agentprovision.1" "$MAN_DIR/agentprovision.1"
+    say "Installed man page: $MAN_DIR/agentprovision.1"
+fi
+
+# ── PATH check ────────────────────────────────────────────────────────────
+case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *)
+        say ""
+        say "→ $INSTALL_DIR is not in your PATH. Add this line to your shell rc file:"
+        say ""
+        say "    export PATH=\"$INSTALL_DIR:\$PATH\""
+        say ""
+        if [ "$ADD_TO_PATH" = "1" ]; then
+            for rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+                [ -f "$rc" ] || continue
+                if ! grep -q "$INSTALL_DIR" "$rc" 2>/dev/null; then
+                    printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$rc"
+                    say "Appended PATH export to $rc"
+                fi
+            done
+        fi
+        ;;
+esac
+
+# ── done ──────────────────────────────────────────────────────────────────
+say ""
+say "✓ agentprovision $VERSION ready."
+say "Run:    agentprovision login    # to authenticate"
