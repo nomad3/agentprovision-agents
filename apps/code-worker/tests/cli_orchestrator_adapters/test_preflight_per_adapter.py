@@ -159,32 +159,18 @@ def test_gemini_creds_missing(monkeypatch):
     assert result.status is Status.NEEDS_AUTH
 
 
-def test_gemini_api_disabled(monkeypatch):
-    """Stamp the Redis cache with '0' so check_cloud_api_enabled
-    short-circuits to API_DISABLED without hitting the probe — robust
-    against module-rebind issues from earlier import-drag tests."""
-    monkeypatch.setattr(
-        "cli_orchestrator.preflight.shutil.which", lambda name: "/bin/gemini",
-    )
-    cache = {"cli_orchestrator:preflight:cloud_api:t-123:gemini_cli": b"0"}
-
-    class _StubRedis:
-        def get(self, k):
-            return cache.get(k)
-
-        def setex(self, k, ttl, v):
-            cache[k] = v.encode() if isinstance(v, str) else v
-
-        def ping(self):
-            return True
-
-    PreflightDeps.get().set_for_test(
-        credential_fetch=lambda p, t: {"oauth_token": "x"},
-        redis_client=_StubRedis(),
-    )
-    result = GeminiCliAdapter().preflight(_req())
-    assert result.ok is False
-    assert result.status is Status.API_DISABLED
+# Phase 3 review C1 fix: `test_gemini_api_disabled` was deleted — it
+# stamped `b"0"` directly into the Redis cache, exercising only the
+# cached short-circuit path of `check_cloud_api_enabled`. The actual
+# probe (`_gemini_api_probe`) was dead code that always returned True
+# from any cluster with internet, so the test was tautological. With
+# the cloud-API preflight step dropped from the gemini adapter, this
+# test no longer has a real path to exercise. The shared helper
+# `check_cloud_api_enabled` retains its own test coverage in
+# `packages/cli_orchestrator/tests/test_preflight_helpers.py` (3 cases:
+# happy, miss, cache-hit). When Phase 4+ wires a tenant-keyed probe,
+# add this test back with a real probe assertion (probe returns False
+# with SERVICE_DISABLED reason).
 
 
 def test_gemini_happy(monkeypatch):
@@ -232,29 +218,11 @@ def test_copilot_creds_missing(monkeypatch):
     assert result.status is Status.NEEDS_AUTH
 
 
-def test_copilot_api_disabled(monkeypatch):
-    monkeypatch.setattr(
-        "cli_orchestrator.preflight.shutil.which", lambda name: "/bin/copilot",
-    )
-    cache = {"cli_orchestrator:preflight:cloud_api:t-123:copilot_cli": b"0"}
-
-    class _StubRedis:
-        def get(self, k):
-            return cache.get(k)
-
-        def setex(self, k, ttl, v):
-            cache[k] = v.encode() if isinstance(v, str) else v
-
-        def ping(self):
-            return True
-
-    PreflightDeps.get().set_for_test(
-        credential_fetch=lambda p, t: {"oauth_token": "x"},
-        redis_client=_StubRedis(),
-    )
-    result = CopilotCliAdapter().preflight(_req())
-    assert result.ok is False
-    assert result.status is Status.API_DISABLED
+# Phase 3 review C1 fix: `test_copilot_api_disabled` deleted for the
+# same reason as `test_gemini_api_disabled` above. The unauthenticated
+# api.github.com reachability probe never detected actual org-level
+# Copilot enablement; the test was a tautology. Re-add when Phase 4+
+# wires an org-scoped token probe.
 
 
 # ── opencode + shell — only binary check ────────────────────────────────

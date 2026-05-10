@@ -1195,20 +1195,36 @@ def _resilient_chain_walk(
                 exploration=False,
             )
         except BaseException:  # noqa: BLE001
-            logger.debug(
+            # Phase 3 review C3 fix: promote debug → warning so the
+            # swallow shows up in default log shipping (Loki/CW filter
+            # at INFO+). Plus increment cli_orchestrator_emit_error_total
+            # so a regression here triggers the alert in
+            # monitoring/alerts/cli-orchestrator.yaml.
+            logger.warning(
                 "RL mirror write failed for tenant=%s run_id=%s",
                 str(tenant_id)[:8], md.run_id, exc_info=True,
             )
+            try:
+                from cli_orchestrator.executor import _emit_error_count
+                _emit_error_count("rl_mirror")
+            except Exception:  # noqa: BLE001
+                pass
 
     def _webhook_emitter(event_type: str, payload: dict) -> None:
         try:
             from app.services import webhook_connectors as wh_svc
             wh_svc.fire_outbound_event(db, tenant_id, event_type, payload)
         except BaseException:  # noqa: BLE001
-            logger.debug(
+            # Phase 3 review C3 fix — same logic as RL mirror.
+            logger.warning(
                 "outbound webhook fire failed event=%s tenant=%s",
                 event_type, str(tenant_id)[:8], exc_info=True,
             )
+            try:
+                from cli_orchestrator.executor import _emit_error_count
+                _emit_error_count("webhook_emit")
+            except Exception:  # noqa: BLE001
+                pass
 
     adapters = {p: TemporalActivityAdapter(platform=p) for p in chain_tuple}
     executor = ResilientExecutor(

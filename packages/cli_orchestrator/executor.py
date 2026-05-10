@@ -66,25 +66,43 @@ logger = logging.getLogger(__name__)
 try:
     from prometheus_client import Counter, Histogram
 
+    # Phase 3 review C2 fix: `tenant_id` REMOVED from label sets to bound
+    # cardinality. With 100+ tenants × 10 statuses × 6 platforms × 3
+    # decision_points = ~18k unique series per metric (Histograms are
+    # ~12x worse via bucket multiplication → ~216k series). Prometheus
+    # best-practice cap is ~10k series/metric. Per-tenant slicing moves
+    # to: (a) RLExperience JSONB rows (already capture tenant_id durably);
+    # (b) structured logs from `_emit_metrics` (logger.info with
+    # `extra={"tenant_id": ...}`); (c) the `routing_summary` written to
+    # ChatMessage.metadata which dashboards can join against.
     _STATUS_TOTAL = Counter(
         "cli_orchestrator_status_total",
         "ResilientExecutor terminal status counter",
-        ["tenant_id", "decision_point", "platform", "status"],
+        ["decision_point", "platform", "status"],
     )
     _DURATION_MS = Histogram(
         "cli_orchestrator_duration_ms",
         "ResilientExecutor end-to-end duration in milliseconds",
-        ["tenant_id", "decision_point", "platform", "status"],
+        ["decision_point", "platform", "status"],
     )
     _FALLBACK_DEPTH = Histogram(
         "cli_orchestrator_fallback_depth",
         "Depth of platform chain walked",
-        ["tenant_id", "decision_point"],
+        ["decision_point"],
     )
     _ATTEMPT_COUNT = Histogram(
         "cli_orchestrator_attempt_count",
         "Total attempts per ResilientExecutor.execute",
-        ["tenant_id", "decision_point", "status"],
+        ["decision_point", "status"],
+    )
+    # Phase 3 review C3 fix: counter for emitter-failure surfacing so a
+    # silent regression in the RL mirror or webhook fan-out path produces
+    # an observable signal. Alert rule in
+    # monitoring/alerts/cli-orchestrator.yaml fires when rate > 0.
+    _EMIT_ERROR_TOTAL = Counter(
+        "cli_orchestrator_emit_error_total",
+        "Errors swallowed by best-effort emitter try/except blocks",
+        ["kind"],  # "rl_mirror" | "webhook_emit" | "metrics" | "shadow"
     )
     # Phase 3 — design §6 ship gate (warm-state p95 ≤ 60ms).
     # Adapters time their preflight() bodies and emit observations here;
@@ -100,7 +118,18 @@ try:
 except ImportError:
     _STATUS_TOTAL = _DURATION_MS = _FALLBACK_DEPTH = _ATTEMPT_COUNT = None  # type: ignore[assignment]
     _PREFLIGHT_DURATION_MS = None  # type: ignore[assignment]
+    _EMIT_ERROR_TOTAL = None  # type: ignore[assignment]
     _METRICS_OK = False
+
+
+def _emit_error_count(kind: str) -> None:
+    """Increment the emit-error counter; never raises. Phase 3 C3 fix."""
+    if not _METRICS_OK or _EMIT_ERROR_TOTAL is None:
+        return
+    try:
+        _EMIT_ERROR_TOTAL.labels(kind=kind).inc()  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _emit_metrics(
@@ -115,29 +144,41 @@ def _emit_metrics(
         return
     try:
         _STATUS_TOTAL.labels(  # type: ignore[union-attr]
-            tenant_id=tenant_id,
             decision_point=decision_point,
             platform=result.platform,
             status=result.status.value,
         ).inc()
         _DURATION_MS.labels(  # type: ignore[union-attr]
-            tenant_id=tenant_id,
             decision_point=decision_point,
             platform=result.platform,
             status=result.status.value,
         ).observe(duration_ms)
         _FALLBACK_DEPTH.labels(  # type: ignore[union-attr]
-            tenant_id=tenant_id,
             decision_point=decision_point,
         ).observe(len(result.platform_attempted))
         _ATTEMPT_COUNT.labels(  # type: ignore[union-attr]
-            tenant_id=tenant_id,
             decision_point=decision_point,
             status=result.status.value,
         ).observe(result.attempt_count)
+        # Phase 3 C2: tenant_id moved from labels to structured-log
+        # field so per-tenant slicing remains possible via Loki/CloudWatch.
+        logger.info(
+            "cli_orchestrator.execute terminal",
+            extra={
+                "tenant_id": tenant_id,
+                "decision_point": decision_point,
+                "platform": result.platform,
+                "status": result.status.value,
+                "attempt_count": result.attempt_count,
+                "duration_ms": duration_ms,
+            },
+        )
     except Exception:  # noqa: BLE001
         # Metric backend hiccup — the chat hot path must continue.
-        logger.debug("metric emission failed", exc_info=True)
+        # Phase 3 C3: surface the swallow via counter + WARN-level log
+        # so dashboards can detect a metric-backend regression.
+        logger.warning("metric emission failed", exc_info=True)
+        _emit_error_count("metrics")
 
 
 # --------------------------------------------------------------------------

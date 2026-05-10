@@ -48,14 +48,22 @@ spec:
               hard. Could be a quota outage at one provider or a broken
               preflight signature on another.
 
-        # ── Ticket: NEEDS_AUTH WoW > 20% ──────────────────────────────
+        # Phase 3 review C2 fix: `tenant_id` removed from Prometheus labels
+        # to bound cardinality. The two alerts below are reshaped to
+        # platform-level aggregates; per-tenant slicing now lives in the
+        # RLExperience JSONB rows + structured logs (see executor.py
+        # `_emit_metrics` `logger.info` extras). Operators drilling into
+        # an alert use the dashboard's RL-state-text query for tenant
+        # attribution.
+
+        # ── Ticket: NEEDS_AUTH rate climbing WoW (per platform) ──────
         - alert: CliOrchestratorNeedsAuthRateWoWClimbing
           expr: |
             (
-              sum by (tenant_id) (rate(cli_orchestrator_status_total{status="needs_auth"}[1h]))
+              sum by (platform) (rate(cli_orchestrator_status_total{status="needs_auth"}[1h]))
               /
               (
-                sum by (tenant_id) (rate(cli_orchestrator_status_total{status="needs_auth"}[1h] offset 7d))
+                sum by (platform) (rate(cli_orchestrator_status_total{status="needs_auth"}[1h] offset 7d))
                 + 0.001
               )
             ) > 1.20
@@ -64,16 +72,18 @@ spec:
             severity: ticket
             service: cli-orchestrator
           annotations:
-            summary: "CLI orchestrator NEEDS_AUTH rate up >20% WoW for tenant {{ $labels.tenant_id }}"
+            summary: "CLI orchestrator NEEDS_AUTH rate up >20% WoW on {{ $labels.platform }}"
             description: |
-              Credential rot — the tenant's CLI tokens are expiring more
-              often than they used to. Open a ticket to nudge the tenant
-              into reconnecting.
+              Credential rot — CLI tokens for this platform are expiring
+              more often than they used to. Drill into the dashboard's
+              RL-state-text query (filter by status=needs_auth, time
+              window matching the alert) to identify which tenants are
+              affected; open tickets to nudge them into reconnecting.
 
-        # ── Ticket: API_DISABLED for any tenant ──────────────────────
-        - alert: CliOrchestratorApiDisabledForTenant
+        # ── Ticket: API_DISABLED rate (per platform) ─────────────────
+        - alert: CliOrchestratorApiDisabledRate
           expr: |
-            sum by (tenant_id, platform) (
+            sum by (platform) (
               rate(cli_orchestrator_status_total{status="api_disabled"}[1h])
             ) > 0
           for: 1h
@@ -81,9 +91,35 @@ spec:
             severity: ticket
             service: cli-orchestrator
           annotations:
-            summary: "CLI orchestrator API_DISABLED on {{ $labels.platform }} for tenant {{ $labels.tenant_id }}"
+            summary: "CLI orchestrator API_DISABLED on {{ $labels.platform }}"
             description: |
-              The tenant's cloud API isn't enabled — this is an onboarding
-              regression. Could mean the GCP project lost the
-              generativelanguage API binding or GitHub Copilot was disabled
-              org-wide. Customer success follow-up.
+              A tenant's cloud API isn't enabled — onboarding regression.
+              Could mean a GCP project lost the generativelanguage API
+              binding or GitHub Copilot was disabled org-wide. Use the
+              RL-state-text query (status=api_disabled) to identify the
+              tenant. Customer success follow-up.
+
+        # ── Phase 3 C3: emit-failure surfacing ───────────────────────
+        # Page when the best-effort RL mirror or webhook emit path is
+        # silently failing — without this alert, a Phase-3 cutover
+        # regression that breaks RL training data accrual or webhook
+        # subscriber notifications would have ZERO observable signal.
+        - alert: CliOrchestratorEmitErrorRateHigh
+          expr: |
+            sum by (kind) (rate(cli_orchestrator_emit_error_total[5m])) > 0
+          for: 5m
+          labels:
+            severity: page
+            service: cli-orchestrator
+          annotations:
+            summary: "CLI orchestrator emit failures: kind={{ $labels.kind }}"
+            description: |
+              Best-effort emitter (RL mirror, webhook fan-out, metrics,
+              or shadow-mode comparison) has been failing for 5 minutes.
+              The chat hot path is unaffected — try/except wraps every
+              emitter — but downstream observability (RL training data,
+              webhook subscribers, Prometheus dashboards) is degrading.
+              Check the WARN-level log lines:
+                logger=app.services.agent_router
+                logger=cli_orchestrator.executor
+              for stack traces from the swallow site.

@@ -25,7 +25,6 @@ from cli_executors.copilot import execute_copilot_chat
 
 from cli_orchestrator.preflight import (
     check_binary_on_path,
-    check_cloud_api_enabled,
 )
 
 from ._common import (
@@ -38,22 +37,16 @@ from ._common import (
 from .preflight_deps import PreflightDeps
 
 
-def _copilot_org_enabled_probe() -> bool:
-    """Probe whether GitHub Copilot is enabled for the org.
-
-    Without a token in the worker environment this is a reachability
-    check on the GitHub API. The actual "is Copilot enabled for THIS
-    org" check requires an org-scoped token — out of scope for the
-    worker pod's preflight (the leaf-side `copilot` invocation surfaces
-    that error directly via stderr).
-    """
-    try:
-        import httpx
-        with httpx.Client(timeout=2.0) as client:
-            resp = client.get("https://api.github.com")
-            return 200 <= resp.status_code < 500
-    except Exception:  # noqa: BLE001
-        return False
+# Phase 3 review C1 fix: the prior `_copilot_org_enabled_probe` made an
+# unauthenticated GET to api.github.com — always 200/401 from any
+# cluster with internet, never detected the actual "Copilot enabled
+# for THIS org" condition (requires an org-scoped token call). Org-
+# enablement check lands in Phase 4+ once org-scoped tokens flow
+# through to the worker. Until then the leaf-side `copilot` invocation
+# surfaces "Copilot is not enabled" via stderr → classifier →
+# Status.QUOTA_EXHAUSTED on the runtime path.
+#
+# See docs/plans/2026-05-09-resilient-cli-orchestrator-design.md §6.
 
 logger = logging.getLogger(__name__)
 
@@ -92,19 +85,9 @@ class CopilotCliAdapter:
             if not cr.ok:
                 return cr
 
-        # 3. Cloud API enabled (org-enabled probe)
-        deps = PreflightDeps.get()
-        if tenant_id:
-            with time_preflight_helper(self.name, "cloud_api_enabled"):
-                ar = check_cloud_api_enabled(
-                    redis_get=deps.redis_get,
-                    redis_setex=deps.redis_setex,
-                    probe=_copilot_org_enabled_probe,
-                    tenant_id=tenant_id,
-                    platform=self.name,
-                )
-            if not ar.ok:
-                return ar
+        # 3. Cloud API enabled — DROPPED in Phase 3 review C1 fix.
+        # Reasons documented above the `_copilot_org_enabled_probe`
+        # removal block.
 
         return PreflightResult.succeed()
 
