@@ -4,14 +4,16 @@
 #
 # Bump deliberately — pinning here pins the toolchain everywhere downstream.
 #
-# Why 1.85.0 (not 1.83 from the original commit): transitive deps —
-# hashbrown 0.17, uuid 1.23, webbrowser 1.2, wasip2/wasip3 — all require
-# Cargo's `edition2024` feature, which stabilised in Rust 1.85. Pinning
-# below 1.85 made cargo refuse to parse those manifests with
-#   "error: feature `edition2024` is required"
-# on the PR-D-1 first CI run (2026-05-10). Bumping unblocks every target.
+# Why "stable" not a fixed version (PR-D-1 second CI run, 2026-05-10):
+# transitive deps (icu_normalizer 2.2, icu_properties 2.2, icu_provider 2.2,
+# idna_adapter 1.2) require rustc 1.86. We previously tried 1.85 (to
+# unblock edition2024) and 1.83 (the original) — both blocked on dep
+# version drift. Until we commit a Cargo.lock at workspace root that
+# pins compatible dep versions, the only stable strategy is to track
+# the latest stable toolchain. Phase 4.5 follow-up: workspace Cargo.lock
+# + pin to a concrete version for reproducibility.
 [toolchain]
-channel = "1.85.0"
+channel = "stable"
 components = ["rustfmt", "clippy"]
 targets = [
     "aarch64-apple-darwin",
