@@ -1068,7 +1068,18 @@ def _run_agent_session_legacy(
         try:
             from app.models.agent import Agent
             from app.services.agent_token import mint_agent_token
-            from app.services.tool_groups import resolve_tool_names
+
+            # `resolve_tool_names` is already imported at module scope (line 20).
+            # Re-importing it here turned it into a function-local in the parent
+            # `dispatch_chat_cli` scope, which then shadowed the module global
+            # for the nested `_run_workflow` closure further down. When
+            # `use_resilient` was False, the local was never bound and the
+            # closure lookup raised:
+            #   NameError: cannot access free variable 'resolve_tool_names'
+            #   where it is not associated with a value in enclosing scope
+            # — which silently aborted ChatCliWorkflow dispatch for every
+            # tenant where the resilient flag wasn't set (Luna in WhatsApp,
+            # most notably). Don't re-import.
 
             # Agent has no `slug` column; the chat hot path passes a slug
             # form like "luna". Match case-insensitively against Agent.name
