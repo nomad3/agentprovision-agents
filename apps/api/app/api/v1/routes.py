@@ -77,6 +77,7 @@ from app.api.v1 import (
     internal_agent_tokens,
     internal_agent_heartbeat,
     internal_agent_tasks,
+    internal_embed,
 )
 
 _logger = logging.getLogger(__name__)
@@ -193,6 +194,11 @@ router.include_router(
 # Phase 4 commit 5 — agent-token mint endpoint (worker-side mint).
 router.include_router(
     internal_agent_tokens.router,
+    prefix="/internal", tags=["internal"],
+)
+# Internal embedding endpoint — replaces sentence-transformers in apps/mcp-server.
+router.include_router(
+    internal_embed.router,
     prefix="/internal", tags=["internal"],
 )
 # Phase 4 commit 8 — leaf-side heartbeat endpoint. Path is
