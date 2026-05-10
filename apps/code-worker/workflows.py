@@ -31,6 +31,15 @@ from cli_runtime import (
     safe_cli_error_snippet as _safe_cli_error_snippet,
 )
 
+# Phase 1.6: per-CLI chat executors live in cli_executors/*.py. Re-export
+# under the old underscore-prefixed names so the dispatch table inside
+# ``execute_chat_cli`` and the test suite both keep resolving via
+# ``workflows._execute_<platform>_chat`` with object identity preserved.
+# Each executor's lazy imports (``from workflows import _fetch_..., ...``)
+# fire only on call, breaking the workflows <-> cli_executors cycle at
+# module-load time and preserving test monkeypatches on those helpers.
+from cli_executors.claude import execute_claude_chat as _execute_claude_chat
+
 logger = logging.getLogger(__name__)
 
 
@@ -1040,106 +1049,6 @@ def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
         return ChatCliResult(response_text="", success=False, error=str(exc))
 
 
-def _execute_claude_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliResult:
-    token = _fetch_claude_token(task_input.tenant_id)
-    if not token:
-        # Canonical not-connected message — must match
-        # `cli_platform_resolver._MISSING_CRED_PATTERNS` so the
-        # resolver chain classifies this as `missing_credential`
-        # (skip without cooldown). The short form "Claude Code not
-        # connected" did NOT match the regex (only the long
-        # "subscription is not connected" did) — that broke chain
-        # fallback for tenants who hit a credential-missing CLI.
-        return ChatCliResult(
-            response_text="",
-            success=False,
-            error=_INTEGRATION_NOT_CONNECTED_MESSAGES["claude_code"],
-        )
-
-    if task_input.instruction_md_content:
-        with open(os.path.join(session_dir, "CLAUDE.md"), "w") as f:
-            f.write(task_input.instruction_md_content)
-
-    if task_input.mcp_config:
-        with open(os.path.join(session_dir, "mcp.json"), "w") as f:
-            f.write(task_input.mcp_config)
-
-    _model = task_input.model or CLAUDE_CODE_MODEL
-    _allowed = task_input.allowed_tools or _build_allowed_tools_from_mcp(
-        task_input.mcp_config, extra="Bash,Read,Edit,Write,WebFetch,WebSearch"
-    )
-    
-    prompt = task_input.message
-    if task_input.instruction_md_content.strip():
-        # Bypass the 20KB limit of --append-system-prompt by injecting
-        # instructions and conversation history directly into the prompt.
-        prompt = f"{task_input.instruction_md_content.strip()}\n\n# User Request\n\n{task_input.message}"
-
-    cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "json",
-        "--model", _model,
-        "--allowedTools", _allowed,
-        "--add-dir", session_dir,
-    ]
-    if os.path.isdir(WORKSPACE):
-        cmd.extend(["--add-dir", WORKSPACE])
-
-    # NOTE: --resume intentionally NOT used. Previously we stored an
-    # ever-growing session_id per chat and resumed it on every message.
-    # For long conversations (Luna on WhatsApp), the JSONL session file
-    # grew to 16+ MB, causing:
-    #   - slow startup (loading + parsing the full file)
-    #   - lossy context compaction (old details silently dropped)
-    #   - context loss on specific entities (names, prior lead gen lists)
-    # Instead, each `claude -p` invocation is a fresh one-shot session,
-    # and the caller (chat.py) is responsible for passing the last N
-    # messages via --append-system-prompt. This gives deterministic,
-    # bounded context under our control.
-    # Use --no-session-persistence to avoid leaking JSONL files on every
-    # call (842+ files were accumulated in the previous model).
-    cmd.append("--no-session-persistence")
-
-    mcp_path = os.path.join(session_dir, "mcp.json")
-    if os.path.exists(mcp_path):
-        cmd.extend(["--mcp-config", mcp_path])
-
-    env = os.environ.copy()
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = token
-
-    result = _run_cli_with_heartbeat(
-        cmd,
-        label="Claude Code",
-        timeout=1500,
-        env=env,
-        cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
-    )
-    if result.returncode != 0:
-        err = _safe_cli_error_snippet(result.stderr, result.stdout, 1000)
-        return ChatCliResult(response_text="", success=False, error=f"CLI exit {result.returncode}: {err}")
-
-    raw = result.stdout.strip()
-    if not raw:
-        return ChatCliResult(response_text="", success=False, error="CLI produced no output")
-
-    try:
-        data = json.loads(raw)
-        text = data.get("result") or data.get("response") or data.get("content") or data.get("text") or raw
-        meta = {
-            "platform": "claude_code",
-            "input_tokens": (data.get("usage") or {}).get("input_tokens", 0),
-            "output_tokens": (data.get("usage") or {}).get("output_tokens", 0),
-            "model": data.get("model"),
-            "claude_session_id": data.get("session_id", ""),
-            "cost_usd": data.get("total_cost_usd", 0),
-        }
-        return ChatCliResult(response_text=text, success=True, metadata=meta)
-    except json.JSONDecodeError:
-        return ChatCliResult(
-            response_text=raw,
-            success=True,
-            metadata={"platform": "claude_code"},
-        )
 
 
 def _execute_codex_chat(task_input: ChatCliInput, session_dir: str, image_path: str) -> ChatCliResult:

@@ -1,0 +1,18 @@
+"""Per-CLI chat executors hoisted out of workflows.py in Phase 1.6.
+
+Each module owns the chat dispatch path for one platform. Executors take
+the same (task_input, session_dir, ...) signature as their previous
+underscore-prefixed forms in workflows.py. workflows.py re-exports each
+public name back under the old `_<name>` alias, so production callers
+and existing tests are unaffected.
+
+Why split: workflows.py grew to 2,318 lines mixing dataclass schemas,
+Temporal activity wiring, credential-fetch helpers, and 5 per-platform
+chat executors. The executors are the largest block (~1,000 lines
+together) and the most independently maintainable — splitting them out
+shrinks workflows.py to its real responsibility (workflow + activity
+orchestration) and gives each platform a clean public module.
+"""
+from cli_executors.claude import execute_claude_chat
+
+__all__ = ["execute_claude_chat"]

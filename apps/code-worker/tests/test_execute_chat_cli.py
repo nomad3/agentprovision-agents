@@ -15,6 +15,7 @@ import os
 
 import pytest
 
+import cli_runtime
 import workflows as wf
 
 
@@ -197,7 +198,7 @@ class TestExecuteClaudeChat:
             stderr="",
         )
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: fake_completed,
         )
 
@@ -218,7 +219,7 @@ class TestExecuteClaudeChat:
             args=["claude"], returncode=2,
             stdout="", stderr="oh no",
         )
-        monkeypatch.setattr(wf, "_run_cli_with_heartbeat", lambda cmd, **kw: fake_completed)
+        monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", lambda cmd, **kw: fake_completed)
 
         out = wf._execute_claude_chat(
             _make_input(platform="claude_code"), session_dir=str(tmp_path),
@@ -231,7 +232,7 @@ class TestExecuteClaudeChat:
         monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
         import subprocess as sp
         fake = sp.CompletedProcess(args=["claude"], returncode=0, stdout="", stderr="")
-        monkeypatch.setattr(wf, "_run_cli_with_heartbeat", lambda cmd, **kw: fake)
+        monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", lambda cmd, **kw: fake)
         out = wf._execute_claude_chat(_make_input(platform="claude_code"), session_dir=str(tmp_path))
         assert out.success is False
         assert "no output" in out.error.lower()
@@ -242,7 +243,7 @@ class TestExecuteClaudeChat:
         fake = sp.CompletedProcess(
             args=["claude"], returncode=0, stdout="plain text response", stderr="",
         )
-        monkeypatch.setattr(wf, "_run_cli_with_heartbeat", lambda cmd, **kw: fake)
+        monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", lambda cmd, **kw: fake)
         out = wf._execute_claude_chat(_make_input(platform="claude_code"), session_dir=str(tmp_path))
         assert out.success is True
         assert out.response_text == "plain text response"
