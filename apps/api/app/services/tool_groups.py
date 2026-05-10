@@ -168,6 +168,49 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "submit_learning_feedback",
         "get_simulation_summary",
     ],
+    # Vet-vertical tool groups (Phase 4.5 — added to support the Animal Doctor
+    # SOC agent fleet, see seed_animaldoctor_agent_fleet.py). Logical groupings
+    # over the real MCP tools registered in apps/mcp-server/src/mcp_tools/.
+    "pulse": [
+        # Covetrus Pulse PIMS — patient/appointment/billing data of record.
+        "pulse_get_patient",
+        "pulse_list_appointments",
+        "pulse_query_invoices",
+    ],
+    "scribblevet": [
+        # ScribbleVet clinical-note pairing — SOAP synthesis from voice/chart.
+        "scribblevet_list_recent_notes",
+        "scribblevet_get_note",
+        "scribblevet_search",
+    ],
+    "patient_records": [
+        # Composite group: clinical reads. Pulls patient context across PIMS,
+        # clinical notes, and the knowledge graph. Read-only — no mutations.
+        "pulse_get_patient",
+        "pulse_list_appointments",
+        "scribblevet_get_note",
+        "scribblevet_list_recent_notes",
+        "search_knowledge",
+        "find_entities",
+        "recall_memory",
+    ],
+    "communication": [
+        # Outbound: SMS + email + inter-agent messaging. Receptionist /
+        # reminder paths use SMS for owner outreach; admin escalation uses
+        # delegate_to_agent / find_agent.
+        "send_sms",
+        "list_sms_threads",
+        "read_sms",
+        "send_email",
+        "search_emails",
+        "delegate_to_agent",
+        "find_agent",
+    ],
+    "bookkeeper_export": [
+        # AAHA-coded ledger exports for the practice's accountant. Used by
+        # the Billing Agent end-of-day routine.
+        "bookkeeper_export_aaha",
+    ],
 }
 
 TIER_MODEL_MAP: dict[str, dict[str, str]] = {

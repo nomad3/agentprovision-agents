@@ -134,7 +134,11 @@ AGENT_FLEET: list[dict[str, Any]] = [
             "intake_forms",
             "new_client_onboarding",
         ],
-        "personality": "warm, professional, fluent in dog-and-cat-person tone",
+        "personality": {
+            "description": "warm, professional, fluent in dog-and-cat-person tone",
+            "tone": "warm",
+            "verbosity": "concise",
+        },
         "persona_prompt": FRONT_DESK_PERSONA,
         "tool_groups": ["calendar", "communication", "patient_records"],
         "default_model_tier": "light",
@@ -153,7 +157,11 @@ AGENT_FLEET: list[dict[str, Any]] = [
             "voice_transcript_to_chart",
             "veterinary_terminology",
         ],
-        "personality": "precise, terse, no padding",
+        "personality": {
+            "description": "precise, terse, no padding",
+            "tone": "clinical",
+            "verbosity": "minimal",
+        },
         "persona_prompt": SOAP_NOTE_PERSONA,
         "tool_groups": ["scribblevet", "patient_records", "knowledge"],
         "default_model_tier": "full",
@@ -172,9 +180,16 @@ AGENT_FLEET: list[dict[str, Any]] = [
             "payment_reconciliation",
             "sunbit_carecredit_financing",
         ],
-        "personality": "meticulous, compliance-first, deterministic",
+        "personality": {
+            "description": "meticulous, compliance-first, deterministic",
+            "tone": "professional",
+            "verbosity": "concise",
+        },
         "persona_prompt": BILLING_PERSONA,
-        "tool_groups": ["bookkeeper_export", "pulse", "ads"],
+        # 'ads' was a noisy carry-over (Meta/Google/TikTok campaigns) — drop
+        # it for billing. Bookkeeper + Pulse + communication for owner SMS
+        # on outstanding balances is the right surface.
+        "tool_groups": ["bookkeeper_export", "pulse", "communication"],
         "default_model_tier": "light",
     },
     {
@@ -193,10 +208,14 @@ AGENT_FLEET: list[dict[str, Any]] = [
             "treatment_recommendation",
             "cardiac_report_generator_workflow",
         ],
-        "personality": (
-            "deeply expert; explains uncertainty plainly; recommends "
-            "second opinions when staging or response is ambiguous"
-        ),
+        "personality": {
+            "description": (
+                "deeply expert; explains uncertainty plainly; recommends "
+                "second opinions when staging or response is ambiguous"
+            ),
+            "tone": "specialist",
+            "verbosity": "thorough",
+        },
         "persona_prompt": CARDIAC_SPECIALIST_PERSONA,
         "tool_groups": [
             "scribblevet",
@@ -221,7 +240,11 @@ AGENT_FLEET: list[dict[str, Any]] = [
             "expiration_tracking",
             "dea_dash_compliance",
         ],
-        "personality": "by-the-book, paranoid about chain-of-custody errors",
+        "personality": {
+            "description": "by-the-book, paranoid about chain-of-custody errors",
+            "tone": "compliance",
+            "verbosity": "concise",
+        },
         "persona_prompt": INVENTORY_PHARMA_PERSONA,
         "tool_groups": ["pulse", "knowledge", "communication"],
         "default_model_tier": "light",

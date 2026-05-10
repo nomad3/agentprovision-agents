@@ -292,7 +292,7 @@ def test_persona_drift_resets_to_seed_value(db):
     assert target.persona_prompt == original_persona
     assert "tampered" not in target.persona_prompt
     # tool_groups reset on the Billing Agent.
-    assert other.tool_groups == ["bookkeeper_export", "pulse", "ads"]
+    assert other.tool_groups == ["bookkeeper_export", "pulse", "communication"]
 
 
 def test_role_drift_is_detected_and_reset(db):
@@ -344,6 +344,11 @@ def test_tool_groups_match_spec(db):
         "patient_records",
         "knowledge",
     ]
+    assert by_name["Billing Agent"].tool_groups == [
+        "bookkeeper_export",
+        "pulse",
+        "communication",
+    ]
     assert by_name["Cardiac Specialist Agent"].tool_groups == [
         "scribblevet",
         "patient_records",
@@ -356,3 +361,38 @@ def test_tool_groups_match_spec(db):
         "knowledge",
         "communication",
     ]
+
+
+def test_every_tool_group_is_registered():
+    """Phase 4.5 review C-1 guardrail: any tool_group declared in the seed
+    must exist in apps/api/app/services/tool_groups.py::TOOL_GROUPS.
+    Unregistered groups are silently dropped at runtime by resolve_tool_names,
+    leaving agents with empty tool surfaces while their personas still
+    instruct them to call those tools — exactly the anti-hallucination
+    failure the platform is designed to prevent."""
+    from app.services.tool_groups import TOOL_GROUPS
+
+    declared = {tg for spec in seed.AGENT_FLEET for tg in spec["tool_groups"]}
+    missing = declared - set(TOOL_GROUPS.keys())
+    assert not missing, (
+        f"Seed declares tool_groups not registered in TOOL_GROUPS: {missing}. "
+        f"Either register them in apps/api/app/services/tool_groups.py or "
+        f"re-target the seed to existing groups."
+    )
+
+
+def test_personality_is_dict_not_string():
+    """Phase 4.5 review C-2 guardrail: agent.personality column is JSON and
+    consumers (notably coalition_activities.py:255) call .get() on it. A
+    plain-string personality round-trips through PostgreSQL JSON but raises
+    AttributeError on the first coalition handoff. Lock it down here."""
+    for spec in seed.AGENT_FLEET:
+        personality = spec.get("personality")
+        assert personality is None or isinstance(personality, dict), (
+            f"{spec['name']}: personality must be dict or None, "
+            f"got {type(personality).__name__}: {personality!r}"
+        )
+        if isinstance(personality, dict):
+            assert "description" in personality, (
+                f"{spec['name']}: personality dict must include 'description' key"
+            )
