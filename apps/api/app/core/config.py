@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     TEMPORAL_NAMESPACE: str = "default"
     REDIS_URL: str = "redis://redis:6379/0"
 
+    # Public-facing base URL the API surfaces to clients (e.g. the device-flow
+    # verification_uri printed by the CLI). Empty default falls back to
+    # relative URLs for local dev; production must set this in the env.
+    PUBLIC_BASE_URL: str = ""
+
     DEFAULT_WORKFLOW_TIMEOUT_SECONDS: int = 600
 
     # MCP Server Configuration
