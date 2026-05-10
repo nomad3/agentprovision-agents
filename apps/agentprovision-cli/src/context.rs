@@ -33,7 +33,8 @@ fn keychain_works(store: &KeyringTokenStore) -> bool {
     thread::spawn(move || {
         let _ = tx.send(probe.load().is_ok());
     });
-    rx.recv_timeout(Duration::from_millis(1500)).unwrap_or(false)
+    rx.recv_timeout(Duration::from_millis(1500))
+        .unwrap_or(false)
 }
 
 /// Tag describing which token-store backend `Context` resolved to. Used to

@@ -40,13 +40,14 @@ async fn main() {
         // user at `agentprovision login` instead of leaving them to guess.
         // We downcast through anyhow's error chain — both the immediate
         // `Error::Unauthorized` and a 401 returned via `Error::Api` count.
-        let auth_failed = e
-            .chain()
-            .any(|src| match src.downcast_ref::<agentprovision_core::error::Error>() {
-                Some(agentprovision_core::error::Error::Unauthorized) => true,
-                Some(agentprovision_core::error::Error::Api { status: 401, .. }) => true,
-                _ => false,
-            });
+        let auth_failed =
+            e.chain().any(
+                |src| match src.downcast_ref::<agentprovision_core::error::Error>() {
+                    Some(agentprovision_core::error::Error::Unauthorized) => true,
+                    Some(agentprovision_core::error::Error::Api { status: 401, .. }) => true,
+                    _ => false,
+                },
+            );
         if auth_failed {
             eprintln!(
                 "{} run `{}` to authenticate.",

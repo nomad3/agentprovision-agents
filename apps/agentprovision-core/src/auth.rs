@@ -192,11 +192,7 @@ impl TokenStore for KeyringTokenStore {
 }
 
 /// Hit `/api/v1/auth/login` with form-encoded credentials.
-pub async fn login_password(
-    client: &ApiClient,
-    email: &str,
-    password: &str,
-) -> Result<Token> {
+pub async fn login_password(client: &ApiClient, email: &str, password: &str) -> Result<Token> {
     client.login_password(email, password).await
 }
 
@@ -237,10 +233,7 @@ struct DeviceTokenResponse {
 /// * 400 + `{error: "slow_down"}` to back off
 /// * 400 + `{error: "expired_token"}` when the code expired
 /// * 400 + `{error: "access_denied"}` when the user declined
-pub async fn poll_device_token(
-    client: &ApiClient,
-    device_code: &str,
-) -> Result<DevicePollOutcome> {
+pub async fn poll_device_token(client: &ApiClient, device_code: &str) -> Result<DevicePollOutcome> {
     let req = client
         .request(reqwest::Method::POST, "/api/v1/auth/device-token")?
         .json(&DeviceTokenRequest { device_code });
@@ -325,10 +318,7 @@ mod tests {
 
     #[test]
     fn file_token_store_round_trip() {
-        let dir = std::env::temp_dir().join(format!(
-            "agentprovision-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("agentprovision-test-{}", std::process::id()));
         let path = dir.join("nested").join("token");
         let s = FileTokenStore::new(&path);
         // load on missing file returns Ok(None)
@@ -347,10 +337,8 @@ mod tests {
     #[test]
     fn file_token_store_uses_0600_permissions() {
         use std::os::unix::fs::PermissionsExt;
-        let path = std::env::temp_dir().join(format!(
-            "agentprovision-perm-{}.token",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("agentprovision-perm-{}.token", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let s = FileTokenStore::new(&path);
         s.save("bearer").unwrap();
@@ -363,10 +351,8 @@ mod tests {
 
     #[test]
     fn file_token_store_trims_trailing_whitespace() {
-        let path = std::env::temp_dir().join(format!(
-            "agentprovision-trim-{}.token",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("agentprovision-trim-{}.token", std::process::id()));
         std::fs::write(&path, "bearer-abc\n").unwrap();
         let s = FileTokenStore::new(&path);
         assert_eq!(s.load().unwrap().as_deref(), Some("bearer-abc"));
@@ -375,10 +361,8 @@ mod tests {
 
     #[test]
     fn file_token_store_empty_file_is_none() {
-        let path = std::env::temp_dir().join(format!(
-            "agentprovision-empty-{}.token",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("agentprovision-empty-{}.token", std::process::id()));
         std::fs::write(&path, "   \n\n").unwrap();
         let s = FileTokenStore::new(&path);
         assert!(s.load().unwrap().is_none());

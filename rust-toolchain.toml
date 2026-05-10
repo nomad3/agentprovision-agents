@@ -1,0 +1,26 @@
+# Workspace-wide Rust toolchain pin. Keeps CI builds reproducible across
+# all 6 cross-compile targets (mac arm64/x64, linux x64/arm64-musl,
+# windows x64/arm64).
+#
+# Bump deliberately — pinning here pins the toolchain everywhere downstream.
+#
+# Why "stable" not a fixed version (PR-D-1 second CI run, 2026-05-10):
+# transitive deps (icu_normalizer 2.2, icu_properties 2.2, icu_provider 2.2,
+# idna_adapter 1.2) require rustc 1.86. We previously tried 1.85 (to
+# unblock edition2024) and 1.83 (the original) — both blocked on dep
+# version drift. Until we commit a Cargo.lock at workspace root that
+# pins compatible dep versions, the only stable strategy is to track
+# the latest stable toolchain. Phase 4.5 follow-up: workspace Cargo.lock
+# + pin to a concrete version for reproducibility.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+profile = "minimal"

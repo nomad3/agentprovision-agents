@@ -1,0 +1,157 @@
+name: CLI Build Matrix
+
+# PR-D-1 of the agentprovision CLI distribution track. Validates that
+# `agentprovision-cli` + `agentprovision-core` build cleanly on every target
+# triple we ship binaries for. Runs on every PR that touches the CLI/core
+# crates or this workflow itself; PR-D-2 reuses the same matrix to publish
+# release artifacts on cli-v* tags.
+#
+# Strategy:
+#   - Native runners for darwin (macos-14 arm64, macos-13 intel) + windows-x64
+#     where `cargo build` runs unmodified.
+#   - Linux + Windows-ARM64 zigbuild targets DEFERRED to PR-D-1.5 (ring needs
+#     x86_64-linux-musl-gcc; zig 0.13 on Windows ARM64 has linker spawn bug).
+#
+# Reference: docs/plans/2026-05-10-agentprovision-cli-distribution-plan.md
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/agentprovision-cli/**'
+      - 'apps/agentprovision-core/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/cli-build-matrix.yaml'
+  pull_request:
+    paths:
+      - 'apps/agentprovision-cli/**'
+      - 'apps/agentprovision-core/**'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/cli-build-matrix.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: cli-build-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Native targets — green on the first CI run ──────────────
+          # Mac arm64 (most dev Macs since M1).
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            tool: cargo
+            archive_ext: tar.gz
+          # Mac x64 (Intel — legacy but still common in enterprise).
+          # Built on macos-14 ARM via cross-compile (Xcode handles both
+          # arches natively, no zig needed). macos-13 runners are being
+          # phased out by GitHub and have multi-hour queue times —
+          # switching to macos-14 for both targets keeps CI fast.
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            tool: cargo
+            archive_ext: tar.gz
+          # Windows x64 — covers ~95% of corporate Windows installs.
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            tool: cargo
+            archive_ext: zip
+          # ── Cross-compile targets — DEFERRED to PR-D-1.5 ─────────────
+          # Linux musl + Windows ARM64 cross-compile via cargo zigbuild
+          # was blocked on:
+          #   • ring's build.rs needing x86_64-linux-musl-gcc (not on
+          #     ubuntu-22.04 by default; needs musl-tools + CC env wiring
+          #     to point at zig cc as the C compiler)
+          #   • zig 0.13 on Windows ARM64 runs into "InvalidWtf8" linker
+          #     spawn error — needs zig 0.14+ (or different cross-compile
+          #     strategy entirely)
+          # Both are tractable but not on the critical path for the
+          # "anyone can install without admin" story — Mac + Windows-x64
+          # cover the majority of dev machines. Linux users typically
+          # cargo install ourselves anyway. Adding back in PR-D-1.5.
+          # - target: x86_64-unknown-linux-musl
+          # - target: aarch64-unknown-linux-musl
+          # - target: aarch64-pc-windows-msvc
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (rust-toolchain.toml resolves channel + targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/agentprovision-cli/target
+            apps/agentprovision-core/target
+          key: cli-${{ matrix.target }}-${{ hashFiles('apps/agentprovision-cli/Cargo.lock', 'apps/agentprovision-core/Cargo.toml', 'apps/agentprovision-cli/Cargo.toml') }}
+          restore-keys: |
+            cli-${{ matrix.target }}-
+
+      - name: cargo fmt --check
+        working-directory: apps/agentprovision-cli
+        run: cargo fmt --all -- --check
+
+      # clippy: run as informational for now (no -D warnings). Phase 4.5
+      # follow-up: enable strict mode after the existing CLI code is
+      # cleaned of clippy warnings.
+      - name: clippy
+        working-directory: apps/agentprovision-cli
+        run: cargo clippy --target ${{ matrix.target }} --all-targets
+
+      # No --locked yet — Cargo.lock isn't committed at workspace root.
+      # Phase 4.5 follow-up: commit Cargo.lock + re-add --locked.
+      - name: Build
+        working-directory: apps/agentprovision-cli
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Smoke test (--version on every target — all 3 native to runner)
+        shell: bash
+        run: |
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          if [[ "${{ matrix.runner }}" == "windows-latest" ]]; then
+            BIN="${BIN}.exe"
+          fi
+          test -x "$BIN" || { echo "binary not executable: $BIN"; ls -la "$(dirname "$BIN")"; exit 1; }
+          "$BIN" --version
+          "$BIN" --help | head -5
+
+      - name: Report binary size
+        shell: bash
+        run: |
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          [[ "${{ matrix.runner }}" == "windows-latest" ]] && BIN="${BIN}.exe"
+          if [ -f "$BIN" ]; then
+            echo "## ${{ matrix.target }} binary" >> $GITHUB_STEP_SUMMARY
+            echo "Size: $(du -h "$BIN" | cut -f1)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentprovision-${{ matrix.target }}
+          path: apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision*
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate:
+    name: All targets built
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - run: echo "All 3 native target triples built and uploaded. Linux + Windows-ARM64 in PR-D-1.5."
