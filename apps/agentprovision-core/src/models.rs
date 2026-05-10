@@ -6,13 +6,26 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Token {
     pub access_token: String,
     #[serde(default = "default_token_type")]
     pub token_type: String,
+}
+
+// PR #332 review Critical #1 fix: never let the bearer token print
+// through the default `#[derive(Debug)]` impl — even with -vv on the
+// CLI, the only thing log lines should ever see is `Token { access_token: <redacted>, .. }`.
+impl fmt::Debug for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Token")
+            .field("access_token", &"<redacted>")
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 fn default_token_type() -> String {
@@ -128,4 +141,28 @@ pub struct DeviceCodeResponse {
 
 fn default_interval() -> u64 {
     5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks down the Critical #1 fix: a Token must never expose its
+    /// `access_token` through `Debug` formatting. If a future refactor
+    /// re-derives `Debug` on `Token`, this test fails.
+    #[test]
+    fn token_debug_redacts_access_token() {
+        let t = Token {
+            access_token: "very-secret-bearer-1234567890".into(),
+            token_type: "bearer".into(),
+        };
+        let dbg = format!("{t:?}");
+        assert!(
+            !dbg.contains("very-secret-bearer"),
+            "Token Debug leaked access_token: {dbg}"
+        );
+        assert!(dbg.contains("<redacted>"), "expected <redacted>: {dbg}");
+        // token_type should still print so logs remain useful.
+        assert!(dbg.contains("bearer"), "token_type should remain: {dbg}");
+    }
 }
