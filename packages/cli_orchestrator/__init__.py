@@ -1,4 +1,4 @@
-"""CLI orchestrator package — Phase 1 (error contract + redaction primitives).
+"""CLI orchestrator package — Phase 1 + Phase 2 surface.
 
 Phase 1 ships:
   - ``Status`` normalised failure-class enum
@@ -9,13 +9,26 @@ Phase 1 ships:
   - ``redact(text)`` and ``redact_json_structural(payload)`` — secret scrub
   - ``cleanup_codex_home(path)`` — idempotent ``~/.codex`` rmtree helper
   - ``SENSITIVE_ENV_KEYS`` — extends ``skill_manager._SENSITIVE_ENV_KEYS``
-    with platform-token names. Defined here, not wired anywhere yet —
-    Phase 2 adapters import it.
+    with platform-token names.
 
-No ``ProviderAdapter``, no ``FallbackPolicy``, no ``ResilientExecutor``,
-no ``ExecutionMetadata`` are exported in Phase 1 — those land in Phase 2.
+Phase 2 ships:
+  - ``FallbackDecision`` + ``decide(...)`` + ``MAX_FALLBACK_DEPTH`` — pure
+    fallback policy (design §3 + §3.1 + §3.2 R1).
+  - ``ProviderAdapter`` Protocol + ``ExecutionRequest`` / ``ExecutionResult``
+    / ``PreflightResult`` dataclasses (``adapters.base``).
+  - ``TemporalActivityAdapter`` (``adapters.temporal_activity``) — api-side
+    adapter that dispatches ``ChatCliWorkflow``.
+  - ``ResilientExecutor`` (``executor``) — sync chain walker that applies
+    preflight + retry + fallback + redaction + Prometheus metrics.
+  - ``shadow`` — agreement-metric plumbing for the flag-off cutover gate.
 """
 from .classifier import classify, classify_with_legacy_label
+from .policy import (
+    FallbackAction,
+    FallbackDecision,
+    MAX_FALLBACK_DEPTH,
+    decide,
+)
 from .redaction import (
     SENSITIVE_ENV_KEYS,
     cleanup_codex_home,
@@ -32,4 +45,8 @@ __all__ = [
     "redact_json_structural",
     "cleanup_codex_home",
     "SENSITIVE_ENV_KEYS",
+    "FallbackAction",
+    "FallbackDecision",
+    "MAX_FALLBACK_DEPTH",
+    "decide",
 ]
