@@ -74,6 +74,9 @@ from app.api.v1 import (
     insights_coalition_replay,
     metrics,
     internal_orchestrator_events,
+    internal_agent_tokens,
+    internal_agent_heartbeat,
+    internal_agent_tasks,
 )
 
 _logger = logging.getLogger(__name__)
@@ -186,6 +189,26 @@ router.include_router(metrics.router, tags=["metrics"])
 router.include_router(
     internal_orchestrator_events.router,
     prefix="/internal", tags=["internal"],
+)
+# Phase 4 commit 5 — agent-token mint endpoint (worker-side mint).
+router.include_router(
+    internal_agent_tokens.router,
+    prefix="/internal", tags=["internal"],
+)
+# Phase 4 commit 8 — leaf-side heartbeat endpoint. Path is
+# /api/v1/agents/internal/heartbeat per design §10.3(c) — declared in
+# the router itself with the full path so we mount at the v1 root.
+router.include_router(
+    internal_agent_heartbeat.router,
+    tags=["internal"],
+)
+# Phase 4 review fix — request-approval endpoint backing the
+# request_human_approval MCP tool. Path is
+# /api/v1/tasks/internal/{task_id}/request-approval declared in the
+# router itself so we mount at the v1 root.
+router.include_router(
+    internal_agent_tasks.router,
+    tags=["internal"],
 )
 
 # Register optional modules that loaded successfully

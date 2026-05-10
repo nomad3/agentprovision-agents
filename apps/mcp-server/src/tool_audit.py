@@ -30,7 +30,7 @@ from typing import Any
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from src.mcp_auth import resolve_tenant_id
+from src.mcp_auth import resolve_auth_context, resolve_tenant_id
 
 logger = logging.getLogger(__name__)
 
@@ -219,13 +219,13 @@ def install_audit(mcp_server) -> None:
         )
         started = time.monotonic()
         started_unix = time.time()
-        # Resolve tenant_id from request context first, fall back to the
-        # `tenant_id` argument that most agentprovision MCP tools accept
-        # explicitly. Without the fallback, audit drops every call where
-        # context resolution races the request lifecycle.
+        # Resolve auth context first — gives us the agent_token tier
+        # info we need for scope enforcement (Phase 4 commit 7).
+        auth_ctx = None
         try:
             ctx = mcp_server.get_context()
-            tenant_id = resolve_tenant_id(ctx)
+            auth_ctx = resolve_auth_context(ctx)
+            tenant_id = auth_ctx.tenant_id
         except Exception:
             tenant_id = None
         if not tenant_id:
@@ -235,6 +235,45 @@ def install_audit(mcp_server) -> None:
         result = None
         error_msg = None
         status = "ok"
+
+        # ── Phase 4 commit 7: scope enforcement gate ───────────────────
+        # When tier=agent_token AND scope is not None AND tool_name not
+        # in scope → 403 + audit-log entry. Bare tool name (no
+        # mcp__agentprovision__ prefix) is the canonical scope-list
+        # form (resolve_tool_names returns bare names; the prefix is
+        # added only at the --allowedTools CLI flag stage).
+        if (
+            auth_ctx is not None
+            and auth_ctx.tier == "agent_token"
+            and auth_ctx.scope is not None
+            and tool_name not in auth_ctx.scope
+        ):
+            status = "scope_denied"
+            error_msg = (
+                f"tool {tool_name!r} not in agent_token scope "
+                f"(allowed: {sorted(auth_ctx.scope)[:10]})"
+            )
+            # Log the scope-denial audit row synchronously — we MUST
+            # surface it before raising.
+            try:
+                duration_ms = int((time.monotonic() - started) * 1000)
+                _log_call(
+                    tenant_id=tenant_id,
+                    tool_name=tool_name,
+                    arguments=dict(arguments) if arguments else {},
+                    result_status=status,
+                    result_summary="",
+                    error=error_msg,
+                    duration_ms=duration_ms,
+                    started_at_unix=started_unix,
+                )
+            except Exception:
+                logger.warning(
+                    "tool_audit: scope-denial audit write failed",
+                    exc_info=True,
+                )
+            raise PermissionError(error_msg)
+
         try:
             result = await original_handler(req)
             return result

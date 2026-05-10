@@ -49,6 +49,9 @@ class AgentTask(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    # Phase 4 — updated by /api/v1/agents/internal/heartbeat (PostToolUse
+    # hook). Migration 122 adds the underlying column.
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     group = relationship("AgentGroup")

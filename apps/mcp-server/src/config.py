@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     API_BASE_URL: str = "http://localhost:8000"
     API_INTERNAL_KEY: str = "internal-service-key"
 
+    # Phase 4: shared with apps/api so agent-tokens minted by the API
+    # pod verify here. Same env var (SECRET_KEY) — set in helm + docker
+    # compose so both pods read the same value.
+    SECRET_KEY: str = "test-secret-key-not-real-32bytes-12345"
+    ALGORITHM: str = "HS256"
+
     # PostgreSQL (shared with API — needed for knowledge tools)
     DATABASE_URL: str = ""
 
