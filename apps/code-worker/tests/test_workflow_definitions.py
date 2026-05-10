@@ -17,7 +17,19 @@ class TestDataclasses:
     def test_code_task_input_round_trip(self):
         ti = wf.CodeTaskInput(task_description="x", tenant_id="t", context="c")
         as_dict = dataclasses.asdict(ti)
-        assert as_dict == {"task_description": "x", "tenant_id": "t", "context": "c"}
+        # Phase 4: agent_id/task_id/parent_workflow_id/parent_chain/
+        # allowed_tools are optional and default None — preserves byte-
+        # identical legacy behavior on the chat hot path.
+        assert as_dict == {
+            "task_description": "x",
+            "tenant_id": "t",
+            "context": "c",
+            "agent_id": None,
+            "task_id": None,
+            "parent_workflow_id": None,
+            "parent_chain": None,
+            "allowed_tools": None,
+        }
 
     def test_code_task_result_default_error(self):
         r = wf.CodeTaskResult(

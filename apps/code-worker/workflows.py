@@ -131,6 +131,15 @@ class CodeTaskInput:
     task_description: str
     tenant_id: str
     context: Optional[str] = None
+    # Phase 4 commit 5 — optional fields populated by /tasks/dispatch
+    # for agent-token minting + hook injection. All optional so legacy
+    # callers (including the chat hot path that doesn't go through
+    # /tasks/dispatch) remain byte-identical.
+    agent_id: Optional[str] = None
+    task_id: Optional[str] = None
+    parent_workflow_id: Optional[str] = None
+    parent_chain: Optional[list] = None
+    allowed_tools: Optional[list] = None  # bare tool names, no prefix
 
 
 @dataclass
@@ -464,6 +473,77 @@ def _consensus_check(reviews: list, required: int = 2) -> tuple:
     return passed, "\n".join(lines)
 
 
+def _inject_agent_token_and_hooks(
+    *,
+    task_input: "CodeTaskInput",
+    claude_env: dict,
+) -> None:
+    """Phase 4 — mint agent-token from /api/v1/internal/agent-tokens/mint
+    and write the .claude.json + .claude/hooks/ scripts into WORKSPACE.
+
+    Mutates ``claude_env`` in place to add:
+      - AGENTPROVISION_AGENT_TOKEN
+      - AGENTPROVISION_TASK_ID
+      - AGENTPROVISION_PARENT_WORKFLOW_ID (if any)
+      - AGENTPROVISION_ALLOWED_TOOLS (whitespace-separated)
+      - AGENTPROVISION_API (base URL the PostToolUse hook calls)
+
+    Best-effort: any exception here is caught at the call site and the
+    leaf falls back to legacy auth.
+    """
+    from pathlib import Path
+    import os as _os
+
+    import hook_templates  # local import — code-worker module
+
+    api_base_url = _os.environ.get("API_BASE_URL", "http://api:8000")
+    internal_key = _os.environ.get("API_INTERNAL_KEY") or _os.environ.get(
+        "MCP_API_KEY", "dev_mcp_key"
+    )
+    mcp_tools_url = _os.environ.get(
+        "MCP_TOOLS_URL",
+        _os.environ.get("MCP_SERVER_URL", "http://mcp-tools:8086"),
+    )
+
+    payload = {
+        "tenant_id": str(task_input.tenant_id),
+        "agent_id": str(task_input.agent_id),
+        "task_id": str(task_input.task_id),
+        "parent_workflow_id": task_input.parent_workflow_id,
+        "scope": list(task_input.allowed_tools or []) or None,
+        "parent_chain": list(task_input.parent_chain or []),
+    }
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.post(
+            f"{api_base_url}/api/v1/internal/agent-tokens/mint",
+            json=payload,
+            headers={"X-Internal-Key": internal_key},
+        )
+    resp.raise_for_status()
+    token = resp.json()["token"]
+
+    workdir = Path(WORKSPACE)
+    hook_templates.write_claude_hooks(workdir)
+    hook_templates.write_claude_mcp_config(
+        workdir=workdir,
+        agent_token=token,
+        mcp_url=f"{mcp_tools_url}/sse",
+    )
+
+    # Inject env trio for the leaf subprocess + hooks.
+    claude_env["AGENTPROVISION_AGENT_TOKEN"] = token
+    claude_env["AGENTPROVISION_TASK_ID"] = str(task_input.task_id)
+    if task_input.parent_workflow_id:
+        claude_env["AGENTPROVISION_PARENT_WORKFLOW_ID"] = (
+            task_input.parent_workflow_id
+        )
+    if task_input.allowed_tools:
+        claude_env["AGENTPROVISION_ALLOWED_TOOLS"] = " ".join(
+            task_input.allowed_tools
+        )
+    claude_env["AGENTPROVISION_API"] = api_base_url
+
+
 @activity.defn
 async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
     """Execute a code task using Claude Code CLI."""
@@ -479,6 +559,22 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         activity.heartbeat("Fetching Claude token...")
         token = _fetch_claude_token(task_input.tenant_id)
         claude_env = {"CLAUDE_CODE_OAUTH_TOKEN": token}
+
+        # 1b. Phase 4 commit 5 — agent-token mint + hook injection.
+        # Only fires when the dispatch endpoint populated agent_id +
+        # task_id on CodeTaskInput. Legacy callers (chat hot path)
+        # pass neither — preserving byte-identical pre-Phase-4 behavior.
+        if task_input.agent_id and task_input.task_id:
+            try:
+                _inject_agent_token_and_hooks(
+                    task_input=task_input,
+                    claude_env=claude_env,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "agent-token injection failed (continuing without): %s",
+                    exc,
+                )
 
         # 2. Pull latest code
         activity.heartbeat("Pulling latest code...")
