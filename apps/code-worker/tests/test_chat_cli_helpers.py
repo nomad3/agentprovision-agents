@@ -22,6 +22,7 @@ import subprocess
 
 import pytest
 
+import cli_runtime
 import workflows as wf
 
 
@@ -100,7 +101,7 @@ class TestExecuteCodexChat:
         output_file.write_text("Codex says hi")
 
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout="", stderr=""),
         )
 
@@ -123,7 +124,7 @@ class TestExecuteCodexChat:
         session_dir.mkdir()
 
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=1, stdout="", stderr="rate limit"),
         )
 
@@ -149,7 +150,7 @@ class TestExecuteCodexChat:
             captured["cmd"] = cmd
             return _completed(returncode=0)
 
-        monkeypatch.setattr(wf, "_run_cli_with_heartbeat", fake_run)
+        monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", fake_run)
 
         wf._execute_codex_chat(
             _make_input(), session_dir=str(session_dir), image_path="/tmp/img.jpg",

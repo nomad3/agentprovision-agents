@@ -14,5 +14,6 @@ shrinks workflows.py to its real responsibility (workflow + activity
 orchestration) and gives each platform a clean public module.
 """
 from cli_executors.claude import execute_claude_chat
+from cli_executors.codex import execute_codex_chat
 
-__all__ = ["execute_claude_chat"]
+__all__ = ["execute_claude_chat", "execute_codex_chat"]
