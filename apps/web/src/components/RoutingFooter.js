@@ -1,5 +1,56 @@
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { FaExchangeAlt, FaExclamationTriangle, FaServer } from 'react-icons/fa';
+import { useTranslation } from 'react-i18next';
+
+/**
+ * Phase 3 commit 6 — resolve summary.actionable_hint via i18n with
+ * fallback chain: specific platform key → generic key → English literal.
+ * The actionable_hint is an i18n key shaped ``cli.errors.<status>[.<platform>]``
+ * (see packages/cli_orchestrator/policy.py:_hint_key) — so we look up the
+ * full key first, then fall back to the generic ``cli.errors.<status>``,
+ * then to a hard-coded English literal. The cliErrors namespace uses
+ * dot-keyed flat strings; we pass keySeparator: false on the t() call.
+ */
+const _GENERIC_HINT_FOR_KEY = (key) => {
+  // key shape: cli.errors.<status>[.<platform>]
+  // Drop the trailing platform segment if present.
+  if (!key) return null;
+  const parts = key.split('.');
+  if (parts.length <= 3) return key; // already generic
+  return parts.slice(0, 3).join('.');
+};
+
+const _ENGLISH_LITERAL_FOR_KEY = (key) => {
+  if (!key) return null;
+  if (key.includes('needs_auth')) return 'Reconnect this CLI in Settings → Integrations to keep using it.';
+  if (key.includes('workspace_untrusted')) return 'This workspace isn\'t marked as trusted for the selected CLI.';
+  if (key.includes('api_disabled')) return 'The selected CLI\'s cloud API isn\'t enabled for your account.';
+  if (key.includes('quota_exhausted')) return 'Your CLI subscription hit its rate limit; we tried other CLIs in your chain.';
+  if (key.includes('recursion_depth_exceeded')) return 'Agent fallback chain too deep — refusing to fan out further.';
+  if (key.includes('recursion_cycle')) return 'Agent fallback chain has a cycle — refusing to repeat the same agent.';
+  if (key.includes('unknown_failure')) return 'The CLI returned an unrecognised error.';
+  return null;
+};
+
+/**
+ * Resolve the actionable_hint key with platform → generic → literal fallback.
+ * Exported for testing.
+ */
+export const resolveActionableHint = (t, hintKey) => {
+  if (!hintKey) return null;
+  const literal = _ENGLISH_LITERAL_FOR_KEY(hintKey);
+  const genericKey = _GENERIC_HINT_FOR_KEY(hintKey);
+  // Try platform-specific first, then generic, then English literal.
+  // i18next: passing defaultValue cascades naturally; nest two t() calls.
+  const opts = { keySeparator: false, ns: 'cliErrors' };
+  const specific = t(hintKey, { ...opts, defaultValue: '__missing__' });
+  if (specific !== '__missing__') return specific;
+  if (genericKey && genericKey !== hintKey) {
+    const generic = t(genericKey, { ...opts, defaultValue: '__missing__' });
+    if (generic !== '__missing__') return generic;
+  }
+  return literal;
+};
 
 /**
  * One-line footer rendered under each assistant message showing what
@@ -18,8 +69,16 @@ import { FaExchangeAlt, FaExclamationTriangle, FaServer } from 'react-icons/fa';
  * messages from before this feature).
  */
 const RoutingFooter = ({ context }) => {
+  const { t } = useTranslation('cliErrors');
   const summary = context?.routing_summary;
   if (!summary) return null;
+
+  // Phase 3 commit 6 — surface the actionable_hint to the user.
+  // hintKey is e.g. ``cli.errors.needs_auth.claude_code``; we resolve
+  // with platform → generic → English-literal fallback.
+  const actionableHintMsg = resolveActionableHint(
+    t, summary?.actionable_hint || context?.actionable_hint,
+  );
 
   const tokens = context?.tokens_used;
   const cost = context?.cost_usd;
@@ -89,6 +148,22 @@ const RoutingFooter = ({ context }) => {
     'aria-label': tooltipText,
   };
 
+  // Actionable hint — rendered as a soft annotation under the main
+  // routing line on any branch where a hint is set. Phase 3 commit 6.
+  const actionableNode = actionableHintMsg ? (
+    <div
+      data-testid="routing-actionable-hint"
+      style={{
+        fontSize: '0.7rem',
+        color: 'var(--color-soft, #6b7785)',
+        opacity: 0.9,
+        marginTop: '0.15rem',
+      }}
+    >
+      {actionableHintMsg}
+    </div>
+  ) : null;
+
   if (exhausted) {
     return (
       <OverlayTrigger placement="top" overlay={tip}>
@@ -104,6 +179,7 @@ const RoutingFooter = ({ context }) => {
           <Badge bg="danger" pill style={{ fontSize: '0.6rem' }}>
             chain exhausted
           </Badge>
+          {actionableNode}
         </div>
       </OverlayTrigger>
     );
@@ -125,6 +201,7 @@ const RoutingFooter = ({ context }) => {
           <Badge bg="warning" pill style={{ fontSize: '0.6rem' }}>
             fallback
           </Badge>
+          {actionableNode}
         </div>
       </OverlayTrigger>
     );
@@ -139,6 +216,7 @@ const RoutingFooter = ({ context }) => {
           Served by <strong>{summary.served_by}</strong>
           {metricTail}
         </span>
+        {actionableNode}
       </div>
     </OverlayTrigger>
   );

@@ -1,0 +1,12 @@
+{
+  "cli.errors.needs_auth": "Reconnect this CLI in Settings → Integrations to keep using it.",
+  "cli.errors.needs_auth.claude_code": "Your Claude Code subscription needs reconnecting in Settings → Integrations.",
+  "cli.errors.needs_auth.gemini_cli": "Your Gemini CLI account needs reconnecting in Settings → Integrations.",
+  "cli.errors.needs_auth.copilot_cli": "Your GitHub Copilot CLI seat needs reconnecting in Settings → Integrations.",
+  "cli.errors.workspace_untrusted": "This workspace isn't marked as trusted for the selected CLI. Run the CLI's auth flow once.",
+  "cli.errors.api_disabled": "The selected CLI's cloud API isn't enabled for your account.",
+  "cli.errors.quota_exhausted": "Your CLI subscription hit its rate limit; we tried other CLIs in your chain.",
+  "cli.errors.recursion_depth_exceeded": "Agent fallback chain too deep — refusing to fan out further.",
+  "cli.errors.recursion_cycle": "Agent fallback chain has a cycle — refusing to repeat the same agent.",
+  "cli.errors.unknown_failure": "The CLI returned an unrecognised error; the snippet is in the operator log."
+}
