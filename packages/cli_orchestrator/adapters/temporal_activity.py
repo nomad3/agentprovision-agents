@@ -43,6 +43,80 @@ logger = logging.getLogger(__name__)
 _SUMMARY_MAX_BYTES = 4096
 
 
+# --------------------------------------------------------------------------
+# Phase 3 commit 2 — Temporal queue heartbeat-staleness probe
+# --------------------------------------------------------------------------
+
+_QUEUE_PROBE_OVERRIDE: Optional[tuple] = None
+"""Tests inject (redis_get, redis_setex, hb_probe) here to bypass Redis."""
+
+
+def _resolve_queue_probe_closures():
+    """Return ``(redis_get, redis_setex, hb_probe)`` closures.
+
+    Defaults to a Redis-backed implementation reading the same
+    ``cli_orchestrator:heartbeat:agentprovision-code`` key the worker
+    stamps. On Redis unavailability or any error the closures degrade
+    to no-op / None (the canonical helper handles that as
+    ``PROVIDER_UNAVAILABLE``).
+    """
+    if _QUEUE_PROBE_OVERRIDE is not None:
+        return _QUEUE_PROBE_OVERRIDE
+
+    _redis_singleton = None
+
+    def _client():
+        nonlocal _redis_singleton
+        if _redis_singleton is not None:
+            return _redis_singleton
+        try:
+            import redis as redis_lib  # type: ignore
+            url = os.environ.get("REDIS_URL", "redis://redis:6379/0")
+            client = redis_lib.Redis.from_url(
+                url, socket_timeout=0.5, socket_connect_timeout=0.5,
+            )
+            client.ping()
+            _redis_singleton = client
+            return client
+        except Exception:  # noqa: BLE001
+            return None
+
+    def redis_get(k):
+        c = _client()
+        if c is None:
+            return None
+        try:
+            return c.get(k)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def redis_setex(k, ttl, v):
+        c = _client()
+        if c is None:
+            return
+        try:
+            c.setex(k, ttl, v)
+        except Exception:  # noqa: BLE001
+            return
+
+    def hb_probe():
+        c = _client()
+        if c is None:
+            return None
+        try:
+            raw = c.get("cli_orchestrator:heartbeat:agentprovision-code")
+        except Exception:  # noqa: BLE001
+            return None
+        if raw is None:
+            return None
+        try:
+            return float(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
+        except (ValueError, TypeError):
+            return None
+
+    return (redis_get, redis_setex, hb_probe)
+
+
 def _truncate(text: str) -> str:
     if not text:
         return ""
@@ -79,12 +153,16 @@ class TemporalActivityAdapter:
     # ── Protocol surface ─────────────────────────────────────────────
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        """Phase 2 preflight: assert the Temporal-SDK is importable.
+        """Phase 3 preflight: SDK importable + heartbeat-staleness probe.
 
-        Phase 3 will extend this with a ``describe_task_queue`` probe
-        cached for 30s. For now we keep the latency budget at < 1ms
-        (one importlib lookup) and trust the dispatch to surface a
-        clear error if Temporal is genuinely down.
+        Per design §6 row 5 + plan §2.3: heartbeat-staleness, NOT
+        ``describe_task_queue``. The probe reads a Redis key the
+        worker stamps periodically; a stale or absent heartbeat
+        returns ``PROVIDER_UNAVAILABLE``.
+
+        On the api-side dispatcher path the closure is wired here once
+        per process (lazy Redis client). Tests inject overrides via
+        the module-level ``_QUEUE_PROBE_OVERRIDE`` hook.
         """
         try:
             import temporalio.client  # noqa: F401
@@ -93,7 +171,22 @@ class TemporalActivityAdapter:
                 Status.PROVIDER_UNAVAILABLE,
                 "temporalio SDK not installed",
             )
-        return PreflightResult.succeed()
+        # Heartbeat-staleness check — design §6 row 5.
+        try:
+            from ..preflight import check_temporal_queue_reachable
+            from . import temporal_activity as _self_mod
+            redis_get, redis_setex, hb_probe = _resolve_queue_probe_closures()
+            return check_temporal_queue_reachable(
+                redis_get=redis_get,
+                redis_setex=redis_setex,
+                heartbeat_probe=hb_probe,
+            )
+        except Exception:  # noqa: BLE001
+            # Probe wiring failure is non-fatal — fall through to
+            # OK so dispatch can still attempt (and surface a clearer
+            # error if Temporal is genuinely down). Phase 3: prefer
+            # availability of the chat path over failing closed.
+            return PreflightResult.succeed()
 
     def classify_error(
         self,

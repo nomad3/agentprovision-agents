@@ -21,11 +21,42 @@ from cli_orchestrator.status import Status
 
 from cli_executors.gemini import execute_gemini_chat
 
+from cli_orchestrator.preflight import (
+    check_binary_on_path,
+    check_cloud_api_enabled,
+)
+
 from ._common import (
     binary_on_path,
+    check_credential_for_platform,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
+from .preflight_deps import PreflightDeps
+
+
+def _gemini_api_probe() -> bool:
+    """Probe ``generativelanguage.googleapis.com`` reachability.
+
+    Returns True when the API endpoint is reachable. The actual
+    project-level "API enabled" check requires a Google Cloud SDK call
+    keyed by the tenant's GCP project — out of scope for the worker
+    pod. We use HTTP reachability as the proxy: a 401/403 still means
+    the API is enabled (you just don't have creds — that's NEEDS_AUTH,
+    handled by check_credentials_present).
+    """
+    try:
+        import httpx
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get(
+                "https://generativelanguage.googleapis.com/v1beta/models",
+            )
+            # Any 2xx/4xx means the API itself is up. 5xx → treat as
+            # disabled / outage.
+            return 200 <= resp.status_code < 500
+    except Exception:  # noqa: BLE001
+        return False
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +79,36 @@ class GeminiCliAdapter:
     name = "gemini_cli"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("gemini"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`gemini` binary not on $PATH",
-            )
+        # 1. Binary on $PATH
+        with time_preflight_helper(self.name, "binary_on_path"):
+            br = check_binary_on_path("gemini")
+        if not br.ok:
+            return br
+
+        # 2. Credentials present
+        tenant_id = req.tenant_id or (req.payload or {}).get("tenant_id") or ""
+        if tenant_id:
+            with time_preflight_helper(self.name, "credentials_present"):
+                cr = check_credential_for_platform(
+                    PreflightDeps.get(), tenant_id, self.name,
+                )
+            if not cr.ok:
+                return cr
+
+        # 3. Cloud API enabled (Redis-cached, generativelanguage probe)
+        deps = PreflightDeps.get()
+        if tenant_id:
+            with time_preflight_helper(self.name, "cloud_api_enabled"):
+                ar = check_cloud_api_enabled(
+                    redis_get=deps.redis_get,
+                    redis_setex=deps.redis_setex,
+                    probe=_gemini_api_probe,
+                    tenant_id=tenant_id,
+                    platform=self.name,
+                )
+            if not ar.ok:
+                return ar
+
         return PreflightResult.succeed()
 
     def classify_error(

@@ -32,11 +32,16 @@ from cli_orchestrator.status import Status
 # ``execute_claude_chat`` keeps workflows.py out of OUR import graph.
 from cli_executors.claude import execute_claude_chat
 
+from cli_orchestrator.preflight import check_binary_on_path
+
 from ._common import (
     binary_on_path,
+    check_credential_for_platform,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
+from .preflight_deps import PreflightDeps
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +70,22 @@ class ClaudeCodeAdapter:
     name = "claude_code"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("claude"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`claude` binary not on $PATH",
-            )
+        # 1. Binary on $PATH — design §6 row 1
+        with time_preflight_helper(self.name, "binary_on_path"):
+            br = check_binary_on_path("claude")
+        if not br.ok:
+            return br
+
+        # 2. Credentials present in vault — design §6 row 2.
+        tenant_id = req.tenant_id or (req.payload or {}).get("tenant_id") or ""
+        if tenant_id:
+            with time_preflight_helper(self.name, "credentials_present"):
+                cr = check_credential_for_platform(
+                    PreflightDeps.get(), tenant_id, self.name,
+                )
+            if not cr.ok:
+                return cr
+
         return PreflightResult.succeed()
 
     def classify_error(

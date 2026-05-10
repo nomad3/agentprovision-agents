@@ -23,11 +23,37 @@ from cli_orchestrator.status import Status
 
 from cli_executors.copilot import execute_copilot_chat
 
+from cli_orchestrator.preflight import (
+    check_binary_on_path,
+    check_cloud_api_enabled,
+)
+
 from ._common import (
     binary_on_path,
+    check_credential_for_platform,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
+from .preflight_deps import PreflightDeps
+
+
+def _copilot_org_enabled_probe() -> bool:
+    """Probe whether GitHub Copilot is enabled for the org.
+
+    Without a token in the worker environment this is a reachability
+    check on the GitHub API. The actual "is Copilot enabled for THIS
+    org" check requires an org-scoped token — out of scope for the
+    worker pod's preflight (the leaf-side `copilot` invocation surfaces
+    that error directly via stderr).
+    """
+    try:
+        import httpx
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.get("https://api.github.com")
+            return 200 <= resp.status_code < 500
+    except Exception:  # noqa: BLE001
+        return False
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +76,36 @@ class CopilotCliAdapter:
     name = "copilot_cli"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("copilot"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`copilot` binary not on $PATH",
-            )
+        # 1. Binary on $PATH
+        with time_preflight_helper(self.name, "binary_on_path"):
+            br = check_binary_on_path("copilot")
+        if not br.ok:
+            return br
+
+        # 2. Credentials present
+        tenant_id = req.tenant_id or (req.payload or {}).get("tenant_id") or ""
+        if tenant_id:
+            with time_preflight_helper(self.name, "credentials_present"):
+                cr = check_credential_for_platform(
+                    PreflightDeps.get(), tenant_id, self.name,
+                )
+            if not cr.ok:
+                return cr
+
+        # 3. Cloud API enabled (org-enabled probe)
+        deps = PreflightDeps.get()
+        if tenant_id:
+            with time_preflight_helper(self.name, "cloud_api_enabled"):
+                ar = check_cloud_api_enabled(
+                    redis_get=deps.redis_get,
+                    redis_setex=deps.redis_setex,
+                    probe=_copilot_org_enabled_probe,
+                    tenant_id=tenant_id,
+                    platform=self.name,
+                )
+            if not ar.ok:
+                return ar
+
         return PreflightResult.succeed()
 
     def classify_error(
