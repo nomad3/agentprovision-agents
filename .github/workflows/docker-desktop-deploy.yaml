@@ -29,6 +29,31 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # `clean: true` (default) calls rm -rf on the working tree before
+          # syncing. Phase 1.5 introduced docker-compose bind-mounts targeted
+          # at `apps/api/cli_orchestrator` + `apps/code-worker/cli_orchestrator`
+          # — Docker creates phantom (empty, root-owned) target directories
+          # at those paths on the host that the runner can't rmdir while
+          # the containers are running, and stopping the containers in
+          # pre-checkout is impossible (no repo on disk yet). Switch to
+          # clean: false and do an explicit git-clean below that excludes
+          # only the bind-mount phantoms.
+          clean: false
+
+      - name: Reset working tree (skipping Docker bind-mount phantoms)
+        run: |
+          # Equivalent to clean: true but with explicit excludes for the
+          # Phase 1.5 docker-compose bind-mount targets. Without these
+          # excludes the runner fails with EACCES on rmdir.
+          git reset --hard HEAD
+          git clean -fd \
+            -e apps/api/cli_orchestrator \
+            -e apps/code-worker/cli_orchestrator \
+            -e apps/api/.env \
+            -e .env \
+            -e cloudflared/credentials.json \
+            -e cloudflared/cert.pem
 
       - name: Symlink env files
         run: |
