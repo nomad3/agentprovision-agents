@@ -137,11 +137,11 @@ class Status(StrEnum):
 |---------|---------------------------------|--------|
 | claude_code | `credit balance is too low\|usage limit reached\|monthly usage limit\|max plan limit\|out of credits\|insufficient credits` | QUOTA_EXHAUSTED |
 | claude_code | `subscription required\|hit your limit` | QUOTA_EXHAUSTED |
-| claude_code | `not connected\|please connect your` | NEEDS_AUTH |
+| claude_code | `not connected\|please connect your` ¹ | NEEDS_AUTH |
 | codex | `rate[\s_-]?limit\|usage limit\|quota[\s_-]?exceeded\|insufficient_quota\|out of credits\|too many requests\|429` | QUOTA_EXHAUSTED |
 | codex | `unauthorized\|invalid[\s_-]?(grant\|token)\|token[\s_-]?(expired\|invalid)\|401\|403` | NEEDS_AUTH |
 | gemini_cli | `quota[\s_-]?exceeded\|resource_exhausted` | QUOTA_EXHAUSTED |
-| gemini_cli | `workspace[\s_-]?(setup\|trust)\|untrusted` | WORKSPACE_UNTRUSTED |
+| gemini_cli | `workspace[\s_-]?(setup\|trust)\|untrusted` ² | WORKSPACE_UNTRUSTED |
 | gemini_cli | `api[\s_-]?disabled\|enable.*api.*console.cloud` | API_DISABLED |
 | gemini_cli | `permission[\s_-]?denied\|access[\s_-]?denied` | NEEDS_AUTH |
 | copilot_cli | `subscription required\|copilot is not enabled\|forbidden\|429` | QUOTA_EXHAUSTED |
@@ -153,6 +153,10 @@ class Status(StrEnum):
 | no rule matched | — | UNKNOWN_FAILURE |
 
 Every entry in this table maps to a unit test (see §7).
+
+> **¹ Implementation footnote (Phase 1, commit `1fc0d012`).** The `not connected` regex is **narrowed** in `apps/api/app/services/cli_orchestrator/classifier.py` to require either an integration-context keyword (e.g. `subscription`, `integration`) OR a CLI-name word boundary (`claude code`, `codex`, `gemini cli`, `github copilot cli`). Bare `not connected` would otherwise misclassify user prose like "the database is not connected" as `NEEDS_AUTH` / `missing_credential`. The legacy `cli_platform_resolver._MISSING_CRED_PATTERNS` made the same narrowing — the implementation preserves legacy behaviour, the design table did not.
+>
+> **² Implementation footnote (Phase 1).** The `untrusted` alternative is narrowed to `untrusted\s*workspace` for the same reason — the bare word would match unrelated prose. Legacy `_AUTH_PATTERNS` did not include `untrusted` at all, so this is a strictly additive narrowing that fires only on Gemini's actual workspace-trust failure messages.
 
 ## §3 — Fallback policy
 

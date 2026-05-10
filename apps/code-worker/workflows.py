@@ -103,7 +103,7 @@ CODE_TASK_ACTIVITY_TIMEOUT_MINUTES = 120
 CODE_TASK_SCHEDULE_TIMEOUT_MINUTES = 150
 CODE_TASK_HEARTBEAT_SECONDS = 240
 CLAUDE_CODE_MODEL = os.environ.get("CLAUDE_CODE_MODEL", "sonnet").strip() or "sonnet"
-CLAUDE_CREDIT_ERROR_PATTERNS = (
+CLAUDE_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestrator package; canonical for worker runtime until then
     "credit balance is too low",
     "usage limit reached",
     "rate limit reached",
@@ -116,7 +116,7 @@ CLAUDE_CREDIT_ERROR_PATTERNS = (
     "hit your limit",
 )
 
-CODEX_CREDIT_ERROR_PATTERNS = (
+CODEX_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestrator package; canonical for worker runtime until then
     "rate limit",
     "rate_limit",
     "usage limit",
@@ -130,7 +130,7 @@ CODEX_CREDIT_ERROR_PATTERNS = (
     "429",
 )
 
-COPILOT_CREDIT_ERROR_PATTERNS = (
+COPILOT_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestrator package; canonical for worker runtime until then
     "rate limit",
     "rate_limit",
     "usage limit",
