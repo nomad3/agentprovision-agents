@@ -921,150 +921,40 @@ def route_and_execute(
             )
             cli_chain = [platform] if platform else ["opencode"]
 
-    response_text: Optional[str] = None
-    metadata: Dict[str, Any] = {}
-    last_error: Optional[str] = None
-    last_err_class: Optional[str] = None
-    # I1: Track the FIRST failure separately so the customer-facing
-    # fallback message attributes the right error to the originally-
-    # requested CLI. Was previously using last_err_class which reports
-    # codex's auth fail when the real story was "claude_code returned
-    # quota → walked through codex → copilot served". The customer sees
-    # "your requested CLI returned X" — that should be the original
-    # CLI's actual error, not whichever was last in the chain.
-    first_err_class: Optional[str] = None
-    attempted: List[str] = []
+    # Phase 2 cutover branch: the resilient ResilientExecutor at
+    # flag=True, the legacy chain walk at flag=False (default).
+    try:
+        from app.services.cli_orchestrator_shadow import read_flags as _read_flags
+        _use_resilient, _ = _read_flags(db, tenant_id)
+    except Exception:
+        _use_resilient = False
 
     try:
-        for attempt_platform in cli_chain:
-            attempted.append(attempt_platform)
-            try:
-                response_text, metadata = run_agent_session(
-                    db, tenant_id=tenant_id, user_id=user_id,
-                    platform=attempt_platform, agent_slug=agent_slug,
-                    agent_skill_slugs=agent_skill_slugs,
-                    message=message, channel=channel,
-                    sender_phone=sender_phone, conversation_summary=conversation_summary,
-                    image_b64=image_b64, image_mime=image_mime,
-                    db_session_memory=db_session_memory,
-                    pre_built_memory_context=pre_built_memory_context,
-                    agent_tier=agent_tier,
-                    agent_tool_groups=agent_tool_groups,
-                    agent_memory_domains=agent_memory_domains,
-                )
-            except Exception as exc:
-                # Hard exception. Classify finer than just "exception" —
-                # a CancelledError mid-tick is genuinely transient, but
-                # a Pydantic ValidationError or a TypeError is internal
-                # and should NOT promise the customer "retry will help".
-                # I4 from the PR #256 review.
-                err_class_local = _classify_exception(exc)
-                last_error = f"{attempt_platform}: {exc}"
-                last_err_class = err_class_local
-                if first_err_class is None:
-                    first_err_class = err_class_local
-                logger.warning(
-                    "CLI attempt raised (no cooldown set) — tenant=%s platform=%s class=%s err=%s",
-                    str(tenant_id)[:8], attempt_platform, err_class_local, exc,
-                )
-                continue
-
-            # Successful response — done. Log chain telemetry to ops logs;
-            # also stamp a CURATED routing_summary on metadata (lands in
-            # ChatMessage.context) so the chat UI can show "Served by X"
-            # under the assistant message. The summary deliberately
-            # excludes the raw `attempted` list (PR #245 review concern).
-            #
-            # C1 fix: read the ACTUAL served platform from metadata first.
-            # ``cli_session_manager.run_agent_session``'s subscription_missing
-            # branch can substitute local_gemma when the requested CLI lacks
-            # creds — `attempt_platform` is the requested CLI ("claude_code")
-            # while `metadata["platform"]` is what actually served
-            # ("local_gemma"). Without this fix, the footer would say
-            # "Served by Claude Code" when Local Gemma actually answered,
-            # poisoning every downstream analytics metric (cost dashboard,
-            # fleet health, etc).
-            #
-            # I1 fix: pass `first_err_class` so the fallback message
-            # attributes the original CLI's actual failure, not whichever
-            # CLI failed last in the chain.
-            #
-            # I2 fix: when `platform` was None (autodetect, no explicit
-            # default), attribute the chain head as the "requested" so
-            # the fallback footer still renders ("Routed to Copilot
-            # after Claude Code returned X") instead of silently hiding
-            # the chain depth.
-            if response_text:
-                served_actual = (metadata or {}).get("platform") or attempt_platform
-                # When chain dispatched and the resolved/served platform
-                # differs from the requested one, that's a fallback. For
-                # autodetect (platform=None), use the head of the chain
-                # as the "requested" stand-in so the customer sees what
-                # the resolver actually attempted first.
-                requested_for_summary = platform or (cli_chain[0] if cli_chain else None)
-                fallback_fired = (
-                    served_actual != requested_for_summary
-                    if requested_for_summary
-                    else False
-                )
-                if fallback_fired or len(attempted) > 1:
-                    logger.info(
-                        "CLI chain resolved — tenant=%s requested=%s served_actual=%s attempted=%s",
-                        str(tenant_id)[:8], requested_for_summary, served_actual, attempted,
-                    )
-                metadata = metadata or {}
-                metadata["routing_summary"] = _build_routing_summary(
-                    served_by=served_actual,
-                    requested=requested_for_summary,
-                    chain_length=len(attempted),
-                    fallback_reason=first_err_class if fallback_fired else None,
-                )
-                break
-
-            # No response text but no exception — classify the metadata.error.
-            err = (metadata or {}).get("error") if isinstance(metadata, dict) else None
-            err_class = _classify_cli_error(err)
-            last_error = err or "empty response"
-            last_err_class = err_class
-            if first_err_class is None:
-                first_err_class = err_class
-            if err_class in {"quota", "auth"}:
-                logger.info(
-                    "CLI %s returned %s for tenant=%s — cooldown + chain skip: %r",
-                    attempt_platform, err_class, str(tenant_id)[:8], err,
-                )
-                _mark_cli_cooldown(tenant_id, attempt_platform, reason=err_class)
-                continue
-            if err_class == "missing_credential":
-                logger.info(
-                    "CLI %s missing credential for tenant=%s — chain skip (no cooldown): %r",
-                    attempt_platform, str(tenant_id)[:8], err,
-                )
-                continue
-
-            # Unclassified empty response — don't blast through the tenant's
-            # other CLI quotas; let the empty result surface.
-            break
-
-        if not response_text:
-            metadata = metadata or {}
-            metadata.setdefault("error", last_error or "all CLI fallbacks failed")
-            # C2 fix: stamp a routing_summary with `error_state="exhausted"`
-            # so the failure UX has CLI attribution. Without this, an
-            # exhausted chain leaves an error message in chat with no
-            # signal about which CLIs were tried — exactly the moment
-            # the customer most needs the "we tried X then Y" context.
-            metadata["routing_summary"] = _build_routing_summary(
-                served_by=None,
-                requested=platform or (cli_chain[0] if cli_chain else None),
-                chain_length=len(attempted),
-                fallback_reason=first_err_class,
-                error_state="exhausted",
-                last_attempted=attempted[-1] if attempted else None,
+        if _use_resilient:
+            response_text, metadata = _resilient_chain_walk(
+                db=db, tenant_id=tenant_id, user_id=user_id,
+                platform=platform, cli_chain=cli_chain,
+                agent_slug=agent_slug, agent_skill_slugs=agent_skill_slugs,
+                message=message, channel=channel,
+                sender_phone=sender_phone, conversation_summary=conversation_summary,
+                image_b64=image_b64, image_mime=image_mime,
+                db_session_memory=db_session_memory,
+                pre_built_memory_context=pre_built_memory_context,
+                agent_tier=agent_tier, agent_tool_groups=agent_tool_groups,
+                agent_memory_domains=agent_memory_domains,
             )
-            logger.warning(
-                "CLI chain exhausted — tenant=%s requested=%s attempted=%s last_error=%r",
-                str(tenant_id)[:8], platform, attempted, last_error,
+        else:
+            response_text, metadata = _legacy_chain_walk(
+                db=db, tenant_id=tenant_id, user_id=user_id,
+                platform=platform, cli_chain=cli_chain,
+                agent_slug=agent_slug, agent_skill_slugs=agent_skill_slugs,
+                message=message, channel=channel,
+                sender_phone=sender_phone, conversation_summary=conversation_summary,
+                image_b64=image_b64, image_mime=image_mime,
+                db_session_memory=db_session_memory,
+                pre_built_memory_context=pre_built_memory_context,
+                agent_tier=agent_tier, agent_tool_groups=agent_tool_groups,
+                agent_memory_domains=agent_memory_domains,
             )
     except Exception:
         try:
@@ -1085,3 +975,260 @@ def route_and_execute(
         pass
 
     return response_text, metadata
+
+
+# --------------------------------------------------------------------------
+# Phase 2 chain-walk helpers
+# --------------------------------------------------------------------------
+
+def _legacy_chain_walk(
+    *,
+    db,
+    tenant_id,
+    user_id,
+    platform,
+    cli_chain,
+    agent_slug,
+    agent_skill_slugs,
+    message,
+    channel,
+    sender_phone,
+    conversation_summary,
+    image_b64,
+    image_mime,
+    db_session_memory,
+    pre_built_memory_context,
+    agent_tier,
+    agent_tool_groups,
+    agent_memory_domains,
+):
+    """The legacy chain-walk loop, hoisted verbatim from the old
+    in-line block at agent_router lines 938-1068.
+
+    Phase 2 step 9: extracted so the public ``run_agent_router`` can
+    branch between this legacy path (flag=False, default) and the
+    new ``_resilient_chain_walk`` (flag=True). Body is intentionally
+    byte-identical to the prior in-line block — every variable name,
+    every log message, every comment is preserved so a flag=False
+    rollout is structurally a no-op for behaviour.
+    """
+    response_text: Optional[str] = None
+    metadata: Dict[str, Any] = {}
+    last_error: Optional[str] = None
+    last_err_class: Optional[str] = None
+    # I1: Track the FIRST failure separately so the customer-facing
+    # fallback message attributes the right error to the originally-
+    # requested CLI. Was previously using last_err_class which reports
+    # codex's auth fail when the real story was "claude_code returned
+    # quota → walked through codex → copilot served". The customer sees
+    # "your requested CLI returned X" — that should be the original
+    # CLI's actual error, not whichever was last in the chain.
+    first_err_class: Optional[str] = None
+    attempted: List[str] = []
+
+    for attempt_platform in cli_chain:
+        attempted.append(attempt_platform)
+        try:
+            response_text, metadata = run_agent_session(
+                db, tenant_id=tenant_id, user_id=user_id,
+                platform=attempt_platform, agent_slug=agent_slug,
+                agent_skill_slugs=agent_skill_slugs,
+                message=message, channel=channel,
+                sender_phone=sender_phone, conversation_summary=conversation_summary,
+                image_b64=image_b64, image_mime=image_mime,
+                db_session_memory=db_session_memory,
+                pre_built_memory_context=pre_built_memory_context,
+                agent_tier=agent_tier,
+                agent_tool_groups=agent_tool_groups,
+                agent_memory_domains=agent_memory_domains,
+            )
+        except Exception as exc:
+            # Hard exception. Classify finer than just "exception" —
+            # a CancelledError mid-tick is genuinely transient, but
+            # a Pydantic ValidationError or a TypeError is internal
+            # and should NOT promise the customer "retry will help".
+            # I4 from the PR #256 review.
+            err_class_local = _classify_exception(exc)
+            last_error = f"{attempt_platform}: {exc}"
+            last_err_class = err_class_local
+            if first_err_class is None:
+                first_err_class = err_class_local
+            logger.warning(
+                "CLI attempt raised (no cooldown set) — tenant=%s platform=%s class=%s err=%s",
+                str(tenant_id)[:8], attempt_platform, err_class_local, exc,
+            )
+            continue
+
+        # Successful response — done. Log chain telemetry to ops logs;
+        # also stamp a CURATED routing_summary on metadata (lands in
+        # ChatMessage.context) so the chat UI can show "Served by X"
+        # under the assistant message. The summary deliberately
+        # excludes the raw `attempted` list (PR #245 review concern).
+        if response_text:
+            served_actual = (metadata or {}).get("platform") or attempt_platform
+            requested_for_summary = platform or (cli_chain[0] if cli_chain else None)
+            fallback_fired = (
+                served_actual != requested_for_summary
+                if requested_for_summary
+                else False
+            )
+            if fallback_fired or len(attempted) > 1:
+                logger.info(
+                    "CLI chain resolved — tenant=%s requested=%s served_actual=%s attempted=%s",
+                    str(tenant_id)[:8], requested_for_summary, served_actual, attempted,
+                )
+            metadata = metadata or {}
+            metadata["routing_summary"] = _build_routing_summary(
+                served_by=served_actual,
+                requested=requested_for_summary,
+                chain_length=len(attempted),
+                fallback_reason=first_err_class if fallback_fired else None,
+            )
+            break
+
+        # No response text but no exception — classify the metadata.error.
+        err = (metadata or {}).get("error") if isinstance(metadata, dict) else None
+        err_class = _classify_cli_error(err)
+        last_error = err or "empty response"
+        last_err_class = err_class
+        if first_err_class is None:
+            first_err_class = err_class
+        if err_class in {"quota", "auth"}:
+            logger.info(
+                "CLI %s returned %s for tenant=%s — cooldown + chain skip: %r",
+                attempt_platform, err_class, str(tenant_id)[:8], err,
+            )
+            _mark_cli_cooldown(tenant_id, attempt_platform, reason=err_class)
+            continue
+        if err_class == "missing_credential":
+            logger.info(
+                "CLI %s missing credential for tenant=%s — chain skip (no cooldown): %r",
+                attempt_platform, str(tenant_id)[:8], err,
+            )
+            continue
+
+        # Unclassified empty response — don't blast through the tenant's
+        # other CLI quotas; let the empty result surface.
+        break
+
+    if not response_text:
+        metadata = metadata or {}
+        metadata.setdefault("error", last_error or "all CLI fallbacks failed")
+        # C2 fix: stamp a routing_summary with `error_state="exhausted"`
+        # so the failure UX has CLI attribution.
+        metadata["routing_summary"] = _build_routing_summary(
+            served_by=None,
+            requested=platform or (cli_chain[0] if cli_chain else None),
+            chain_length=len(attempted),
+            fallback_reason=first_err_class,
+            error_state="exhausted",
+            last_attempted=attempted[-1] if attempted else None,
+        )
+        logger.warning(
+            "CLI chain exhausted — tenant=%s requested=%s attempted=%s last_error=%r",
+            str(tenant_id)[:8], platform, attempted, last_error,
+        )
+
+    return response_text, metadata
+
+
+def _resilient_chain_walk(
+    *,
+    db,
+    tenant_id,
+    user_id,
+    platform,
+    cli_chain,
+    agent_slug,
+    agent_skill_slugs,
+    message,
+    channel,
+    sender_phone,
+    conversation_summary,
+    image_b64,
+    image_mime,
+    db_session_memory,
+    pre_built_memory_context,
+    agent_tier,
+    agent_tool_groups,
+    agent_memory_domains,
+):
+    """The new ResilientExecutor-driven chain walk (flag=True path).
+
+    Builds an ExecutionRequest, hands the chain to a ResilientExecutor
+    wired with the api-side TemporalActivityAdapter for each platform
+    in the chain, and shapes the resulting ExecutionResult into the
+    legacy ``(response_text, metadata)`` tuple.
+
+    The ``metadata['routing_summary']`` keys the chat UI footer reads
+    are produced by ``ExecutionResult.to_metadata_dict()`` plus a
+    final ``_build_routing_summary`` call so the legacy footer
+    consumer doesn't have to know about the new path.
+    """
+    from cli_orchestrator.adapters.base import ExecutionRequest
+    from cli_orchestrator.adapters.temporal_activity import TemporalActivityAdapter
+    from cli_orchestrator.executor import ResilientExecutor
+    from cli_orchestrator.status import Status as _Status
+
+    chain_tuple = tuple(cli_chain or ())
+    if not chain_tuple:
+        return None, {"error": "empty CLI chain"}
+
+    adapters = {p: TemporalActivityAdapter(platform=p) for p in chain_tuple}
+    executor = ResilientExecutor(adapters=adapters, decision_point="chat_response")
+
+    payload = {
+        "message": message,
+        "agent_slug": agent_slug,
+        "agent_skill_slugs": agent_skill_slugs,
+        "channel": channel,
+        "sender_phone": sender_phone,
+        "conversation_summary": conversation_summary,
+        "image_b64": image_b64,
+        "image_mime": image_mime,
+        "db_session_memory": db_session_memory,
+        "pre_built_memory_context": pre_built_memory_context,
+        "agent_tier": agent_tier,
+        "agent_tool_groups": agent_tool_groups,
+        "agent_memory_domains": agent_memory_domains,
+        "user_id": str(user_id),
+    }
+
+    req = ExecutionRequest(
+        chain=chain_tuple,
+        platform=chain_tuple[0],
+        payload=payload,
+        parent_chain=(),
+        tenant_id=str(tenant_id),
+    )
+
+    result = executor.execute(req)
+    metadata: Dict[str, Any] = result.to_metadata_dict()
+
+    if result.status is _Status.EXECUTION_SUCCEEDED:
+        served_actual = result.platform
+        requested_for_summary = platform or (chain_tuple[0] if chain_tuple else None)
+        fallback_fired = bool(
+            requested_for_summary and served_actual != requested_for_summary
+        )
+        # Stamp routing_summary in the same shape the legacy footer reads.
+        metadata["routing_summary"] = _build_routing_summary(
+            served_by=served_actual,
+            requested=requested_for_summary,
+            chain_length=len(result.platform_attempted),
+            fallback_reason=("auth" if fallback_fired and result.actionable_hint else None),
+        )
+        return result.response_text, metadata
+
+    # Failure — exhausted or stopped. Build the same "exhausted" footer.
+    last_attempted = result.platform_attempted[-1] if result.platform_attempted else None
+    metadata.setdefault("error", result.error_message or "all CLI fallbacks failed")
+    metadata["routing_summary"] = _build_routing_summary(
+        served_by=None,
+        requested=platform or (chain_tuple[0] if chain_tuple else None),
+        chain_length=len(result.platform_attempted),
+        fallback_reason=(result.status.value if result.status is not _Status.UNKNOWN_FAILURE else None),
+        error_state="exhausted",
+        last_attempted=last_attempted,
+    )
+    return None, metadata
