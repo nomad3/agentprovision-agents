@@ -42,7 +42,6 @@ AGENTPROVISION_PASSWORD=... ./target/release/agentprovision login \
 | Flag | Description | Env var |
 |------|-------------|---------|
 | `--server URL` | Override API base URL | `AGENTPROVISION_SERVER` |
-| `--tenant ID` | Override default tenant | `AGENTPROVISION_TENANT` |
 | `--json` | Emit JSON instead of pretty output | — |
 | `--no-stream` | Wait for full chat reply | — |
 | `-v` / `-vv` | Verbose / debug stderr logs | — |

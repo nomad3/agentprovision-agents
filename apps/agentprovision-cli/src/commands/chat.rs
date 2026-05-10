@@ -156,13 +156,18 @@ async fn stream_and_collect(
     let mut stream = stream_chat(&ctx.client, session_id, prompt).await?;
     let mut full = String::new();
     let mut stdout = std::io::stdout();
+    // When --json is set we MUST NOT write deltas to stdout — they would
+    // contaminate the JSON envelope printed at the end (which scripts pipe
+    // to jq). Reviewer Important #1 from the PR #332 final review.
+    let render_live = !ctx.json;
     while let Some(item) = stream.next().await {
         match item? {
             ChatStreamEvent::Delta(d) => {
                 full.push_str(&d);
-                // Stream raw deltas; we render markdown at the end.
-                let _ = stdout.write_all(d.as_bytes());
-                let _ = stdout.flush();
+                if render_live {
+                    let _ = stdout.write_all(d.as_bytes());
+                    let _ = stdout.flush();
+                }
             }
             ChatStreamEvent::Done => break,
             ChatStreamEvent::Other(_) => {
