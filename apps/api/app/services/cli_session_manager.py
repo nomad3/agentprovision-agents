@@ -1091,9 +1091,13 @@ def _run_agent_session_legacy(
                 scope = resolve_tool_names(agent_row.tool_groups)
                 # task_id: the chat hot path doesn't have a persisted
                 # AgentTask row (the chat workflow doesn't create one),
-                # so we mint a synthetic one. The MCP server uses this
-                # as the parent_task_id for execution_trace rows; if no
-                # AgentTask exists, the trace just orphans cleanly.
+                # so we mint a synthetic one. The MCP server's audit
+                # boundary (apps/mcp-server/src/tool_audit.py) writes
+                # this id to the ``tool_calls`` table only — there is
+                # no FK to agent_tasks and no execution_trace row is
+                # written for chat-driven leafs in this phase.
+                # Phase 4.5+ will persist a synthetic AgentTask row
+                # (kind="chat") to close the audit-trace gap.
                 synth_task_id = str(uuid.uuid4())
                 parent_chain = tuple(
                     str(x) for x in (
@@ -1110,7 +1114,11 @@ def _run_agent_session_legacy(
                 )
         except Exception as exc:  # noqa: BLE001
             # Mint failure is non-fatal — fall back to legacy auth path.
-            logger.debug(
+            # WARN, not DEBUG: silent fallback at INFO+ would mask JWT
+            # secret rotation bugs, malformed tool_groups data, or DB
+            # outages on every chat turn. Mirror worker-side severity
+            # (apps/code-worker/app/workflows.py:574) — Phase 4 review C3.
+            logger.warning(
                 "agent_token mint failed (falling back to legacy auth): %s",
                 exc, exc_info=True,
             )

@@ -76,6 +76,7 @@ from app.api.v1 import (
     internal_orchestrator_events,
     internal_agent_tokens,
     internal_agent_heartbeat,
+    internal_agent_tasks,
 )
 
 _logger = logging.getLogger(__name__)
@@ -199,6 +200,14 @@ router.include_router(
 # the router itself with the full path so we mount at the v1 root.
 router.include_router(
     internal_agent_heartbeat.router,
+    tags=["internal"],
+)
+# Phase 4 review fix — request-approval endpoint backing the
+# request_human_approval MCP tool. Path is
+# /api/v1/tasks/internal/{task_id}/request-approval declared in the
+# router itself so we mount at the v1 root.
+router.include_router(
+    internal_agent_tasks.router,
     tags=["internal"],
 )
 

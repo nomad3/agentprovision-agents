@@ -20,7 +20,9 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
+from app.api import deps
 from app.core.config import settings
 from app.services.agent_token import mint_agent_token
 
@@ -62,6 +64,7 @@ class MintAgentTokenBody(BaseModel):
 def mint_token(
     body: MintAgentTokenBody,
     _auth: None = Depends(_verify_internal_key),
+    db: Session = Depends(deps.get_db),
 ) -> dict:
     """Mint an agent-scoped JWT for a leaf subprocess.
 
@@ -69,7 +72,35 @@ def mint_token(
     longer than MAX_FALLBACK_DEPTH (the mint helper raises
     ValueError; we surface as 422 to make the error actionable on the
     worker side).
+
+    Defence-in-depth: verify ``agent_id`` actually belongs to
+    ``tenant_id`` before minting. ``X-Internal-Key`` already grants
+    cross-tenant access by design, so a misconfigured worker passing
+    ``tenant=A, agent=B`` (where agent B belongs to tenant C) is not an
+    exploit — but the soft check catches the bug at mint time instead
+    of letting a token with mismatched tenant/agent reach the resolver.
+    Phase 4 review I-4.
     """
+    # Local import to avoid cycle with app.models.agent at module load.
+    from app.models.agent import Agent as _Agent
+
+    agent_row = (
+        db.query(_Agent)
+        .filter(
+            _Agent.id == body.agent_id,
+            _Agent.tenant_id == body.tenant_id,
+        )
+        .first()
+    )
+    if agent_row is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "agent_id does not belong to tenant_id (or agent does "
+                "not exist)"
+            ),
+        )
+
     try:
         tok = mint_agent_token(
             tenant_id=body.tenant_id,

@@ -417,7 +417,7 @@ When a leaf hits `QUOTA_EXHAUSTED` mid-task and policy says fall-back, it calls 
 | **1** | `Status` enum + `classify(stderr, exit_code, exc) -> Status` + redaction primitive + tests. The existing pattern tuples (`CLAUDE_CREDIT_ERROR_PATTERNS` etc.) and `cli_platform_resolver.classify_error` become **thin wrappers** delegating to the new classifier. **No behaviour change** — old call sites get the same string labels back. | `feat/cli-orchestrator-phase-1-error-contract` | (a) every classification-table row has a named test; (b) redaction property test + negative-redaction test pass; (c) no public API change verified by `grep -r classify_error apps/` returning the same set of call sites pre/post | revert PR; aliases delegated, so revert is mechanical |
 | **2** | `ProviderAdapter` trait + 6 concrete adapters + `FallbackPolicy` + `ResilientExecutor`. `cli_session_manager.run_agent_session` rewritten to call `ResilientExecutor.execute(req)`. **Behaviour change** — auth/setup/trust errors stop instead of silent-fallback. **Feature-flagged** via `tenant_features.use_resilient_executor` (default off). (Resolves OQ1 toward gradual cutover, per review C2.) | `feat/cli-orchestrator-phase-2-adapters` | (a) per-adapter contract test, fallback-policy table test, Temporal-failure normalization test, no-fallback-on-auth test, recursion-depth gate test; (b) **shadow-mode metric**: with flag off, run new classifier in parallel and assert ≥99% agreement vs legacy across a sample of ≥10k dispatches; (c) chat p50 within +10% of pre-cutover baseline (~5.5s); (d) `cli_platform_resolver.classify_error` is **kept as alias** (review I2 — single-PR rollback) | flip `use_resilient_executor` off per-tenant; alias still routes the legacy path |
 | **3** | `preflight()` per adapter + `ExecutionMetadata` mirror to `RLExperience` + UI surfacing of `actionable_hint` (i18n keys, not English strings — review I4) + observability metrics + dashboards + alerts. | `feat/cli-orchestrator-phase-3-preflight-metadata` | (a) preflight tests + latency-budget test; (b) metadata emission tests; (c) end-to-end QUOTA_EXHAUSTED → fallback → success metadata-chain test; (d) UNKNOWN_FAILURE rate observed < 1% over 24h soak; (e) `preflight_duration_ms` p95 < 60ms | revert PR; preflight is additive, easy revert |
-| **4** | Agent-scoped JWT mint + third auth tier on `apps/mcp-server` + new MCP tools `dispatch_agent` (review M6) + `request_human_approval` (review M6). The CLI binary's existing `agent` / `blackboard` / `memory` / `workflow` / `approval` subcommands are added in a sibling PR-C of the CLI track (#332 follow-up); they're not Phase 4 of this design. | `feat/cli-orchestrator-phase-4-leaf-mcp-auth` *(renamed per review M3)* | (a) leaf-from-Claude-Code calls `recall_memory` and `execution_trace` row contains `parent_task_id`; (b) **scope-enforcement test** — leaf with `scope=["recall_memory"]` calling `dispatch_agent` returns 403 + audit log (review's added second gate); (c) tenancy-precedence test (I3) | revert PR; agent-token minting is additive — leaves fall back to no-op until reverted |
+| **4** | Agent-scoped JWT mint + third auth tier on `apps/mcp-server` + new MCP tools `dispatch_agent` (review M6) + `request_human_approval` (review M6). The CLI binary's existing `agent` / `blackboard` / `memory` / `workflow` / `approval` subcommands are added in a sibling PR-C of the CLI track (#332 follow-up); they're not Phase 4 of this design. | `feat/cli-orchestrator-phase-4-leaf-mcp-auth` *(renamed per review M3)* | (a) leaf-from-Claude-Code calls `recall_memory` and the audit pipeline records the call with `task_id` from the agent_token claim (writes to `tool_calls`; `execution_trace.parent_task_id` wiring deferred — see Known deferrals); (b) **scope-enforcement test** — leaf with `scope=["recall_memory"]` calling `dispatch_agent` returns 403 + a `tool_calls` row with `result_status='scope_denied'` (review's added second gate); (c) tenancy-precedence test (I3); (d) recursion gate at `/tasks/dispatch` refuses depth ≥ MAX_FALLBACK_DEPTH | revert PR; agent-token minting is additive — leaves fall back to no-op until reverted |
 
 Each phase is its own PR; each PR's ship gate must pass before the next branches off.
 
@@ -947,3 +947,18 @@ Hard constraint: zero behavior change at `use_resilient_executor=False`.
     via the agent_token's `task_id` claim being preserved through the
     audit context, ready for a future commit to wire into the trace
     writer when the underlying persistence path lands.
+  - **Synthetic AgentTask row for chat-driven leaves.** The chat hot
+    path mints with `task_id = uuid4()` since the chat workflow
+    doesn't persist an AgentTask. Audit `tool_calls` rows reference
+    this id with no FK, which is safe today but means execution-trace
+    JOINs from chat-driven leaves resolve to nothing. Phase 4.5 will
+    persist a synthetic AgentTask row (kind="chat") to close the gap.
+  - **Workflow-resume signal for `request_human_approval`.** The MCP
+    tool flips `task.status` to `waiting_for_approval` and notifies
+    the tenant admin via the new
+    `/api/v1/tasks/internal/{task_id}/request-approval` internal
+    endpoint. Resuming a Temporal `human_approval` workflow step is
+    still gated on the human admin pressing Approve/Reject in the UI
+    (which round-trips through the existing JWT-gated `/workflow-approve`).
+    Phase 4.5 may unify the leaf-request and admin-resume paths once
+    the visual-builder approval queue ships.

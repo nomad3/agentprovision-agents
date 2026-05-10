@@ -165,9 +165,15 @@ async def test_dispatch_agent_requires_agent_token_tier():
 
 @pytest.mark.asyncio
 async def test_request_human_approval_round_trips(agent_ctx):
+    """Phase 4 review C1: posts to the internal request-approval
+    endpoint (NOT /workflow-approve, which is JWT-gated and rejects
+    decision='requested'). Body is {"reason": ...}. Headers include
+    X-Internal-Key + X-Tenant-Id."""
     from src.mcp_tools import agents
 
     captured: dict = {}
+    task_id = str(uuid.uuid4())
+    notif_id = str(uuid.uuid4())
 
     class _Capture:
         def __init__(self, timeout=None):
@@ -182,23 +188,36 @@ async def test_request_human_approval_round_trips(agent_ctx):
         async def post(self, url, json=None, headers=None):
             captured["url"] = url
             captured["json"] = json
+            captured["headers"] = headers
             return SimpleNamespace(
                 status_code=200,
-                json=lambda: {"status": "signal_sent", "decision": "requested"},
+                json=lambda: {
+                    "status": "requested",
+                    "task_id": task_id,
+                    "notification_id": notif_id,
+                },
             )
 
     with patch.object(agents, "resolve_auth_context", return_value=agent_ctx), \
          patch.object(agents.httpx, "AsyncClient", _Capture):
         result = await agents.request_human_approval(
-            task_id=str(uuid.uuid4()),
+            task_id=task_id,
             reason="needs admin signoff",
             ctx=SimpleNamespace(),
         )
 
-    assert result["status"] == "signal_sent"
-    assert captured["json"]["decision"] == "requested"
-    assert captured["json"]["comment"] == "needs admin signoff"
-    assert "/workflow-approve" in captured["url"]
+    assert result["status"] == "requested"
+    assert result["task_id"] == task_id
+    assert result["notification_id"] == notif_id
+    # Body is {"reason": ...} — NOT decision/comment.
+    assert captured["json"] == {"reason": "needs admin signoff"}
+    # Auth headers must be present.
+    assert "X-Internal-Key" in captured["headers"]
+    assert captured["headers"]["X-Tenant-Id"] == agent_ctx.tenant_id
+    # URL must hit the internal endpoint, not /workflow-approve.
+    assert "/tasks/internal/" in captured["url"]
+    assert "/request-approval" in captured["url"]
+    assert "/workflow-approve" not in captured["url"]
 
 
 @pytest.mark.asyncio

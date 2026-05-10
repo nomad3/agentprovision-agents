@@ -122,13 +122,25 @@ async def request_human_approval(
     reason: str,
     ctx: Context | None = None,
 ) -> dict:
-    """Request human-admin approval for a workflow step.
+    """Request human-admin approval for an agent task.
 
-    Round-trips through /api/v1/tasks/{id}/workflow-approve with
-    decision='requested' + comment=<reason>. The endpoint signals the
-    Temporal workflow waiting on the human_approval step; the
-    tenant-admin UI surfaces the request in the approval queue.
-    Returns the endpoint's response payload.
+    Round-trips through ``/api/v1/tasks/internal/{task_id}/request-approval``
+    (X-Internal-Key + X-Tenant-Id auth, body={"reason": ...}). The
+    endpoint flips ``task.status`` to ``waiting_for_approval``, stores
+    the rationale in ``context.approval_request``, and writes a
+    high-priority Notification so the tenant-admin UI surfaces the
+    request. The actual workflow-resume signal stays JWT-gated on the
+    user-facing ``/workflow-approve`` endpoint — only the human admin
+    can approve, and they do it from the UI.
+
+    Returns ``{"status":"requested","task_id":...,"notification_id":...}``
+    on success or surfaces a structured error dict on failure.
+
+    Phase 4 review C1: prior version posted ``decision="requested"`` to
+    ``/workflow-approve`` which (a) requires JWT bearer auth and
+    (b) hard-validates ``decision in ("approved","rejected")``. The
+    tool would have 401'd before reaching the validation. Tests
+    green-stamped because they mocked httpx.
     """
     auth = resolve_auth_context(ctx) if ctx is not None else None
     if auth is None or auth.tier != "agent_token":
@@ -136,11 +148,13 @@ async def request_human_approval(
             "error": "PERMISSION_DENIED",
             "message": "request_human_approval requires agent-token auth tier",
         }
+    if not auth.tenant_id:
+        return {
+            "error": "PERMISSION_DENIED",
+            "message": "agent_token claim missing tenant_id",
+        }
 
-    body = {
-        "decision": "requested",
-        "comment": reason,
-    }
+    body = {"reason": reason}
     headers = {
         "X-Internal-Key": _internal_key(),
         "X-Tenant-Id": auth.tenant_id,
@@ -149,7 +163,7 @@ async def request_human_approval(
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.post(
-                f"{_api_url()}/api/v1/tasks/{task_id}/workflow-approve",
+                f"{_api_url()}/api/v1/tasks/internal/{task_id}/request-approval",
                 json=body,
                 headers=headers,
             )
