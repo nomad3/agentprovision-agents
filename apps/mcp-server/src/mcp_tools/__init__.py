@@ -29,3 +29,4 @@ from src.mcp_tools import agent_messaging  # noqa: F401
 from src.mcp_tools import sms  # noqa: F401
 from src.mcp_tools import scribblevet  # noqa: F401
 from src.mcp_tools import bookkeeper_export  # noqa: F401
+from src.mcp_tools import agents  # noqa: F401  # Phase 4 — dispatch_agent + request_human_approval

@@ -75,6 +75,7 @@ from app.api.v1 import (
     metrics,
     internal_orchestrator_events,
     internal_agent_tokens,
+    internal_agent_heartbeat,
 )
 
 _logger = logging.getLogger(__name__)
@@ -192,6 +193,13 @@ router.include_router(
 router.include_router(
     internal_agent_tokens.router,
     prefix="/internal", tags=["internal"],
+)
+# Phase 4 commit 8 — leaf-side heartbeat endpoint. Path is
+# /api/v1/agents/internal/heartbeat per design §10.3(c) — declared in
+# the router itself with the full path so we mount at the v1 root.
+router.include_router(
+    internal_agent_heartbeat.router,
+    tags=["internal"],
 )
 
 # Register optional modules that loaded successfully
