@@ -16,8 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install dependencies separately to avoid resolution issues
 # Note: removed playwright, sentence-transformers, einops to save space
+# IMPORTANT: this list must stay in sync with pyproject.toml's `dependencies`
+# block. The next pip install runs with `--no-deps`, so anything added to
+# pyproject.toml that isn't repeated here will silently NOT be installed.
 COPY pyproject.toml .
-RUN pip install --no-cache-dir --break-system-packages psycopg2-binary sqlalchemy asyncpg httpx pyarrow pandas pydantic pydantic-settings python-dotenv fastapi uvicorn python-multipart mcp playwright==1.50.0
+RUN pip install --no-cache-dir --break-system-packages psycopg2-binary sqlalchemy asyncpg httpx pyarrow pandas pydantic pydantic-settings python-dotenv fastapi uvicorn python-multipart mcp playwright==1.50.0 'python-jose>=3.3.0'
 
 # Install the project
 RUN pip install --no-cache-dir --break-system-packages --no-deps .
