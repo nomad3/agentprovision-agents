@@ -46,6 +46,100 @@ impl TokenStore for MemoryTokenStore {
     }
 }
 
+/// File-backed token store. Used by:
+///   * the `--token-file` flag / `AGENTPROVISION_TOKEN_FILE` env var
+///   * the keychain auto-fallback when the keyring backend errors
+///     (e.g. headless / SSH session, locked keychain, ACL denial).
+///
+/// On Unix the file is created with 0600 permissions so other users on a
+/// shared box can't snarf the bearer. On Windows we lean on the default
+/// per-user ACL inherited from the parent dir.
+#[derive(Debug)]
+pub struct FileTokenStore {
+    path: std::path::PathBuf,
+}
+
+impl FileTokenStore {
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+}
+
+impl TokenStore for FileTokenStore {
+    fn load(&self) -> Result<Option<String>> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(s) => {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(trimmed.to_string()))
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Error::other(format!(
+                "failed to read token file {}: {e}",
+                self.path.display()
+            ))),
+        }
+    }
+    fn save(&self, token: &str) -> Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Error::other(format!(
+                    "failed to create token-file parent {}: {e}",
+                    parent.display()
+                ))
+            })?;
+        }
+        // Best-effort: chmod 0600 on Unix. On Windows the file inherits
+        // the per-user ACL of %USERPROFILE% which is already private.
+        #[cfg(unix)]
+        {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&self.path)
+                .map_err(|e| {
+                    Error::other(format!(
+                        "failed to open token file {} for write: {e}",
+                        self.path.display()
+                    ))
+                })?;
+            f.write_all(token.as_bytes()).map_err(|e| {
+                Error::other(format!(
+                    "failed to write token file {}: {e}",
+                    self.path.display()
+                ))
+            })?;
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&self.path, token).map_err(|e| {
+                Error::other(format!(
+                    "failed to write token file {}: {e}",
+                    self.path.display()
+                ))
+            })?;
+        }
+        Ok(())
+    }
+    fn clear(&self) -> Result<()> {
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Error::other(format!(
+                "failed to remove token file {}: {e}",
+                self.path.display()
+            ))),
+        }
+    }
+}
+
 /// OS keychain-backed token store. Available with the `keyring` feature.
 #[cfg(feature = "keyring")]
 pub struct KeyringTokenStore {
@@ -62,6 +156,15 @@ impl KeyringTokenStore {
             service: service.into(),
             account: account.into(),
         }
+    }
+    /// Service identifier passed to the OS keyring. Exposed so the CLI can
+    /// build a parallel handle for a probe thread.
+    pub fn service_str(&self) -> &str {
+        &self.service
+    }
+    /// Account identifier passed to the OS keyring.
+    pub fn account_str(&self) -> &str {
+        &self.account
     }
     fn entry(&self) -> Result<keyring::Entry> {
         Ok(keyring::Entry::new(&self.service, &self.account)?)
@@ -218,5 +321,67 @@ mod tests {
         assert_eq!(s.load().unwrap().as_deref(), Some("hello"));
         s.clear().unwrap();
         assert!(s.load().unwrap().is_none());
+    }
+
+    #[test]
+    fn file_token_store_round_trip() {
+        let dir = std::env::temp_dir().join(format!(
+            "agentprovision-test-{}",
+            std::process::id()
+        ));
+        let path = dir.join("nested").join("token");
+        let s = FileTokenStore::new(&path);
+        // load on missing file returns Ok(None)
+        assert!(s.load().unwrap().is_none());
+        // save creates parent dirs
+        s.save("bearer-xyz").unwrap();
+        assert_eq!(s.load().unwrap().as_deref(), Some("bearer-xyz"));
+        // clear removes the file; second clear is a no-op
+        s.clear().unwrap();
+        assert!(s.load().unwrap().is_none());
+        s.clear().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_token_store_uses_0600_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "agentprovision-perm-{}.token",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let s = FileTokenStore::new(&path);
+        s.save("bearer").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        // Mask to lower 9 bits — `mode()` includes file-type bits on some
+        // platforms.
+        assert_eq!(mode & 0o777, 0o600, "token file mode = {:o}", mode);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_token_store_trims_trailing_whitespace() {
+        let path = std::env::temp_dir().join(format!(
+            "agentprovision-trim-{}.token",
+            std::process::id()
+        ));
+        std::fs::write(&path, "bearer-abc\n").unwrap();
+        let s = FileTokenStore::new(&path);
+        assert_eq!(s.load().unwrap().as_deref(), Some("bearer-abc"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_token_store_empty_file_is_none() {
+        let path = std::env::temp_dir().join(format!(
+            "agentprovision-empty-{}.token",
+            std::process::id()
+        ));
+        std::fs::write(&path, "   \n\n").unwrap();
+        let s = FileTokenStore::new(&path);
+        assert!(s.load().unwrap().is_none());
+        let _ = std::fs::remove_file(&path);
     }
 }

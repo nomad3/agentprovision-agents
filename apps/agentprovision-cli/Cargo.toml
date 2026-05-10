@@ -1,0 +1,39 @@
+[package]
+name = "agentprovision-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77.2"
+description = "Single-binary CLI for the AgentProvision platform — login, chat, workflows, agents."
+license = "MIT"
+repository = "https://github.com/nomad3/agentprovision-agents"
+authors = ["AgentProvision"]
+default-run = "agentprovision"
+
+[[bin]]
+name = "agentprovision"
+path = "src/main.rs"
+
+[dependencies]
+agentprovision-core = { path = "../agentprovision-core", features = ["keyring"] }
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+console = "0.15"
+dialoguer = { version = "0.11", default-features = false, features = ["password"] }
+indicatif = "0.17"
+termimad = "0.31"
+rustyline = { version = "14", default-features = false, features = ["with-file-history", "custom-bindings"] }
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+url = "2"
+webbrowser = "1"
+dirs = "5"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
