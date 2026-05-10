@@ -300,6 +300,78 @@ class TestRedactProperty:
                 f"  output: {out!r}"
             )
 
+    # ────────────────────────────────────────────────────────────────
+    # Rule 8a config-line shape — the boundary cases.
+    #
+    # Independent review (commit 1fc0d012) flagged that the property test
+    # corpus above never exercises the `<trigger>:<value>` shape on
+    # benign-but-config-shaped prose. Rule 8a is line-anchored on
+    # `^[\s>]*<trigger>\s*[:=]\s*\S+`, so anything starting a line with
+    # `secret:` / `password:` / `api_key=` matches — even a chat
+    # sentence like "secret: meeting at 3pm".
+    #
+    # The team's accepted trade-off: err on the side of over-redaction.
+    # If a chat user happens to write a line that looks like a config
+    # entry, we'd rather mangle the words than risk leaking an actual
+    # secret. These tests pin the trade-off so a future tightening is a
+    # deliberate, reviewable change — not a silent rule edit.
+    # ────────────────────────────────────────────────────────────────
+
+    def test_rule8a_redacts_real_config_line_shape(self):
+        """A real config line containing secret material gets redacted.
+        This is rule 8a's primary purpose."""
+        out = redact("password=hunter2-actual-prod-pw")
+        assert "password=<redacted>" in out
+        assert "hunter2" not in out
+
+    def test_rule8a_overredacts_benign_chat_with_colon_value(self):
+        """ACCEPTED OVER-REDACTION: chat prose that happens to start with
+        a trigger keyword followed by `:` or `=` and a value has its
+        FIRST whitespace-delimited token replaced (`\\S+` is the value
+        capture). The replacement template is `\\1=<redacted>` — so
+        `:` and `=` both normalize to `=` in output, deterministic.
+
+        We accept this trade-off — losing one word from a sentence is
+        preferable to leaking a real secret. If a future change tightens
+        rule 8a (e.g., requires the value to look secret-shaped), update
+        this test to reflect the new behaviour."""
+        out = redact("secret: meeting at 3pm in conference room B")
+        # `\S+` is non-greedy on the value side: only the first
+        # whitespace-delimited token after "secret:" gets eaten. The
+        # rest of the line ("at 3pm in conference room B") survives.
+        assert out == "secret=<redacted> at 3pm in conference room B"
+        # The first word after the colon is gone; the rest is intact.
+        assert "<redacted>" in out
+        assert "conference room B" in out
+        assert "meeting" not in out
+
+    def test_rule8a_does_not_match_trigger_without_assignment(self):
+        """No `:` or `=` after the trigger keyword → rule 8a does NOT
+        fire. Prose like "the secret to X is Y" survives intact, even
+        though it contains the word 'secret'. This is the boundary that
+        keeps the rule from being completely greedy."""
+        text = "the secret to good code is simplicity"
+        assert redact(text) == text
+
+    def test_rule8a_indented_config_line_still_redacts(self):
+        """The `^[\\s>]*` prefix in rule 8a allows leading whitespace and
+        quote markers (for forwarded email / quoted log lines) to still
+        match. Verifies the anchoring is correct."""
+        for prefix in ("  ", "    ", "> ", ">> "):
+            out = redact(f"{prefix}api_key=AKIAIOSFODNN7EXAMPLE")
+            assert "<redacted>" in out
+            assert "AKIAIOSFODNN7EXAMPLE" not in out
+
+    def test_rule8a_keyword_in_middle_of_line_does_not_match(self):
+        """Rule 8a is line-anchored; a trigger keyword appearing
+        mid-sentence (not at line start, modulo whitespace) does not
+        fire. This is what keeps "the value of secret=42 is important"
+        ambiguous — line-start matters."""
+        # Mid-line: "see secret=foo" — rule 8a is line-anchored so this
+        # does NOT match (the leading "see " is not whitespace-only).
+        text = "see secret=foo for the relevant constant"
+        assert redact(text) == text
+
 
 # --------------------------------------------------------------------------
 # redact_json_structural
