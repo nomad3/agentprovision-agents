@@ -1,9 +1,9 @@
 """Tests for src.mcp_tools.email helpers and a few thin tool wrappers.
 
 The full email module is large and integrates with Gmail + Outlook +
-Postgres + sentence-transformers. This file covers the pure helpers
-plus shallow happy-path tests for the public MCP tools that don't
-need a Postgres connection.
+Postgres + the API's /internal/embed endpoint. This file covers the
+pure helpers plus shallow happy-path tests for the public MCP tools
+that don't need a Postgres connection.
 """
 from __future__ import annotations
 

@@ -299,22 +299,16 @@ def _extract_email_entities(headers: dict, body: str, account_email: str) -> lis
 # ---------------------------------------------------------------------------
 
 async def _get_embedding(text: str, task_type: str = "document") -> Optional[list]:
-    """Generate a 768-dim embedding via nomic-embed-text-v1.5 (local, no API key)."""
-    try:
-        from sentence_transformers import SentenceTransformer
-        _model_cache = getattr(_get_embedding, "_model", None)
-        if _model_cache is None:
-            _get_embedding._model = SentenceTransformer(
-                "nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True
-            )
-        model = _get_embedding._model
-        prefix = "search_document: " if task_type == "document" else "search_query: "
-        prefixed = f"{prefix}{text[:8000]}"
-        embedding = model.encode(prefixed, normalize_embeddings=True)
-        return embedding.tolist()
-    except Exception as e:
-        logger.warning("Embedding generation skipped: %s", e)
-        return None
+    """Generate a 768-dim embedding via the API's internal /embed endpoint.
+
+    Thin wrapper around ``src._embed.get_embedding`` — kept under the
+    legacy name so the existing call-sites in this file don't need to
+    change. The API routes to the Rust gRPC ``embedding-service`` for
+    the fast path, with a sentence-transformers fallback inside the
+    API pod itself; the MCP server no longer carries the ML deps.
+    """
+    from src._embed import get_embedding
+    return await get_embedding(text, task_type=task_type)
 
 
 async def _embed_attachment_content(
