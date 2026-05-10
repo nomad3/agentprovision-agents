@@ -59,12 +59,19 @@ def read_flags(db: Session, tenant_id) -> tuple[bool, bool]:
             .filter(TenantFeatures.tenant_id == tenant_id)
             .first()
         )
-        if row is None:
+        # ``isinstance`` rather than ``is None`` — defends against test
+        # MagicMock dbs whose .first() returns a truthy MagicMock that
+        # would otherwise turn flag=False into flag=True via
+        # bool(getattr(MagicMock, ...)).
+        if not isinstance(row, TenantFeatures):
             return False, False
-        return (
-            bool(getattr(row, "use_resilient_executor", False)),
-            bool(getattr(row, "shadow_mode_real_dispatch", False)),
-        )
+        use = row.use_resilient_executor
+        real = row.shadow_mode_real_dispatch
+        # Coerce to plain bool — sqlalchemy can hand back NULL on legacy
+        # rows pre-migration; the model has nullable=False but
+        # defensive coercion keeps None-safety.
+        return (bool(use) if use is not None else False,
+                bool(real) if real is not None else False)
     except Exception:  # noqa: BLE001
         logger.debug("read_flags failed — defaulting to (False, False)", exc_info=True)
         return False, False

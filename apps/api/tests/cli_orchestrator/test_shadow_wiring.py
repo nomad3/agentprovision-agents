@@ -96,16 +96,46 @@ def test_maybe_run_shadow_with_no_tenant_features_row_does_nothing(fake_db):
     )
 
 
+def test_read_flags_returns_false_for_magicmock_db():
+    """Defends against test MagicMock DBs whose .first() returns a
+    truthy MagicMock — read_flags must NOT misread that as flag=True.
+    """
+    from app.services.cli_orchestrator_shadow import read_flags
+
+    db = MagicMock()
+    # MagicMock.first() returns a MagicMock by default (NOT a TenantFeatures
+    # instance) — read_flags must use isinstance to reject this.
+    use, real = read_flags(db, "tenant-1")
+    assert use is False
+    assert real is False
+
+
+def test_read_flags_returns_true_for_real_tenant_features_row(fake_db):
+    """Real TenantFeatures row with both flags True returns (True, True)."""
+    from app.models.tenant_features import TenantFeatures
+    from app.services.cli_orchestrator_shadow import read_flags
+
+    row = TenantFeatures(
+        tenant_id="tenant-1",
+        use_resilient_executor=True,
+        shadow_mode_real_dispatch=True,
+    )
+    fake_db.query.return_value.filter.return_value.first.return_value = row
+    use, real = read_flags(fake_db, "tenant-1")
+    assert use is True
+    assert real is True
+
+
 def test_maybe_run_shadow_with_use_resilient_skips(fake_db):
     """When use_resilient_executor is TRUE, the api-side shadow is not
     needed (the resilient path IS the path). Helper returns silently.
     """
-    fake_row = MagicMock()
-    fake_row.use_resilient_executor = True
-    fake_row.shadow_mode_real_dispatch = False
-    fake_db.query.return_value.filter.return_value.first.return_value = fake_row
-    # Patch run_shadow_comparison to assert it's NOT called.
+    # Patch read_flags directly — we're testing the conditional logic,
+    # not the SQLAlchemy lookup path (covered separately).
     with patch(
+        "app.services.cli_orchestrator_shadow.read_flags",
+        return_value=(True, False),
+    ), patch(
         "app.services.cli_orchestrator_shadow.run_shadow_comparison"
     ) as run_mock:
         maybe_run_shadow(
@@ -121,11 +151,10 @@ def test_maybe_run_shadow_with_use_resilient_skips(fake_db):
 def test_maybe_run_shadow_flag_off_runs_stub_replay(fake_db):
     """With flags (False, False) — default — shadow runs against the
     stubbed _ReplayAdapter (no real Temporal dispatch)."""
-    fake_row = MagicMock()
-    fake_row.use_resilient_executor = False
-    fake_row.shadow_mode_real_dispatch = False
-    fake_db.query.return_value.filter.return_value.first.return_value = fake_row
     with patch(
+        "app.services.cli_orchestrator_shadow.read_flags",
+        return_value=(False, False),
+    ), patch(
         "app.services.cli_orchestrator_shadow.run_shadow_comparison"
     ) as run_mock:
         maybe_run_shadow(
