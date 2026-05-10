@@ -1,13 +1,15 @@
 import logging
-from datetime import datetime
-from typing import List, Optional
+from datetime import datetime, timedelta
+from typing import List, Literal, Optional
 
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_user
+from app.models.agent import Agent
+from app.models.agent_task import AgentTask as AgentTaskModel
 from app.models.user import User
 from app.schemas.agent_task import AgentTask, AgentTaskCreate, AgentTaskUpdate
 from app.schemas.execution_trace import ExecutionTrace as ExecutionTraceSchema
@@ -282,3 +284,199 @@ async def workflow_approve_task(
             "reason": f"Temporal signal client error: {exc}",
             "decision": body.decision,
         }
+
+
+# --------------------------------------------------------------------------
+# Phase 4 commit 2 — POST /tasks/dispatch
+# --------------------------------------------------------------------------
+#
+# Surfaces the missing dispatch verb. Existing POST /tasks just queues a row
+# (create_task above); the chat hot path (cli_session_manager) is the only
+# pre-Phase-4 dispatch site. The dispatch endpoint is the explicit API for
+# both the human CLI (`agentprovision agent dispatch`) and the leaf-side
+# `dispatch_agent` MCP tool.
+#
+# The §3.1 recursion gate fires HERE: we construct an ExecutionRequest with
+# the caller's parent_chain and let ResilientExecutor.execute() refuse if
+# depth >= 3 or the chain has a cycle. On refusal we surface 503 with the
+# actionable_hint so the leaf can stop walking.
+
+class DispatchRequest(BaseModel):
+    """Request to dispatch a task — either a code task or a delegation."""
+
+    task_type: Literal["code", "delegate"] = Field(
+        ..., description="'code' = CodeTaskWorkflow, 'delegate' = TaskExecutionWorkflow",
+    )
+    objective: str = Field(..., description="Task description / goal")
+    target_agent_id: Optional[uuid.UUID] = Field(
+        None, description="Required when task_type='delegate'",
+    )
+    repo: Optional[str] = Field(None, description="Code task repo (org/name)")
+    branch: Optional[str] = Field(None, description="Code task base branch")
+    parent_chain: List[uuid.UUID] = Field(
+        default_factory=list,
+        description="Lineage of dispatching agent UUIDs — used by §3.1 recursion gate",
+    )
+    parent_task_id: Optional[uuid.UUID] = Field(
+        None, description="Optional parent task UUID for audit linkage",
+    )
+    context: Optional[dict] = Field(None, description="Free-form context payload")
+
+
+@router.post("/dispatch", status_code=201)
+async def dispatch_task(
+    body: DispatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Dispatch a task to either CodeTaskWorkflow or TaskExecutionWorkflow.
+
+    The recursion gate (§3.1) is enforced here: we build an ExecutionRequest
+    with parent_chain and ask the executor to refuse depth >= 3 or cycles.
+    On refusal: 503 + actionable_hint. On success: returns
+    {task_id, workflow_id}.
+    """
+    # ── §3.1 recursion gate ─────────────────────────────────────────────
+    # We don't actually run the executor (no chain/platform here — that's
+    # for the LLM hot path). We just call _enforce_recursion_gate directly
+    # so the policy stays single-sourced.
+    try:
+        from cli_orchestrator.adapters.base import ExecutionRequest
+        from cli_orchestrator.executor import ResilientExecutor
+    except ImportError:
+        # cli_orchestrator package always available in production; if it's
+        # absent at import (e.g. unit-test bootstrap), skip the gate. The
+        # gate is also enforced executor-side at chat time.
+        ExecutionRequest = None  # type: ignore[assignment]
+        ResilientExecutor = None  # type: ignore[assignment]
+
+    if ExecutionRequest is not None and ResilientExecutor is not None:
+        req = ExecutionRequest(
+            chain=("dispatch",),  # synthetic — gate doesn't read this
+            platform="dispatch",
+            payload={"objective": body.objective},
+            parent_chain=tuple(str(x) for x in body.parent_chain),
+            tenant_id=str(current_user.tenant_id),
+        )
+        # Stand up the executor with no adapters — only the gate matters.
+        gate_result = ResilientExecutor(adapters={})._enforce_recursion_gate(
+            req, run_id=str(uuid.uuid4()),
+        )
+        if gate_result is not None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "status": gate_result.status.value,
+                    "actionable_hint": gate_result.actionable_hint,
+                    "error_message": gate_result.error_message,
+                },
+            )
+
+    # ── Validate target_agent_id for delegate ──────────────────────────
+    if body.task_type == "delegate" and body.target_agent_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="target_agent_id is required when task_type='delegate'",
+        )
+
+    # For delegate tasks, persist an AgentTask row so audit linkage works.
+    task_row: Optional[AgentTaskModel] = None
+    if body.task_type == "delegate" and body.target_agent_id is not None:
+        # Verify agent belongs to tenant (parallels create_task above).
+        agent = (
+            db.query(Agent)
+            .filter(
+                Agent.id == body.target_agent_id,
+                Agent.tenant_id == current_user.tenant_id,
+            )
+            .first()
+        )
+        if agent is None:
+            raise HTTPException(
+                status_code=422,
+                detail="target_agent_id not found in this tenant",
+            )
+        task_row = AgentTaskModel(
+            assigned_agent_id=body.target_agent_id,
+            parent_task_id=body.parent_task_id,
+            human_requested=True,
+            status="queued",
+            priority="normal",
+            task_type="delegate",
+            objective=body.objective,
+            context=body.context,
+            requires_approval=False,
+        )
+        db.add(task_row)
+        db.commit()
+        db.refresh(task_row)
+
+    # ── Dispatch via Temporal ──────────────────────────────────────────
+    from app.core.config import settings
+    from temporalio.client import Client as TemporalClient
+
+    workflow_name: str
+    task_queue: str
+    workflow_input: dict
+
+    if body.task_type == "code":
+        workflow_name = "CodeTaskWorkflow"
+        task_queue = "agentprovision-code"
+        workflow_input = {
+            "task_description": body.objective,
+            "tenant_id": str(current_user.tenant_id),
+            "context": body.context or {},
+            "repo": body.repo,
+            "branch": body.branch,
+            "parent_task_id": (
+                str(body.parent_task_id) if body.parent_task_id else None
+            ),
+            "parent_chain": [str(x) for x in body.parent_chain],
+        }
+    else:  # delegate
+        workflow_name = "TaskExecutionWorkflow"
+        task_queue = "agentprovision-orchestration"
+        workflow_input = {
+            "task_id": str(task_row.id) if task_row else None,
+            "tenant_id": str(current_user.tenant_id),
+            "target_agent_id": str(body.target_agent_id),
+            "objective": body.objective,
+            "context": body.context or {},
+            "parent_chain": [str(x) for x in body.parent_chain],
+        }
+
+    workflow_id = (
+        f"{body.task_type}-task-{uuid.uuid4().hex[:12]}"
+    )
+
+    try:
+        client = await TemporalClient.connect(settings.TEMPORAL_ADDRESS)
+        handle = await client.start_workflow(
+            workflow_name,
+            workflow_input,
+            id=workflow_id,
+            task_queue=task_queue,
+            execution_timeout=timedelta(minutes=180),
+        )
+        logger.info(
+            "Dispatched %s for tenant %s objective=%r workflow=%s",
+            workflow_name, str(current_user.tenant_id)[:8],
+            body.objective[:80], handle.id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Temporal dispatch failed for %s: %s", workflow_name, exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "PROVIDER_UNAVAILABLE",
+                "actionable_hint": "cli.errors.temporal_dispatch_failed",
+                "error_message": str(exc),
+            },
+        )
+
+    return {
+        "task_id": str(task_row.id) if task_row else workflow_id,
+        "workflow_id": workflow_id,
+    }
