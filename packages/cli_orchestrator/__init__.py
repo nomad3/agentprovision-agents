@@ -37,6 +37,15 @@ from .policy import (
     decide,
 )
 from .metadata import ExecutionMetadata
+from .webhook_events import (
+    ALL_EVENTS as WEBHOOK_EVENTS,
+    EVENT_ATTEMPT_FAILED,
+    EVENT_FAILED,
+    EVENT_FALLBACK_TRIGGERED,
+    EVENT_HEARTBEAT_MISSED,
+    EVENT_STARTED,
+    EVENT_SUCCEEDED,
+)
 from .preflight import (
     check_binary_on_path,
     check_cloud_api_enabled,
@@ -70,6 +79,13 @@ __all__ = [
     "PreflightResult",
     "ResilientExecutor",
     "ExecutionMetadata",
+    "WEBHOOK_EVENTS",
+    "EVENT_STARTED",
+    "EVENT_ATTEMPT_FAILED",
+    "EVENT_FALLBACK_TRIGGERED",
+    "EVENT_SUCCEEDED",
+    "EVENT_FAILED",
+    "EVENT_HEARTBEAT_MISSED",
     "check_binary_on_path",
     "check_workspace_trust_file",
     "check_credentials_present",
