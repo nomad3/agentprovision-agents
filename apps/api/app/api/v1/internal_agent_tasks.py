@@ -1,30 +1,39 @@
-"""Internal task-side endpoints called by leaf MCP tools — Phase 4 review fix.
+"""Internal task-side endpoints called by leaf MCP tools — Phase 4 review fixes.
 
-POST /api/v1/tasks/internal/{task_id}/request-approval
+Two endpoints, both auth'd via X-Internal-Key + X-Tenant-Id (matches the
+existing internal-endpoint pattern at internal_orchestrator_events.py
+and internal_agent_tokens.py):
 
-Backs the ``request_human_approval`` MCP tool. The user-facing
-``/api/v1/tasks/{id}/workflow-approve`` endpoint requires JWT bearer
-auth and validates ``decision in ("approved","rejected")`` — neither
-fits a leaf-MCP caller, which authenticates via X-Internal-Key +
-X-Tenant-Id and is *requesting* an admin signoff (not approving one).
+  POST /api/v1/tasks/internal/{task_id}/request-approval
+  POST /api/v1/tasks/internal/dispatch
 
-This endpoint:
-  • authenticates via X-Internal-Key (matches the existing
-    internal-endpoint pattern at internal_orchestrator_events.py and
-    internal_agent_tokens.py),
-  • takes ``X-Tenant-Id`` as the canonical tenant scope,
-  • verifies the task exists in that tenant (404 otherwise),
-  • flips ``status`` to ``waiting_for_approval`` and stores the reason
-    in ``context.approval_request``,
-  • writes a Notification row (priority=high, source=system) so the
-    tenant-admin UI's notification bell surfaces the request,
-  • returns ``{"status":"requested","task_id":..., "notification_id":...}``.
+The user-facing ``/api/v1/tasks/{id}/workflow-approve`` and
+``/api/v1/tasks/dispatch`` endpoints stay JWT-gated for the human CLI
+and web UI. Leaf MCP tools route through these internal-tier endpoints
+which share the same business logic (approval flip / recursion gate +
+Temporal dispatch) but accept the leaf's auth headers.
 
-The Temporal-signal half (resuming a paused human_approval workflow
-step) is the existing ``/workflow-approve`` endpoint's job and stays
-JWT-gated — only the human admin can approve, and they do it from the
-UI. Phase 4.5 may unify these once the visual-builder approval queue
-ships.
+## Why not just one endpoint?
+
+The user-facing endpoints take ``Depends(get_current_user)`` which
+decodes a tenant JWT and looks up the User row. Leaves have no tenant
+JWT — they authenticate as their owning agent via the agent_token's
+claim. The mcp-server's resolver verifies the agent_token, then the
+MCP tool sends the resolved tenant in X-Tenant-Id.
+
+## /tasks/internal/{task_id}/request-approval
+
+Backs the ``request_human_approval`` MCP tool (Phase 4 review C1).
+Flips ``task.status='waiting_for_approval'``, stashes rationale in
+``context.approval_request``, writes a high-priority Notification.
+Resuming a Temporal human_approval workflow step stays JWT-gated on
+the existing /workflow-approve so only a human admin can approve.
+
+## /tasks/internal/dispatch (Phase 4 review C-FINAL-1)
+
+Backs the ``dispatch_agent`` MCP tool. Shares the §3.1 recursion gate
+and Temporal dispatch logic with the JWT-gated /tasks/dispatch via
+``app.api.v1.agent_tasks.dispatch_core``.
 """
 from __future__ import annotations
 
@@ -38,6 +47,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.api.v1.agent_tasks import DispatchRequest, dispatch_core
 from app.core.config import settings
 from app.models.agent_task import AgentTask as AgentTaskModel
 from app.models.notification import Notification
@@ -131,3 +141,35 @@ def request_approval(
         "task_id": str(task_id),
         "notification_id": str(notif.id),
     }
+
+
+# ---------------------------------------------------------------------------
+# /tasks/internal/dispatch — Phase 4 review C-FINAL-1
+# ---------------------------------------------------------------------------
+
+
+@router.post("/tasks/internal/dispatch", status_code=201)
+async def dispatch_internal(
+    body: DispatchRequest,
+    tenant_id: _uuid.UUID = Depends(_resolve_tenant_id),
+    _auth: None = Depends(_verify_internal_key),
+    db: Session = Depends(deps.get_db),
+) -> dict:
+    """Internal-tier sibling of ``/api/v1/tasks/dispatch``.
+
+    Backs the ``dispatch_agent`` MCP tool. Auth: X-Internal-Key +
+    X-Tenant-Id. Tenant scope is the X-Tenant-Id header — the mcp-server
+    resolver authenticates the agent_token and forwards the canonical
+    tenant from the claim. Body shape and response shape are identical
+    to the JWT-gated endpoint; the §3.1 recursion gate fires the same
+    way via the shared ``dispatch_core`` helper.
+
+    Phase 4 review C-FINAL-1: the prior Phase 4 implementation pointed
+    ``dispatch_agent`` at the JWT-gated ``/tasks/dispatch`` endpoint,
+    which would 401 every leaf invocation in production because the MCP
+    tool sends X-Internal-Key, not Bearer JWT. The integration test
+    only passed via ``app.dependency_overrides[get_current_user]`` —
+    that's covered now by ``test_dispatch_internal_*`` which exercises
+    the real wire contract without overrides.
+    """
+    return await dispatch_core(db, tenant_id=tenant_id, body=body)

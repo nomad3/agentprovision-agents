@@ -77,13 +77,13 @@ def heartbeat(
     """Update ``agent_tasks.last_seen_at`` for the in-flight task.
 
     Tenant scope is read from the agent-token claim; the path body
-    cannot override it. If the task_id doesn't belong to the claim's
-    tenant, this is a 404 (treat unknown task as missing) rather than
-    a 403 — defence in depth, but no information leak.
-
-    No-op if the agent_tasks row doesn't exist (e.g. chat hot path
-    minted a synthetic task_id with no persisted row). Returns 204
-    cleanly so the leaf hook stays fire-and-forget.
+    cannot override it. The endpoint always returns 204 — even when
+    the row is missing, in the wrong tenant, or simply silent no-op.
+    This is intentional: leaf PostToolUse hooks are fire-and-forget
+    (curl -m 2 || true), so any non-2xx would just spam the leaf's
+    error log without changing behavior. Tenant mismatch causes a
+    silent no-op (no UPDATE), which prevents cross-tenant timestamp
+    leakage without leaking task existence either.
     """
     tenant_id = claims.get("tenant_id")
     if not tenant_id:

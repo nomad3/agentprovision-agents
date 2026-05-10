@@ -57,6 +57,13 @@ async def dispatch_agent(
     or surfaces the dispatch endpoint's 503/422 as a structured error
     dict so the caller can render the actionable_hint.
 
+    Calls ``/api/v1/tasks/internal/dispatch`` (X-Internal-Key + X-Tenant-Id)
+    — the internal-tier sibling of the user-facing JWT-gated endpoint.
+    Phase 4 review C-FINAL-1: prior version pointed at /tasks/dispatch
+    which requires Bearer JWT and would have 401'd every leaf invocation
+    in production. Tests green-stamped via dep_overrides; the new test
+    suite exercises the real wire contract.
+
     Args:
         target_agent_id: UUID of the receiving agent. Required for
             task_type='delegate'.
@@ -93,7 +100,7 @@ async def dispatch_agent(
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             resp = await client.post(
-                f"{_api_url()}/api/v1/tasks/dispatch",
+                f"{_api_url()}/api/v1/tasks/internal/dispatch",
                 json=body,
                 headers=headers,
             )

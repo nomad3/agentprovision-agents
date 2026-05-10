@@ -323,18 +323,26 @@ class DispatchRequest(BaseModel):
     context: Optional[dict] = Field(None, description="Free-form context payload")
 
 
-@router.post("/dispatch", status_code=201)
-async def dispatch_task(
+async def dispatch_core(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
     body: DispatchRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Dispatch a task to either CodeTaskWorkflow or TaskExecutionWorkflow.
+    """Shared dispatch logic for both the JWT-gated and internal-key endpoints.
 
-    The recursion gate (§3.1) is enforced here: we build an ExecutionRequest
-    with parent_chain and ask the executor to refuse depth >= 3 or cycles.
-    On refusal: 503 + actionable_hint. On success: returns
-    {task_id, workflow_id}.
+    Runs the §3.1 recursion gate, validates target_agent_id, persists the
+    AgentTask row for delegates, and starts the appropriate Temporal
+    workflow. Returns ``{"task_id", "workflow_id"}`` on success or raises
+    HTTPException on any failure mode (recursion refuse → 503, missing
+    target → 422, Temporal unreachable → 503).
+
+    Phase 4 review C-FINAL-1 fix: this used to live inline in the
+    JWT-gated dispatch_task endpoint. The leaf-side ``dispatch_agent``
+    MCP tool authenticates via X-Internal-Key + X-Tenant-Id, which
+    couldn't reach a JWT-gated endpoint. Splitting the helper lets the
+    new internal endpoint share the same gate + dispatch logic without
+    duplicating it. The user-facing /tasks/dispatch stays JWT-gated.
     """
     # ── §3.1 recursion gate ─────────────────────────────────────────────
     # We don't actually run the executor (no chain/platform here — that's
@@ -356,7 +364,7 @@ async def dispatch_task(
             platform="dispatch",
             payload={"objective": body.objective},
             parent_chain=tuple(str(x) for x in body.parent_chain),
-            tenant_id=str(current_user.tenant_id),
+            tenant_id=str(tenant_id),
         )
         # Stand up the executor with no adapters — only the gate matters.
         gate_result = ResilientExecutor(adapters={})._enforce_recursion_gate(
@@ -387,7 +395,7 @@ async def dispatch_task(
             db.query(Agent)
             .filter(
                 Agent.id == body.target_agent_id,
-                Agent.tenant_id == current_user.tenant_id,
+                Agent.tenant_id == tenant_id,
             )
             .first()
         )
@@ -424,7 +432,7 @@ async def dispatch_task(
         task_queue = "agentprovision-code"
         workflow_input = {
             "task_description": body.objective,
-            "tenant_id": str(current_user.tenant_id),
+            "tenant_id": str(tenant_id),
             "context": body.context or {},
             "repo": body.repo,
             "branch": body.branch,
@@ -438,7 +446,7 @@ async def dispatch_task(
         task_queue = "agentprovision-orchestration"
         workflow_input = {
             "task_id": str(task_row.id) if task_row else None,
-            "tenant_id": str(current_user.tenant_id),
+            "tenant_id": str(tenant_id),
             "target_agent_id": str(body.target_agent_id),
             "objective": body.objective,
             "context": body.context or {},
@@ -460,7 +468,7 @@ async def dispatch_task(
         )
         logger.info(
             "Dispatched %s for tenant %s objective=%r workflow=%s",
-            workflow_name, str(current_user.tenant_id)[:8],
+            workflow_name, str(tenant_id)[:8],
             body.objective[:80], handle.id,
         )
     except Exception as exc:
@@ -480,3 +488,21 @@ async def dispatch_task(
         "task_id": str(task_row.id) if task_row else workflow_id,
         "workflow_id": workflow_id,
     }
+
+
+@router.post("/dispatch", status_code=201)
+async def dispatch_task(
+    body: DispatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Dispatch a task to either CodeTaskWorkflow or TaskExecutionWorkflow.
+
+    Human-CLI / web-app surface — JWT-gated. The recursion gate (§3.1)
+    is enforced here via dispatch_core. On refusal: 503 + actionable_hint.
+    On success: returns {task_id, workflow_id}.
+
+    Leaf-side MCP tools must use the X-Internal-Key + X-Tenant-Id sibling
+    at /api/v1/tasks/internal/dispatch (Phase 4 review C-FINAL-1).
+    """
+    return await dispatch_core(db, tenant_id=current_user.tenant_id, body=body)

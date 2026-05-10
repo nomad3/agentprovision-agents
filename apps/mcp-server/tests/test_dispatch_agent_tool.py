@@ -64,7 +64,8 @@ def _mock_httpx_post(status_code: int, json_payload: dict):
 @pytest.mark.asyncio
 async def test_dispatch_agent_appends_caller_id_to_parent_chain(agent_ctx):
     """Caller agent_id must be appended to parent_chain on the
-    /tasks/dispatch payload."""
+    /tasks/internal/dispatch payload (Phase 4 review C-FINAL-1: was
+    /tasks/dispatch which is JWT-gated)."""
     from src.mcp_tools import agents
 
     captured: dict = {}
@@ -98,13 +99,20 @@ async def test_dispatch_agent_appends_caller_id_to_parent_chain(agent_ctx):
 
     assert result == {"task_id": "tid", "workflow_id": "wid"}
     assert captured["json"]["parent_chain"] == [agent_ctx.agent_id]
+    # Critical: must hit the INTERNAL endpoint, not the JWT-gated one.
+    assert "/tasks/internal/dispatch" in captured["url"]
+    assert captured["url"].endswith("/tasks/internal/dispatch")
+    # Auth tier is X-Internal-Key + X-Tenant-Id, NO Authorization header.
+    assert "X-Internal-Key" in captured["headers"]
+    assert captured["headers"]["X-Tenant-Id"] == agent_ctx.tenant_id
+    assert "Authorization" not in captured["headers"]
 
 
 @pytest.mark.asyncio
 async def test_dispatch_agent_at_depth_3_surfaces_recursion_error(deep_agent_ctx):
     """When the caller is at depth 2, dispatch_agent appends → depth 3.
-    The /tasks/dispatch endpoint refuses with 503; the tool surfaces
-    that as a structured error dict."""
+    The /tasks/internal/dispatch endpoint refuses with 503; the tool
+    surfaces that as a structured error dict."""
     from src.mcp_tools import agents
 
     class _Refuse:
