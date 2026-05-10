@@ -298,6 +298,12 @@ def _generate_agentic_response(
     _session_id_str = str(session.id)
     _session_id_short = _session_id_str[:8]
     _session_tenant_id = session.tenant_id
+    # Also snapshot memory_context — see the same auto-refresh hazard.
+    # This snapshot is reused (a) inside the route_and_execute else-branch
+    # below, and (b) in the post-route recalled_entity_names merge. We
+    # capture once here so both code paths (coalition + route) can share it
+    # without re-triggering a SELECT against chat_sessions.
+    _session_memory_snapshot = dict(session.memory_context or {})
     # [chat-trace] anchor for this function — `_trace_t0` from
     # `post_user_message` is in a different scope and not visible here.
     # Reset locally so the elapsed= readings in the route_and_execute
@@ -401,9 +407,8 @@ def _generate_agentic_response(
         # block at the top of this function. Reading `session.id` here would
         # auto-refresh against the live ORM identity map and raise from
         # inside the `logger.info()` call when the txn is poisoned.
-        # Snapshot session.memory_context too: the dict reference is read
-        # once here so a later attribute expiry doesn't surprise the dispatch.
-        _session_memory_snapshot = dict(session.memory_context or {})
+        # session.memory_context was already snapshotted at function entry
+        # (`_session_memory_snapshot`) — see the comment block at the top.
         logger.info(
             "[chat-trace] route_and_execute: enter session=%s elapsed=%.0fms",
             _session_id_short, (time.perf_counter() - _trace_t0) * 1000,
@@ -470,18 +475,34 @@ def _generate_agentic_response(
     tool_groups = context.get("tool_groups", []) if context else []
 
     if context and isinstance(context, dict):
-        _mem_dirty = False
-        _mem = dict(session.memory_context or {})
-        recalled_entity_names = context.get("recalled_entity_names")
-        if recalled_entity_names:
-            existing = _mem.get("recalled_entity_names", [])
-            merged = list(dict.fromkeys(existing + recalled_entity_names))[:50]
-            _mem["recalled_entity_names"] = merged
-            _mem_dirty = True
-        if _mem_dirty:
-            session.memory_context = _mem
-            flag_modified(session, "memory_context")
-            db.commit()
+        # PR #361 follow-up: same auto-refresh trap as the success-log line.
+        # Reading `session.memory_context` here triggers a SELECT-refresh
+        # against chat_sessions; if the txn was poisoned upstream that
+        # SELECT raises InFailedSqlTransaction and Luna's reply gets
+        # swallowed by the outer "Failed to process through agent pipeline"
+        # handler in whatsapp_service.py. Use the snapshot we captured
+        # before route_and_execute (line ~406) instead, and isolate the
+        # commit in its own try/safe_rollback so a poisoned txn here can't
+        # silence the response.
+        try:
+            _mem_dirty = False
+            _mem = dict(_session_memory_snapshot)
+            recalled_entity_names = context.get("recalled_entity_names")
+            if recalled_entity_names:
+                existing = _mem.get("recalled_entity_names", [])
+                merged = list(dict.fromkeys(existing + recalled_entity_names))[:50]
+                _mem["recalled_entity_names"] = merged
+                _mem_dirty = True
+            if _mem_dirty:
+                session.memory_context = _mem
+                flag_modified(session, "memory_context")
+                db.commit()
+        except Exception as _mem_e:
+            safe_rollback(db)
+            logger.warning(
+                "[chat-trace] session.memory_context update failed for session=%s — continuing with response: %s",
+                _session_id_short, _mem_e,
+            )
 
     if response_text is None:
         error_msg = (context or {}).get("error", "Agent failed to respond. Please try again.")
