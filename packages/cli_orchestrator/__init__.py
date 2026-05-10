@@ -22,7 +22,14 @@ Phase 2 ships:
     preflight + retry + fallback + redaction + Prometheus metrics.
   - ``shadow`` — agreement-metric plumbing for the flag-off cutover gate.
 """
+from .adapters.base import (
+    ExecutionRequest,
+    ExecutionResult,
+    PreflightResult,
+    ProviderAdapter,
+)
 from .classifier import classify, classify_with_legacy_label
+from .executor import ResilientExecutor
 from .policy import (
     FallbackAction,
     FallbackDecision,
@@ -49,4 +56,9 @@ __all__ = [
     "FallbackDecision",
     "MAX_FALLBACK_DEPTH",
     "decide",
+    "ProviderAdapter",
+    "ExecutionRequest",
+    "ExecutionResult",
+    "PreflightResult",
+    "ResilientExecutor",
 ]
