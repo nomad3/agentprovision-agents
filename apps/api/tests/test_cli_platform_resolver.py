@@ -108,6 +108,49 @@ def test_classify_returns_none_for_user_errors():
         assert r.classify_error(s) is None, s
 
 
+# ── Phase 1.5 review I-A — declared apps/api fallback-trigger surface ──
+#
+# Phase 1.5's classifier widening (commit 5f874cac, fixup 90a42ea9-style)
+# added 6 new fragments that the legacy `_QUOTA_PATTERNS` / `_AUTH_PATTERNS`
+# regexes did NOT catch. Every chat turn flows through this resolver
+# (agent_router.py:1026), so widening the classifier widens the chat-side
+# fallback-trigger surface too. This was an INTENTIONAL correction — the
+# legacy regexes undercounted real CLI quota / auth signals — but it's a
+# behaviour change that deserves an explicit test record.
+#
+# Reviewer recommendation: pin the new triggers as a parametrized
+# documentation test so a future change that flips one of these back to
+# None has to do so deliberately.
+
+@pytest.mark.parametrize(
+    "stderr,expected_label",
+    [
+        # Auth signals that legacy regex missed → classifier now catches.
+        ("HTTP 401 Unauthorized — not authorized", "auth"),
+        # 403 is more specifically auth than quota — codex auth rule
+        # (\\b403\\b) wins over copilot quota rule (forbidden), which
+        # matches both legacy CODEX _AUTH_PATTERNS semantics and the
+        # right operational meaning (403 = revoke + reauth, not throttle).
+        ("HTTP 403 Forbidden", "auth"),
+        # Quota signals that legacy regex missed → classifier now catches.
+        ("you are out of extra usage for the month", "quota"),
+        ("token limit exceeded for this conversation", "quota"),
+        # Bare-token narrowing (review I-A): bare 'capacity' / 'billing'
+        # in user prose must NOT trigger fallback. Anchored forms do.
+        ("monthly billing invoice was generated", None),
+        ("the capacity planning meeting is at 3pm", None),
+        ("billing error: payment method expired", "quota"),
+        ("server at capacity exceeded available shards", "quota"),
+    ],
+)
+def test_phase_1_5_widened_fallback_surface(stderr, expected_label):
+    """Phase 1.5 widened the chat-side fallback trigger surface. This
+    test records the new contract: which previously-None strings now
+    fire fallback, and which bare tokens are intentionally narrowed
+    so user prose doesn't false-positive."""
+    assert r.classify_error(stderr) == expected_label, stderr
+
+
 # ── cooldown ─────────────────────────────────────────────────────────
 
 def test_cooldown_marks_and_clears(monkeypatch):

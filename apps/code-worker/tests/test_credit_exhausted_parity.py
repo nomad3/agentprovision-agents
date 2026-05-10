@@ -53,6 +53,30 @@ _ALL_LEGACY_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
+# Phase 1.5 Important review I-A — INTENTIONAL NARROWING:
+# the legacy CODEX_CREDIT_ERROR_PATTERNS tuple contained bare-token
+# substrings ``billing`` and ``capacity`` that were too loose for the
+# apps/api chat hot path (the classifier feeds both apps/code-worker
+# AND cli_platform_resolver via the shim, and bare "capacity planning"
+# in user prose would have falsely triggered cooldown + chain-skip on
+# the active CLI). The classifier rule was tightened to require an
+# adjacent failure word (e.g. ``capacity exceeded``, ``billing error``).
+# This map encodes the new contract: when the parity test feeds these
+# two specific legacy fragments, anchor them to the minimum stderr the
+# new classifier accepts. All other literals feed unchanged.
+_PARITY_TEST_INPUT_OVERRIDE: dict[str, str] = {
+    "billing": "billing error",
+    "capacity": "capacity exceeded",
+}
+
+
+def _resolve_test_input(legacy_fragment: str) -> str:
+    """Map a legacy tuple literal to the minimum stderr the new
+    classifier accepts. Identity for everything except the two
+    intentionally-narrowed bare tokens above."""
+    return _PARITY_TEST_INPUT_OVERRIDE.get(legacy_fragment, legacy_fragment)
+
+
 # ── Class 1 — every legacy fragment hits the fallback status set ──────
 
 class TestLegacyCorpusClassifiesToFallbackTrigger:
@@ -70,16 +94,20 @@ class TestLegacyCorpusClassifiesToFallbackTrigger:
     def test_pattern_classifies_to_fallback_trigger(
         self, platform: str, pattern: str
     ) -> None:
-        # The legacy helpers do `pattern in error_text.lower()`, so the
-        # fragment is matched as a substring of lowercase stderr. Feed
-        # the bare pattern (already lowercase in the tuples) — that's
-        # the minimal stderr the legacy helper would have accepted.
-        result = classify(pattern)
+        # The legacy helpers did `pattern in error_text.lower()`, so the
+        # bare fragment was the minimum stderr the legacy helper accepted.
+        # The new classifier intentionally narrows two bare tokens
+        # (`capacity`, `billing`) to require an adjacent failure word —
+        # see _PARITY_TEST_INPUT_OVERRIDE above. For those two we feed
+        # the minimum-anchored form; everything else feeds unchanged.
+        test_input = _resolve_test_input(pattern)
+        result = classify(test_input)
         expected = _FALLBACK_STATUSES[platform]
         assert result in expected, (
-            f"{platform} legacy fragment {pattern!r} classified to "
-            f"{result!r}, not in expected fallback set {expected}; "
-            f"step 5 helper rewrite would change CLI-chain behaviour"
+            f"{platform} legacy fragment {pattern!r} (fed as {test_input!r}) "
+            f"classified to {result!r}, not in expected fallback set "
+            f"{expected}; step 5 helper rewrite would change CLI-chain "
+            f"behaviour"
         )
 
 
@@ -117,13 +145,15 @@ class TestHelpersDelegateToClassifier:
     def test_helper_and_classifier_agree(
         self, platform: str, pattern: str
     ) -> None:
-        helper_says_exhausted = self._classify_via_helper(platform, pattern)
+        # Same anchoring as Class 1 for the two narrowed bare tokens.
+        test_input = _resolve_test_input(pattern)
+        helper_says_exhausted = self._classify_via_helper(platform, test_input)
         classifier_says_exhausted = (
-            classify(pattern) in _FALLBACK_STATUSES[platform]
+            classify(test_input) in _FALLBACK_STATUSES[platform]
         )
         assert helper_says_exhausted == classifier_says_exhausted, (
-            f"{platform} parity drift on {pattern!r}: helper="
-            f"{helper_says_exhausted}, classifier-in-fallback-set="
+            f"{platform} parity drift on {pattern!r} (fed as {test_input!r}): "
+            f"helper={helper_says_exhausted}, classifier-in-fallback-set="
             f"{classifier_says_exhausted}"
         )
 

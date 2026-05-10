@@ -364,11 +364,16 @@ def _is_claude_credit_exhausted(error_text: Optional[str]) -> bool:
 
 def _is_codex_credit_exhausted(error_text: Optional[str]) -> bool:
     # Phase 1.5: delegate to the canonical classifier (closes I-1).
+    # NOTE (review I-B): no production call sites today — only tests.
+    # Phase 2 should either wire codex-first fallback chaining or delete.
     return classify(error_text or "") == Status.QUOTA_EXHAUSTED
 
 
 def _is_copilot_credit_exhausted(error_text: Optional[str]) -> bool:
     # Phase 1.5: delegate to the canonical classifier (closes I-1).
+    # NOTE (review I-B): no production call sites today — only tests.
+    # Phase 2 should either wire copilot-first fallback chaining or delete.
+    #
     # Copilot legacy CREDIT_ERROR_PATTERNS lumped 'not authorized' (an
     # auth error) into the credit-exhausted bucket so CLI fallback
     # chaining triggers on either. Phase 1.5 keeps NEEDS_AUTH a

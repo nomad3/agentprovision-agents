@@ -155,14 +155,16 @@ _STDERR_RULES: list[_Rule] = [
             r"|credit[\s_-]?balance"
             r"|out\s*of\s*(tokens|credits|quota)"
             r"|too\s*many\s*requests"
-            # Phase 1.5 parity: the legacy CODEX_CREDIT_ERROR_PATTERNS
-            # in apps/code-worker/workflows.py also flag "billing",
-            # "token limit exceeded", and "capacity" as quota signals.
-            # Corpus parity test gates these; step 5's helper rewrite
-            # would otherwise silently change behaviour.
-            r"|billing"
+            # Phase 1.5 parity widening, anchored (review I-A):
+            # the legacy CODEX_CREDIT_ERROR_PATTERNS bare substrings
+            # ("billing", "capacity") are too loose for the apps/api
+            # chat hot path — bare "the meeting is at capacity" or
+            # "monthly billing invoice generated" would trigger
+            # cooldown + chain-skip. Anchored to require an adjacent
+            # failure word so plain user prose doesn't trip them.
+            r"|billing[\s_-]?(error|issue|failed|required|quota|problem)"
+            r"|capacity[\s_-]?(exceeded|exhausted|reached|error|limit)"
             r"|token\s*limit\s*exceeded"
-            r"|capacity"
             r"|\b429\b",
             re.IGNORECASE,
         ),
