@@ -604,7 +604,78 @@ def run_agent_session(
     agent_memory_domains: list = None,
     agent_skill_slugs: list = None,
 ) -> Tuple[Optional[str], Dict]:
-    """Run a full stateless CLI agent session through the configured platform.
+    """Public entry — runs the legacy session and fires shadow comparison.
+
+    Phase 2 cutover: when ``tenant_features.use_resilient_executor`` is
+    FALSE (default), this delegates to the byte-identical legacy
+    implementation in ``_run_agent_session_legacy`` and then fires
+    ``maybe_run_shadow`` against a stubbed ResilientExecutor that
+    replays the legacy outcome (no real second dispatch). When the
+    flag is TRUE, ``agent_router`` builds an ExecutionRequest directly
+    and calls ResilientExecutor.execute(req) — this function is not
+    on that path. Either way, shadow can NEVER poison the response
+    (try/except around the call).
+    """
+    response_text, metadata = _run_agent_session_legacy(
+        db, tenant_id=tenant_id, user_id=user_id,
+        platform=platform, agent_slug=agent_slug,
+        message=message, channel=channel,
+        sender_phone=sender_phone, conversation_summary=conversation_summary,
+        image_b64=image_b64, image_mime=image_mime,
+        db_session_memory=db_session_memory,
+        pre_built_memory_context=pre_built_memory_context,
+        agent_tier=agent_tier, agent_tool_groups=agent_tool_groups,
+        agent_memory_domains=agent_memory_domains,
+        agent_skill_slugs=agent_skill_slugs,
+    )
+
+    # Phase 2 shadow comparison — wrapped in try/except so the shadow
+    # path can never poison the response. Lazy-imported to avoid a
+    # cycle at module load.
+    try:
+        from app.services.cli_orchestrator_shadow import maybe_run_shadow
+        maybe_run_shadow(
+            db=db,
+            tenant_id=tenant_id,
+            platform=platform,
+            response_text=response_text,
+            metadata=metadata,
+        )
+    except BaseException:  # noqa: BLE001
+        logger.debug("shadow comparison wrapper swallowed exception", exc_info=True)
+
+    return response_text, metadata
+
+
+def _run_agent_session_legacy(
+    db: Session,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    platform: str,
+    agent_slug: str,
+    message: str,
+    channel: str,
+    sender_phone: Optional[str],
+    conversation_summary: str,
+    image_b64: str = "",
+    image_mime: str = "",
+    db_session_memory: Dict = None,
+    pre_built_memory_context: Dict = None,
+    agent_tier: str = "full",
+    agent_tool_groups: list = None,
+    agent_memory_domains: list = None,
+    agent_skill_slugs: list = None,
+) -> Tuple[Optional[str], Dict]:
+    """Legacy run_agent_session — body unchanged from Phase 1.6.
+
+    Renamed from ``run_agent_session`` to ``_run_agent_session_legacy``
+    in Phase 2 step 8 so the public ``run_agent_session`` can wrap the
+    legacy outcome with a shadow-comparison fire. The body of THIS
+    function is byte-identical to the prior public function — every
+    return path, every variable name, every log message, every guard
+    is preserved.
+
+    See ``run_agent_session`` above for the cutover wrapping.
 
     `agent_skill_slugs` is the ordered list of skill slugs to compose into
     CLAUDE.md. The first element is the agent's identity skill (its body

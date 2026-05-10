@@ -196,6 +196,24 @@ Without a depth budget, recursive resilience (a leaf at QUOTA_EXHAUSTED dispatch
 
 Both rules are enforced in `ResilientExecutor.execute(req)` before any preflight or adapter call — they're a **gate**, not a runtime check, so the storm never starts.
 
+### §3.2 NEEDS_AUTH → opencode-fallthrough (R1 amendment, Phase 2)
+
+The §3 invariant says auth/setup/trust errors **stop the chain** so the user sees the actionable hint. That's correct for the typical chain — `claude_code → codex → copilot_cli`, all subscription-gated. But every tenant's chain has `opencode` as the **local floor**: it needs no external creds, runs the local Gemma model, and is the universal "always available" terminator.
+
+A literal §3 reading would also stop on `claude_code:NEEDS_AUTH` even when `opencode` is the next platform — leaving the user without a response when we could have served one locally. We don't want that.
+
+**Sub-rule (encoded in `cli_orchestrator.policy.decide`):**
+
+> When the failing status is one of `NEEDS_AUTH`, `WORKSPACE_UNTRUSTED`, or `API_DISABLED` AND the executor's `next_platform` in `req.chain` is exactly `opencode`, the policy returns `action="fallback"` AND **preserves the actionable_hint** on the decision. The executor stashes that hint in `carry_hint` and stamps it on the eventual successful `ExecutionResult.actionable_hint` as a **non-blocking annotation**.
+
+What the user sees in chat: the response IS produced (by opencode). The chat footer renders the hint as a passive "FYI: your Claude Code subscription needs reconnecting at /settings/integrations" line, NOT a hard error. Reconnecting is a one-click action they can do later.
+
+What the policy still enforces (no §3 weakening):
+- The fallthrough is **specific to `next_platform == "opencode"`**. NEEDS_AUTH on `claude_code` with `next_platform="codex"` STILL stops the chain (codex would also be subscription-gated; user still has to reconnect).
+- The actionable_hint is **always set** when policy stops or §3.2-falls-through. The mechanism that surfaces it is what differs (hard error footer vs non-blocking annotation).
+
+This is what the test gate `test_no_fallback_on_auth.py` covers in **both** branches: stops-with-hint when next is non-opencode, falls-through-with-hint when next is opencode.
+
 ## §4 — Durable execution metadata
 
 ```python
@@ -402,6 +420,50 @@ When a leaf hits `QUOTA_EXHAUSTED` mid-task and policy says fall-back, it calls 
 | **4** | Agent-scoped JWT mint + third auth tier on `apps/mcp-server` + new MCP tools `dispatch_agent` (review M6) + `request_human_approval` (review M6). The CLI binary's existing `agent` / `blackboard` / `memory` / `workflow` / `approval` subcommands are added in a sibling PR-C of the CLI track (#332 follow-up); they're not Phase 4 of this design. | `feat/cli-orchestrator-phase-4-leaf-mcp-auth` *(renamed per review M3)* | (a) leaf-from-Claude-Code calls `recall_memory` and `execution_trace` row contains `parent_task_id`; (b) **scope-enforcement test** — leaf with `scope=["recall_memory"]` calling `dispatch_agent` returns 403 + audit log (review's added second gate); (c) tenancy-precedence test (I3) | revert PR; agent-token minting is additive — leaves fall back to no-op until reverted |
 
 Each phase is its own PR; each PR's ship gate must pass before the next branches off.
+
+### Phase 2 cutover playbook (post-merge)
+
+Phase 2 ships behind two flags on `tenant_features` (migration 121):
+
+  - `use_resilient_executor` (default **FALSE**) — the hard cutover gate.
+    FALSE keeps the legacy chain walk in `agent_router._legacy_chain_walk`
+    (byte-identical to the previous in-line block); TRUE switches to
+    `ResilientExecutor.execute(req)` via `agent_router._resilient_chain_walk`.
+  - `shadow_mode_real_dispatch` (default **FALSE**) — sub-flag for the
+    flag-OFF shadow path. FALSE = stubbed shadow (replays the legacy
+    outcome through the executor; cheap, no second dispatch). TRUE =
+    real adapter dispatch (~2x cost; only ~48h validation).
+
+Cutover sequence (each step requires the previous gate to pass):
+
+  1. **Internal-tenant validation, real dispatch (≤48h).** Flip both
+     flags TRUE on a single internal tenant. Watch
+     `cli_orchestrator_shadow_agreement_total` — agreement rate must
+     hold ≥99.5% across ≥1000 dispatches. The R4 amendment excludes
+     `disagreement_kind="expected_behaviour_change"` from the
+     denominator (legacy fell through on auth → new path stops with
+     hint is the *designed* change, not a regression).
+  2. **Pilot tenants, flag-OFF shadow (cheap path).** Reset
+     `shadow_mode_real_dispatch=FALSE` on the internal tenant; enable
+     `use_resilient_executor=TRUE` on a pilot cohort. The cheap
+     shadow now runs across all flag-OFF tenants. Watch
+     `cli_orchestrator_status_total` and `cli_orchestrator_duration_ms`
+     for the pilot cohort: chat p50 must stay within +10% of the
+     ~5.5s pre-cutover baseline.
+  3. **Ramp.** 10% → 25% → 50% → 100% over 14 days, gating each step
+     on the same SLOs. UNKNOWN_FAILURE rate <1% over rolling 1-hour
+     window. Pager alerts wire `cli_orchestrator_fallback_depth p99
+     > 2` (storm tripwire — §3.1 gate should prevent it).
+  4. **Hard cutover.** After 14 days at 100% with all SLOs holding,
+     remove the legacy chain-walk path entirely. The `_legacy_chain_walk`
+     helper stays as a sealed reference until the next major release.
+
+Rollback: flip `use_resilient_executor=FALSE` on the affected tenant
+(or fleet-wide via `UPDATE tenant_features SET use_resilient_executor =
+FALSE`). The legacy code path is byte-identical to the pre-Phase-2
+in-line block — no migration step needed for revert. Migration 121
+columns can be dropped via `121_*.down.sql` in a follow-up if the
+flag is permanently removed.
 
 ## How to verify locally (per phase)
 

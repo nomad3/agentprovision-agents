@@ -60,6 +60,19 @@ class TenantFeatures(Base):
     cli_orchestrator_enabled = Column(Boolean, default=False)
     default_cli_platform = Column(String(50), default="claude_code")
 
+    # Resilient CLI orchestrator (Phase 2 cutover gate). Default OFF —
+    # legacy chain-walk path runs at flag=False with byte-identical
+    # behaviour. See migration 121 + design doc §3 for cutover plan.
+    use_resilient_executor = Column(Boolean, nullable=False, default=False)
+
+    # Shadow-mode sub-flag. When `use_resilient_executor` is FALSE, we
+    # run the new path in shadow alongside the legacy path so we can
+    # diff outcomes. Default FALSE = stubbed shadow (replays legacy
+    # outcome, no real Temporal/LLM dispatch — the cheap mass path).
+    # TRUE = real adapter dispatch (~2x cost; only for ~48h internal
+    # tenant validation per the cutover plan).
+    shadow_mode_real_dispatch = Column(Boolean, nullable=False, default=False)
+
     # CPA software export format for the Bookkeeper Agent's weekly
     # categorized output. AAHA stays canonical — the Bookkeeper still
     # categorizes against the AAHA chart of accounts; this just picks
