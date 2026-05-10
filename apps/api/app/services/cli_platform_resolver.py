@@ -169,11 +169,14 @@ def mark_cooldown(tenant_id, platform: str, *, reason: str = "") -> None:
     )
 
 
-# Patterns that mean "this CLI can't process this turn — try the next
-# one." Matched against the metadata.error string from run_agent_session.
-# Conservative on purpose: false-negative (no retry on quota) is
-# acceptable; false-positive (retry on user-content errors) wastes the
-# user's CLI quota.
+# DEPRECATED — Phase 2 cleanup. These three pattern tuples are kept
+# here only so the legacy compiled-regex constants remain importable
+# while downstream is moved over. Phase 1's ``classify_error`` is now
+# a thin wrapper around the new
+# ``app.services.cli_orchestrator.classify_with_legacy_label``; nothing
+# in this module reads ``_QUOTA_PATTERNS`` / ``_AUTH_PATTERNS`` /
+# ``_MISSING_CRED_PATTERNS`` anymore. Phase 2 deletes the constants
+# alongside the wrapper.
 _QUOTA_PATTERNS = re.compile(
     r"(quota[\s_-]?(exceeded|exhausted|limit)|rate[\s_-]?limit|insufficient[\s_-]?(quota|credit)|"
     r"credit[\s_-]?balance|out of (tokens|credits|quota)|too many requests|429)",
@@ -184,25 +187,6 @@ _AUTH_PATTERNS = re.compile(
     r"authentication[\s_-]?failed)",
     re.IGNORECASE,
 )
-
-# Patterns that indicate the CLI is configured but its credentials aren't
-# wired (e.g. the friendly "X subscription is not connected" message
-# emitted by ``run_agent_session`` when ``subscription_missing`` fires,
-# or the ``RuntimeError("X is not connected. ...")`` raised from the
-# code-worker activity). These errors are stable across retries — the
-# chain skip for the SAME turn already handled them; cooldown would just
-# stretch a 1-second config issue (revoked OAuth) into 10 minutes of
-# degraded replies. So we classify them as ``"missing_credential"``,
-# which fires a chain skip without setting cooldown.
-#
-# The regex is deliberately defensive — code-worker historically
-# returned both long form ("X subscription is not connected. Please
-# connect ...") AND short form ("X not connected"). The 2026-05-02
-# holistic review caught that the short form silently bypassed
-# classification and broke chain fallback. The two alternations below
-# cover both forms; the first three terms catch the long form, the
-# trailing ``\bnot connected\b`` catches the short form anchored on a
-# word boundary so we don't false-positive on user prompts.
 _MISSING_CRED_PATTERNS = re.compile(
     r"(subscription is not connected|not connected\.?\s*integration|"
     r"not connected\..*Please connect|is not connected\..*subscription|"
@@ -214,6 +198,10 @@ _MISSING_CRED_PATTERNS = re.compile(
 def classify_error(error: Optional[str]) -> Optional[str]:
     """Return ``"quota"`` | ``"auth"`` | ``"missing_credential"`` | None.
 
+    Phase 1 wrapper — delegates to
+    ``app.services.cli_orchestrator.classifier.classify_with_legacy_label``.
+    The contract is unchanged:
+
     - ``"quota"`` and ``"auth"`` trigger chain fallback AND mark a 10-min
       cooldown so future turns skip the failing CLI directly.
     - ``"missing_credential"`` triggers chain fallback only — no cooldown,
@@ -221,17 +209,21 @@ def classify_error(error: Optional[str]) -> Optional[str]:
       cooling would mask a quick reconnect.
     - Anything else → ``None``: real failure, bubbles up.
 
-    ``None`` input → ``None``.
+    ``None`` / ``""`` input → ``None``.
+
+    Phase 2 callers should import ``Status`` from
+    ``app.services.cli_orchestrator`` and switch to the strongly-typed
+    enum; this wrapper stays as the rollback seam.
     """
     if not error:
         return None
-    if _QUOTA_PATTERNS.search(error):
-        return "quota"
-    if _AUTH_PATTERNS.search(error):
-        return "auth"
-    if _MISSING_CRED_PATTERNS.search(error):
-        return "missing_credential"
-    return None
+    # Lazy import to keep the module-load cost flat — the orchestrator
+    # package pulls in ``re`` + ``shutil`` + a chunk of patterns, and
+    # ``cli_platform_resolver`` is hot in the request path.
+    from app.services.cli_orchestrator import classify_with_legacy_label
+
+    _status, legacy_label = classify_with_legacy_label(error)
+    return legacy_label
 
 
 def _connected_clis(db: Session, tenant_id: uuid.UUID) -> tuple[set[str], bool]:
