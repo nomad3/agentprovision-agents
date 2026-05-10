@@ -254,3 +254,27 @@ ingress:
 # Managed Certificate disabled - using shared certificate
 managedCertificate:
   enabled: false
+
+# Phase 3 — Prometheus ServiceMonitor for /api/v1/metrics scrape.
+# Internal-key gated; the scraper config injects the X-Internal-Key
+# header from the agentprovision-api-internal-key secret.
+serviceMonitor:
+  enabled: true
+  interval: 30s
+  path: /api/v1/metrics
+  scheme: http
+  bearerTokenSecret:
+    name: agentprovision-api-secret
+    key: API_INTERNAL_KEY
+  # The chart base wires this into a HTTPHeaders block. If the
+  # rendered ServiceMonitor needs a static X-Internal-Key header
+  # instead of a bearer, set headers manually here.
+  headers:
+    - name: X-Internal-Key
+      valueFrom:
+        secretKeyRef:
+          name: agentprovision-api-secret
+          key: API_INTERNAL_KEY
+  labels:
+    app: agentprovision-api
+    role: cli-orchestrator-metrics

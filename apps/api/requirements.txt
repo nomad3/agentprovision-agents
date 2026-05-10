@@ -17,6 +17,7 @@ duckdb
 pyarrow
 temporalio
 redis[hiredis]>=5.0.0
+prometheus-client>=0.17
 anthropic
 openai
 pytest

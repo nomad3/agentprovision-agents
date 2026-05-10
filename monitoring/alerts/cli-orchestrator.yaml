@@ -1,0 +1,89 @@
+# PrometheusRule CRD — CLI orchestrator alerts (Phase 3 commit 4).
+# Lands the 4 alerts from design §4.1.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cli-orchestrator-alerts
+  labels:
+    app: cli-orchestrator
+    role: alert-rules
+spec:
+  groups:
+    - name: cli-orchestrator.rules
+      rules:
+        # ── Page: classifier drift ───────────────────────────────────
+        - alert: CliOrchestratorUnknownFailureRateHigh
+          expr: |
+            sum(rate(cli_orchestrator_status_total{status="unknown_failure"}[15m]))
+            /
+            sum(rate(cli_orchestrator_status_total[15m]))
+            > 0.05
+          for: 15m
+          labels:
+            severity: page
+            service: cli-orchestrator
+          annotations:
+            summary: "CLI orchestrator UNKNOWN_FAILURE rate > 5% (classifier drift)"
+            description: |
+              UNKNOWN_FAILURE rate over the last 15min is above 5% — the classifier
+              is no longer recognising failure shapes. Investigate the
+              cli_orchestrator_status_total UNKNOWN drill-down panel.
+              SLO target: < 1% over any rolling 1-hour window.
+
+        # ── Page: fallback storm tripwire ─────────────────────────────
+        - alert: CliOrchestratorFallbackDepthStorm
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(cli_orchestrator_fallback_depth_bucket[5m]))
+            ) > 2
+          for: 5m
+          labels:
+            severity: page
+            service: cli-orchestrator
+          annotations:
+            summary: "CLI orchestrator p99 fallback depth > 2 (storm starting)"
+            description: |
+              The §3.1 recursion gate should prevent this; a p99 depth above 2
+              over 5 minutes means a class of requests is walking the chain
+              hard. Could be a quota outage at one provider or a broken
+              preflight signature on another.
+
+        # ── Ticket: NEEDS_AUTH WoW > 20% ──────────────────────────────
+        - alert: CliOrchestratorNeedsAuthRateWoWClimbing
+          expr: |
+            (
+              sum by (tenant_id) (rate(cli_orchestrator_status_total{status="needs_auth"}[1h]))
+              /
+              (
+                sum by (tenant_id) (rate(cli_orchestrator_status_total{status="needs_auth"}[1h] offset 7d))
+                + 0.001
+              )
+            ) > 1.20
+          for: 30m
+          labels:
+            severity: ticket
+            service: cli-orchestrator
+          annotations:
+            summary: "CLI orchestrator NEEDS_AUTH rate up >20% WoW for tenant {{ $labels.tenant_id }}"
+            description: |
+              Credential rot — the tenant's CLI tokens are expiring more
+              often than they used to. Open a ticket to nudge the tenant
+              into reconnecting.
+
+        # ── Ticket: API_DISABLED for any tenant ──────────────────────
+        - alert: CliOrchestratorApiDisabledForTenant
+          expr: |
+            sum by (tenant_id, platform) (
+              rate(cli_orchestrator_status_total{status="api_disabled"}[1h])
+            ) > 0
+          for: 1h
+          labels:
+            severity: ticket
+            service: cli-orchestrator
+          annotations:
+            summary: "CLI orchestrator API_DISABLED on {{ $labels.platform }} for tenant {{ $labels.tenant_id }}"
+            description: |
+              The tenant's cloud API isn't enabled — this is an onboarding
+              regression. Could mean the GCP project lost the
+              generativelanguage API binding or GitHub Copilot was disabled
+              org-wide. Customer success follow-up.

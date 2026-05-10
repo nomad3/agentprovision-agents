@@ -72,6 +72,7 @@ from app.api.v1 import (
     insights_fleet_health,
     insights_cost,
     insights_coalition_replay,
+    metrics,
 )
 
 _logger = logging.getLogger(__name__)
@@ -178,6 +179,8 @@ router.include_router(agent_tests.router, prefix="/agents", tags=["agent-tests"]
 router.include_router(insights_resolver_metrics.router, prefix="/insights", tags=["insights"])
 router.include_router(spatial_orchestration.router, prefix="/spatial", tags=["spatial"])
 router.include_router(admin_tenant_health.router, prefix="/admin", tags=["admin"])
+# Phase 3 — Prometheus exposition (internal-key gated, scraped in-cluster).
+router.include_router(metrics.router, tags=["metrics"])
 
 # Register optional modules that loaded successfully
 _optional_routes = {

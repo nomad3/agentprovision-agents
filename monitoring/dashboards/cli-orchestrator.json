@@ -1,0 +1,101 @@
+{
+  "title": "CLI Orchestrator",
+  "uid": "cli-orchestrator",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["cli-orchestrator", "phase3"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "type": "barchart",
+      "title": "Status mix per platform",
+      "description": "Stacked bar per platform of cli_orchestrator_status_total — design §4.1 dashboard panel #1.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (platform, status) (rate(cli_orchestrator_status_total[5m]))",
+          "legendFormat": "{{platform}} / {{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": { "mode": "normal", "group": "A" }
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "heatmap",
+      "title": "Fallback chain heatmap (origin × winning platform)",
+      "description": "Rows = origin platform, cols = winning platform — design §4.1 panel #2.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (platform, status) (rate(cli_orchestrator_status_total{status=\"execution_succeeded\"}[5m]))",
+          "format": "heatmap",
+          "legendFormat": "{{platform}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Recovery latency CDF (1st-attempt vs after-fallback)",
+      "description": "p50/p95/p99 of cli_orchestrator_duration_ms split by attempt_count — design §4.1 panel #3.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(cli_orchestrator_duration_ms_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cli_orchestrator_duration_ms_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(cli_orchestrator_duration_ms_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "UNKNOWN_FAILURE drill-down (top 10 platforms by rate)",
+      "description": "Surfaces classifier drift — design §4.1 panel #4.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (platform) (rate(cli_orchestrator_status_total{status=\"unknown_failure\"}[1h])))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Preflight duration (warm-state p95) by helper",
+      "description": "Phase 3 ship gate — preflight p95 must stay inside the §6 latency budget table.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (helper, platform, le) (rate(cli_orchestrator_preflight_duration_ms_bucket[5m])))",
+          "legendFormat": "{{platform}} / {{helper}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s"
+}
