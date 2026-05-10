@@ -1,11 +1,17 @@
 # Workspace-wide Rust toolchain pin. Keeps CI builds reproducible across
 # all 6 cross-compile targets (mac arm64/x64, linux x64/arm64-musl,
-# windows x64/arm64) and matches what the agentprovision-cli + agentprovision-core
-# crates declare in their Cargo.toml `rust-version` field.
+# windows x64/arm64).
 #
 # Bump deliberately — pinning here pins the toolchain everywhere downstream.
+#
+# Why 1.85.0 (not 1.83 from the original commit): transitive deps —
+# hashbrown 0.17, uuid 1.23, webbrowser 1.2, wasip2/wasip3 — all require
+# Cargo's `edition2024` feature, which stabilised in Rust 1.85. Pinning
+# below 1.85 made cargo refuse to parse those manifests with
+#   "error: feature `edition2024` is required"
+# on the PR-D-1 first CI run (2026-05-10). Bumping unblocks every target.
 [toolchain]
-channel = "1.83.0"
+channel = "1.85.0"
 components = ["rustfmt", "clippy"]
 targets = [
     "aarch64-apple-darwin",
