@@ -94,6 +94,12 @@ _STDERR_RULES: list[_Rule] = [
             r"|monthly\s*usage\s*limit"
             r"|max\s*plan\s*limit"
             r"|out\s*of\s*credits"
+            # Phase 1.5 parity: legacy CLAUDE_CREDIT_ERROR_PATTERNS in
+            # apps/code-worker/workflows.py also flagged "out of extra
+            # usage" as a quota fragment. The corpus parity test
+            # (test_credit_exhausted_parity.py) gates this; without it
+            # step 5's helper rewrite would silently regress.
+            r"|out\s*of\s*extra\s*usage"
             r"|insufficient\s*credits",
             re.IGNORECASE,
         ),
@@ -149,6 +155,14 @@ _STDERR_RULES: list[_Rule] = [
             r"|credit[\s_-]?balance"
             r"|out\s*of\s*(tokens|credits|quota)"
             r"|too\s*many\s*requests"
+            # Phase 1.5 parity: the legacy CODEX_CREDIT_ERROR_PATTERNS
+            # in apps/code-worker/workflows.py also flag "billing",
+            # "token limit exceeded", and "capacity" as quota signals.
+            # Corpus parity test gates these; step 5's helper rewrite
+            # would otherwise silently change behaviour.
+            r"|billing"
+            r"|token\s*limit\s*exceeded"
+            r"|capacity"
             r"|\b429\b",
             re.IGNORECASE,
         ),
@@ -215,13 +229,25 @@ _STDERR_RULES: list[_Rule] = [
         legacy_label="auth",
         test_id="gemini_cli_permission_denied_is_needs_auth",
     ),
-    # 10. copilot quota — subscription / not enabled / forbidden / 429
+    # 10. copilot quota — subscription / not enabled / forbidden /
+    # rate / quota / billing / 429. Phase 1.5 corpus-parity widening:
+    # legacy COPILOT_CREDIT_ERROR_PATTERNS in apps/code-worker/workflows.py
+    # also flag rate-limit / quota-exceeded / insufficient_quota /
+    # out-of-credits / too-many-requests as credit signals. Corpus
+    # parity test (test_credit_exhausted_parity.py) gates this; step 5's
+    # helper rewrite would otherwise silently change behaviour.
     _Rule(
         platform="copilot_cli",
         pattern=re.compile(
             r"copilot\s*is\s*not\s*enabled"
             r"|subscription\s*required"
             r"|forbidden"
+            r"|rate[\s_-]?limit"
+            r"|usage\s*limit"
+            r"|quota[\s_-]?exceeded"
+            r"|insufficient[\s_-]?quota"
+            r"|out\s*of\s*credits"
+            r"|too\s*many\s*requests"
             r"|\b429\b",
             re.IGNORECASE,
         ),
@@ -229,7 +255,15 @@ _STDERR_RULES: list[_Rule] = [
         legacy_label="quota",
         test_id="copilot_cli_subscription_required_is_quota_exhausted",
     ),
-    # 11. copilot auth — not authorized / 401 / 403
+    # 11. copilot auth — not authorized / 401 / 403.
+    # NOTE on legacy union: COPILOT_CREDIT_ERROR_PATTERNS also lumped
+    # "not authorized" into its credit-exhausted bucket, but only to
+    # trigger CLI fallback chaining (auth failure → switch CLI). Other
+    # consumers (chat error footer, RL writer, council) want auth and
+    # quota distinct, so this rule keeps NEEDS_AUTH semantically
+    # correct and the worker helper for copilot in step 5 uses
+    # ``classify(...) in (QUOTA_EXHAUSTED, NEEDS_AUTH)`` to preserve
+    # the legacy union behaviour. See test_credit_exhausted_parity.py.
     _Rule(
         platform="copilot_cli",
         pattern=re.compile(
