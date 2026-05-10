@@ -141,6 +141,14 @@ def test_classify_returns_none_for_user_errors():
         ("the capacity planning meeting is at 3pm", None),
         ("billing error: payment method expired", "quota"),
         ("server at capacity exceeded available shards", "quota"),
+        # Bare 'forbidden' in copilot quota rule remains untightened —
+        # pre-existing legacy COPILOT_CREDIT_ERROR_PATTERNS contract,
+        # Phase 2 narrows naturally via per-adapter routing (each
+        # adapter's stderr only sees its own platform's tokens). Pinned
+        # here so a future tightening is deliberate, not a silent edit.
+        # Note: 'HTTP 403 Forbidden' classifies as 'auth' not 'quota'
+        # because the codex \\b403\\b auth rule wins over copilot quota.
+        ("permission to read /etc is forbidden", "quota"),
     ],
 )
 def test_phase_1_5_widened_fallback_surface(stderr, expected_label):
