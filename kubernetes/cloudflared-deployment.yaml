@@ -29,16 +29,14 @@ data:
         service: http://api:8000
 
       # PR-D-3: install one-liners. agentprovision.com/install.sh + .ps1
-      # land in the API's static-file router, NOT the SPA. Without these
-      # rules cloudflared sends them through the catch-all to web nginx,
-      # which serves index.html, and `curl | sh` would pipe HTML into a
-      # shell. Two explicit rules — one per script — placed BEFORE the
-      # web fall-through.
+      # land in the API's static-file router, NOT the SPA. Anchored regex
+      # so /install.sh matches exactly that path (no /install.shXY,
+      # /foo/install.sh, etc.). Placed BEFORE the web fall-through.
       - hostname: agentprovision.com
-        path: /install.sh
+        path: ^/install\.sh$
         service: http://api:8000
       - hostname: agentprovision.com
-        path: /install.ps1
+        path: ^/install\.ps1$
         service: http://api:8000
 
       - hostname: luna.agentprovision.com

@@ -73,7 +73,9 @@ esac
 case "$OS" in
     Darwin)
         TRIPLE="${ARCH}-apple-darwin"
-        ARCHIVE_EXT=tar.gz
+        # macOS ships .zip — Apple's xcrun notarytool only accepts
+        # .zip / .pkg / .dmg, so PR-D-2 publishes zip on macOS.
+        ARCHIVE_EXT=zip
         ;;
     Linux)
         # Linux ships as static musl, runs on any glibc / Alpine / RHEL.
@@ -90,10 +92,16 @@ esac
 # ── tools we need ─────────────────────────────────────────────────────────
 need() { command -v "$1" >/dev/null 2>&1 || err "missing required tool: $1"; }
 need curl
-need tar
+# Archive tool depends on platform — case below.
 need mkdir
 need mv
 need chmod
+# unzip ships with macOS by default; tar handles Linux's tar.gz once
+# PR-D-1.5 lands. Pick whichever the platform ARCHIVE_EXT requires.
+case "$ARCHIVE_EXT" in
+    zip)    need unzip ;;
+    tar.gz) need tar ;;
+esac
 # sha256sum on Linux, shasum -a 256 on macOS — pick whichever exists.
 if command -v sha256sum >/dev/null 2>&1; then
     SHACMD="sha256sum"
@@ -138,7 +146,9 @@ curl -fsSL --retry 3 --retry-delay 2 -o "$TMP/SHA256SUMS" "$SHASUMS_URL" \
 # ── verify ────────────────────────────────────────────────────────────────
 say "Verifying SHA256..."
 # Manifest format: "<hash>  <filename>" (sha256sum-compatible).
-EXPECTED=$(grep "  ${ARCHIVE}\$" "$TMP/SHA256SUMS" | awk '{print $1}' | head -1)
+# grep -F treats the archive name as a literal string — important because
+# the filename contains a `.` that's a regex wildcard otherwise.
+EXPECTED=$(grep -F "  ${ARCHIVE}" "$TMP/SHA256SUMS" | awk -v fn="$ARCHIVE" '$2 == fn {print $1}' | head -1)
 if [ -z "$EXPECTED" ]; then
     err "no SHA256 line for $ARCHIVE in SHA256SUMS — release manifest incomplete?"
 fi
@@ -150,7 +160,10 @@ fi
 # ── extract + install ─────────────────────────────────────────────────────
 say "Extracting..."
 mkdir -p "$TMP/extract"
-tar -xzf "$TMP/$ARCHIVE" -C "$TMP/extract"
+case "$ARCHIVE_EXT" in
+    zip)    unzip -q "$TMP/$ARCHIVE" -d "$TMP/extract" ;;
+    tar.gz) tar -xzf "$TMP/$ARCHIVE" -C "$TMP/extract" ;;
+esac
 
 # The archive contains a single directory `agentprovision-<triple>/`.
 SRC_DIR="$TMP/extract/agentprovision-${TRIPLE}"
