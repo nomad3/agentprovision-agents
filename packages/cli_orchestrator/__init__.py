@@ -36,6 +36,7 @@ from .policy import (
     MAX_FALLBACK_DEPTH,
     decide,
 )
+from .metadata import ExecutionMetadata
 from .preflight import (
     check_binary_on_path,
     check_cloud_api_enabled,
@@ -68,6 +69,7 @@ __all__ = [
     "ExecutionResult",
     "PreflightResult",
     "ResilientExecutor",
+    "ExecutionMetadata",
     "check_binary_on_path",
     "check_workspace_trust_file",
     "check_credentials_present",

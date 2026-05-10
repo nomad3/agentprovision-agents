@@ -17,6 +17,8 @@ DECISION_POINTS = [
     "code_strategy", "deal_stage_advance", "change_significance",
     "code_task", "tier_selection",
     "gesture_action",
+    # Phase 3 — ResilientExecutor mirror lands here.
+    "chat_response",
 ]
 
 # Reward discount factor for backward propagation
