@@ -22,6 +22,8 @@ import subprocess
 
 import pytest
 
+import cli_executors.opencode
+import cli_runtime
 import workflows as wf
 
 
@@ -100,7 +102,7 @@ class TestExecuteCodexChat:
         output_file.write_text("Codex says hi")
 
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout="", stderr=""),
         )
 
@@ -123,7 +125,7 @@ class TestExecuteCodexChat:
         session_dir.mkdir()
 
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=1, stdout="", stderr="rate limit"),
         )
 
@@ -149,7 +151,7 @@ class TestExecuteCodexChat:
             captured["cmd"] = cmd
             return _completed(returncode=0)
 
-        monkeypatch.setattr(wf, "_run_cli_with_heartbeat", fake_run)
+        monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", fake_run)
 
         wf._execute_codex_chat(
             _make_input(), session_dir=str(session_dir), image_path="/tmp/img.jpg",
@@ -201,7 +203,7 @@ class TestExecuteGeminiChat:
             lambda sd, mcp: str(session_dir),
         )
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(
                 returncode=0,
                 stdout='{"result": "Gemini speaking", "model": "gemini-2.5-pro"}',
@@ -229,7 +231,7 @@ class TestExecuteGeminiChat:
         # stderr contains a tool-error pattern; helper should extract it.
         stderr_text = "Error executing tool default_api:list_files: not authorized\n"
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=1, stdout="", stderr=stderr_text),
         )
 
@@ -251,7 +253,7 @@ class TestExecuteGeminiChat:
             wf, "_prepare_gemini_home_apikey", lambda sd, mcp: str(session_dir),
         )
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout="", stderr=""),
         )
 
@@ -283,7 +285,7 @@ class TestExecuteGeminiChat:
 
         monkeypatch.setattr(wf, "_prepare_gemini_home", fake_prep)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout='{"result":"x"}'),
         )
 
@@ -319,7 +321,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setattr(wf, "_fetch_github_token", fake_fetch)
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(
                 returncode=0,
                 stdout=json.dumps({
@@ -343,7 +345,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(
                 returncode=0,
                 stdout='{"type":"session.skills_loaded"}\n{"type":"session.completed"}\n',
@@ -360,7 +362,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=2, stdout="", stderr="quota exceeded"),
         )
 
@@ -375,7 +377,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout=""),
         )
 
@@ -407,7 +409,7 @@ class TestExecuteCopilotChat:
             }),
         ])
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout=stream),
         )
 
@@ -446,7 +448,7 @@ class TestExecuteCopilotChat:
             }),
         ])
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout=stream),
         )
 
@@ -494,7 +496,7 @@ class TestExecuteOpencodeChat:
                 "usage": {"prompt_tokens": 10},
             })
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         out = wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -514,7 +516,7 @@ class TestExecuteOpencodeChat:
             calls.append(url)
             return _FakeResp(200, {"parts": [{"type": "text", "text": "x"}]})
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -527,7 +529,7 @@ class TestExecuteOpencodeChat:
         def fake_post(url, **kwargs):
             raise RuntimeError("connection refused")
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         # The fallback CLI uses subprocess.run.
         def fake_subprocess_run(cmd, **kw):
@@ -536,7 +538,7 @@ class TestExecuteOpencodeChat:
                 stdout=json.dumps({"response": "CLI answer"}),
             )
 
-        monkeypatch.setattr(wf.subprocess, "run", fake_subprocess_run)
+        monkeypatch.setattr(cli_executors.opencode.subprocess, "run", fake_subprocess_run)
 
         out = wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -555,7 +557,7 @@ class TestExecuteOpencodeChat:
             # No 'parts', use legacy 'response'.
             return _FakeResp(200, {"response": "legacy text"})
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         out = wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -569,7 +571,7 @@ class TestExecuteOpencodeChatCli:
 
     def test_cli_failure_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            wf.subprocess, "run",
+            cli_executors.opencode.subprocess, "run",
             lambda cmd, **kw: _completed(returncode=1, stdout="", stderr="boom"),
         )
         out = wf._execute_opencode_chat_cli(
@@ -582,7 +584,7 @@ class TestExecuteOpencodeChatCli:
         def boom(*a, **kw):
             raise OSError("not found")
 
-        monkeypatch.setattr(wf.subprocess, "run", boom)
+        monkeypatch.setattr(cli_executors.opencode.subprocess, "run", boom)
         out = wf._execute_opencode_chat_cli(
             _make_input(platform="opencode"), str(tmp_path),
         )

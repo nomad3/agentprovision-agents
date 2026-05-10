@@ -19,6 +19,7 @@ import subprocess
 
 import pytest
 
+import cli_runtime
 import workflows as wf
 
 
@@ -208,7 +209,7 @@ class TestRunCliWithHeartbeat:
     def _patch_clocks(self, monkeypatch):
         self.heartbeats: list[str] = []
         monkeypatch.setattr(
-            wf.activity, "heartbeat", lambda msg=None: self.heartbeats.append(msg),
+            cli_runtime.activity, "heartbeat", lambda msg=None: self.heartbeats.append(msg),
         )
         self._t = 0.0
 
@@ -216,19 +217,19 @@ class TestRunCliWithHeartbeat:
             self._t += 1.0
             return self._t
 
-        monkeypatch.setattr(wf.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(cli_runtime.time, "monotonic", fake_monotonic)
         yield
 
     def test_loop_emits_heartbeats_until_subprocess_completes(self, monkeypatch):
         """Heartbeat must fire at start + on every future-result timeout iteration
         before the subprocess finally exits."""
         fake = _FakeChatPopen(block_seconds=0.05, returncode=0, stdout="OUT", stderr="")
-        monkeypatch.setattr(wf.subprocess, "Popen", lambda *a, **kw: fake)
+        monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *a, **kw: fake)
 
         # heartbeat_interval << block_seconds — each future.result(timeout=...)
         # times out quickly while ``communicate`` is still sleeping inside the
         # worker thread, forcing the loop to fire a "running..." heartbeat.
-        result = wf._run_cli_with_heartbeat(
+        result = cli_runtime.run_cli_with_heartbeat(
             ["fakecli"], label="Fake CLI",
             timeout=1000,
             env={}, cwd="/tmp",
@@ -243,10 +244,10 @@ class TestRunCliWithHeartbeat:
 
     def test_subprocess_timeout_kills_and_reraises(self, monkeypatch):
         fake = _FakeChatPopen(raise_timeout_expired=True)
-        monkeypatch.setattr(wf.subprocess, "Popen", lambda *a, **kw: fake)
+        monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *a, **kw: fake)
 
         with pytest.raises(subprocess.TimeoutExpired):
-            wf._run_cli_with_heartbeat(
+            cli_runtime.run_cli_with_heartbeat(
                 ["fakecli"], label="X",
                 timeout=1, env={}, cwd="/tmp",
                 heartbeat_interval=0.001,
@@ -272,10 +273,10 @@ class TestRunCliWithHeartbeat:
                 return None  # still alive when the killer runs
 
         fake = _ExplodingPopen()
-        monkeypatch.setattr(wf.subprocess, "Popen", lambda *a, **kw: fake)
+        monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *a, **kw: fake)
 
         with pytest.raises(RuntimeError, match="boom"):
-            wf._run_cli_with_heartbeat(
+            cli_runtime.run_cli_with_heartbeat(
                 ["fakecli"], label="X",
                 timeout=10, env={}, cwd="/tmp",
                 heartbeat_interval=0.001,
