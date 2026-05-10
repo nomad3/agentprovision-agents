@@ -836,6 +836,12 @@ def _run_agent_session_legacy(
                 return tool_response, metadata
             logger.info("Local tool agent returned no response — falling back to plain text")
         except Exception as exc:
+            # Roll back so the IntegrationConfig query above (or any DB work
+            # local_tool_agent did) cannot poison the session for the plain-text
+            # fallback below or the caller's downstream commits. See PR #349 —
+            # the missing rollback on a sibling handler is what cascaded into
+            # InFailedSqlTransaction across an entire FastAPI request.
+            safe_rollback(db)
             logger.warning("Local tool agent failed: %s — falling back to plain text", exc)
 
         # 2. Fall back to plain text response (no tools)
@@ -1129,6 +1135,13 @@ def _run_agent_session_legacy(
             # secret rotation bugs, malformed tool_groups data, or DB
             # outages on every chat turn. Mirror worker-side severity
             # (apps/code-worker/app/workflows.py:574) — Phase 4 review C3.
+            #
+            # Rollback is required: the try-block ran `db.query(Agent)` and
+            # `read_flags(db, ...)`. A NameError or DB hiccup mid-block
+            # (this is exactly the failure mode behind PR #349) leaves the
+            # session in InFailedSqlTransaction. The very next line calls
+            # generate_mcp_config(..., db=db) which would otherwise cascade.
+            safe_rollback(db)
             logger.warning(
                 "agent_token mint failed (falling back to legacy auth): %s",
                 exc, exc_info=True,
@@ -1260,6 +1273,15 @@ def _run_agent_session_legacy(
         )
         return None, metadata
     except Exception as exc:
+        # Roll back so the caller (chat.py route_and_execute) can keep
+        # running its own db.commit() calls — _append_message, ExecutionTrace
+        # write, session memory_context update — without cascading into
+        # InFailedSqlTransaction. This is the exact site that PR #349
+        # diagnosed: a NameError raised inside the nested _run_workflow
+        # closure was caught here without a rollback, which poisoned every
+        # subsequent query on the same FastAPI request session for hours
+        # of WhatsApp traffic.
+        safe_rollback(db)
         logger.exception("ChatCliWorkflow dispatch failed")
         metadata["error"] = str(exc)
         return None, metadata

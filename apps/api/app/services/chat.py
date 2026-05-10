@@ -413,6 +413,14 @@ def _generate_agentic_response(
                 "ok" if response_text else "none",
             )
         except Exception as e:
+            # Roll back BEFORE we continue — route_and_execute holds the
+            # request's db session for the entire dispatch path
+            # (cli_session_manager → memory recall → agent_router) and any
+            # broken-state propagation here would poison the db.commit()
+            # calls below (assistant message append, ExecutionTrace write,
+            # session memory_context update). This is the consumer-side
+            # guard for the cascade that PR #349 diagnosed.
+            safe_rollback(db)
             logger.error(
                 "[chat-trace] route_and_execute: raised session=%s elapsed=%.0fms err=%s",
                 str(session.id)[:8], (time.perf_counter() - _trace_t0) * 1000, e,
