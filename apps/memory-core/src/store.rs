@@ -246,7 +246,15 @@ impl MemoryStore for PgStore {
             .map(|r| Observation {
                 id: r.get("id"),
                 entity_id: r.get("entity_id"),
-                content: r.get("content"),
+                // `content` is a free-text TEXT column on knowledge_observations
+                // and can be NULL on early-platform rows. Proto-side it is a
+                // proto3 `string` (non-nullable), so default to "" rather than
+                // panic. Same pattern as fetch_entities (PR #351).
+                content: r
+                    .try_get::<Option<String>, _>("content")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 similarity: r.get::<f64, _>("similarity") as f32,
             })
             .collect())
@@ -276,9 +284,16 @@ impl MemoryStore for PgStore {
         Ok(rows
             .iter()
             .map(|r| Relation {
+                // from_entity_id / to_entity_id are NOT NULL FKs in the schema,
+                // so bare .get() is safe. relation_type is VARCHAR with no
+                // NOT NULL — defend against NULL the same way as PR #351.
                 from_entity: r.get("from_entity"),
                 to_entity: r.get("to_entity"),
-                relation_type: r.get("relation_type"),
+                relation_type: r
+                    .try_get::<Option<String>, _>("relation_type")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
             })
             .collect())
     }
@@ -320,7 +335,13 @@ impl MemoryStore for PgStore {
             .iter()
             .map(|r| EpisodeSummary {
                 id: r.get("id"),
-                summary: r.get("summary"),
+                // `summary` is TEXT and may be NULL for episodes that haven't
+                // been summarized yet. Default to "" — same pattern as PR #351.
+                summary: r
+                    .try_get::<Option<String>, _>("summary")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default(),
                 created_at: Some(chrono_to_proto_ts(
                     r.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
                 )),
@@ -361,13 +382,35 @@ impl MemoryStore for PgStore {
             .iter()
             .map(|r| {
                 let due_at: Option<chrono::DateTime<chrono::Utc>> = r.get("due_at");
+                // commitment_records: title is TEXT (may be NULL on
+                // pre-template-shape rows), commitment_type / state are
+                // VARCHAR (NOT NULL in current schema but defensively pulled
+                // through the same Option pattern), owner_agent_slug is
+                // nullable for unowned commitments. All proto-side `string`
+                // — default to "". Same pattern as PR #351.
                 CommitmentSummary {
                     id: r.get("id"),
-                    title: r.get("title"),
-                    commitment_type: r.get("commitment_type"),
-                    status: r.get("state"),
+                    title: r
+                        .try_get::<Option<String>, _>("title")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
+                    commitment_type: r
+                        .try_get::<Option<String>, _>("commitment_type")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
+                    status: r
+                        .try_get::<Option<String>, _>("state")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
                     due_at: due_at.map(chrono_to_proto_ts),
-                    owner_agent_slug: r.get("owner_agent_slug"),
+                    owner_agent_slug: r
+                        .try_get::<Option<String>, _>("owner_agent_slug")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
                 }
             })
             .collect())
@@ -407,9 +450,21 @@ impl MemoryStore for PgStore {
             .iter()
             .map(|r| {
                 let dt: Option<chrono::DateTime<chrono::Utc>> = r.get("created_at");
+                // `role` is a SQL literal ('user' as role) so never NULL.
+                // `content` (e.text_content) IS nullable in the embeddings
+                // table; `session_id` (e.content_id) is also nullable for
+                // some content_types — defend both. Same pattern as PR #351.
                 ConversationSnippet {
-                    session_id: r.get("session_id"),
-                    content: r.get("content"),
+                    session_id: r
+                        .try_get::<Option<String>, _>("session_id")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
+                    content: r
+                        .try_get::<Option<String>, _>("content")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default(),
                     role: r.get("role"),
                     created_at: dt.map(chrono_to_proto_ts),
                     similarity: r.get::<f64, _>("similarity") as f32,
