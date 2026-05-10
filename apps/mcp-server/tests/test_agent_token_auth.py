@@ -234,3 +234,226 @@ def test_tenancy_mismatch_per_distinct_header_value_logged_separately():
 
     # 3 distinct (tenant, agent, header) tuples → 3 audit rows total.
     assert len(audit_calls) == 3
+
+
+# ── Commit 7: scope enforcement at audit boundary ───────────────────────
+
+
+class _FakeReq:
+    """Stand-in for FastMCP's CallToolRequest — only .params.name +
+    .params.arguments are read by the audit handler."""
+
+    def __init__(self, name: str, arguments: dict | None = None):
+        self.params = SimpleNamespace(name=name, arguments=arguments or {})
+
+
+def _build_audit_handler_with_auth(auth_ctx_to_return):
+    """Build an audit handler with a mocked resolve_auth_context. Returns
+    (handler, original_handler_calls, log_call_calls).
+
+    We invoke ``install_audit`` against a stub mcp_server, capture the
+    installed handler off the request_handlers dict, and exercise it
+    directly. This bypasses the FastMCP machinery while still testing
+    the real scope-gate logic in tool_audit.py.
+    """
+    from mcp.types import CallToolRequest
+
+    from src import tool_audit
+
+    original_calls = []
+
+    async def fake_original(req):
+        original_calls.append(req)
+        return SimpleNamespace(content=[], isError=False)
+
+    handlers_dict: dict = {CallToolRequest: fake_original}
+    fake_lowlevel = SimpleNamespace(request_handlers=handlers_dict)
+    fake_mcp = SimpleNamespace(
+        _mcp_server=fake_lowlevel,
+        _tool_audit_installed=False,
+        get_context=lambda: SimpleNamespace(),
+    )
+
+    # Mock resolve_auth_context to return the test's auth_ctx
+    # regardless of context shape.
+    log_calls = []
+    with patch.object(
+        tool_audit, "resolve_auth_context",
+        return_value=auth_ctx_to_return,
+    ), patch.object(
+        tool_audit, "_log_call",
+        side_effect=lambda **kw: log_calls.append(kw),
+    ):
+        tool_audit.install_audit(fake_mcp)
+        installed = handlers_dict[CallToolRequest]
+        # Mark the installed handler so tests can call it; keep the
+        # patch context alive by yielding a closure that re-applies
+        # the mocks per-invocation.
+    # Re-apply mocks at call time since the with-block has closed.
+    return installed, original_calls, log_calls, fake_mcp
+
+
+@pytest.mark.asyncio
+async def test_scope_blocks_out_of_scope_tool_with_403_audit():
+    """Phase 4 second ship gate (b): scope=['recall_memory'] caller
+    invoking dispatch_agent → PermissionError + audit row."""
+    from src.agent_token_verify import AuthContext
+    from src import tool_audit
+
+    auth = AuthContext(
+        tier="agent_token",
+        tenant_id=str(uuid.uuid4()),
+        agent_id=str(uuid.uuid4()),
+        task_id=str(uuid.uuid4()),
+        scope=["recall_memory"],
+    )
+
+    # Patch resolve_auth_context + _log_call across the actual call.
+    from mcp.types import CallToolRequest
+
+    original_calls = []
+
+    async def fake_original(req):
+        original_calls.append(req)
+        return SimpleNamespace(content=[], isError=False)
+
+    handlers_dict: dict = {CallToolRequest: fake_original}
+    fake_lowlevel = SimpleNamespace(request_handlers=handlers_dict)
+    fake_mcp = SimpleNamespace(
+        _mcp_server=fake_lowlevel,
+        _tool_audit_installed=False,
+        get_context=lambda: SimpleNamespace(),
+    )
+
+    log_calls = []
+    with patch.object(tool_audit, "resolve_auth_context", return_value=auth), \
+         patch.object(tool_audit, "_log_call",
+                      side_effect=lambda **kw: log_calls.append(kw)):
+        tool_audit.install_audit(fake_mcp)
+        installed = handlers_dict[CallToolRequest]
+        req = _FakeReq("dispatch_agent")
+        with pytest.raises(PermissionError):
+            await installed(req)
+
+    # The original handler must NOT have been invoked.
+    assert original_calls == []
+    # An audit row was written.
+    assert len(log_calls) == 1
+    assert log_calls[0]["result_status"] == "scope_denied"
+    assert log_calls[0]["tool_name"] == "dispatch_agent"
+
+
+@pytest.mark.asyncio
+async def test_scope_none_bypasses_gate():
+    """scope=None means 'no per-call scope check' — gate is a no-op."""
+    from src.agent_token_verify import AuthContext
+    from src import tool_audit
+    from mcp.types import CallToolRequest
+
+    auth = AuthContext(
+        tier="agent_token",
+        tenant_id=str(uuid.uuid4()),
+        agent_id=str(uuid.uuid4()),
+        scope=None,  # ← no scope check
+    )
+
+    original_calls = []
+
+    async def fake_original(req):
+        original_calls.append(req)
+        return SimpleNamespace(content=[], isError=False)
+
+    handlers_dict: dict = {CallToolRequest: fake_original}
+    fake_lowlevel = SimpleNamespace(request_handlers=handlers_dict)
+    fake_mcp = SimpleNamespace(
+        _mcp_server=fake_lowlevel,
+        _tool_audit_installed=False,
+        get_context=lambda: SimpleNamespace(),
+    )
+
+    with patch.object(tool_audit, "resolve_auth_context", return_value=auth), \
+         patch.object(tool_audit, "_log_call"):
+        tool_audit.install_audit(fake_mcp)
+        installed = handlers_dict[CallToolRequest]
+        await installed(_FakeReq("any_tool_name"))
+
+    assert len(original_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_non_agent_token_tier_bypasses_gate():
+    """tier != agent_token → scope gate is a no-op even if scope is
+    populated. (Defends against future tiers smuggling a scope claim.)"""
+    from src.agent_token_verify import AuthContext
+    from src import tool_audit
+    from mcp.types import CallToolRequest
+
+    auth = AuthContext(
+        tier="tenant_header",
+        tenant_id=str(uuid.uuid4()),
+        scope=["only_one_tool"],  # populated but tier is wrong
+    )
+
+    original_calls = []
+
+    async def fake_original(req):
+        original_calls.append(req)
+        return SimpleNamespace(content=[], isError=False)
+
+    handlers_dict: dict = {CallToolRequest: fake_original}
+    fake_lowlevel = SimpleNamespace(request_handlers=handlers_dict)
+    fake_mcp = SimpleNamespace(
+        _mcp_server=fake_lowlevel,
+        _tool_audit_installed=False,
+        get_context=lambda: SimpleNamespace(),
+    )
+
+    with patch.object(tool_audit, "resolve_auth_context", return_value=auth), \
+         patch.object(tool_audit, "_log_call"):
+        tool_audit.install_audit(fake_mcp)
+        installed = handlers_dict[CallToolRequest]
+        # call a tool NOT in scope — should still pass since tier is wrong
+        await installed(_FakeReq("some_other_tool"))
+
+    assert len(original_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_scope_check_uses_bare_tool_name_no_prefix():
+    """The canonical scope-list form is bare tool names (no
+    mcp__agentprovision__ prefix). This matches what
+    tool_groups.resolve_tool_names returns."""
+    from src.agent_token_verify import AuthContext
+    from src import tool_audit
+    from mcp.types import CallToolRequest
+
+    # scope contains BARE name; tool_name in audit is also bare.
+    auth = AuthContext(
+        tier="agent_token",
+        tenant_id=str(uuid.uuid4()),
+        agent_id=str(uuid.uuid4()),
+        scope=["recall_memory"],
+    )
+
+    original_calls = []
+
+    async def fake_original(req):
+        original_calls.append(req)
+        return SimpleNamespace(content=[], isError=False)
+
+    handlers_dict: dict = {CallToolRequest: fake_original}
+    fake_lowlevel = SimpleNamespace(request_handlers=handlers_dict)
+    fake_mcp = SimpleNamespace(
+        _mcp_server=fake_lowlevel,
+        _tool_audit_installed=False,
+        get_context=lambda: SimpleNamespace(),
+    )
+
+    with patch.object(tool_audit, "resolve_auth_context", return_value=auth), \
+         patch.object(tool_audit, "_log_call"):
+        tool_audit.install_audit(fake_mcp)
+        installed = handlers_dict[CallToolRequest]
+        # Bare name → allowed
+        await installed(_FakeReq("recall_memory"))
+
+    assert len(original_calls) == 1
