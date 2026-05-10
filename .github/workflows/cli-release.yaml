@@ -74,12 +74,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS uses .zip (not .tar.gz) so xcrun notarytool accepts the
+          # archive — Apple's notarytool only takes .zip / .pkg / .dmg.
+          # Also build x86_64 on macos-14 ARM via Cargo cross-compile to
+          # dodge macos-13's queue stalls (matches PR-D-1 build matrix).
           - target: aarch64-apple-darwin
             runner: macos-14
-            archive_ext: tar.gz
+            archive_ext: zip
           - target: x86_64-apple-darwin
-            runner: macos-13
-            archive_ext: tar.gz
+            runner: macos-14
+            archive_ext: zip
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
             archive_ext: zip
@@ -150,14 +154,30 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         shell: bash
         run: |
-          if [ -z "$APPLE_CERTIFICATE" ]; then exit 0; fi
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE not set — shipping unsigned binary"
+            exit 0
+          fi
           BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
-          codesign --force --options runtime --timestamp --sign "$APPLE_TEAM_ID" "$BIN"
+          # codesign --sign expects an *identity name* or SHA-1 fingerprint,
+          # not a bare team ID. Find the Developer ID Application identity
+          # for our team in the keychain — survives keychains with multiple
+          # identities. Falls back to APPLE_TEAM_ID for backward compat.
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | grep "$APPLE_TEAM_ID" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::warning::No 'Developer ID Application' identity for team $APPLE_TEAM_ID; using bare team ID"
+            IDENTITY="$APPLE_TEAM_ID"
+          fi
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$BIN"
           codesign --verify --verbose=4 "$BIN"
 
       # ── Archive ──────────────────────────────────────────────────────
-      - name: Archive (tar.gz on Unix)
-        if: matrix.archive_ext == 'tar.gz'
+      # macOS uses .zip too (not tar.gz) so xcrun notarytool accepts it
+      # — Apple's tool only takes .zip / .pkg / .dmg. The user-facing
+      # install.sh + install.ps1 (PR-D-3) read SHA256SUMS, so the
+      # archive format is opaque to consumers.
+      - name: Archive (zip on Unix)
+        if: matrix.runner != 'windows-latest'
         shell: bash
         run: |
           STAGE=$RUNNER_TEMP/agentprovision-${{ matrix.target }}
@@ -165,11 +185,11 @@ jobs:
           cp apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision "$STAGE/"
           cp LICENSE "$STAGE/" 2>/dev/null || echo "LICENSE not found at repo root — skipping"
           cp apps/agentprovision-cli/README.md "$STAGE/"
-          tar -czf "agentprovision-${{ matrix.target }}.tar.gz" -C "$RUNNER_TEMP" "agentprovision-${{ matrix.target }}"
-          shasum -a 256 "agentprovision-${{ matrix.target }}.tar.gz" > "agentprovision-${{ matrix.target }}.tar.gz.sha256"
+          (cd "$RUNNER_TEMP" && zip -r "$GITHUB_WORKSPACE/agentprovision-${{ matrix.target }}.zip" "agentprovision-${{ matrix.target }}")
+          shasum -a 256 "agentprovision-${{ matrix.target }}.zip" > "agentprovision-${{ matrix.target }}.zip.sha256"
 
       - name: Archive (zip on Windows)
-        if: matrix.archive_ext == 'zip'
+        if: matrix.runner == 'windows-latest'
         shell: pwsh
         run: |
           $stage = "$env:RUNNER_TEMP\agentprovision-${{ matrix.target }}"
@@ -181,9 +201,7 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 "agentprovision-${{ matrix.target }}.zip").Hash.ToLower()
           "$hash  agentprovision-${{ matrix.target }}.zip" | Out-File "agentprovision-${{ matrix.target }}.zip.sha256" -Encoding ASCII
 
-      # ── macOS notarization ──────────────────────────────────────────
-      # Notarize the archive (Apple notarytool runs against zip/tar.gz too).
-      # Skips cleanly if creds unset.
+      # ── macOS notarization (zip-only — Apple rejects tar.gz) ─────────
       - name: Notarize (macOS)
         if: startsWith(matrix.runner, 'macos')
         env:
@@ -196,8 +214,7 @@ jobs:
             echo "::warning::APPLE_ID not set — skipping notarization"
             exit 0
           fi
-          ARCHIVE="agentprovision-${{ matrix.target }}.tar.gz"
-          # Notarytool needs a zip; tar.gz works from 13.0+.
+          ARCHIVE="agentprovision-${{ matrix.target }}.zip"
           for attempt in 1 2 3; do
             if xcrun notarytool submit "$ARCHIVE" \
                  --apple-id "$APPLE_ID" \
@@ -242,6 +259,16 @@ jobs:
         working-directory: dist
         run: |
           ls -la
+          # Sanity: every expected archive must be present. Catches the
+          # "matrix job silently failed but the release job ran anyway" bug
+          # before we publish a half-broken release.
+          EXPECTED_TARGETS="aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc"
+          for t in $EXPECTED_TARGETS; do
+            if ! ls "agentprovision-${t}.zip" >/dev/null 2>&1; then
+              echo "::error::missing archive for target $t — refusing to publish incomplete release"
+              exit 1
+            fi
+          done
           # Combine each per-target .sha256 line into one SHA256SUMS file.
           rm -f SHA256SUMS
           for f in *.sha256; do
@@ -249,30 +276,32 @@ jobs:
           done
           echo "── SHA256SUMS ─────────────────────────────────────"
           cat SHA256SUMS
-          # Heredoc the install instructions to a release-notes file so we
-          # don't have to wrestle markdown triple-backticks inside a YAML
-          # `--notes` string (the blank lines reset YAML indentation).
-          cat > NOTES.md <<'NOTES'
-          ## Install
-
-          ```bash
-          # macOS / Linux
-          curl -fsSL https://agentprovision.com/install.sh | sh
-
-          # Windows (PowerShell)
-          iwr -useb https://agentprovision.com/install.ps1 | iex
-          ```
-
-          Or download a binary directly from the assets below.
-
-          ### Verify
-
-          Each archive ships with a SHA256 sidecar. The combined `SHA256SUMS` manifest is verifiable with:
-
-          ```
-          sha256sum -c SHA256SUMS    # macOS / Linux
-          ```
-          NOTES
+          # Render release notes with printf to avoid YAML/heredoc indent
+          # tangles (markdown triple-backticks + blank lines + YAML run-block
+          # indentation = unrendered code-block soup).
+          printf '%s\n' \
+            '## Install' \
+            '' \
+            '```bash' \
+            '# macOS' \
+            'curl -fsSL https://agentprovision.com/install.sh | sh' \
+            '' \
+            '# Windows (PowerShell)' \
+            'iwr -useb https://agentprovision.com/install.ps1 | iex' \
+            '```' \
+            '' \
+            'Or download a binary directly from the assets below.' \
+            '' \
+            '### Verify' \
+            '' \
+            'The combined `SHA256SUMS` manifest is verifiable with:' \
+            '' \
+            '```' \
+            'sha256sum -c SHA256SUMS    # macOS / Linux' \
+            '```' \
+            > NOTES.md
+          echo "── NOTES.md ─────────────────────────────────────"
+          cat NOTES.md
 
       - name: Create or update GitHub Release
         env:
@@ -281,13 +310,13 @@ jobs:
         working-directory: dist
         run: |
           TAG="${{ needs.validate.outputs.tag }}"
+          # All archives are .zip now (macOS notarytool rejects tar.gz).
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" agentprovision-*.tar.gz agentprovision-*.zip SHA256SUMS --clobber
+            gh release upload "$TAG" agentprovision-*.zip SHA256SUMS --clobber
           else
             gh release create "$TAG" \
               --title "agentprovision ${{ needs.validate.outputs.version }}" \
               --notes-file NOTES.md \
-              agentprovision-*.tar.gz \
               agentprovision-*.zip \
               SHA256SUMS
           fi
