@@ -50,8 +50,12 @@ jobs:
             tool: cargo
             archive_ext: tar.gz
           # Mac x64 (Intel — legacy but still common in enterprise).
+          # Built on macos-14 ARM via cross-compile (Xcode handles both
+          # arches natively, no zig needed). macos-13 runners are being
+          # phased out by GitHub and have multi-hour queue times —
+          # switching to macos-14 for both targets keeps CI fast.
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-14
             tool: cargo
             archive_ext: tar.gz
           # Windows x64 — covers ~95% of corporate Windows installs.
