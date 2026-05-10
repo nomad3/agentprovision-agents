@@ -31,7 +31,11 @@ from app.core.config import settings
 
 
 class _FakeRedis:
-    """Just enough Redis surface for the device-flow code path."""
+    """Just enough Redis surface for the device-flow code path.
+
+    Includes ``getdel`` (Redis 6.2+) which the device-token handler uses
+    for atomic one-shot consumption (Phase 4 review I-1).
+    """
 
     def __init__(self):
         self._store: dict[str, bytes] = {}
@@ -46,6 +50,9 @@ class _FakeRedis:
 
     def delete(self, key: str):
         self._store.pop(key, None)
+
+    def getdel(self, key: str):
+        return self._store.pop(key, None)
 
 
 @pytest.fixture
@@ -119,7 +126,7 @@ def test_device_token_authorization_pending_when_unapproved(client, fake_redis):
         json={"device_code": init["device_code"]},
     )
     assert resp.status_code == 400
-    assert resp.json()["detail"]["error"] == "authorization_pending"
+    assert resp.json()["error"] == "authorization_pending"
 
 
 def test_device_token_expired_when_unknown_device_code(client):
@@ -128,13 +135,13 @@ def test_device_token_expired_when_unknown_device_code(client):
         json={"device_code": "this-was-never-minted"},
     )
     assert resp.status_code == 400
-    assert resp.json()["detail"]["error"] == "expired_token"
+    assert resp.json()["error"] == "expired_token"
 
 
 def test_device_token_invalid_request_when_empty_code(client):
     resp = client.post("/api/v1/auth/device-token", json={"device_code": ""})
     assert resp.status_code == 400
-    assert resp.json()["detail"]["error"] == "invalid_request"
+    assert resp.json()["error"] == "invalid_request"
 
 
 def test_device_token_returns_access_token_when_approved(client, fake_redis):
@@ -191,7 +198,7 @@ def test_device_token_one_shot_consumed_on_first_success(client, fake_redis):
         json={"device_code": init["device_code"]},
     )
     assert resp2.status_code == 400
-    assert resp2.json()["detail"]["error"] == "expired_token"
+    assert resp2.json()["error"] == "expired_token"
 
 
 def test_device_token_access_denied(client, fake_redis):
@@ -209,7 +216,7 @@ def test_device_token_access_denied(client, fake_redis):
         json={"device_code": init["device_code"]},
     )
     assert resp.status_code == 400
-    assert resp.json()["detail"]["error"] == "access_denied"
+    assert resp.json()["error"] == "access_denied"
 
 
 def test_device_token_corrupted_approved_state_returns_expired(client, fake_redis):
@@ -228,7 +235,7 @@ def test_device_token_corrupted_approved_state_returns_expired(client, fake_redi
         json={"device_code": init["device_code"]},
     )
     assert resp.status_code == 400
-    assert resp.json()["detail"]["error"] == "expired_token"
+    assert resp.json()["error"] == "expired_token"
 
 
 # ── /device-approve (JWT-gated) ──────────────────────────────────────────
@@ -297,3 +304,107 @@ def test_device_approve_lowercase_user_code_normalises(fake_user):
             json={"user_code": init["user_code"].lower()},
         )
     assert resp.status_code == 200
+
+
+def test_device_approve_dashless_user_code_normalises(fake_user):
+    """User types ABCDEFGH instead of ABCD-EFGH. Phase 4 review M-2."""
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    app.dependency_overrides[deps.get_current_active_user] = lambda: fake_user
+
+    fr = _FakeRedis()
+    with patch("app.api.v1.auth._device_redis", return_value=fr):
+        c = TestClient(app)
+        init = c.post("/api/v1/auth/device-code").json()
+        dashless = init["user_code"].replace("-", "")
+        resp = c.post(
+            "/api/v1/auth/device-approve",
+            json={"user_code": dashless},
+        )
+    assert resp.status_code == 200
+
+
+def test_device_approve_with_internal_whitespace(fake_user):
+    """Paste-from-screenshot users may end up with extra whitespace.
+    Phase 4 review M-7: strip internal whitespace before lookup."""
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    app.dependency_overrides[deps.get_current_active_user] = lambda: fake_user
+
+    fr = _FakeRedis()
+    with patch("app.api.v1.auth._device_redis", return_value=fr):
+        c = TestClient(app)
+        init = c.post("/api/v1/auth/device-code").json()
+        # "AB CD-EF GH" with spaces inside
+        spaced = " ".join([init["user_code"][:2], init["user_code"][2:]])
+        resp = c.post(
+            "/api/v1/auth/device-approve",
+            json={"user_code": spaced},
+        )
+    assert resp.status_code == 200
+
+
+def test_device_approve_too_short_returns_400(fake_user):
+    """Wrong-length user_code → 400, not 404 — distinguishes user-input
+    error from genuinely unknown code."""
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    app.dependency_overrides[deps.get_current_active_user] = lambda: fake_user
+
+    fr = _FakeRedis()
+    with patch("app.api.v1.auth._device_redis", return_value=fr):
+        c = TestClient(app)
+        # 8-char minimum imposed by Pydantic, but our handler-level check
+        # validates the canonical 8-char (post-normalization) length.
+        # 9 chars without dashes/spaces → too long after dash-stripping
+        resp = c.post(
+            "/api/v1/auth/device-approve",
+            json={"user_code": "ABCDEFGHX"},
+        )
+    assert resp.status_code == 400
+
+
+def test_device_approve_refuses_to_rebind_already_approved(fake_user):
+    """Phase 4 review C-2: closes the TOCTOU window where a second
+    logged-in user could overwrite the bound token on a polling CLI.
+    Once status='approved', a second /device-approve returns 409.
+    """
+    app = FastAPI()
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
+    app.dependency_overrides[deps.get_current_active_user] = lambda: fake_user
+
+    fr = _FakeRedis()
+    with patch("app.api.v1.auth._device_redis", return_value=fr):
+        c = TestClient(app)
+        init = c.post("/api/v1/auth/device-code").json()
+        # First approve — should succeed.
+        first = c.post(
+            "/api/v1/auth/device-approve",
+            json={"user_code": init["user_code"]},
+        )
+        assert first.status_code == 200
+        # Second approve (same user_code, simulating a TOCTOU race) — 409.
+        second = c.post(
+            "/api/v1/auth/device-approve",
+            json={"user_code": init["user_code"]},
+        )
+    assert second.status_code == 409
+
+
+def test_device_token_error_shape_is_flat_top_level(client, fake_redis):
+    """Phase 4 review C-1: the Rust CLI in apps/agentprovision-core/src/auth.rs
+    deserialises ``body.error`` at TOP LEVEL — NOT under FastAPI's default
+    ``detail`` envelope. Pin the wire format so a future refactor that
+    re-wraps in HTTPException(detail=...) breaks the contract loudly.
+    """
+    init = client.post("/api/v1/auth/device-code").json()
+    resp = client.post(
+        "/api/v1/auth/device-token",
+        json={"device_code": init["device_code"]},
+    )
+    body = resp.json()
+    assert "detail" not in body, (
+        "device-token error must be {'error': ...} not {'detail': {'error': ...}}; "
+        "this is the wire shape the gh-style CLI client expects."
+    )
+    assert body == {"error": "authorization_pending"}

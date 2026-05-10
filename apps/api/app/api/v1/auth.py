@@ -6,6 +6,7 @@ import secrets
 import logging
 import time
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -230,7 +231,6 @@ def reset_password(
 # Pending state is stored in Redis with a short TTL. If Redis is unavailable
 # we fail closed (CLI falls back to email/password prompts).
 
-from typing import Any
 from pydantic import BaseModel, Field
 
 _DEVICE_CODE_TTL_SECONDS = 600  # 10 minutes
@@ -348,10 +348,25 @@ def approve_device_code(
     """Web UI calls this once the logged-in user enters the user_code they got
     from the CLI. Binds a fresh access token to the device_code so the CLI's
     next ``/device-token`` poll succeeds.
+
+    Strips dashes + whitespace from the user_code before lookup so paste-from-
+    screenshot users (extra spaces) and dashless typers ("ABCDEFGH" instead of
+    "ABCD-EFGH") both work. Stored canonically as XXXX-XXXX uppercase.
+
+    Refuses to re-bind an already-approved device_code (409) — closes the
+    TOCTOU window where a second logged-in user could swap the bound token
+    on a polling CLI at the last millisecond. Phase 4 review C-2.
     """
-    user_code = body.user_code.strip().upper()
-    if not user_code:
-        raise HTTPException(status_code=400, detail="user_code is required")
+    # Normalise: strip whitespace, drop dashes, uppercase, then re-insert the
+    # canonical dash. Accepts "ABCD-EFGH", "abcd-efgh", "ABCDEFGH", "abcdefgh",
+    # "AB CD-EF GH", etc.
+    raw_uc = "".join(body.user_code.split()).replace("-", "").upper()
+    if len(raw_uc) != _DEVICE_USER_CODE_LEN:
+        raise HTTPException(
+            status_code=400,
+            detail=f"user_code must be {_DEVICE_USER_CODE_LEN} characters (XXXX-XXXX)",
+        )
+    user_code = f"{raw_uc[:4]}-{raw_uc[4:]}"
     redis = _device_redis()
     if redis is None:
         raise HTTPException(status_code=503, detail="device-flow login unavailable")
@@ -362,6 +377,10 @@ def approve_device_code(
     raw = redis.get(_device_state_key(device_code))
     if not raw:
         raise HTTPException(status_code=404, detail="device_code expired")
+    state = json.loads(raw)
+    if state.get("status") == "approved":
+        # Already bound — refuse to overwrite with a different user's token.
+        raise HTTPException(status_code=409, detail="device_code already approved")
     # Mint a token for the approving user.
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     claims = {"user_id": str(current_user.id)}
@@ -372,50 +391,87 @@ def approve_device_code(
         expires_delta=access_token_expires,
         additional_claims=claims,
     )
-    state = json.loads(raw)
     state["status"] = "approved"
     state["access_token"] = access_token
     redis.set(_device_state_key(device_code), json.dumps(state), ex=_DEVICE_CODE_TTL_SECONDS)
     return DeviceApproveResponse(approved=True)
 
 
-@router.post("/device-token", response_model=DeviceTokenResponse)
+def _device_error(error_code: str, http_status: int = 400) -> JSONResponse:
+    """RFC-8628 error response with the error code at the TOP LEVEL of the
+    body — NOT under FastAPI's default `detail` envelope. The Rust CLI client
+    in apps/agentprovision-core/src/auth.rs deserializes `body.error` flat;
+    any `{"detail": {"error": "..."}}` shape would deserialize to None and
+    break every poll. Phase 4 review C-1.
+    """
+    return JSONResponse(status_code=http_status, content={"error": error_code})
+
+
+@router.post(
+    "/device-token",
+    responses={
+        200: {"model": DeviceTokenResponse},
+        400: {"description": "RFC-8628 error: authorization_pending | slow_down | expired_token | access_denied | invalid_request"},
+        503: {"description": "Cache backend unavailable"},
+    },
+)
 @limiter.limit("60/minute")
-def poll_device_token(request: Request, body: DeviceTokenRequest) -> DeviceTokenResponse:
-    """CLI polls this with the device_code. Mirrors GitHub's error model:
+def poll_device_token(request: Request, body: DeviceTokenRequest):
+    """CLI polls this with the device_code. Mirrors GitHub's RFC-8628 wire model:
     400 + {"error": "authorization_pending" | "slow_down" | "expired_token" |
-    "access_denied" | "invalid_request"}.
+    "access_denied" | "invalid_request"} at the TOP LEVEL of the body so
+    gh-style polling clients (incl. apps/agentprovision-core/src/auth.rs)
+    deserialize the error code without unwrapping nested envelopes.
     """
     device_code = body.device_code.strip()
     if not device_code:
-        raise HTTPException(status_code=400, detail={"error": "invalid_request"})
+        return _device_error("invalid_request")
     redis = _device_redis()
     if redis is None:
         raise HTTPException(status_code=503, detail="device-flow login unavailable")
     raw = redis.get(_device_state_key(device_code))
     if not raw:
         # No record -> expired or never minted.
-        raise HTTPException(status_code=400, detail={"error": "expired_token"})
+        return _device_error("expired_token")
     state = json.loads(raw)
     status_field = state.get("status")
     if status_field == "pending":
-        raise HTTPException(status_code=400, detail={"error": "authorization_pending"})
+        return _device_error("authorization_pending")
     if status_field == "denied":
-        raise HTTPException(status_code=400, detail={"error": "access_denied"})
+        return _device_error("access_denied")
     if status_field == "approved":
         token = state.get("access_token")
         if not token:
             # Race / corrupted state — treat as expired so the CLI re-bootstraps.
-            raise HTTPException(status_code=400, detail={"error": "expired_token"})
-        # One-shot: the device_code is consumed on first successful poll so a
-        # leaked token in transit can't be replayed.
+            return _device_error("expired_token")
+        # One-shot: consume the device_code on first successful poll so a leaked
+        # token in transit can't be replayed AND two parallel polls can't
+        # double-issue. Use Redis GETDEL (atomic) so the read+delete is one
+        # round-trip — a parallel poll either wins the GETDEL and gets the
+        # token, or sees the key already gone and returns expired_token.
+        # Phase 4 review I-1.
         try:
-            redis.delete(_device_state_key(device_code))
+            atomic = redis.getdel(_device_state_key(device_code))
+            if atomic is None:
+                # Lost the race to a parallel poll — let the winner have the
+                # token, return expired here.
+                return _device_error("expired_token")
             user_code = state.get("user_code")
             if user_code:
                 redis.delete(_user_code_index_key(user_code))
+        except AttributeError:
+            # Older redis-py without getdel — fall back to delete (still
+            # one-shot under non-concurrent load, which is the realistic
+            # case for a CLI polling at 5s intervals).
+            try:
+                redis.delete(_device_state_key(device_code))
+                user_code = state.get("user_code")
+                if user_code:
+                    redis.delete(_user_code_index_key(user_code))
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:  # noqa: BLE001
             # Best-effort cleanup; the TTL on the keys is the backstop.
             pass
         return DeviceTokenResponse(access_token=token, token_type="bearer")
-    raise HTTPException(status_code=400, detail={"error": "expired_token"})
+    return _device_error("expired_token")
