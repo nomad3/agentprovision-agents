@@ -1,0 +1,322 @@
+name: CLI Release
+
+# PR-D-2 of the agentprovision CLI distribution track. Fires on cli-v*
+# tag pushes (e.g. cli-v0.1.0). Builds release binaries for every
+# supported target triple, signs + notarizes the macOS artifacts, and
+# publishes them as a GitHub Release with a SHA256SUMS manifest.
+#
+# install.sh + install.ps1 (PR-D-3) read directly from these releases.
+# `agentprovision upgrade` (PR-D-4) self-updates by reading from the
+# /releases/latest endpoint.
+#
+# Targets — same shape as PR-D-1 build matrix; Linux + Windows-ARM64
+# zigbuild targets DEFERRED until PR-D-1.5 lands the cross-compile
+# wiring (musl-tools + zig 0.14 for ARM64).
+#
+# Reference: docs/plans/2026-05-10-agentprovision-cli-distribution-plan.md
+
+on:
+  push:
+    tags:
+      - 'cli-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g. 0.1.0). Tag will be cli-v<version>.'
+        required: true
+        type: string
+
+permissions:
+  contents: write   # for gh release create + upload
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # ─── Validate the tag matches Cargo.toml's version (footgun-prevention) ───
+  validate:
+    name: Validate tag vs Cargo.toml
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
+        run: |
+          # If we got here via tag push, version = tag minus 'cli-v' prefix.
+          # If via workflow_dispatch, version is the input directly.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG="cli-v$VERSION"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#cli-v}"
+          fi
+          # Cargo.toml `version = "..."` must match.
+          CARGO_VERSION=$(grep -E '^version = ' apps/agentprovision-cli/Cargo.toml | head -1 | sed -E 's/version = "(.+)"/\1/')
+          if [ "$VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag version '$VERSION' does not match Cargo.toml version '$CARGO_VERSION'"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+  # ─── Build per-target artifacts ─────────────────────────────────────
+  build:
+    name: ${{ matrix.target }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS uses .zip (not .tar.gz) so xcrun notarytool accepts the
+          # archive — Apple's notarytool only takes .zip / .pkg / .dmg.
+          # Also build x86_64 on macos-14 ARM via Cargo cross-compile to
+          # dodge macos-13's queue stalls (matches PR-D-1 build matrix).
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            archive_ext: zip
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            archive_ext: zip
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive_ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (rust-toolchain.toml resolves channel + targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            apps/agentprovision-cli/target
+            apps/agentprovision-core/target
+          key: cli-release-${{ matrix.target }}-${{ hashFiles('apps/agentprovision-cli/Cargo.toml', 'apps/agentprovision-core/Cargo.toml') }}
+          restore-keys: |
+            cli-release-${{ matrix.target }}-
+
+      - name: Build release
+        working-directory: apps/agentprovision-cli
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Strip debug symbols (macOS + Linux). Windows is already lean.
+      - name: Strip
+        if: matrix.runner != 'windows-latest'
+        shell: bash
+        run: |
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          strip "$BIN" || true
+          ls -lh "$BIN"
+
+      # ── macOS code-signing + notarization (reuse Luna's secrets) ─────
+      - name: Import Apple signing certificate (macOS)
+        if: startsWith(matrix.runner, 'macos')
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Skip cleanly if signing secrets not provisioned yet (PR-D-1.5
+          # acceptance criterion). Allows the workflow to ship binaries
+          # that pass Gatekeeper-translocate-on-first-run; users see a
+          # one-time "developer not verified" dialog until cert lands.
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE not set — shipping unsigned binary"
+            exit 0
+          fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
+          KEYCHAIN_PWD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PWD" "$KEYCHAIN_PATH" >/dev/null
+
+      - name: Codesign (macOS)
+        if: startsWith(matrix.runner, 'macos')
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        shell: bash
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::warning::APPLE_CERTIFICATE not set — shipping unsigned binary"
+            exit 0
+          fi
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          # codesign --sign expects an *identity name* or SHA-1 fingerprint,
+          # not a bare team ID. Find the Developer ID Application identity
+          # for our team in the keychain — survives keychains with multiple
+          # identities. Falls back to APPLE_TEAM_ID for backward compat.
+          IDENTITY=$(security find-identity -v -p codesigning | grep "Developer ID Application" | grep "$APPLE_TEAM_ID" | head -1 | awk -F'"' '{print $2}')
+          if [ -z "$IDENTITY" ]; then
+            echo "::warning::No 'Developer ID Application' identity for team $APPLE_TEAM_ID; using bare team ID"
+            IDENTITY="$APPLE_TEAM_ID"
+          fi
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$BIN"
+          codesign --verify --verbose=4 "$BIN"
+
+      # ── Archive ──────────────────────────────────────────────────────
+      # macOS uses .zip too (not tar.gz) so xcrun notarytool accepts it
+      # — Apple's tool only takes .zip / .pkg / .dmg. The user-facing
+      # install.sh + install.ps1 (PR-D-3) read SHA256SUMS, so the
+      # archive format is opaque to consumers.
+      - name: Archive (zip on Unix)
+        if: matrix.runner != 'windows-latest'
+        shell: bash
+        run: |
+          STAGE=$RUNNER_TEMP/agentprovision-${{ matrix.target }}
+          mkdir -p "$STAGE"
+          cp apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision "$STAGE/"
+          cp LICENSE "$STAGE/" 2>/dev/null || echo "LICENSE not found at repo root — skipping"
+          cp apps/agentprovision-cli/README.md "$STAGE/"
+          (cd "$RUNNER_TEMP" && zip -r "$GITHUB_WORKSPACE/agentprovision-${{ matrix.target }}.zip" "agentprovision-${{ matrix.target }}")
+          shasum -a 256 "agentprovision-${{ matrix.target }}.zip" > "agentprovision-${{ matrix.target }}.zip.sha256"
+
+      - name: Archive (zip on Windows)
+        if: matrix.runner == 'windows-latest'
+        shell: pwsh
+        run: |
+          $stage = "$env:RUNNER_TEMP\agentprovision-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item "apps\agentprovision-cli\target\${{ matrix.target }}\release\agentprovision.exe" $stage
+          if (Test-Path "LICENSE") { Copy-Item "LICENSE" $stage }
+          Copy-Item "apps\agentprovision-cli\README.md" $stage
+          Compress-Archive -Path "$stage\*" -DestinationPath "agentprovision-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "agentprovision-${{ matrix.target }}.zip").Hash.ToLower()
+          "$hash  agentprovision-${{ matrix.target }}.zip" | Out-File "agentprovision-${{ matrix.target }}.zip.sha256" -Encoding ASCII
+
+      # ── macOS notarization (zip-only — Apple rejects tar.gz) ─────────
+      - name: Notarize (macOS)
+        if: startsWith(matrix.runner, 'macos')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          if [ -z "$APPLE_ID" ]; then
+            echo "::warning::APPLE_ID not set — skipping notarization"
+            exit 0
+          fi
+          ARCHIVE="agentprovision-${{ matrix.target }}.zip"
+          for attempt in 1 2 3; do
+            if xcrun notarytool submit "$ARCHIVE" \
+                 --apple-id "$APPLE_ID" \
+                 --password "$APPLE_PASSWORD" \
+                 --team-id "$APPLE_TEAM_ID" \
+                 --wait --timeout 20m; then
+              echo "Notarized on attempt $attempt"
+              exit 0
+            fi
+            echo "::warning::Notarization attempt $attempt failed — retrying"
+            sleep 10
+          done
+          echo "::error::Notarization failed after 3 attempts"
+          exit 1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentprovision-${{ matrix.target }}
+          path: |
+            agentprovision-${{ matrix.target }}.${{ matrix.archive_ext }}
+            agentprovision-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  # ─── Publish GitHub Release with all artifacts ────────────────────
+  release:
+    name: Publish GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Concat SHA256SUMS manifest + render release notes
+        shell: bash
+        working-directory: dist
+        run: |
+          ls -la
+          # Sanity: every expected archive must be present. Catches the
+          # "matrix job silently failed but the release job ran anyway" bug
+          # before we publish a half-broken release.
+          EXPECTED_TARGETS="aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc"
+          for t in $EXPECTED_TARGETS; do
+            if ! ls "agentprovision-${t}.zip" >/dev/null 2>&1; then
+              echo "::error::missing archive for target $t — refusing to publish incomplete release"
+              exit 1
+            fi
+          done
+          # Combine each per-target .sha256 line into one SHA256SUMS file.
+          rm -f SHA256SUMS
+          for f in *.sha256; do
+            cat "$f" >> SHA256SUMS
+          done
+          echo "── SHA256SUMS ─────────────────────────────────────"
+          cat SHA256SUMS
+          # Render release notes with printf to avoid YAML/heredoc indent
+          # tangles (markdown triple-backticks + blank lines + YAML run-block
+          # indentation = unrendered code-block soup).
+          printf '%s\n' \
+            '## Install' \
+            '' \
+            '```bash' \
+            '# macOS' \
+            'curl -fsSL https://agentprovision.com/install.sh | sh' \
+            '' \
+            '# Windows (PowerShell)' \
+            'iwr -useb https://agentprovision.com/install.ps1 | iex' \
+            '```' \
+            '' \
+            'Or download a binary directly from the assets below.' \
+            '' \
+            '### Verify' \
+            '' \
+            'The combined `SHA256SUMS` manifest is verifiable with:' \
+            '' \
+            '```' \
+            'sha256sum -c SHA256SUMS    # macOS / Linux' \
+            '```' \
+            > NOTES.md
+          echo "── NOTES.md ─────────────────────────────────────"
+          cat NOTES.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        working-directory: dist
+        run: |
+          TAG="${{ needs.validate.outputs.tag }}"
+          # All archives are .zip now (macOS notarytool rejects tar.gz).
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" agentprovision-*.zip SHA256SUMS --clobber
+          else
+            gh release create "$TAG" \
+              --title "agentprovision ${{ needs.validate.outputs.version }}" \
+              --notes-file NOTES.md \
+              agentprovision-*.zip \
+              SHA256SUMS
+          fi
