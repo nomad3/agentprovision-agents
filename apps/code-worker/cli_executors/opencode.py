@@ -10,7 +10,7 @@ Ollama hosting Gemma 4. This module owns:
   * the internal ``_execute_opencode_chat_cli`` (subprocess fallback)
 
 Bodies are byte-identical to their previous home in workflows.py.
-ChatCliInput / ChatCliResult are imported lazily inside the function
+ChatCliResult is imported lazily inside the function
 body to break the workflows<->cli_executors cycle.
 """
 from __future__ import annotations
@@ -46,7 +46,7 @@ def execute_opencode_chat(task_input, session_dir: str):
     Creates one session per tenant for context continuity. Falls back to `opencode run`
     if the server is unreachable.
     """
-    from workflows import ChatCliInput, ChatCliResult
+    from workflows import ChatCliResult
     import httpx
 
     base_url = f"http://127.0.0.1:{OPENCODE_PORT}"
@@ -115,7 +115,7 @@ def execute_opencode_chat(task_input, session_dir: str):
 
 def _execute_opencode_chat_cli(task_input, session_dir: str):
     """Fallback: Execute opencode turn via CLI subprocess."""
-    from workflows import ChatCliInput, ChatCliResult
+    from workflows import ChatCliResult
     import subprocess
 
     prompt = task_input.message

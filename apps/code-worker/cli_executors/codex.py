@@ -19,7 +19,6 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
         _prepare_codex_home,
         _extract_codex_last_message,
         _extract_codex_metadata,
-        ChatCliInput,
         ChatCliResult,
         WORKSPACE,
     )

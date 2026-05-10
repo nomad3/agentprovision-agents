@@ -4,7 +4,7 @@ Body is byte-identical to the previous ``_execute_claude_chat`` (just
 renamed to ``execute_claude_chat`` and with the two helper calls
 rewired to the new ``cli_runtime`` module). Workflows-side helpers
 (``_fetch_claude_token``, ``_INTEGRATION_NOT_CONNECTED_MESSAGES``,
-``_build_allowed_tools_from_mcp``, the ``ChatCliInput``/``ChatCliResult``
+``_build_allowed_tools_from_mcp``, the ``ChatCliResult``
 dataclasses, and the module-level constants) are imported lazily inside
 the function body so:
 
@@ -27,7 +27,6 @@ def execute_claude_chat(task_input, session_dir: str):
         _fetch_claude_token,
         _INTEGRATION_NOT_CONNECTED_MESSAGES,
         _build_allowed_tools_from_mcp,
-        ChatCliInput,
         ChatCliResult,
         WORKSPACE,
         CLAUDE_CODE_MODEL,

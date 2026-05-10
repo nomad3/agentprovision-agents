@@ -3,7 +3,7 @@
 Body byte-identical to the previous ``_execute_copilot_chat`` (only the
 two ``cli_runtime.*`` call sites differ). Workflows-side helpers
 (_fetch_github_token, _prepare_copilot_home,
-_INTEGRATION_NOT_CONNECTED_MESSAGES, ChatCliInput, ChatCliResult,
+_INTEGRATION_NOT_CONNECTED_MESSAGES, ChatCliResult,
 WORKSPACE, API_BASE_URL, API_INTERNAL_KEY) imported lazily inside the
 function body.
 """
@@ -42,7 +42,6 @@ def execute_copilot_chat(task_input, session_dir: str):
         _fetch_github_token,
         _prepare_copilot_home,
         _INTEGRATION_NOT_CONNECTED_MESSAGES,
-        ChatCliInput,
         ChatCliResult,
         WORKSPACE,
         API_BASE_URL,

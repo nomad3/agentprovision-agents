@@ -4,7 +4,7 @@ Body byte-identical to the previous ``_execute_gemini_chat`` (only the
 two ``cli_runtime.*`` call sites differ). Workflows-side helpers
 (_fetch_integration_credentials, _prepare_gemini_home,
 _prepare_gemini_home_apikey, _INTEGRATION_NOT_CONNECTED_MESSAGES,
-ChatCliInput, ChatCliResult, WORKSPACE) are imported lazily inside
+ChatCliResult, WORKSPACE) are imported lazily inside
 the function body.
 
 The module owns its own ``logger`` so log records are namespaced under
@@ -28,7 +28,6 @@ def execute_gemini_chat(task_input, session_dir: str, image_path: str):
         _prepare_gemini_home,
         _prepare_gemini_home_apikey,
         _INTEGRATION_NOT_CONNECTED_MESSAGES,
-        ChatCliInput,
         ChatCliResult,
         WORKSPACE,
     )
