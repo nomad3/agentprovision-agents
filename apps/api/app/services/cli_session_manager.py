@@ -443,6 +443,7 @@ def generate_mcp_config(
     internal_key: str,
     db: Session = None,
     user_id: Optional[str] = None,
+    agent_token: Optional[str] = None,
 ) -> dict:
     """Generate MCP config JSON for a CLI session.
 
@@ -450,6 +451,14 @@ def generate_mcp_config(
     connected to this tenant via MCPServerConnector. ``user_id`` is forwarded
     as ``X-User-Id`` so chat-side tools that mutate skills/agents can attribute
     the change to the actor.
+
+    Phase 4: when ``agent_token`` is provided (resilient-executor flag ON),
+    we add an ``Authorization: Bearer <agent_token>`` header to the
+    ``agentprovision`` server entry so the leaf authenticates via the
+    third auth tier (agent-token) rather than relying on X-Internal-Key.
+    The internal key + tenant header are still set for backward compat
+    during the cutover; the MCP server precedence rule in
+    ``mcp_auth.resolve_auth_context`` makes agent_token authoritative.
     """
     # Helm sets MCP_TOOLS_URL explicitly; docker-compose only sets
     # MCP_SERVER_URL — fall back to that so the default works in both.
@@ -465,6 +474,11 @@ def generate_mcp_config(
     }
     if user_id:
         headers["X-User-Id"] = str(user_id)
+    if agent_token:
+        # Phase 4 — third auth tier. Server-side
+        # ``mcp_auth.resolve_auth_context`` gives this precedence over
+        # the X-Tenant-Id header + X-Internal-Key.
+        headers["Authorization"] = f"Bearer {agent_token}"
 
     config = {
         "mcpServers": {
@@ -1036,7 +1050,76 @@ def _run_agent_session_legacy(
     )
 
     internal_key = settings.MCP_API_KEY or "dev_mcp_key"
-    mcp_config = generate_mcp_config(str(tenant_id), internal_key, db=db, user_id=str(user_id))
+
+    # ── Phase 4 commit 3 — agent-token mint (gated by resilient flag) ──
+    # When use_resilient_executor is TRUE, mint an agent-scoped JWT and
+    # plumb it through generate_mcp_config so the leaf authenticates via
+    # the third auth tier on apps/mcp-server. When FALSE (the default
+    # during cutover), agent_token is None and behavior is byte-identical
+    # to Phase 3 — the leaf still uses X-Internal-Key + X-Tenant-Id.
+    agent_token: Optional[str] = None
+    try:
+        from app.services.cli_orchestrator_shadow import read_flags
+        use_resilient, _ = read_flags(db, tenant_id)
+    except Exception:  # noqa: BLE001
+        use_resilient = False
+
+    if use_resilient:
+        try:
+            from app.models.agent import Agent
+            from app.services.agent_token import mint_agent_token
+            from app.services.tool_groups import resolve_tool_names
+
+            # Agent has no `slug` column; the chat hot path passes a slug
+            # form like "luna". Match case-insensitively against Agent.name
+            # which is the closest analogue (display name).
+            from sqlalchemy import func as _sa_func
+
+            agent_row = (
+                db.query(Agent)
+                .filter(
+                    Agent.tenant_id == tenant_id,
+                    _sa_func.lower(Agent.name) == agent_slug.lower(),
+                )
+                .first()
+            )
+            if agent_row is not None:
+                # Scope claim from agent.tool_groups (per plan correction
+                # #2). resolve_tool_names returns None when tool_groups
+                # is None, meaning "all tools" — propagate that to the
+                # claim so the server-side scope check is a no-op.
+                scope = resolve_tool_names(agent_row.tool_groups)
+                # task_id: the chat hot path doesn't have a persisted
+                # AgentTask row (the chat workflow doesn't create one),
+                # so we mint a synthetic one. The MCP server uses this
+                # as the parent_task_id for execution_trace rows; if no
+                # AgentTask exists, the trace just orphans cleanly.
+                synth_task_id = str(uuid.uuid4())
+                parent_chain = tuple(
+                    str(x) for x in (
+                        (db_session_memory or {}).get("parent_chain") or ()
+                    )
+                )
+                agent_token = mint_agent_token(
+                    tenant_id=str(tenant_id),
+                    agent_id=str(agent_row.id),
+                    task_id=synth_task_id,
+                    parent_workflow_id=None,  # set per-run by Temporal
+                    scope=scope,
+                    parent_chain=parent_chain,
+                )
+        except Exception as exc:  # noqa: BLE001
+            # Mint failure is non-fatal — fall back to legacy auth path.
+            logger.debug(
+                "agent_token mint failed (falling back to legacy auth): %s",
+                exc, exc_info=True,
+            )
+            agent_token = None
+
+    mcp_config = generate_mcp_config(
+        str(tenant_id), internal_key, db=db,
+        user_id=str(user_id), agent_token=agent_token,
+    )
 
     _mark("prompt_render")
 
