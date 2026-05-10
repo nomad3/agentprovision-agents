@@ -1168,14 +1168,71 @@ def _resilient_chain_walk(
     from cli_orchestrator.adapters.base import ExecutionRequest
     from cli_orchestrator.adapters.temporal_activity import TemporalActivityAdapter
     from cli_orchestrator.executor import ResilientExecutor
+    from cli_orchestrator.metadata import ExecutionMetadata
     from cli_orchestrator.status import Status as _Status
 
     chain_tuple = tuple(cli_chain or ())
     if not chain_tuple:
         return None, {"error": "empty CLI chain"}
 
+    # Phase 3 commit 7 — RL mirror + outbound webhook emitter closures.
+    # Both wrapped at the call site so executor failures inside them can
+    # never poison the chat hot path. The closures bind the surrounding
+    # ``db`` + ``tenant_id`` for the lifetime of one chain walk.
+    def _mirror_to_rl(md: ExecutionMetadata) -> None:
+        try:
+            from app.services import rl_experience_service
+            import uuid as _uuid
+            rl_experience_service.log_experience(
+                db=db,
+                tenant_id=tenant_id,
+                trajectory_id=_uuid.uuid4(),
+                step_index=0,
+                decision_point="chat_response",
+                state=md.to_rl_experience_state(),
+                action=md.to_rl_experience_action(),
+                state_text=md.to_state_text(),
+                exploration=False,
+            )
+        except BaseException:  # noqa: BLE001
+            # Phase 3 review C3 fix: promote debug → warning so the
+            # swallow shows up in default log shipping (Loki/CW filter
+            # at INFO+). Plus increment cli_orchestrator_emit_error_total
+            # so a regression here triggers the alert in
+            # monitoring/alerts/cli-orchestrator.yaml.
+            logger.warning(
+                "RL mirror write failed for tenant=%s run_id=%s",
+                str(tenant_id)[:8], md.run_id, exc_info=True,
+            )
+            try:
+                from cli_orchestrator.executor import _emit_error_count
+                _emit_error_count("rl_mirror")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _webhook_emitter(event_type: str, payload: dict) -> None:
+        try:
+            from app.services import webhook_connectors as wh_svc
+            wh_svc.fire_outbound_event(db, tenant_id, event_type, payload)
+        except BaseException:  # noqa: BLE001
+            # Phase 3 review C3 fix — same logic as RL mirror.
+            logger.warning(
+                "outbound webhook fire failed event=%s tenant=%s",
+                event_type, str(tenant_id)[:8], exc_info=True,
+            )
+            try:
+                from cli_orchestrator.executor import _emit_error_count
+                _emit_error_count("webhook_emit")
+            except Exception:  # noqa: BLE001
+                pass
+
     adapters = {p: TemporalActivityAdapter(platform=p) for p in chain_tuple}
-    executor = ResilientExecutor(adapters=adapters, decision_point="chat_response")
+    executor = ResilientExecutor(
+        adapters=adapters,
+        decision_point="chat_response",
+        mirror_to_rl=_mirror_to_rl,
+        webhook_emitter=_webhook_emitter,
+    )
 
     payload = {
         "message": message,
@@ -1192,6 +1249,15 @@ def _resilient_chain_walk(
         "agent_tool_groups": agent_tool_groups,
         "agent_memory_domains": agent_memory_domains,
         "user_id": str(user_id),
+        # Phase 3 commit 7 — parent_task_id flows through to ExecutionMetadata
+        # so child dispatches can attribute their lineage back to the
+        # originating chat message / inbound CLI call (§8 surface).
+        "parent_task_id": (
+            str(db_session_memory.get("parent_task_id"))
+            if isinstance(db_session_memory, dict)
+            and db_session_memory.get("parent_task_id")
+            else None
+        ),
     }
 
     req = ExecutionRequest(

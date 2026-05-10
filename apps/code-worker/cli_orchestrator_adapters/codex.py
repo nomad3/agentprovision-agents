@@ -22,11 +22,17 @@ from cli_orchestrator.status import Status
 
 from cli_executors.codex import execute_codex_chat
 
+from cli_orchestrator.preflight import check_binary_on_path
+
 from ._common import (
     binary_on_path,
+    check_credential_for_platform,
+    check_workspace_trust_file_for_platform,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
+from .preflight_deps import PreflightDeps
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +55,28 @@ class CodexAdapter:
     name = "codex"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("codex"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`codex` binary not on $PATH",
-            )
+        # 1. Binary on $PATH
+        with time_preflight_helper(self.name, "binary_on_path"):
+            br = check_binary_on_path("codex")
+        if not br.ok:
+            return br
+
+        # 2. Credentials present
+        tenant_id = req.tenant_id or (req.payload or {}).get("tenant_id") or ""
+        if tenant_id:
+            with time_preflight_helper(self.name, "credentials_present"):
+                cr = check_credential_for_platform(
+                    PreflightDeps.get(), tenant_id, self.name,
+                )
+            if not cr.ok:
+                return cr
+
+        # 3. Workspace trust file (~/.codex/config.toml)
+        with time_preflight_helper(self.name, "workspace_trust_file"):
+            wr = check_workspace_trust_file_for_platform(self.name)
+        if not wr.ok:
+            return wr
+
         return PreflightResult.succeed()
 
     def classify_error(

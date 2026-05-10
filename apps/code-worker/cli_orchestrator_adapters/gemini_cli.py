@@ -21,11 +21,38 @@ from cli_orchestrator.status import Status
 
 from cli_executors.gemini import execute_gemini_chat
 
+from cli_orchestrator.preflight import (
+    check_binary_on_path,
+)
+
 from ._common import (
     binary_on_path,
+    check_credential_for_platform,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
+from .preflight_deps import PreflightDeps
+
+
+# Phase 3 review C1 fix: the prior `_gemini_api_probe` made an
+# unauthenticated GET to generativelanguage.googleapis.com — Google
+# returns 200/401/403 whether the tenant's project has the Generative
+# Language API enabled or disabled, so the probe ALWAYS returned True
+# from a Rancher Desktop / GKE cluster with internet access.
+# `API_DISABLED` would never have fired in production, even though the
+# helper's name promised it.
+#
+# Rather than ship a dead probe, we DROP the preflight cloud-API check
+# entirely until Phase 4+ wires a tenant-keyed call (project-scoped
+# endpoint with `?key=<tenant-api-key>` returns 403 + SERVICE_DISABLED
+# reason when project-level disabled). The `Status.API_DISABLED` enum
+# value remains usable — the classifier still surfaces it from stderr
+# matches against "API has not been used in project X" / similar
+# messages on the runtime path.
+#
+# See docs/plans/2026-05-09-resilient-cli-orchestrator-design.md §6
+# "Cloud API enabled" row — marked Phase 4+ post-Phase-3 follow-up.
 
 logger = logging.getLogger(__name__)
 
@@ -48,11 +75,30 @@ class GeminiCliAdapter:
     name = "gemini_cli"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("gemini"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`gemini` binary not on $PATH",
-            )
+        # 1. Binary on $PATH
+        with time_preflight_helper(self.name, "binary_on_path"):
+            br = check_binary_on_path("gemini")
+        if not br.ok:
+            return br
+
+        # 2. Credentials present
+        tenant_id = req.tenant_id or (req.payload or {}).get("tenant_id") or ""
+        if tenant_id:
+            with time_preflight_helper(self.name, "credentials_present"):
+                cr = check_credential_for_platform(
+                    PreflightDeps.get(), tenant_id, self.name,
+                )
+            if not cr.ok:
+                return cr
+
+        # 3. Cloud API enabled — DROPPED in Phase 3 review C1 fix.
+        # The earlier reachability-only probe was dead code (always
+        # returned True from any cluster with internet). Project-level
+        # API enablement detection lands in Phase 4+ once tenant-keyed
+        # probe plumbing exists; until then API_DISABLED is surfaced
+        # from subprocess stderr by the classifier on the runtime path,
+        # not preflight.
+
         return PreflightResult.succeed()
 
     def classify_error(

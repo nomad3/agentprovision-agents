@@ -18,6 +18,7 @@ import enNotebooks from './locales/en/notebooks.json';
 import enTools from './locales/en/tools.json';
 import enSkills from './locales/en/skills.json';
 import enLearning from './locales/en/learning.json';
+import enCliErrors from './locales/en/cliErrors.json';
 
 // Spanish
 import esCommon from './locales/es/common.json';
@@ -35,6 +36,7 @@ import esNotebooks from './locales/es/notebooks.json';
 import esTools from './locales/es/tools.json';
 import esSkills from './locales/es/skills.json';
 import esLearning from './locales/es/learning.json';
+import esCliErrors from './locales/es/cliErrors.json';
 
 const resources = {
   en: {
@@ -53,6 +55,7 @@ const resources = {
     tools: enTools,
     skills: enSkills,
     learning: enLearning,
+    cliErrors: enCliErrors,
   },
   es: {
     common: esCommon,
@@ -70,6 +73,7 @@ const resources = {
     tools: esTools,
     skills: esSkills,
     learning: esLearning,
+    cliErrors: esCliErrors,
   },
 };
 
@@ -80,7 +84,7 @@ i18n
     resources,
     fallbackLng: 'en',
     supportedLngs: ['en', 'es'],
-    ns: ['common', 'landing', 'datasets', 'dashboard', 'chat', 'agents', 'workflows', 'memory', 'integrations', 'settings', 'auth', 'notebooks', 'tools', 'skills', 'learning'],
+    ns: ['common', 'landing', 'datasets', 'dashboard', 'chat', 'agents', 'workflows', 'memory', 'integrations', 'settings', 'auth', 'notebooks', 'tools', 'skills', 'learning', 'cliErrors'],
     defaultNS: 'common',
     interpolation: {
       escapeValue: false,

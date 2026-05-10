@@ -1,0 +1,9 @@
+{
+  "cli.errors.needs_auth": "Vuelve a conectar esta CLI en Configuración → Integraciones para seguir usándola.",
+  "cli.errors.workspace_untrusted": "Este espacio de trabajo no está marcado como de confianza para la CLI seleccionada. Ejecuta el flujo de autenticación una vez.",
+  "cli.errors.api_disabled": "La API en la nube de la CLI seleccionada no está habilitada para tu cuenta.",
+  "cli.errors.quota_exhausted": "Tu suscripción CLI alcanzó su límite; probamos otras CLIs de tu cadena.",
+  "cli.errors.recursion_depth_exceeded": "Cadena de respaldo de agentes demasiado profunda — se rechaza una mayor expansión.",
+  "cli.errors.recursion_cycle": "La cadena de respaldo de agentes tiene un ciclo — se rechaza repetir el mismo agente.",
+  "cli.errors.unknown_failure": "La CLI devolvió un error no reconocido; el fragmento está en el registro del operador."
+}

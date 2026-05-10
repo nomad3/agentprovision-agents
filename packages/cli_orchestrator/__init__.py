@@ -36,6 +36,23 @@ from .policy import (
     MAX_FALLBACK_DEPTH,
     decide,
 )
+from .metadata import ExecutionMetadata
+from .webhook_events import (
+    ALL_EVENTS as WEBHOOK_EVENTS,
+    EVENT_ATTEMPT_FAILED,
+    EVENT_FAILED,
+    EVENT_FALLBACK_TRIGGERED,
+    EVENT_HEARTBEAT_MISSED,
+    EVENT_STARTED,
+    EVENT_SUCCEEDED,
+)
+from .preflight import (
+    check_binary_on_path,
+    check_cloud_api_enabled,
+    check_credentials_present,
+    check_temporal_queue_reachable,
+    check_workspace_trust_file,
+)
 from .redaction import (
     SENSITIVE_ENV_KEYS,
     cleanup_codex_home,
@@ -61,4 +78,17 @@ __all__ = [
     "ExecutionResult",
     "PreflightResult",
     "ResilientExecutor",
+    "ExecutionMetadata",
+    "WEBHOOK_EVENTS",
+    "EVENT_STARTED",
+    "EVENT_ATTEMPT_FAILED",
+    "EVENT_FALLBACK_TRIGGERED",
+    "EVENT_SUCCEEDED",
+    "EVENT_FAILED",
+    "EVENT_HEARTBEAT_MISSED",
+    "check_binary_on_path",
+    "check_workspace_trust_file",
+    "check_credentials_present",
+    "check_cloud_api_enabled",
+    "check_temporal_queue_reachable",
 ]

@@ -29,7 +29,9 @@ from cli_orchestrator.status import Status
 
 import cli_runtime
 
-from ._common import binary_on_path, truncate
+from cli_orchestrator.preflight import check_binary_on_path
+
+from ._common import binary_on_path, time_preflight_helper, truncate
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +47,8 @@ class ShellAdapter:
                 "shell adapter requires payload['cmd'] list",
             )
         binary = cmd[0]
-        if not binary_on_path(binary):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                f"`{binary}` binary not on $PATH",
-            )
-        return PreflightResult.succeed()
+        with time_preflight_helper(self.name, "binary_on_path"):
+            return check_binary_on_path(binary)
 
     def classify_error(
         self,

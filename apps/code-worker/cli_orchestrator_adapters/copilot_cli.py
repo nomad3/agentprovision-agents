@@ -23,11 +23,30 @@ from cli_orchestrator.status import Status
 
 from cli_executors.copilot import execute_copilot_chat
 
+from cli_orchestrator.preflight import (
+    check_binary_on_path,
+)
+
 from ._common import (
     binary_on_path,
+    check_credential_for_platform,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
+from .preflight_deps import PreflightDeps
+
+
+# Phase 3 review C1 fix: the prior `_copilot_org_enabled_probe` made an
+# unauthenticated GET to api.github.com — always 200/401 from any
+# cluster with internet, never detected the actual "Copilot enabled
+# for THIS org" condition (requires an org-scoped token call). Org-
+# enablement check lands in Phase 4+ once org-scoped tokens flow
+# through to the worker. Until then the leaf-side `copilot` invocation
+# surfaces "Copilot is not enabled" via stderr → classifier →
+# Status.QUOTA_EXHAUSTED on the runtime path.
+#
+# See docs/plans/2026-05-09-resilient-cli-orchestrator-design.md §6.
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +69,26 @@ class CopilotCliAdapter:
     name = "copilot_cli"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("copilot"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`copilot` binary not on $PATH",
-            )
+        # 1. Binary on $PATH
+        with time_preflight_helper(self.name, "binary_on_path"):
+            br = check_binary_on_path("copilot")
+        if not br.ok:
+            return br
+
+        # 2. Credentials present
+        tenant_id = req.tenant_id or (req.payload or {}).get("tenant_id") or ""
+        if tenant_id:
+            with time_preflight_helper(self.name, "credentials_present"):
+                cr = check_credential_for_platform(
+                    PreflightDeps.get(), tenant_id, self.name,
+                )
+            if not cr.ok:
+                return cr
+
+        # 3. Cloud API enabled — DROPPED in Phase 3 review C1 fix.
+        # Reasons documented above the `_copilot_org_enabled_probe`
+        # removal block.
+
         return PreflightResult.succeed()
 
     def classify_error(

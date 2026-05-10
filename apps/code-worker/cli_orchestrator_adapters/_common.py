@@ -113,9 +113,100 @@ def map_chat_cli_result_to_execution_result(
     )
 
 
+# --------------------------------------------------------------------------
+# Phase 3 commit 2 — per-adapter preflight composition
+# --------------------------------------------------------------------------
+
+def time_preflight_helper(platform: str, helper_name: str):
+    """Context-manager that emits ``cli_orchestrator_preflight_duration_ms``.
+
+    Used by adapters to instrument each helper call. Best-effort —
+    failures to emit metrics are swallowed.
+
+    Usage:
+        with time_preflight_helper("codex", "binary_on_path"):
+            result = check_binary_on_path("codex")
+    """
+    from contextlib import contextmanager
+    import time as _time
+
+    @contextmanager
+    def _ctx():
+        try:
+            from cli_orchestrator.executor import (
+                _METRICS_OK,
+                _PREFLIGHT_DURATION_MS,
+            )
+        except Exception:  # noqa: BLE001
+            _METRICS_OK = False
+            _PREFLIGHT_DURATION_MS = None  # type: ignore[assignment]
+        t0 = _time.perf_counter()
+        try:
+            yield
+        finally:
+            if _METRICS_OK and _PREFLIGHT_DURATION_MS is not None:
+                try:
+                    _PREFLIGHT_DURATION_MS.labels(
+                        platform=platform, helper=helper_name,
+                    ).observe((_time.perf_counter() - t0) * 1000.0)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    return _ctx()
+
+
+# Codex / Gemini workspace trust file paths — design §6 row 3.
+# Codex writes ~/.codex/config.toml on `codex auth`. Gemini's setup
+# marker is the existence of GOOGLE_APPLICATION_CREDENTIALS or the
+# default ~/.config/gemini/oauth.json (handled separately, today only
+# codex composes a workspace check).
+_WORKSPACE_TRUST_FILES = {
+    "codex": "~/.codex/config.toml",
+}
+
+
+def check_credential_for_platform(
+    deps,
+    tenant_id: str,
+    platform: str,
+):
+    """Compose ``check_credentials_present`` against the worker's
+    PreflightDeps.
+
+    Phase 3 commit 2 helper — used by the 4 adapters that need a
+    NEEDS_AUTH preflight check (claude_code, codex, gemini_cli,
+    copilot_cli). Returns a ``PreflightResult``; opencode + shell
+    don't need this (no per-tenant credentials).
+    """
+    from cli_orchestrator.preflight import check_credentials_present
+
+    return check_credentials_present(
+        fetch=deps.credential_fetch,
+        tenant_id=tenant_id,
+        platform=platform,
+    )
+
+
+def check_workspace_trust_file_for_platform(platform: str):
+    """Compose ``check_workspace_trust_file`` for adapters that need
+    it. Returns ``PreflightResult.succeed()`` when the platform has no
+    workspace trust file (defensive — the executor still walks the
+    rest of preflight)."""
+    from cli_orchestrator.adapters.base import PreflightResult
+    from cli_orchestrator.preflight import check_workspace_trust_file
+
+    path = _WORKSPACE_TRUST_FILES.get(platform)
+    if path is None:
+        return PreflightResult.succeed()
+    return check_workspace_trust_file(path)
+
+
 __all__ = [
     "SUMMARY_MAX_BYTES",
     "binary_on_path",
     "truncate",
     "map_chat_cli_result_to_execution_result",
+    "check_credential_for_platform",
+    "check_workspace_trust_file_for_platform",
+    "time_preflight_helper",
 ]

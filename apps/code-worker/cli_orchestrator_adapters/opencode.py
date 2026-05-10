@@ -27,9 +27,12 @@ from cli_orchestrator.status import Status
 
 from cli_executors.opencode import execute_opencode_chat
 
+from cli_orchestrator.preflight import check_binary_on_path
+
 from ._common import (
     binary_on_path,
     map_chat_cli_result_to_execution_result,
+    time_preflight_helper,
     truncate,
 )
 
@@ -54,12 +57,9 @@ class OpencodeAdapter:
     name = "opencode"
 
     def preflight(self, req: ExecutionRequest) -> PreflightResult:
-        if not binary_on_path("opencode"):
-            return PreflightResult.fail(
-                Status.PROVIDER_UNAVAILABLE,
-                "`opencode` binary not on $PATH",
-            )
-        return PreflightResult.succeed()
+        # opencode is the local floor — only the binary check applies.
+        with time_preflight_helper(self.name, "binary_on_path"):
+            return check_binary_on_path("opencode")
 
     def classify_error(
         self,

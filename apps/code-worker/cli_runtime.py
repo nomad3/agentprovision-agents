@@ -81,6 +81,51 @@ def safe_cli_error_snippet(stderr: str, stdout: str, max_len: int = 800) -> str:
     return out[:max_len]
 
 
+def emit_heartbeat_missed_event(
+    *,
+    tenant_id: str,
+    run_id: str,
+    last_seen_ts: float,
+    parent_workflow_id: str | None = None,
+    parent_task_id: str | None = None,
+    api_base_url: str | None = None,
+    api_internal_key: str | None = None,
+) -> bool:
+    """POST execution.heartbeat_missed to the api internal endpoint.
+
+    Phase 3 commit 8 worker-side emit. Fire-and-forget — never raises;
+    returns True on 2xx, False otherwise. Caller decides whether to
+    backoff or not.
+
+    Used by the heartbeat-poll loop when staleness exceeds
+    ``2 * heartbeat_interval`` (per design §9.1).
+    """
+    import os as _os
+    base = api_base_url or _os.environ.get("API_BASE_URL", "http://api")
+    key = api_internal_key or _os.environ.get("API_INTERNAL_KEY", "")
+    url = f"{base.rstrip('/')}/api/v1/internal/orchestrator/events"
+    body = {
+        "event_type": "execution.heartbeat_missed",
+        "tenant_id": tenant_id,
+        "payload": {
+            "run_id": run_id,
+            "last_seen_ts": last_seen_ts,
+            "parent_workflow_id": parent_workflow_id,
+            "parent_task_id": parent_task_id,
+        },
+    }
+    try:
+        import httpx
+        with httpx.Client(timeout=2.0) as client:
+            resp = client.post(
+                url, json=body,
+                headers={"X-Internal-Key": key},
+            )
+            return 200 <= resp.status_code < 300
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_cli_with_heartbeat(
     cmd: list[str],
     *,
