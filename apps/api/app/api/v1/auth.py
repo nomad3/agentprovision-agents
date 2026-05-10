@@ -1,6 +1,7 @@
 from datetime import timedelta, datetime
 import hashlib
 import hmac
+import json
 import secrets
 import logging
 import time
@@ -211,3 +212,210 @@ def reset_password(
     db.commit()
 
     return {"message": "Password updated successfully"}
+
+
+# ---------------------------------------------------------------------------
+# Device-flow login (gh-style) for the `agentprovision` CLI
+# ---------------------------------------------------------------------------
+#
+# Flow:
+#   1. Client POST /api/v1/auth/device-code  -> returns { device_code, user_code, verification_uri, expires_in, interval }
+#   2. User opens verification_uri in a browser, authenticates with the
+#      existing /login page, and POSTs /api/v1/auth/device-approve { user_code }
+#      while logged in to bind their access_token to the device_code.
+#   3. Client polls POST /api/v1/auth/device-token { device_code }
+#      -> 200 { access_token, token_type } once approved
+#      -> 400 { error: "authorization_pending" | "slow_down" | "expired_token" | "access_denied" }
+#
+# Pending state is stored in Redis with a short TTL. If Redis is unavailable
+# we fail closed (CLI falls back to email/password prompts).
+
+from typing import Any
+from pydantic import BaseModel, Field
+
+_DEVICE_CODE_TTL_SECONDS = 600  # 10 minutes
+_DEVICE_CODE_INTERVAL_SECONDS = 5
+_DEVICE_USER_CODE_LEN = 8  # Pretty-printed as XXXX-XXXX
+
+
+class DeviceCodeResponse(BaseModel):
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    expires_in: int
+    interval: int
+
+
+class DeviceApproveRequest(BaseModel):
+    user_code: str = Field(
+        ...,
+        description="The XXXX-XXXX code the user typed in the browser",
+        min_length=8,
+        max_length=10,
+    )
+
+
+class DeviceApproveResponse(BaseModel):
+    approved: bool
+
+
+class DeviceTokenRequest(BaseModel):
+    device_code: str = Field(..., description="Opaque token issued by /device-code")
+
+
+class DeviceTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+# Treat 'I', 'O', '0', '1' as ambiguous; pick a friendly alphabet.
+_USER_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _device_redis():
+    try:
+        import redis as redis_lib
+        return redis_lib.from_url(settings.REDIS_URL)
+    except Exception as exc:
+        logger.warning("auth.device-code: redis unavailable: %s", exc)
+        return None
+
+
+def _generate_user_code() -> str:
+    raw = "".join(secrets.choice(_USER_CODE_ALPHABET) for _ in range(_DEVICE_USER_CODE_LEN))
+    return f"{raw[:4]}-{raw[4:]}"
+
+
+def _device_state_key(device_code: str) -> str:
+    return f"auth:device:{device_code}"
+
+
+def _user_code_index_key(user_code: str) -> str:
+    return f"auth:device:user:{user_code}"
+
+
+@router.post("/device-code", response_model=DeviceCodeResponse)
+@limiter.limit("20/minute")
+def request_device_code(request: Request) -> DeviceCodeResponse:
+    """Mint a new device_code + user_code pair (gh-style device-flow). No auth required.
+
+    The CLI calls this first, opens ``verification_uri_complete`` in a browser,
+    and then polls ``POST /device-token`` with the returned ``device_code``
+    until the user approves in the web UI.
+    """
+    redis = _device_redis()
+    if redis is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="device-flow login unavailable (cache backend down)",
+        )
+    device_code = secrets.token_urlsafe(32)
+    user_code = _generate_user_code()
+    base_url = (settings.PUBLIC_BASE_URL or "").rstrip("/")
+    verification_uri = f"{base_url}/login/device" if base_url else "/login/device"
+    verification_uri_complete = f"{verification_uri}?user_code={user_code}"
+    state = json.dumps({
+        "user_code": user_code,
+        "status": "pending",
+        "access_token": None,
+    })
+    try:
+        redis.set(_device_state_key(device_code), state, ex=_DEVICE_CODE_TTL_SECONDS)
+        redis.set(_user_code_index_key(user_code), device_code, ex=_DEVICE_CODE_TTL_SECONDS)
+    except Exception as exc:
+        logger.warning("auth.device-code: redis write failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="device-flow login unavailable",
+        )
+    return DeviceCodeResponse(
+        device_code=device_code,
+        user_code=user_code,
+        verification_uri=verification_uri,
+        verification_uri_complete=verification_uri_complete,
+        expires_in=_DEVICE_CODE_TTL_SECONDS,
+        interval=_DEVICE_CODE_INTERVAL_SECONDS,
+    )
+
+
+@router.post("/device-approve", response_model=DeviceApproveResponse)
+@limiter.limit("10/minute")
+def approve_device_code(
+    request: Request,
+    body: DeviceApproveRequest,
+    current_user=Depends(deps.get_current_active_user),
+) -> DeviceApproveResponse:
+    """Web UI calls this once the logged-in user enters the user_code they got
+    from the CLI. Binds a fresh access token to the device_code so the CLI's
+    next ``/device-token`` poll succeeds.
+    """
+    user_code = body.user_code.strip().upper()
+    if not user_code:
+        raise HTTPException(status_code=400, detail="user_code is required")
+    redis = _device_redis()
+    if redis is None:
+        raise HTTPException(status_code=503, detail="device-flow login unavailable")
+    raw_dc = redis.get(_user_code_index_key(user_code))
+    if not raw_dc:
+        raise HTTPException(status_code=404, detail="user_code not found or expired")
+    device_code = raw_dc.decode() if isinstance(raw_dc, (bytes, bytearray)) else raw_dc
+    raw = redis.get(_device_state_key(device_code))
+    if not raw:
+        raise HTTPException(status_code=404, detail="device_code expired")
+    # Mint a token for the approving user.
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    claims = {"user_id": str(current_user.id)}
+    if current_user.tenant_id:
+        claims["tenant_id"] = str(current_user.tenant_id)
+    access_token = security.create_access_token(
+        current_user.email,
+        expires_delta=access_token_expires,
+        additional_claims=claims,
+    )
+    state = json.loads(raw)
+    state["status"] = "approved"
+    state["access_token"] = access_token
+    redis.set(_device_state_key(device_code), json.dumps(state), ex=_DEVICE_CODE_TTL_SECONDS)
+    return DeviceApproveResponse(approved=True)
+
+
+@router.post("/device-token", response_model=DeviceTokenResponse)
+@limiter.limit("60/minute")
+def poll_device_token(request: Request, body: DeviceTokenRequest) -> DeviceTokenResponse:
+    """CLI polls this with the device_code. Mirrors GitHub's error model:
+    400 + {"error": "authorization_pending" | "slow_down" | "expired_token" |
+    "access_denied" | "invalid_request"}.
+    """
+    device_code = body.device_code.strip()
+    if not device_code:
+        raise HTTPException(status_code=400, detail={"error": "invalid_request"})
+    redis = _device_redis()
+    if redis is None:
+        raise HTTPException(status_code=503, detail="device-flow login unavailable")
+    raw = redis.get(_device_state_key(device_code))
+    if not raw:
+        # No record -> expired or never minted.
+        raise HTTPException(status_code=400, detail={"error": "expired_token"})
+    state = json.loads(raw)
+    status_field = state.get("status")
+    if status_field == "pending":
+        raise HTTPException(status_code=400, detail={"error": "authorization_pending"})
+    if status_field == "denied":
+        raise HTTPException(status_code=400, detail={"error": "access_denied"})
+    if status_field == "approved":
+        token = state.get("access_token")
+        if not token:
+            # Race / corrupted state — treat as expired so the CLI re-bootstraps.
+            raise HTTPException(status_code=400, detail={"error": "expired_token"})
+        # One-shot: the device_code is consumed on first successful poll so a
+        # leaked token in transit can't be replayed.
+        try:
+            redis.delete(_device_state_key(device_code))
+            user_code = state.get("user_code")
+            if user_code:
+                redis.delete(_user_code_index_key(user_code))
+        except Exception:  # noqa: BLE001
+            # Best-effort cleanup; the TTL on the keys is the backstop.
+            pass
+        return DeviceTokenResponse(access_token=token, token_type="bearer")
+    raise HTTPException(status_code=400, detail={"error": "expired_token"})
