@@ -104,6 +104,12 @@ app.add_middleware(
 
 app.include_router(v1_routes.router, prefix="/api/v1")
 
+# Root-level install scripts so the user-visible install command stays
+# short — `curl -fsSL https://agentprovision.com/install.sh | sh` (PR-D-3).
+from app.api.v1 import install_scripts  # noqa: E402
+
+app.include_router(install_scripts.router, tags=["install-scripts"])
+
 
 @app.on_event("startup")
 async def startup_skill_manager():
