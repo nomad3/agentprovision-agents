@@ -320,7 +320,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setattr(wf, "_fetch_github_token", fake_fetch)
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(
                 returncode=0,
                 stdout=json.dumps({
@@ -344,7 +344,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(
                 returncode=0,
                 stdout='{"type":"session.skills_loaded"}\n{"type":"session.completed"}\n',
@@ -361,7 +361,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=2, stdout="", stderr="quota exceeded"),
         )
 
@@ -376,7 +376,7 @@ class TestExecuteCopilotChat:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout=""),
         )
 
@@ -408,7 +408,7 @@ class TestExecuteCopilotChat:
             }),
         ])
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout=stream),
         )
 
@@ -447,7 +447,7 @@ class TestExecuteCopilotChat:
             }),
         ])
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout=stream),
         )
 
