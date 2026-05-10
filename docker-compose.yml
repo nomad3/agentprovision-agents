@@ -18,12 +18,19 @@ services:
 
   api:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+      # Phase 1.5: context widened to repo root so the canonical
+      # packages/cli_orchestrator/ is reachable from the Dockerfile.
+      context: .
+      dockerfile: apps/api/Dockerfile
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./apps/api:/app
+      # Phase 1.5: read-only bind-mount of the canonical cli_orchestrator
+      # package so dev hot-reload picks up edits without rebuilding the
+      # image. The api/ volume mount above clobbers the COPY'd
+      # /app/cli_orchestrator from the Dockerfile, so we re-mount it here.
+      - ./packages/cli_orchestrator:/app/cli_orchestrator:ro
       - hf_cache:/root/.cache/huggingface
     env_file:
       - ./apps/api/.env
@@ -107,12 +114,15 @@ services:
 
   orchestration-worker:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+      # Phase 1.5: context widened to repo root.
+      context: .
+      dockerfile: apps/api/Dockerfile
     image: agentprovision-agents-api
     command: python -m app.workers.orchestration_worker
     volumes:
       - ./apps/api:/app
+      # Phase 1.5: see api service comment above.
+      - ./packages/cli_orchestrator:/app/cli_orchestrator:ro
       - hf_cache:/root/.cache/huggingface
     env_file:
       - ./apps/api/.env
@@ -176,8 +186,12 @@ services:
 
   code-worker:
     build:
-      context: ./apps/code-worker
-      dockerfile: Dockerfile
+      # Phase 1.5: context widened to repo root so the canonical
+      # packages/cli_orchestrator/ is reachable from the Dockerfile and
+      # the worker's _is_*_credit_exhausted helpers can delegate to
+      # cli_orchestrator.classify (closes I-1).
+      context: .
+      dockerfile: apps/code-worker/Dockerfile
     env_file:
       - ./apps/api/.env
     environment:
@@ -194,6 +208,10 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./apps/code-worker:/app
+      # Phase 1.5: read-only bind-mount of the canonical cli_orchestrator
+      # package. The code-worker volume above clobbers the COPY'd
+      # /app/cli_orchestrator from the Dockerfile, so we re-mount it.
+      - ./packages/cli_orchestrator:/app/cli_orchestrator:ro
       - claude_sessions:/home/codeworker/.claude
       # Read-only library mount so CLI subprocesses can grep/read the canonical
       # skill + agent definitions directly when the API is unreachable mid-turn.

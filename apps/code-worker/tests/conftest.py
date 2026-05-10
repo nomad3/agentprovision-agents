@@ -18,6 +18,16 @@ PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
+# Phase 1.5 — make the canonical cli_orchestrator package importable for
+# pytest. apps/code-worker/tests/conftest.py -> apps/code-worker -> apps
+# -> <repo-root>; the canonical package lives at <repo-root>/packages/.
+# At runtime the worker container COPYs that package into /app/, so the
+# top-level ``cli_orchestrator`` import resolves natively in production.
+REPO_ROOT = PACKAGE_ROOT.parent.parent
+PACKAGES_DIR = REPO_ROOT / "packages"
+if PACKAGES_DIR.is_dir() and str(PACKAGES_DIR) not in sys.path:
+    sys.path.insert(0, str(PACKAGES_DIR))
+
 
 # ── Required env (must be set before importing modules that read os.environ) ──
 # The package reads API_BASE_URL / API_INTERNAL_KEY / TEMPORAL_ADDRESS at

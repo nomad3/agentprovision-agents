@@ -31,8 +31,10 @@ services:
 
   api:
     build:
-      context: ./apps/api
-      dockerfile: Dockerfile
+      # Phase 1.5: context widened to repo root so the canonical
+      # packages/cli_orchestrator/ is reachable from the Dockerfile.
+      context: .
+      dockerfile: apps/api/Dockerfile
     restart: always
     ports:
       - "127.0.0.1:8000:8000"
@@ -182,8 +184,12 @@ services:
 
   code-worker:
     build:
-      context: ./apps/code-worker
-      dockerfile: Dockerfile
+      # Phase 1.5: context widened to repo root so the canonical
+      # packages/cli_orchestrator/ is reachable from the Dockerfile and
+      # the worker's _is_*_credit_exhausted helpers can delegate to
+      # cli_orchestrator.classify (closes I-1).
+      context: .
+      dockerfile: apps/code-worker/Dockerfile
     restart: always
     env_file:
       - .env.production
