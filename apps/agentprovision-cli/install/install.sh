@@ -124,17 +124,24 @@ trap 'rm -rf "$TMP"' EXIT
 
 ARCHIVE="agentprovision-${TRIPLE}.${ARCHIVE_EXT}"
 URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE"
-SHA_URL="https://github.com/$REPO/releases/download/$TAG/${ARCHIVE}.sha256"
+# PR-D-2 publishes one combined SHA256SUMS manifest per release (one
+# line per archive). Half the HTTP round-trips vs. per-target sidecars,
+# and survives renames.
+SHASUMS_URL="https://github.com/$REPO/releases/download/$TAG/SHA256SUMS"
 
 say "Downloading $ARCHIVE..."
 curl -fsSL --retry 3 --retry-delay 2 -o "$TMP/$ARCHIVE" "$URL" \
     || err "download failed: $URL"
-curl -fsSL --retry 3 --retry-delay 2 -o "$TMP/${ARCHIVE}.sha256" "$SHA_URL" \
-    || err "sha256 sidecar download failed: $SHA_URL"
+curl -fsSL --retry 3 --retry-delay 2 -o "$TMP/SHA256SUMS" "$SHASUMS_URL" \
+    || err "SHA256SUMS download failed: $SHASUMS_URL"
 
 # ── verify ────────────────────────────────────────────────────────────────
 say "Verifying SHA256..."
-EXPECTED=$(awk '{print $1}' "$TMP/${ARCHIVE}.sha256")
+# Manifest format: "<hash>  <filename>" (sha256sum-compatible).
+EXPECTED=$(grep "  ${ARCHIVE}\$" "$TMP/SHA256SUMS" | awk '{print $1}' | head -1)
+if [ -z "$EXPECTED" ]; then
+    err "no SHA256 line for $ARCHIVE in SHA256SUMS — release manifest incomplete?"
+fi
 ACTUAL=$($SHACMD "$TMP/$ARCHIVE" | awk '{print $1}')
 if [ "$EXPECTED" != "$ACTUAL" ]; then
     err "checksum mismatch! expected=$EXPECTED actual=$ACTUAL"

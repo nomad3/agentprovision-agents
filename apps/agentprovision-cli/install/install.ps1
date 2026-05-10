@@ -83,17 +83,27 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
     $archiveName = "agentprovision-$triple.zip"
     $url = "https://github.com/$Repo/releases/download/$tag/$archiveName"
-    $shaUrl = "https://github.com/$Repo/releases/download/$tag/$archiveName.sha256"
+    # PR-D-2 publishes one combined SHA256SUMS manifest per release.
+    # Half the HTTP round-trips vs. per-target sidecars + survives renames.
+    $shasumsUrl = "https://github.com/$Repo/releases/download/$tag/SHA256SUMS"
     $archivePath = Join-Path $tmp $archiveName
-    $shaPath = Join-Path $tmp "$archiveName.sha256"
+    $shasumsPath = Join-Path $tmp "SHA256SUMS"
 
     Say "Downloading $archiveName..."
     Invoke-WebRequest -Uri $url -OutFile $archivePath -UseBasicParsing
-    Invoke-WebRequest -Uri $shaUrl -OutFile $shaPath -UseBasicParsing
+    Invoke-WebRequest -Uri $shasumsUrl -OutFile $shasumsPath -UseBasicParsing
 
     # ── verify ────────────────────────────────────────────────────────────
     Say "Verifying SHA256..."
-    $expected = ((Get-Content $shaPath -Raw).Trim() -split "\s+")[0].ToLower()
+    # Manifest format: "<hash>  <filename>" (sha256sum-compatible).
+    # Grep our archive's line (matches on \s+<archiveName>$).
+    $expected = (Get-Content $shasumsPath |
+                 Where-Object { $_ -match "\s+$([regex]::Escape($archiveName))\s*$" } |
+                 Select-Object -First 1) -replace '\s.*', ''
+    if (-not $expected) {
+        Fail "no SHA256 line for $archiveName in SHA256SUMS — release manifest incomplete?"
+    }
+    $expected = $expected.ToLower()
     $actual = (Get-FileHash -Algorithm SHA256 $archivePath).Hash.ToLower()
     if ($expected -ne $actual) {
         Fail "checksum mismatch! expected=$expected actual=$actual"

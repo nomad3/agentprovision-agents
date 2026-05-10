@@ -69,6 +69,11 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Copy application code
 COPY --chown=appuser:appgroup apps/api/app /app/app
 
+# PR-D-3: install.sh + install.ps1 served at agentprovision.com/install.{sh,ps1}.
+# Resolved by app/api/v1/install_scripts.py via Path(__file__).parents[3]/static
+# which lands at /app/static at runtime.
+COPY --chown=appuser:appgroup apps/api/static /app/static
+
 # Copy pre-compiled gRPC stubs from builder (proto compilation happened there
 # with grpcio-tools + protobuf<7; production runs protobuf>=7 for neonize compat)
 COPY --from=builder --chown=appuser:appgroup /app/app/generated /app/app/generated

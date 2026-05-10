@@ -19,11 +19,13 @@ Reference: docs/plans/2026-05-10-agentprovision-cli-distribution-plan.md §PR-D-
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Static install scripts ship inside the api image at /app/static/install/.
@@ -33,6 +35,18 @@ _INSTALL_DIR = Path(__file__).resolve().parents[3] / "static" / "install"
 
 _INSTALL_SH_PATH = _INSTALL_DIR / "install.sh"
 _INSTALL_PS1_PATH = _INSTALL_DIR / "install.ps1"
+
+# Surface a deploy-time warning if the static dir is missing — without
+# this, every install request silently falls back to a 503 body and the
+# misconfig only shows up via user reports. The Dockerfile copies
+# apps/api/static → /app/static; if either step gets removed in a future
+# refactor this log fires on first import.
+if not _INSTALL_DIR.exists():
+    logger.warning(
+        "install_scripts: static dir missing at %s — install.sh / install.ps1 "
+        "will return 503. Ensure apps/api/Dockerfile COPYs apps/api/static.",
+        _INSTALL_DIR,
+    )
 
 
 @router.get(
