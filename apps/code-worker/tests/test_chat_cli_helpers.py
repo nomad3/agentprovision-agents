@@ -202,7 +202,7 @@ class TestExecuteGeminiChat:
             lambda sd, mcp: str(session_dir),
         )
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(
                 returncode=0,
                 stdout='{"result": "Gemini speaking", "model": "gemini-2.5-pro"}',
@@ -230,7 +230,7 @@ class TestExecuteGeminiChat:
         # stderr contains a tool-error pattern; helper should extract it.
         stderr_text = "Error executing tool default_api:list_files: not authorized\n"
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=1, stdout="", stderr=stderr_text),
         )
 
@@ -252,7 +252,7 @@ class TestExecuteGeminiChat:
             wf, "_prepare_gemini_home_apikey", lambda sd, mcp: str(session_dir),
         )
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout="", stderr=""),
         )
 
@@ -284,7 +284,7 @@ class TestExecuteGeminiChat:
 
         monkeypatch.setattr(wf, "_prepare_gemini_home", fake_prep)
         monkeypatch.setattr(
-            wf, "_run_cli_with_heartbeat",
+            cli_runtime, "run_cli_with_heartbeat",
             lambda cmd, **kw: _completed(returncode=0, stdout='{"result":"x"}'),
         )
 

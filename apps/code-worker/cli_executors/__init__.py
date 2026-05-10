@@ -15,5 +15,6 @@ orchestration) and gives each platform a clean public module.
 """
 from cli_executors.claude import execute_claude_chat
 from cli_executors.codex import execute_codex_chat
+from cli_executors.gemini import execute_gemini_chat
 
-__all__ = ["execute_claude_chat", "execute_codex_chat"]
+__all__ = ["execute_claude_chat", "execute_codex_chat", "execute_gemini_chat"]
