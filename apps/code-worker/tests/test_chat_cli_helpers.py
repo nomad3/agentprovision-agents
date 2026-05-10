@@ -22,6 +22,7 @@ import subprocess
 
 import pytest
 
+import cli_executors.opencode
 import cli_runtime
 import workflows as wf
 
@@ -495,7 +496,7 @@ class TestExecuteOpencodeChat:
                 "usage": {"prompt_tokens": 10},
             })
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         out = wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -515,7 +516,7 @@ class TestExecuteOpencodeChat:
             calls.append(url)
             return _FakeResp(200, {"parts": [{"type": "text", "text": "x"}]})
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -528,7 +529,7 @@ class TestExecuteOpencodeChat:
         def fake_post(url, **kwargs):
             raise RuntimeError("connection refused")
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         # The fallback CLI uses subprocess.run.
         def fake_subprocess_run(cmd, **kw):
@@ -537,7 +538,7 @@ class TestExecuteOpencodeChat:
                 stdout=json.dumps({"response": "CLI answer"}),
             )
 
-        monkeypatch.setattr(wf.subprocess, "run", fake_subprocess_run)
+        monkeypatch.setattr(cli_executors.opencode.subprocess, "run", fake_subprocess_run)
 
         out = wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -556,7 +557,7 @@ class TestExecuteOpencodeChat:
             # No 'parts', use legacy 'response'.
             return _FakeResp(200, {"response": "legacy text"})
 
-        monkeypatch.setattr(wf.httpx, "post", fake_post)
+        monkeypatch.setattr(cli_executors.opencode.httpx, "post", fake_post)
 
         out = wf._execute_opencode_chat(
             _make_input(platform="opencode"), str(tmp_path),
@@ -570,7 +571,7 @@ class TestExecuteOpencodeChatCli:
 
     def test_cli_failure_returns_error(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
-            wf.subprocess, "run",
+            cli_executors.opencode.subprocess, "run",
             lambda cmd, **kw: _completed(returncode=1, stdout="", stderr="boom"),
         )
         out = wf._execute_opencode_chat_cli(
@@ -583,7 +584,7 @@ class TestExecuteOpencodeChatCli:
         def boom(*a, **kw):
             raise OSError("not found")
 
-        monkeypatch.setattr(wf.subprocess, "run", boom)
+        monkeypatch.setattr(cli_executors.opencode.subprocess, "run", boom)
         out = wf._execute_opencode_chat_cli(
             _make_input(platform="opencode"), str(tmp_path),
         )

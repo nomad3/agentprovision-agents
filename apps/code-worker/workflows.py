@@ -42,6 +42,14 @@ from cli_executors.claude import execute_claude_chat as _execute_claude_chat
 from cli_executors.codex import execute_codex_chat as _execute_codex_chat
 from cli_executors.gemini import execute_gemini_chat as _execute_gemini_chat
 from cli_executors.copilot import execute_copilot_chat as _execute_copilot_chat
+from cli_executors.opencode import (
+    execute_opencode_chat as _execute_opencode_chat,
+    _execute_opencode_chat_cli,
+    _opencode_sessions,
+    OPENCODE_OLLAMA_URL,
+    OPENCODE_MODEL,
+    OPENCODE_PORT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1430,120 +1438,6 @@ def _prepare_gemini_home_apikey(session_dir: str, mcp_config_json: str) -> str:
         json.dump(settings, f, indent=2)
 
     return gemini_home
-
-# ---------------------------------------------------------------------------
-# OpenCode CLI — local Gemma 4 via Ollama with MCP tool access
-# ---------------------------------------------------------------------------
-
-OPENCODE_OLLAMA_URL = os.environ.get("OPENCODE_OLLAMA_URL", "http://host.docker.internal:11434/v1")
-OPENCODE_MODEL = os.environ.get("OPENCODE_MODEL", "gemma4")
-OPENCODE_PORT = int(os.environ.get("OPENCODE_PORT", "8200"))
-
-# Per-tenant OpenCode session cache (tenant_id → session_id)
-_opencode_sessions: dict[str, str] = {}
-
-
-def _execute_opencode_chat(task_input: ChatCliInput, session_dir: str) -> ChatCliResult:
-    """Execute a chat turn via the persistent OpenCode server (local Gemma 4).
-
-    Uses the in-process OpenCode server started by entrypoint.sh on OPENCODE_PORT.
-    Creates one session per tenant for context continuity. Falls back to `opencode run`
-    if the server is unreachable.
-    """
-    import httpx
-
-    base_url = f"http://127.0.0.1:{OPENCODE_PORT}"
-
-    # Get or create a session for this tenant
-    tenant = task_input.tenant_id
-    session_id = _opencode_sessions.get(tenant)
-
-    try:
-        if not session_id:
-            resp = httpx.post(f"{base_url}/session", timeout=10)
-            resp.raise_for_status()
-            session_id = resp.json()["id"]
-            _opencode_sessions[tenant] = session_id
-
-        # Wrap message with tenant context if MCP is enabled
-        prompt = task_input.message
-        if task_input.mcp_config:
-            # Inject tenant_id so MCP tools know which data to access
-            context_prefix = (
-                f"[Context: tenant_id={tenant}. "
-                f"Always pass tenant_id in ALL MCP tool calls.]\n\n"
-            )
-            prompt = context_prefix + prompt
-
-        # Send message to OpenCode server.
-        #
-        # OpenCode adopted a multipart message schema. The body must be
-        # `{"parts": [{"type": "text", "text": "..."}]}`, not the old
-        # `{"message": "..."}`. The mismatch caused every fallback to
-        # 400 with `expected array, received undefined` on `parts`,
-        # which surfaced to users as `OpenCode server failed (400 Bad
-        # Request)` and the CLI fallback (also broken) emitted raw
-        # JSON like `CLI exit 1: {"type":"session.skills_loaded",...}`
-        # into chat. Live diagnostic 2026-05-05.
-        resp = httpx.post(
-            f"{base_url}/session/{session_id}/message",
-            json={"parts": [{"type": "text", "text": prompt}]},
-            timeout=120,  # Local LLM can be slow
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        # Response shape also moved to multipart. Try the new shape first
-        # (parts[].text concatenated), fall back to the legacy `response`
-        # field if the server downgraded for compatibility.
-        text = ""
-        for part in (data.get("parts") or []):
-            if isinstance(part, dict) and part.get("type") == "text":
-                text += part.get("text", "")
-        if not text:
-            text = data.get("response", "")
-        meta = {
-            "platform": "opencode",
-            "session_id": session_id,
-            "model": OPENCODE_MODEL,
-            "usage": data.get("usage", {}),
-        }
-        return ChatCliResult(response_text=text, success=True, metadata=meta)
-
-    except Exception as e:
-        logger.warning("OpenCode server failed (%s), falling back to CLI", e)
-        # Fallback to CLI
-        return _execute_opencode_chat_cli(task_input, session_dir)
-
-
-def _execute_opencode_chat_cli(task_input: ChatCliInput, session_dir: str) -> ChatCliResult:
-    """Fallback: Execute opencode turn via CLI subprocess."""
-    import subprocess
-
-    prompt = task_input.message
-    if task_input.mcp_config:
-        context_prefix = f"[Context: tenant_id={task_input.tenant_id}]\n\n"
-        prompt = context_prefix + prompt
-
-    cmd = ["opencode", "run", "-p", prompt, "-y", "--output-format", "json"]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            err = _safe_cli_error_snippet(result.stderr, result.stdout, 1000)
-            return ChatCliResult(
-                response_text="",
-                success=False,
-                error=f"OpenCode CLI failed: {err}",
-            )
-
-        data = json.loads(result.stdout)
-        return ChatCliResult(
-            response_text=data.get("response", ""),
-            success=True,
-            metadata={"platform": "opencode_cli", "model": OPENCODE_MODEL},
-        )
-    except Exception as e:
-        return ChatCliResult(response_text="", success=False, error=str(e))
 
 
 @workflow.defn
