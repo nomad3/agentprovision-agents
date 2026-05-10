@@ -21,9 +21,7 @@ pub async fn tail_session_events(
     client: &ApiClient,
     session_id: &str,
 ) -> Result<impl Stream<Item = Result<SessionEvent>>> {
-    let url = client.build_url(&format!(
-        "/api/v1/chat/sessions/{session_id}/events/stream"
-    ))?;
+    let url = client.build_url(&format!("/api/v1/chat/sessions/{session_id}/events/stream"))?;
     let mut req = client.http().get(url).header("Accept", "text/event-stream");
     if let Some(tok) = client.token() {
         req = req.header("Authorization", format!("Bearer {tok}"));
@@ -37,7 +35,11 @@ pub async fn tail_session_events(
     let stream = resp.bytes_stream().eventsource().map(|res| {
         let ev = res.map_err(|e| Error::other(format!("sse error: {e}")))?;
         Ok(SessionEvent {
-            event: if ev.event.is_empty() { None } else { Some(ev.event) },
+            event: if ev.event.is_empty() {
+                None
+            } else {
+                Some(ev.event)
+            },
             data: ev.data,
         })
     });

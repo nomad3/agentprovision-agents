@@ -63,17 +63,17 @@ pub async fn send(args: SendArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     let reply = if ctx.no_stream {
-        let turn = ctx.client.send_chat_message(&session_id, &args.prompt).await?;
+        let turn = ctx
+            .client
+            .send_chat_message(&session_id, &args.prompt)
+            .await?;
         turn.assistant.content
     } else {
         stream_and_collect(&ctx, &session_id, &args.prompt).await?
     };
 
     if ctx.json {
-        let payload = SendResult {
-            session_id,
-            reply,
-        };
+        let payload = SendResult { session_id, reply };
         println!("{}", serde_json::to_string_pretty(&payload)?);
     } else if !ctx.no_stream {
         // streaming already printed; just newline
@@ -102,10 +102,8 @@ pub async fn repl(args: ReplArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     output::info("Type your message and press Enter. Ctrl-D to exit.");
-    let mut rl: rustyline::Editor<(), rustyline::history::FileHistory> =
-        rustyline::Editor::new()?;
-    let history_path = dirs::cache_dir()
-        .map(|p| p.join("agentprovision").join("repl-history.txt"));
+    let mut rl: rustyline::Editor<(), rustyline::history::FileHistory> = rustyline::Editor::new()?;
+    let history_path = dirs::cache_dir().map(|p| p.join("agentprovision").join("repl-history.txt"));
     if let Some(h) = &history_path {
         if let Some(parent) = h.parent() {
             let _ = std::fs::create_dir_all(parent);

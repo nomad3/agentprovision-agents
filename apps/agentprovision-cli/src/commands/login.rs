@@ -32,8 +32,7 @@ pub struct LoginArgs {
 }
 
 pub async fn run(args: LoginArgs, ctx: Context) -> anyhow::Result<()> {
-    let force_password =
-        args.password || args.password_stdin || args.password_env.is_some();
+    let force_password = args.password || args.password_stdin || args.password_env.is_some();
     let token = if force_password {
         password_flow(
             &ctx,
@@ -71,19 +70,18 @@ pub async fn run(args: LoginArgs, ctx: Context) -> anyhow::Result<()> {
             "Logged in as {} ({}), tenant {}",
             label, me.email, tenant
         ));
-        output::info(format!(
-            "Token saved to {}.",
-            ctx.token_store_kind.human()
-        ));
+        output::info(format!("Token saved to {}.", ctx.token_store_kind.human()));
     }
     Ok(())
 }
 
 async fn try_device_flow(ctx: &Context) -> anyhow::Result<String> {
-    let code = request_device_code(&ctx.client).await.map_err(|e| match e {
-        Error::Api { status, body } => anyhow::anyhow!("HTTP {status}: {body}"),
-        other => anyhow::anyhow!(other),
-    })?;
+    let code = request_device_code(&ctx.client)
+        .await
+        .map_err(|e| match e {
+            Error::Api { status, body } => anyhow::anyhow!("HTTP {status}: {body}"),
+            other => anyhow::anyhow!(other),
+        })?;
     if !ctx.json {
         eprintln!();
         output::info(format!(
@@ -134,8 +132,7 @@ async fn password_flow(
         }
     };
     let password = if let Some(var) = password_env {
-        std::env::var(var)
-            .map_err(|_| anyhow::anyhow!("env var {var} not set or not unicode"))?
+        std::env::var(var).map_err(|_| anyhow::anyhow!("env var {var} not set or not unicode"))?
     } else if password_stdin {
         use std::io::BufRead;
         let stdin = std::io::stdin();
