@@ -27,6 +27,29 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # Phase 1.5 bind-mounts target apps/api/cli_orchestrator +
+      # apps/code-worker/cli_orchestrator. Docker holds those paths open
+      # while the containers are running, and the runner's pre-checkout
+      # cleanup hits EACCES on rmdir. Stop the affected containers using
+      # the user's main repo clone (which has docker-compose.yml
+      # available even before this workflow checks out) so the bind-mount
+      # is released before actions/checkout runs.
+      - name: Pre-checkout — release bind-mounts
+        shell: bash
+        run: |
+          SRC="$HOME/Documents/GitHub/servicetsunami-agents"
+          if [ -f "$SRC/docker-compose.yml" ]; then
+            (cd "$SRC" && docker compose stop api orchestration-worker code-worker 2>&1 | tail -5) || true
+          fi
+          # Remove the phantom dirs left in the runner workspace from
+          # previous deploys; safe because the containers are stopped.
+          for phantom in \
+            "$GITHUB_WORKSPACE/apps/api/cli_orchestrator" \
+            "$GITHUB_WORKSPACE/apps/code-worker/cli_orchestrator"; do
+            [ -d "$phantom" ] && (rmdir "$phantom" 2>/dev/null || rm -rf "$phantom" 2>/dev/null) || true
+          done
+        continue-on-error: true
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
