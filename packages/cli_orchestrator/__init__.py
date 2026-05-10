@@ -36,6 +36,13 @@ from .policy import (
     MAX_FALLBACK_DEPTH,
     decide,
 )
+from .preflight import (
+    check_binary_on_path,
+    check_cloud_api_enabled,
+    check_credentials_present,
+    check_temporal_queue_reachable,
+    check_workspace_trust_file,
+)
 from .redaction import (
     SENSITIVE_ENV_KEYS,
     cleanup_codex_home,
@@ -61,4 +68,9 @@ __all__ = [
     "ExecutionResult",
     "PreflightResult",
     "ResilientExecutor",
+    "check_binary_on_path",
+    "check_workspace_trust_file",
+    "check_credentials_present",
+    "check_cloud_api_enabled",
+    "check_temporal_queue_reachable",
 ]

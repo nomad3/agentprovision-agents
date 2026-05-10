@@ -86,9 +86,20 @@ try:
         "Total attempts per ResilientExecutor.execute",
         ["tenant_id", "decision_point", "status"],
     )
+    # Phase 3 — design §6 ship gate (warm-state p95 ≤ 60ms).
+    # Adapters time their preflight() bodies and emit observations here;
+    # the executor itself does NOT time preflight (the executor only
+    # consumes the result). Module-level so adapters in any process can
+    # reuse the same Histogram instance.
+    _PREFLIGHT_DURATION_MS = Histogram(
+        "cli_orchestrator_preflight_duration_ms",
+        "Per-helper preflight duration in milliseconds",
+        ["platform", "helper"],
+    )
     _METRICS_OK = True
 except ImportError:
     _STATUS_TOTAL = _DURATION_MS = _FALLBACK_DEPTH = _ATTEMPT_COUNT = None  # type: ignore[assignment]
+    _PREFLIGHT_DURATION_MS = None  # type: ignore[assignment]
     _METRICS_OK = False
 
 
