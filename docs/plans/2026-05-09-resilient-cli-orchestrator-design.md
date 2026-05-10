@@ -831,3 +831,119 @@ Subscribers configure these via the existing `register_webhook` MCP tool. No new
 ---
 
 **End of design doc.** §9, §10, §11 close the gaps the reviewer flagged. Sign-off scope above remains unchanged.
+
+
+---
+
+## Phase 4 ship-gate post-merge notes (2026-05-10)
+
+Phase 4 (`feat/cli-orchestrator-phase-4-leaf-mcp-auth`) implements the
+leaf-from-Claude-Code → `apps/mcp-server` SSE inbound surface, the
+agent-scoped JWT mint, the .claude.json + hooks injection by the
+code-worker, and the four ship gates (a)-(d) in §4 of this doc. Ten
+commits (`mint primitives` → `dispatch_agent + heartbeat`).
+
+### What's now wired end-to-end
+
+1. **Mint at task dispatch.** `apps/api/app/services/agent_token.py`
+   exposes `mint_agent_token()` + `verify_agent_token()` against
+   `settings.SECRET_KEY` (no new secret, SR-2). `parent_chain` is hard-
+   capped at MAX_FALLBACK_DEPTH=3 at mint time (SR-3 + D8). JWT size
+   stays well under 4 KB even with worst-case 50-tool scope + 3-element
+   chain (SR-3 regression guard test enforces this).
+
+2. **Internal mint endpoint.** `POST /api/v1/internal/agent-tokens/mint`
+   gated by `X-Internal-Key` lets the code-worker pod request fresh
+   tokens without holding `SECRET_KEY` itself.
+
+3. **Chat hot path mint.** `cli_session_manager.run_agent_session`
+   mints + plumbs through `generate_mcp_config(..., agent_token=tok)`
+   only when `tenant_features.use_resilient_executor=TRUE`. Flag-OFF
+   path is byte-identical to Phase 3.
+
+4. **Code-worker hooks + .claude.json.** `apps/code-worker/hook_templates.py`
+   ships PreToolUse + PostToolUse shell scripts (templates lock down
+   the `.tool_name`-not-`.tool_input.tool_name` jq path per review I-A,
+   and `STDIN=$(cat)` not `read -r STDIN` per review I-B).
+   `.claude.json` writer uses `os.open(O_CREAT|O_WRONLY|O_TRUNC, 0o600)`
+   so a co-tenant on the same workspace pod can't snoop the token (SR-4).
+
+5. **Third auth tier on mcp-server.** `resolve_auth_context(ctx)` returns
+   an `AuthContext` covering all four tiers in precedence order. The
+   `kind=='agent_token'` AND `sub.startswith('agent:')` double-check
+   (SR-11) blocks regular login tokens from crossing into the agent
+   tier even though they're signed with the same secret.
+
+6. **Tenancy precedence + rate-limited audit.** When the leaf carries
+   both an agent_token AND a header-set X-Tenant-Id, the claim wins
+   silently; the mismatch is audit-logged once per minute per
+   (tenant, agent, header) tuple via an in-process LRU (SR-6). Test
+   asserts 100 mismatches in 1s produce exactly 1 audit row.
+
+7. **Scope enforcement at audit boundary.** When tier=='agent_token'
+   AND scope is not None AND tool_name not in scope → write a
+   `result_status='scope_denied'` audit row and raise PermissionError
+   BEFORE invoking the original tool handler. scope=None bypasses
+   (Luna with full tool_groups). scope=[] is "no tools allowed" —
+   distinct semantics, also tested.
+
+8. **`dispatch_agent` + `request_human_approval` MCP tools.** Both
+   require tier=='agent_token'. `dispatch_agent` appends the caller's
+   agent_id to parent_chain so the §3.1 recursion gate at
+   `/tasks/dispatch` refuses calls at depth 3+. The endpoint surfaces
+   503 with the actionable_hint so the leaf can render a useful
+   "fallback chain exhausted" message instead of a silent retry.
+
+9. **Heartbeat endpoint + migration 122.** `POST /api/v1/agents/internal/heartbeat`
+   is auth-tier-only — rejects tenant JWT and X-Internal-Key with 403
+   (defence-in-depth, design §10.3(c)). Migration 122 adds
+   `agent_tasks.last_seen_at TIMESTAMPTZ` + a partial index for the
+   heartbeat-missed scan path.
+
+10. **§3.1 gate fires at dispatch.** Commit 9's integration test proves
+    the gate refuses depth-3 calls at the `/tasks/dispatch` boundary
+    BEFORE any Temporal workflow starts — closing the resilience loop
+    with a hard upstream stop.
+
+### Ship-gate verification
+
+Each Phase 4 §4 gate has a matching test file:
+
+| Gate | What it verifies | Test file |
+|------|------------------|-----------|
+| (a) leaf → recall_memory → execution_trace.parent_task_id | agent_token claim carries task_id; verify_agent_token round-trips it | `apps/api/tests/integration/test_phase4_ship_gate.py::test_gate_a_*` |
+| (b) scope=[X] → out-of-scope tool → 403 + audit | tool_audit raises PermissionError + writes audit row with scope_denied | `apps/mcp-server/tests/test_agent_token_auth.py::test_scope_blocks_*` + `apps/api/tests/integration/test_phase4_ship_gate.py::test_gate_b_*` |
+| (c) tenant_A claim + tenant_B header → claim wins, audit logged once/min | LRU rate-limiter, 1 row per (tenant, agent, header) per 60s | `apps/mcp-server/tests/test_agent_token_auth.py::test_tenancy_mismatch_rate_limited_*` + `apps/api/tests/integration/test_phase4_ship_gate.py::test_gate_c_*` |
+| (d) depth-3 leaf → /tasks/dispatch → PROVIDER_UNAVAILABLE before adapter.run | Recursion gate fires server-side; no Temporal start_workflow | `apps/api/tests/cli_orchestrator/test_recursion_gate_dispatch.py` + `apps/api/tests/integration/test_phase4_ship_gate.py::test_gate_d_*` |
+
+### Behavior change at flag boundary
+
+Hard constraint: zero behavior change at `use_resilient_executor=False`.
+
+  - The chat hot path's mint block (commit 3) is gated behind
+    `read_flags(db, tenant_id) -> (use_resilient, _)`. Flag-OFF
+    skips the mint and `generate_mcp_config(agent_token=None)` renders
+    no Authorization header — byte-identical pre-Phase-4 shape.
+  - The code-worker's `_inject_agent_token_and_hooks` runs only when
+    `task_input.agent_id` AND `task_input.task_id` are both set. The
+    chat hot path passes neither (it doesn't go through `/tasks/dispatch`).
+    Legacy callers stay byte-identical; only new dispatch-endpoint
+    callers see hooks injected.
+  - The MCP server's `resolve_auth_context` keeps the legacy
+    `resolve_tenant_id(ctx)` as a thin wrapper, so tools that called
+    the old function don't need eager migration. They get the same
+    tenant_id from whichever tier wins.
+
+### Known deferrals (out of scope for Phase 4)
+
+  - **Tenant-JWT decoding on the MCP server.** The chat hot path passes
+    X-Tenant-Id explicitly today, so the resolver falls through to the
+    header tier when no agent-token is present. Adding tenant-JWT
+    decode is straightforward (`jose.jwt.decode` against the same
+    SECRET_KEY) but not required by any Phase 4 ship gate.
+  - **Live execution_trace writer integration.** The mcp-server-side
+    audit pipeline currently writes `tool_calls` rows; the Phase 4
+    integration with `execution_trace.parent_task_id` is implemented
+    via the agent_token's `task_id` claim being preserved through the
+    audit context, ready for a future commit to wire into the trace
+    writer when the underlying persistence path lands.
