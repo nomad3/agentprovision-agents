@@ -15,6 +15,12 @@ import httpx
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
+# Phase 1.5: helpers delegate to the canonical classifier (closes I-1).
+# At runtime the package lives at /app/cli_orchestrator/ (Dockerfile COPY +
+# docker-compose bind-mount); under pytest the worker conftest puts
+# <repo-root>/packages/ on sys.path. Either way the import resolves.
+from cli_orchestrator import Status, classify
+
 logger = logging.getLogger(__name__)
 
 
@@ -103,7 +109,7 @@ CODE_TASK_ACTIVITY_TIMEOUT_MINUTES = 120
 CODE_TASK_SCHEDULE_TIMEOUT_MINUTES = 150
 CODE_TASK_HEARTBEAT_SECONDS = 240
 CLAUDE_CODE_MODEL = os.environ.get("CLAUDE_CODE_MODEL", "sonnet").strip() or "sonnet"
-CLAUDE_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestrator package; canonical for worker runtime until then
+CLAUDE_CREDIT_ERROR_PATTERNS = (  # DEAD CODE Phase 1.5 — kept one phase as parity-test corpus + for legacy attribute tests in test_workflow_definitions.py:74-77; Phase 2 deletes.
     "credit balance is too low",
     "usage limit reached",
     "rate limit reached",
@@ -116,7 +122,7 @@ CLAUDE_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchest
     "hit your limit",
 )
 
-CODEX_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestrator package; canonical for worker runtime until then
+CODEX_CREDIT_ERROR_PATTERNS = (  # DEAD CODE Phase 1.5 — kept one phase as parity-test corpus + for legacy attribute tests in test_workflow_definitions.py:74-77; Phase 2 deletes.
     "rate limit",
     "rate_limit",
     "usage limit",
@@ -130,7 +136,7 @@ CODEX_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestr
     "429",
 )
 
-COPILOT_CREDIT_ERROR_PATTERNS = (  # PHASE 1.5 — replace via shared cli_orchestrator package; canonical for worker runtime until then
+COPILOT_CREDIT_ERROR_PATTERNS = (  # DEAD CODE Phase 1.5 — kept one phase as parity-test corpus + for legacy attribute tests in test_workflow_definitions.py:74-77; Phase 2 deletes.
     "rate limit",
     "rate_limit",
     "usage limit",
@@ -351,21 +357,33 @@ def _detect_tag(task_description: str) -> str:
 
 
 def _is_claude_credit_exhausted(error_text: Optional[str]) -> bool:
-    # Accepts None / empty defensively — callers pass through whatever
-    # `resp.text` or a captured exception message yielded, which can be
-    # None when the request failed before a body was read.
-    text = (error_text or "").lower()
-    return any(pattern in text for pattern in CLAUDE_CREDIT_ERROR_PATTERNS)
+    # Phase 1.5: delegate to the canonical classifier (closes I-1).
+    # Defensive None/empty handling matches the legacy contract.
+    return classify(error_text or "") == Status.QUOTA_EXHAUSTED
 
 
 def _is_codex_credit_exhausted(error_text: Optional[str]) -> bool:
-    text = (error_text or "").lower()
-    return any(pattern in text for pattern in CODEX_CREDIT_ERROR_PATTERNS)
+    # Phase 1.5: delegate to the canonical classifier (closes I-1).
+    # NOTE (review I-B): no production call sites today — only tests.
+    # Phase 2 should either wire codex-first fallback chaining or delete.
+    return classify(error_text or "") == Status.QUOTA_EXHAUSTED
 
 
 def _is_copilot_credit_exhausted(error_text: Optional[str]) -> bool:
-    text = (error_text or "").lower()
-    return any(pattern in text for pattern in COPILOT_CREDIT_ERROR_PATTERNS)
+    # Phase 1.5: delegate to the canonical classifier (closes I-1).
+    # NOTE (review I-B): no production call sites today — only tests.
+    # Phase 2 should either wire copilot-first fallback chaining or delete.
+    #
+    # Copilot legacy CREDIT_ERROR_PATTERNS lumped 'not authorized' (an
+    # auth error) into the credit-exhausted bucket so CLI fallback
+    # chaining triggers on either. Phase 1.5 keeps NEEDS_AUTH a
+    # distinct Status for other consumers (chat error footer, RL,
+    # council) and the helper takes the union explicitly here. See
+    # apps/code-worker/tests/test_credit_exhausted_parity.py.
+    return classify(error_text or "") in (
+        Status.QUOTA_EXHAUSTED,
+        Status.NEEDS_AUTH,
+    )
 
 
 _INTEGRATION_NOT_CONNECTED_MESSAGES = {

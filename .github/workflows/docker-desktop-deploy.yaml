@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'apps/**'
+      - 'packages/**'  # Phase 1.5: rebuild on shared cli_orchestrator changes
       - 'docker-compose.yml'
       - '.github/workflows/docker-desktop-deploy.yaml'
   workflow_dispatch:
@@ -61,6 +62,9 @@ jobs:
           echo "$CHANGED" | grep -q "apps/memory-core/" && SERVICES="$SERVICES memory-core"
           echo "$CHANGED" | grep -q "apps/mcp-server/" && SERVICES="$SERVICES mcp-tools"
           echo "$CHANGED" | grep -q "apps/luna-client/" && SERVICES="$SERVICES luna-client"
+          # Phase 1.5: cli_orchestrator package is shared by api, orchestration-worker
+          # and code-worker — any change rebuilds all three.
+          echo "$CHANGED" | grep -q "packages/cli_orchestrator/" && SERVICES="$SERVICES api orchestration-worker code-worker"
           
           if [ -z "$SERVICES" ] || [ "${{ github.event.inputs.action }}" = "rebuild-all" ]; then
             SERVICES="api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"

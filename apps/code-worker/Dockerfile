@@ -19,10 +19,21 @@ RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli op
 
 # Python deps
 WORKDIR /app
-COPY requirements.txt .
+# Phase 1.5: build context is the repo root (see docker-compose.yml). All
+# subsequent COPY paths are repo-rooted so the canonical
+# packages/cli_orchestrator/ package is reachable alongside the worker
+# source.
+COPY apps/code-worker/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Worker source first
+COPY apps/code-worker/ .
+
+# Canonical cli_orchestrator package — the worker imports it as
+# ``cli_orchestrator`` (top-level) so it must sit on sys.path. Putting it
+# at /app/cli_orchestrator/ achieves that since /app is the WORKDIR and
+# Python adds CWD to sys.path implicitly for the worker entrypoint.
+COPY packages/cli_orchestrator /app/cli_orchestrator
 
 # Non-root user
 RUN useradd -m -u 1000 codeworker && \

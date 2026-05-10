@@ -145,6 +145,25 @@ CLASSIFICATION_CASES: list[
         None, None, None,
         Status.UNKNOWN_FAILURE, None,
     ),
+    # ── 18 / 19. Phase 1.5 review I-A — bare-token narrowing ────────────
+    # The legacy CODEX_CREDIT_ERROR_PATTERNS tuple in workflows.py has
+    # ``billing`` and ``capacity`` as bare substrings. Acceptable on the
+    # worker side where those tokens only show up in subprocess stderr,
+    # but the classifier ALSO feeds apps/api's chat hot path via
+    # cli_platform_resolver — bare tokens there false-positive on
+    # casual prose. Rule was tightened to require an adjacent failure
+    # word. These tests pin that the bare tokens DO NOT classify; the
+    # anchored forms still do (covered by codex_rate_limit_is_quota_exhausted).
+    (
+        "bare_capacity_in_prose_is_unknown_failure",
+        "the capacity planning meeting is at 3pm in conference room B",
+        1, None, Status.UNKNOWN_FAILURE, None,
+    ),
+    (
+        "bare_billing_in_prose_is_unknown_failure",
+        "monthly billing invoice was generated and emailed",
+        1, None, Status.UNKNOWN_FAILURE, None,
+    ),
 ]
 
 

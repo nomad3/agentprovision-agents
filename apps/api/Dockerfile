@@ -17,16 +17,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Phase 1.5: build context is the repo root (see docker-compose.yml). All
+# COPY paths are now repo-rooted so packages/cli_orchestrator/ is
+# reachable alongside the API source.
+
 # Install Python dependencies
-COPY requirements.txt .
+COPY apps/api/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Install grpcio-tools (build-time only, needs protobuf<7) and compile protos.
 # The generated *_pb2*.py files will be copied to the production stage;
 # grpcio-tools itself stays in the builder and is NOT in the production venv.
-COPY ./proto /app/proto
-COPY ./scripts/gen_proto.sh /app/scripts/gen_proto.sh
+COPY apps/api/proto /app/proto
+COPY apps/api/scripts/gen_proto.sh /app/scripts/gen_proto.sh
 RUN pip install --no-cache-dir "grpcio-tools>=1.62.0,<2.0" "protobuf>=5.26.1,<7.0.0" && \
     bash /app/scripts/gen_proto.sh && \
     pip install --no-cache-dir "protobuf>=7.34.1"
@@ -63,11 +67,17 @@ COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code
-COPY --chown=appuser:appgroup ./app /app/app
+COPY --chown=appuser:appgroup apps/api/app /app/app
 
 # Copy pre-compiled gRPC stubs from builder (proto compilation happened there
 # with grpcio-tools + protobuf<7; production runs protobuf>=7 for neonize compat)
 COPY --from=builder --chown=appuser:appgroup /app/app/generated /app/app/generated
+
+# Canonical cli_orchestrator package (Phase 1.5). Re-exported by the
+# apps/api shim modules under app/services/cli_orchestrator/. Sits at
+# /app/cli_orchestrator/ so the top-level ``cli_orchestrator`` import
+# resolves via /app on sys.path (uvicorn's CWD).
+COPY --chown=appuser:appgroup packages/cli_orchestrator /app/cli_orchestrator
 
 # Create storage directory with correct permissions
 RUN mkdir -p /app/storage && chown -R appuser:appgroup /app/storage
