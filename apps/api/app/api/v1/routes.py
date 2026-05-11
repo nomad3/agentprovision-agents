@@ -78,6 +78,7 @@ from app.api.v1 import (
     internal_agent_heartbeat,
     internal_agent_tasks,
     internal_embed,
+    agent_tokens,
 )
 
 _logger = logging.getLogger(__name__)
@@ -196,6 +197,10 @@ router.include_router(
     internal_agent_tokens.router,
     prefix="/internal", tags=["internal"],
 )
+# PR-E — user-scoped agent-token mint (no /internal prefix, Bearer-auth).
+# This is the public-internet-reachable sibling that powers `ap claude-code`,
+# `ap codex`, etc. — multi-runtime dispatch from the user's terminal.
+router.include_router(agent_tokens.router, tags=["agent-tokens"])
 # Internal embedding endpoint — replaces sentence-transformers in apps/mcp-server.
 router.include_router(
     internal_embed.router,
