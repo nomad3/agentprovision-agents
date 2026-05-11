@@ -1,4 +1,4 @@
-//! `agentprovision login` — device-flow first, fallback to email/password.
+//! `ap login` — device-flow first, fallback to email/password.
 
 use clap::Args;
 use dialoguer::Password;

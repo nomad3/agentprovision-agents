@@ -1,24 +1,22 @@
-# install.ps1 — PowerShell installer for the `agentprovision` CLI on Windows.
+# install.ps1 — PowerShell installer for the `ap` CLI (AgentProvision) on Windows.
 #
 # Usage:
 #   iwr -useb https://agentprovision.com/install.ps1 | iex
 #
 # Pin a version:
-#   $env:AGENTPROVISION_VERSION="0.1.0"; iwr -useb https://agentprovision.com/install.ps1 | iex
+#   $env:AGENTPROVISION_VERSION="0.2.0"; iwr -useb https://agentprovision.com/install.ps1 | iex
 #
 # What it does:
 #   1. Refuses to run elevated (no admin needed; installs into %USERPROFILE%).
 #   2. Detects arch (AMD64 → x86_64-pc-windows-msvc; ARM64 deferred to PR-D-1.5).
 #   3. Resolves a concrete version (latest stable, or AGENTPROVISION_VERSION).
-#   4. Downloads the matching .zip release archive + its SHA256 sidecar.
-#   5. Verifies SHA256.
-#   6. Extracts to a temp dir; moves agentprovision.exe →
-#      $env:USERPROFILE\.agentprovision\bin.
-#   7. Updates User-scope PATH (no UAC, no admin) so new terminals find it.
-#   8. Cleans up.
+#   4. Downloads the matching .zip release archive + verifies SHA256.
+#   5. Extracts to a temp dir; moves ap.exe → $env:USERPROFILE\.agentprovision\bin.
+#   6. Updates User-scope PATH (no UAC, no admin) so new terminals find it.
+#   7. Cleans up.
 #
-# Idempotent: re-running upgrades cleanly. Use `agentprovision upgrade`
-# instead once you have an install.
+# Idempotent: re-running upgrades cleanly. Use `ap upgrade` instead once
+# you have an install (PR-D-4 — coming soon).
 
 [CmdletBinding()]
 param(
@@ -38,7 +36,7 @@ function Fail { param($msg) Write-Error "install.ps1: $msg"; exit 1 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Fail "do not run elevated. agentprovision installs into `$env:USERPROFILE\.agentprovision\bin (no admin needed)."
+    Fail "do not run elevated. ap installs into `$env:USERPROFILE\.agentprovision\bin (no admin needed)."
 }
 
 # ── detect arch ───────────────────────────────────────────────────────────
@@ -75,13 +73,13 @@ if ($Version -eq "latest") {
 } else {
     $tag = "cli-v$Version"
 }
-Say "Installing agentprovision $Version ($triple)"
+Say "Installing ap $Version ($triple)"
 
 # ── download ──────────────────────────────────────────────────────────────
 $tmp = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
-    $archiveName = "agentprovision-$triple.zip"
+    $archiveName = "ap-$triple.zip"
     $url = "https://github.com/$Repo/releases/download/$tag/$archiveName"
     # PR-D-2 publishes one combined SHA256SUMS manifest per release.
     # Half the HTTP round-trips vs. per-target sidecars + survives renames.
@@ -114,16 +112,16 @@ try {
     $extractDir = Join-Path $tmp "extract"
     Expand-Archive -Path $archivePath -DestinationPath $extractDir -Force
 
-    # Find the agentprovision.exe in the extracted tree.
-    $exe = Get-ChildItem -Path $extractDir -Recurse -Filter "agentprovision.exe" |
+    # Find the ap.exe in the extracted tree.
+    $exe = Get-ChildItem -Path $extractDir -Recurse -Filter "ap.exe" |
            Select-Object -First 1
-    if (-not $exe) { Fail "agentprovision.exe not found in archive" }
+    if (-not $exe) { Fail "ap.exe not found in archive" }
 
     if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     }
-    Copy-Item -Force $exe.FullName (Join-Path $InstallDir "agentprovision.exe")
-    Say "Installed: $InstallDir\agentprovision.exe"
+    Copy-Item -Force $exe.FullName (Join-Path $InstallDir "ap.exe")
+    Say "Installed: $InstallDir\ap.exe"
 
     # ── PATH (User scope — no UAC) ────────────────────────────────────────
     $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -137,8 +135,8 @@ try {
     }
 
     Say ""
-    Say "✓ agentprovision $Version ready."
-    Say "Run:    agentprovision login    # to authenticate"
+    Say "ap $Version ready."
+    Say "Run:    ap login    # to authenticate"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

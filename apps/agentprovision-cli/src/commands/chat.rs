@@ -1,4 +1,4 @@
-//! `agentprovision chat send` (one-shot) and `agentprovision chat repl`.
+//! `ap chat send` (one-shot) and `ap chat repl`.
 //!
 //! Streaming chat replies render through `termimad` so code blocks, headers,
 //! and lists land nicely in the terminal. With `--no-stream` we POST the

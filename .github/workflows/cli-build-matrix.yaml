@@ -123,7 +123,7 @@ jobs:
       - name: Smoke test (--version on every target — all 3 native to runner)
         shell: bash
         run: |
-          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/ap
           if [[ "${{ matrix.runner }}" == "windows-latest" ]]; then
             BIN="${BIN}.exe"
           fi
@@ -134,7 +134,7 @@ jobs:
       - name: Report binary size
         shell: bash
         run: |
-          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/ap
           [[ "${{ matrix.runner }}" == "windows-latest" ]] && BIN="${BIN}.exe"
           if [ -f "$BIN" ]; then
             echo "## ${{ matrix.target }} binary" >> $GITHUB_STEP_SUMMARY
@@ -144,8 +144,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agentprovision-${{ matrix.target }}
-          path: apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision*
+          name: ap-${{ matrix.target }}
+          path: apps/agentprovision-cli/target/${{ matrix.target }}/release/ap*
           if-no-files-found: error
           retention-days: 7
 
