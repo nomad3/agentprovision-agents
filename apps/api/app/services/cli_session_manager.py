@@ -939,6 +939,13 @@ def _run_agent_session_legacy(
             memory_context["self_model"] = self_model
     except Exception as exc:
         logger.debug("Self-model injection failed for %s: %s", agent_slug, exc)
+        # Self-model queries hit agent_identities / goals / commitments. Any
+        # failure (NULL columns, missing rows, sibling-handler poison) leaves
+        # psycopg2's txn aborted. Without rollback, the *next* block (world
+        # model) re-poisons it after every catch site, and generate_mcp_config
+        # at line 506 cascades. Watchdog caught this 2026-05-11 — caught + fixed
+        # in PR alongside PR #363, which patched only the user_obj lookup below.
+        safe_rollback(db)
 
     # Inject world state context: snapshots, unstable assertions, causal patterns
     try:
@@ -997,6 +1004,9 @@ def _run_agent_session_legacy(
             memory_context["world_model"] = world_model
     except Exception as exc:
         logger.debug("World model injection failed for %s: %s", agent_slug, exc)
+        # See safe_rollback rationale on the self-model handler above —
+        # world_state + causal_edge queries hit the same poisonable txn.
+        safe_rollback(db)
 
     # Thread recalled entity names into metadata for session memory persistence
     recalled_names = memory_context.get("recalled_entity_names", [])
@@ -1011,6 +1021,12 @@ def _run_agent_session_legacy(
             memory_context["temporal_context"] = temporal_ctx
     except Exception as exc:
         logger.debug("Temporal context injection failed: %s", exc)
+        # Last unguarded handler in the memory-context pipeline. After this,
+        # the explicit pre-clear below ran for the user_obj lookup but a
+        # poisoned txn from here would still cascade because the comment
+        # at "Clear any poisoned DB state" assumes a clean slate it didn't
+        # actually have. Closes the same class as the self/world rollback fix.
+        safe_rollback(db)
 
     # Clear any poisoned DB state before we start querying
     safe_rollback(db)
