@@ -1,16 +1,19 @@
 [package]
 name = "agentprovision-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.77.2"
 description = "Single-binary CLI for the AgentProvision platform — login, chat, workflows, agents."
 license = "MIT"
 repository = "https://github.com/nomad3/agentprovision-agents"
 authors = ["AgentProvision"]
-default-run = "agentprovision"
+# Binary is `ap` (short, gh-style). Crate name stays agentprovision-cli for
+# crates.io / cargo install — `cargo install agentprovision-cli` installs
+# the `ap` binary onto PATH.
+default-run = "ap"
 
 [[bin]]
-name = "agentprovision"
+name = "ap"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,31 +1,30 @@
 #!/bin/sh
 # shellcheck shell=sh
-# install.sh — POSIX installer for the `agentprovision` CLI.
+# install.sh — POSIX installer for the `ap` CLI (AgentProvision).
 #
 # Usage (typical):
 #   curl -fsSL https://agentprovision.com/install.sh | sh
 #
 # Usage (pin a version):
-#   AGENTPROVISION_VERSION=0.1.0 curl -fsSL https://agentprovision.com/install.sh | sh
+#   AGENTPROVISION_VERSION=0.2.0 curl -fsSL https://agentprovision.com/install.sh | sh
 #
 # Or with flags (after downloading the script first):
 #   curl -fsSL https://agentprovision.com/install.sh -o install.sh
-#   sh install.sh --version 0.1.0 --prefix $HOME/.local --add-to-path
+#   sh install.sh --version 0.2.0 --prefix $HOME/.local --add-to-path
 #
 # What it does:
 #   1. Refuses to run as root (`--no-modify-path` to system locations).
 #   2. Detects OS + arch, maps to a target triple (mac arm64/x64, linux x64
 #      via the static musl binary, windows users use install.ps1 instead).
 #   3. Resolves a concrete version (latest stable, or AGENTPROVISION_VERSION).
-#   4. Downloads the matching release archive + its SHA256 sidecar.
-#   5. Verifies SHA256.
-#   6. Extracts to a temp dir; moves `agentprovision` → ~/.local/bin/.
-#   7. Drops the man page at ~/.local/share/man/man1/agentprovision.1.
-#   8. Prints PATH-export instructions if ~/.local/bin isn't already on PATH.
-#   9. Cleans up.
+#   4. Downloads the matching release archive + verifies SHA256.
+#   5. Extracts to a temp dir; moves `ap` → ~/.local/bin/ap.
+#   6. Drops the man page at ~/.local/share/man/man1/ap.1.
+#   7. Prints PATH-export instructions if ~/.local/bin isn't already on PATH.
+#   8. Cleans up.
 #
-# Idempotent: re-running upgrades cleanly. Use `agentprovision upgrade`
-# instead once you have an install.
+# Idempotent: re-running upgrades cleanly. Use `ap upgrade` instead once
+# you have an install (PR-D-4 — coming soon).
 
 set -eu
 
@@ -57,7 +56,7 @@ err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
 # ── refuse sudo ────────────────────────────────────────────────────────────
 if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
-    err "do not run with sudo. agentprovision installs into \$HOME/.local/bin (no admin needed). If you need a system-wide install, set --prefix /usr/local explicitly and run as that user."
+    err "do not run with sudo. ap installs into \$HOME/.local/bin (no admin needed). If you need a system-wide install, set --prefix /usr/local explicitly and run as that user."
 fi
 
 # ── detect OS + arch ───────────────────────────────────────────────────────
@@ -124,13 +123,13 @@ if [ "$VERSION" = "latest" ]; then
 else
     TAG="cli-v$VERSION"
 fi
-say "Installing agentprovision $VERSION ($TRIPLE)"
+say "Installing ap $VERSION ($TRIPLE)"
 
 # ── download ──────────────────────────────────────────────────────────────
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-ARCHIVE="agentprovision-${TRIPLE}.${ARCHIVE_EXT}"
+ARCHIVE="ap-${TRIPLE}.${ARCHIVE_EXT}"
 URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE"
 # PR-D-2 publishes one combined SHA256SUMS manifest per release (one
 # line per archive). Half the HTTP round-trips vs. per-target sidecars,
@@ -165,22 +164,22 @@ case "$ARCHIVE_EXT" in
     tar.gz) tar -xzf "$TMP/$ARCHIVE" -C "$TMP/extract" ;;
 esac
 
-# The archive contains a single directory `agentprovision-<triple>/`.
-SRC_DIR="$TMP/extract/agentprovision-${TRIPLE}"
+# The archive contains a single directory `ap-<triple>/`.
+SRC_DIR="$TMP/extract/ap-${TRIPLE}"
 if [ ! -d "$SRC_DIR" ]; then
-    # Some older releases extracted flat; fall back to "any dir we find".
-    SRC_DIR=$(find "$TMP/extract" -maxdepth 2 -name agentprovision -type f -print -quit | xargs -n1 dirname 2>/dev/null || echo "$TMP/extract")
+    # Fallback: find the `ap` binary anywhere in the extracted tree.
+    SRC_DIR=$(find "$TMP/extract" -maxdepth 2 -name ap -type f -print -quit | xargs -n1 dirname 2>/dev/null || echo "$TMP/extract")
 fi
 
 mkdir -p "$INSTALL_DIR"
-mv -f "$SRC_DIR/agentprovision" "$INSTALL_DIR/agentprovision"
-chmod +x "$INSTALL_DIR/agentprovision"
-say "Installed: $INSTALL_DIR/agentprovision"
+mv -f "$SRC_DIR/ap" "$INSTALL_DIR/ap"
+chmod +x "$INSTALL_DIR/ap"
+say "Installed: $INSTALL_DIR/ap"
 
-if [ -f "$SRC_DIR/agentprovision.1" ]; then
+if [ -f "$SRC_DIR/ap.1" ]; then
     mkdir -p "$MAN_DIR"
-    cp -f "$SRC_DIR/agentprovision.1" "$MAN_DIR/agentprovision.1"
-    say "Installed man page: $MAN_DIR/agentprovision.1"
+    cp -f "$SRC_DIR/ap.1" "$MAN_DIR/ap.1"
+    say "Installed man page: $MAN_DIR/ap.1"
 fi
 
 # ── PATH check ────────────────────────────────────────────────────────────
@@ -206,5 +205,5 @@ esac
 
 # ── done ──────────────────────────────────────────────────────────────────
 say ""
-say "✓ agentprovision $VERSION ready."
-say "Run:    agentprovision login    # to authenticate"
+say "ap $VERSION ready."
+say "Run:    ap login    # to authenticate"

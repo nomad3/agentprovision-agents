@@ -118,7 +118,7 @@ jobs:
         if: matrix.runner != 'windows-latest'
         shell: bash
         run: |
-          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/ap
           strip "$BIN" || true
           ls -lh "$BIN"
 
@@ -158,7 +158,7 @@ jobs:
             echo "::warning::APPLE_CERTIFICATE not set — shipping unsigned binary"
             exit 0
           fi
-          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision
+          BIN=apps/agentprovision-cli/target/${{ matrix.target }}/release/ap
           # codesign --sign expects an *identity name* or SHA-1 fingerprint,
           # not a bare team ID. Find the Developer ID Application identity
           # for our team in the keychain — survives keychains with multiple
@@ -180,26 +180,26 @@ jobs:
         if: matrix.runner != 'windows-latest'
         shell: bash
         run: |
-          STAGE=$RUNNER_TEMP/agentprovision-${{ matrix.target }}
+          STAGE=$RUNNER_TEMP/ap-${{ matrix.target }}
           mkdir -p "$STAGE"
-          cp apps/agentprovision-cli/target/${{ matrix.target }}/release/agentprovision "$STAGE/"
+          cp apps/agentprovision-cli/target/${{ matrix.target }}/release/ap "$STAGE/"
           cp LICENSE "$STAGE/" 2>/dev/null || echo "LICENSE not found at repo root — skipping"
           cp apps/agentprovision-cli/README.md "$STAGE/"
-          (cd "$RUNNER_TEMP" && zip -r "$GITHUB_WORKSPACE/agentprovision-${{ matrix.target }}.zip" "agentprovision-${{ matrix.target }}")
-          shasum -a 256 "agentprovision-${{ matrix.target }}.zip" > "agentprovision-${{ matrix.target }}.zip.sha256"
+          (cd "$RUNNER_TEMP" && zip -r "$GITHUB_WORKSPACE/ap-${{ matrix.target }}.zip" "ap-${{ matrix.target }}")
+          shasum -a 256 "ap-${{ matrix.target }}.zip" > "ap-${{ matrix.target }}.zip.sha256"
 
       - name: Archive (zip on Windows)
         if: matrix.runner == 'windows-latest'
         shell: pwsh
         run: |
-          $stage = "$env:RUNNER_TEMP\agentprovision-${{ matrix.target }}"
+          $stage = "$env:RUNNER_TEMP\ap-${{ matrix.target }}"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item "apps\agentprovision-cli\target\${{ matrix.target }}\release\agentprovision.exe" $stage
+          Copy-Item "apps\agentprovision-cli\target\${{ matrix.target }}\release\ap.exe" $stage
           if (Test-Path "LICENSE") { Copy-Item "LICENSE" $stage }
           Copy-Item "apps\agentprovision-cli\README.md" $stage
-          Compress-Archive -Path "$stage\*" -DestinationPath "agentprovision-${{ matrix.target }}.zip"
-          $hash = (Get-FileHash -Algorithm SHA256 "agentprovision-${{ matrix.target }}.zip").Hash.ToLower()
-          "$hash  agentprovision-${{ matrix.target }}.zip" | Out-File "agentprovision-${{ matrix.target }}.zip.sha256" -Encoding ASCII
+          Compress-Archive -Path "$stage\*" -DestinationPath "ap-${{ matrix.target }}.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "ap-${{ matrix.target }}.zip").Hash.ToLower()
+          "$hash  ap-${{ matrix.target }}.zip" | Out-File "ap-${{ matrix.target }}.zip.sha256" -Encoding ASCII
 
       # ── macOS notarization (zip-only — Apple rejects tar.gz) ─────────
       - name: Notarize (macOS)
@@ -214,7 +214,7 @@ jobs:
             echo "::warning::APPLE_ID not set — skipping notarization"
             exit 0
           fi
-          ARCHIVE="agentprovision-${{ matrix.target }}.zip"
+          ARCHIVE="ap-${{ matrix.target }}.zip"
           for attempt in 1 2 3; do
             if xcrun notarytool submit "$ARCHIVE" \
                  --apple-id "$APPLE_ID" \
@@ -233,10 +233,10 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agentprovision-${{ matrix.target }}
+          name: ap-${{ matrix.target }}
           path: |
-            agentprovision-${{ matrix.target }}.${{ matrix.archive_ext }}
-            agentprovision-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+            ap-${{ matrix.target }}.${{ matrix.archive_ext }}
+            ap-${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -264,7 +264,7 @@ jobs:
           # before we publish a half-broken release.
           EXPECTED_TARGETS="aarch64-apple-darwin x86_64-apple-darwin x86_64-pc-windows-msvc"
           for t in $EXPECTED_TARGETS; do
-            if ! ls "agentprovision-${t}.zip" >/dev/null 2>&1; then
+            if ! ls "ap-${t}.zip" >/dev/null 2>&1; then
               echo "::error::missing archive for target $t — refusing to publish incomplete release"
               exit 1
             fi
@@ -312,11 +312,11 @@ jobs:
           TAG="${{ needs.validate.outputs.tag }}"
           # All archives are .zip now (macOS notarytool rejects tar.gz).
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" agentprovision-*.zip SHA256SUMS --clobber
+            gh release upload "$TAG" ap-*.zip SHA256SUMS --clobber
           else
             gh release create "$TAG" \
               --title "agentprovision ${{ needs.validate.outputs.version }}" \
               --notes-file NOTES.md \
-              agentprovision-*.zip \
+              ap-*.zip \
               SHA256SUMS
           fi

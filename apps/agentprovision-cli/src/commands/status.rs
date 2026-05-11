@@ -1,4 +1,4 @@
-//! `agentprovision status` — show the current user, tenant, and server.
+//! `ap status` — show the current user, tenant, and server.
 
 use serde::Serialize;
 
