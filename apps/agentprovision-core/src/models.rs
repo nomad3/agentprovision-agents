@@ -191,6 +191,44 @@ pub struct WorkflowRunRequest {
     pub dry_run: bool,
 }
 
+/// File-based skill entry. Matches `FileSkill` in
+/// `apps/api/app/schemas/file_skill.py`. Only the fields the CLI actually
+/// renders are modelled; unknowns are tolerated via the default attrs. `slug`
+/// is the stable identifier (matches the `slug` column on the registry),
+/// `tier` is one of native/community/custom, `engine` is one of
+/// python/shell/markdown/tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSkill {
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_engine")]
+    pub engine: String,
+    #[serde(default = "default_category")]
+    pub category: String,
+    #[serde(default = "default_tier")]
+    pub tier: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default = "default_version")]
+    pub version: i64,
+}
+
+fn default_engine() -> String {
+    "python".into()
+}
+fn default_category() -> String {
+    "general".into()
+}
+fn default_tier() -> String {
+    "native".into()
+}
+fn default_version() -> i64 {
+    1
+}
+
 /// Status entry for a single integration in the current tenant. Matches the
 /// shape `GET /api/v1/integrations/status` returns — one row per registered
 /// integration, with `connected = true` when an `IntegrationConfig` row exists

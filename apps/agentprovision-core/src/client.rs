@@ -16,7 +16,7 @@ use url::Url;
 use crate::error::{Error, Result};
 use crate::models::{
     Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, DynamicWorkflow,
-    DynamicWorkflowRun, IntegrationStatus, Tenant, Token, User, Workflow, WorkflowRun,
+    DynamicWorkflowRun, FileSkill, IntegrationStatus, Tenant, Token, User, Workflow, WorkflowRun,
     WorkflowRunRequest,
 };
 
@@ -331,6 +331,36 @@ impl ApiClient {
     /// `GET /api/v1/integrations/status`
     pub async fn list_integration_status(&self) -> Result<Vec<IntegrationStatus>> {
         let req = self.request(Method::GET, "/api/v1/integrations/status")?;
+        self.send_json(req).await
+    }
+
+    // ── Skill library ─────────────────────────────────────────────
+    // Surfaces the file-based skill registry. Matches what the web
+    // SkillsPage consumes via `/api/v1/skills/library`. `tier` filters
+    // native/community/custom; `category` filters by the manifest category;
+    // `search` triggers pgvector embedding match with text fallback.
+
+    /// `GET /api/v1/skills/library[?tier=…&category=…&search=…]`
+    pub async fn list_skills(
+        &self,
+        tier: Option<&str>,
+        category: Option<&str>,
+        search: Option<&str>,
+    ) -> Result<Vec<FileSkill>> {
+        let mut req = self.request(Method::GET, "/api/v1/skills/library")?;
+        let mut params: Vec<(&str, &str)> = Vec::new();
+        if let Some(t) = tier {
+            params.push(("tier", t));
+        }
+        if let Some(c) = category {
+            params.push(("category", c));
+        }
+        if let Some(s) = search {
+            params.push(("search", s));
+        }
+        if !params.is_empty() {
+            req = req.query(&params);
+        }
         self.send_json(req).await
     }
 }
