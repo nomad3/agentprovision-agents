@@ -3,7 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, chat, integration, login, logout, memory, session, skill, status, upgrade, workflow,
+    agent, chat, completions, integration, login, logout, memory, session, skill, status, upgrade,
+    workflow,
 };
 use crate::context::Context;
 
@@ -83,6 +84,9 @@ pub enum Command {
     /// Browse and search the tenant's knowledge graph (entities).
     #[command(subcommand)]
     Memory(memory::MemoryCommand),
+
+    /// Emit shell completion script (bash / zsh / fish / powershell / elvish).
+    Completions(completions::CompletionsArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -107,5 +111,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Integration(cmd) => integration::dispatch(cmd, ctx).await,
         Command::Skill(cmd) => skill::dispatch(cmd, ctx).await,
         Command::Memory(cmd) => memory::dispatch(cmd, ctx).await,
+        Command::Completions(a) => completions::run(a, ctx).await,
     }
 }
