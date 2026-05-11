@@ -168,5 +168,17 @@ async def find_idle_sessions(
                 })
                 
         return results
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()

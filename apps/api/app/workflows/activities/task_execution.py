@@ -114,6 +114,18 @@ async def dispatch_task(task_id: str, tenant_id: str, task_data: Dict[str, Any])
         )
 
         return {"status": "dispatched", "agent_id": agent_id}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -168,6 +180,18 @@ async def recall_memory(task_id: str, tenant_id: str, agent_id: str, task_data: 
 
         logger.info(f"Recalled {len(memory_list)} memories for agent {agent_id}")
         return {"memories": memory_list}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -226,6 +250,18 @@ async def execute_task(task_id: str, tenant_id: str, agent_id: str, context: Dic
         )
 
         return {"status": "executed", "output": output}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -337,6 +373,18 @@ async def evaluate_task(task_id: str, tenant_id: str, agent_id: str, execute_res
             "tokens_used": tokens_used,
             "cost": cost,
         }
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -430,6 +478,18 @@ async def persist_entities(
             "entities_updated": 0,
             "duplicates_skipped": 0,
         }
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
