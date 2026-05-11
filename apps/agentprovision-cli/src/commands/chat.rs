@@ -237,9 +237,7 @@ async fn stream_and_collect(
                         let up_u16: u16 = up.min(u16::MAX as u32) as u16;
                         let _ = stdout.execute(cursor::MoveUp(up_u16));
                     }
-                    let _ = stdout.execute(terminal::Clear(
-                        terminal::ClearType::FromCursorDown,
-                    ));
+                    let _ = stdout.execute(terminal::Clear(terminal::ClearType::FromCursorDown));
                     let _ = stdout.flush();
                 }
                 render_markdown(&full);
