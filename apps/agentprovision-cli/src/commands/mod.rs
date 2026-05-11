@@ -3,6 +3,7 @@ pub mod chat;
 pub mod integration;
 pub mod login;
 pub mod logout;
+pub mod memory;
 pub mod session;
 pub mod skill;
 pub mod status;

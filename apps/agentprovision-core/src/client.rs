@@ -16,8 +16,8 @@ use url::Url;
 use crate::error::{Error, Result};
 use crate::models::{
     Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, DynamicWorkflow,
-    DynamicWorkflowRun, FileSkill, IntegrationStatus, Tenant, Token, User, Workflow, WorkflowRun,
-    WorkflowRunRequest,
+    DynamicWorkflowRun, FileSkill, IntegrationStatus, KnowledgeEntity, Tenant, Token, User,
+    Workflow, WorkflowRun, WorkflowRunRequest,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
@@ -361,6 +361,59 @@ impl ApiClient {
         if !params.is_empty() {
             req = req.query(&params);
         }
+        self.send_json(req).await
+    }
+
+    // ── Knowledge graph ─────────────────────────────────────────────
+    // Surfaces the same endpoints the web MemoryPage hits to browse
+    // `KnowledgeEntity` rows.
+
+    /// `GET /api/v1/knowledge/entities[?entity_type=…&category=…&limit=…&skip=…]`
+    pub async fn list_entities(
+        &self,
+        entity_type: Option<&str>,
+        category: Option<&str>,
+        limit: Option<u32>,
+        skip: Option<u32>,
+    ) -> Result<Vec<KnowledgeEntity>> {
+        let mut req = self.request(Method::GET, "/api/v1/knowledge/entities")?;
+        let limit_s = limit.map(|n| n.to_string());
+        let skip_s = skip.map(|n| n.to_string());
+        let mut params: Vec<(&str, &str)> = Vec::new();
+        if let Some(t) = entity_type {
+            params.push(("entity_type", t));
+        }
+        if let Some(c) = category {
+            params.push(("category", c));
+        }
+        if let Some(ref l) = limit_s {
+            params.push(("limit", l.as_str()));
+        }
+        if let Some(ref s) = skip_s {
+            params.push(("skip", s.as_str()));
+        }
+        if !params.is_empty() {
+            req = req.query(&params);
+        }
+        self.send_json(req).await
+    }
+
+    /// `GET /api/v1/knowledge/entities/search?q=<term>[&entity_type=…&category=…]`
+    pub async fn search_entities(
+        &self,
+        query: &str,
+        entity_type: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<Vec<KnowledgeEntity>> {
+        let mut req = self.request(Method::GET, "/api/v1/knowledge/entities/search")?;
+        let mut params: Vec<(&str, &str)> = vec![("q", query)];
+        if let Some(t) = entity_type {
+            params.push(("entity_type", t));
+        }
+        if let Some(c) = category {
+            params.push(("category", c));
+        }
+        req = req.query(&params);
         self.send_json(req).await
     }
 }

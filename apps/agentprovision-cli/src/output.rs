@@ -4,7 +4,11 @@
 
 use serde::Serialize;
 
-pub fn emit<T: Serialize>(json: bool, value: &T, pretty: impl FnOnce(&T)) {
+// `?Sized` lets callers pass slice borrows like `&[KnowledgeEntity]` without
+// going through `.to_vec()` first — Serialize is implemented for `[T]` so
+// `serde_json` works fine, the default `Sized` bound was the only thing
+// blocking it.
+pub fn emit<T: Serialize + ?Sized>(json: bool, value: &T, pretty: impl FnOnce(&T)) {
     if json {
         match serde_json::to_string_pretty(value) {
             Ok(s) => println!("{s}"),
