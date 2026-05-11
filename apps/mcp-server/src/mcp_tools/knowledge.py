@@ -259,6 +259,73 @@ async def find_entities(
 
 
 @mcp.tool()
+async def filter_entities(
+    category: str = "",
+    entity_type: str = "",
+    tag: str = "",
+    limit: int = 50,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> list:
+    """Filter entities by structured fields (no semantic search).
+
+    Designed for workflow steps that need a deterministic list — 'every
+    entity in the knowledge graph tagged ``cli-prospect-v3``' or 'every
+    organization with category=lead'. ``find_entities`` does
+    natural-language semantic search and is the wrong primitive when
+    the agent already knows the exact filter shape.
+
+    All filter args are optional and combine with AND semantics. Pass
+    an empty string ("") to skip a filter — required for FastMCP
+    compatibility since the JSON-RPC bridge serialises absent args as
+    "". An empty filter set returns the most recent ``limit`` entities
+    in the tenant.
+
+    Args:
+        category: Exact match on entity.category (e.g. ``lead``,
+            ``investor``, ``signal``). Empty = no filter.
+        entity_type: Exact match on entity.entity_type (e.g. ``person``,
+            ``organization``, ``company``). Empty = no filter.
+        tag: Single tag that must be present in entity.tags. Empty = no
+            filter. The tags column is JSONB; we use ``@>`` containment.
+        limit: Maximum rows. Default 50; capped at 200.
+        tenant_id: Tenant UUID (resolved from session if omitted).
+
+    Returns:
+        List of entity rows ordered by created_at DESC.
+    """
+    tid = resolve_tenant_id(ctx) or tenant_id
+    if not tid:
+        return []
+    limit = max(1, min(int(limit or 50), 200))
+
+    where_clauses = ["tenant_id = $1"]
+    args: list = [tid]
+    if category:
+        where_clauses.append(f"category = ${len(args) + 1}")
+        args.append(category)
+    if entity_type:
+        where_clauses.append(f"entity_type = ${len(args) + 1}")
+        args.append(entity_type)
+    if tag:
+        where_clauses.append(f"tags @> ${len(args) + 1}::jsonb")
+        args.append(json.dumps([tag]))
+
+    sql = f"""
+        SELECT id, name, entity_type, category, description, confidence,
+               1.0 as similarity
+        FROM knowledge_entities
+        WHERE {" AND ".join(where_clauses)}
+        ORDER BY created_at DESC
+        LIMIT {limit}
+    """
+
+    async with (await _get_pool()).acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+        return [_serialize_row(r) for r in rows]
+
+
+@mcp.tool()
 async def update_entity(
     entity_id: str,
     updates: str,

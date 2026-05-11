@@ -36,6 +36,13 @@ class KnowledgeEntityUpdate(BaseModel):
     enrichment_data: Optional[Dict[str, Any]] = None
     tags: Optional[List[str]] = None
     data_quality_score: Optional[float] = None
+    # `properties` was missing from the update schema, which silently
+    # dropped sales.qualify_lead's BANT score persist payload. The
+    # column exists on KnowledgeEntity and is shown on KnowledgeEntity
+    # response — the asymmetry was a real bug for every MCP tool that
+    # tried to write structured data into the entity (qualify_lead,
+    # any future enrichment tool). Expose it now.
+    properties: Optional[Dict[str, Any]] = None
 
 
 class KnowledgeEntity(KnowledgeEntityBase):
