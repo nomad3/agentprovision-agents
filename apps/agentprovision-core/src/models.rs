@@ -150,8 +150,10 @@ pub struct DynamicWorkflow {
     pub definition: Option<serde_json::Value>,
     #[serde(default)]
     pub run_count: i64,
+    // See note on KnowledgeEntity — backend returns naive datetimes that
+    // chrono::DateTime<Utc> refuses. Kept as raw string.
     #[serde(default)]
-    pub last_run_at: Option<DateTime<Utc>>,
+    pub last_run_at: Option<String>,
 }
 
 /// Run record for a dynamic workflow. Matches `WorkflowRunInDB` in
@@ -165,9 +167,10 @@ pub struct DynamicWorkflowRun {
     #[serde(default)]
     pub trigger_type: Option<String>,
     pub status: String,
-    pub started_at: DateTime<Utc>,
+    // Naive ISO timestamp string. See note on KnowledgeEntity.
+    pub started_at: String,
     #[serde(default)]
-    pub completed_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<String>,
     #[serde(default)]
     pub duration_ms: Option<i64>,
     #[serde(default)]
@@ -218,6 +221,13 @@ pub struct CreateEntityRequest {
 /// renders are modelled here; the API can return a dozen+ extra columns
 /// (tags, score, extraction_model, etc.) — those flow through to `--json`
 /// because we don't `deny_unknown_fields`.
+///
+/// **Note on timestamps**: backend serialises naive datetimes from
+/// `datetime.utcnow().isoformat()` (no `Z` or `+00:00`). `chrono::DateTime<Utc>`
+/// would reject those with "premature end of input" because its serde impl
+/// requires RFC 3339 timezone markers — so we keep timestamps as opaque
+/// strings here. The CLI only renders them; if we ever need to parse,
+/// switch to `chrono::NaiveDateTime` (which is the actual server contract).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeEntity {
     pub id: Uuid,
@@ -234,9 +244,9 @@ pub struct KnowledgeEntity {
     #[serde(default)]
     pub tags: Option<Vec<String>>,
     #[serde(default)]
-    pub created_at: Option<DateTime<Utc>>,
+    pub created_at: Option<String>,
     #[serde(default)]
-    pub updated_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<String>,
 }
 
 /// File-based skill entry. Matches `FileSkill` in
