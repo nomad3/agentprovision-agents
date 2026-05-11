@@ -37,6 +37,18 @@ url = "2"
 webbrowser = "1"
 dirs = "5"
 crossterm = "0.27"
+# `ap upgrade` self-update path. PR-D-4.
+# Features: rustls (no openssl, matches reqwest config across the workspace),
+# archive-zip (we ship .zip on every target — PR-D-2 review fix), and
+# compression-zip-deflate (zip's internal per-entry compression — without
+# this the extractor errors on the deflate-stored `ap` binary inside the
+# archive). The task brief asked for `compression-flate2`, but that toggles
+# gzip support and force-pulls `archive-tar`; the correct knob for zip-only
+# is `compression-zip-deflate`.
+self_update = { version = "0.41", default-features = false, features = ["rustls", "archive-zip", "compression-zip-deflate"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sha2 = "0.10"
+semver = "1"
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::{chat, login, logout, status};
+use crate::commands::{chat, login, logout, status, upgrade};
 use crate::context::Context;
 
 #[derive(Debug, Parser)]
@@ -54,6 +54,9 @@ pub enum Command {
     /// Chat with the default agent. Run without subcommand for an interactive REPL.
     #[command(subcommand)]
     Chat(ChatCommand),
+
+    /// Self-update the `ap` binary from GitHub Releases.
+    Upgrade(upgrade::UpgradeArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -71,5 +74,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Status => status::run(ctx).await,
         Command::Chat(ChatCommand::Send(a)) => chat::send(a, ctx).await,
         Command::Chat(ChatCommand::Repl(a)) => chat::repl(a, ctx).await,
+        Command::Upgrade(a) => upgrade::run(a, ctx).await,
     }
 }
