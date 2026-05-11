@@ -2,6 +2,7 @@ pub mod agent;
 pub mod chat;
 pub mod login;
 pub mod logout;
+pub mod session;
 pub mod status;
 pub mod upgrade;
 pub mod workflow;
