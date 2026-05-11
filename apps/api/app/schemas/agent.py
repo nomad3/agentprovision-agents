@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.schemas.agent_skill import AgentSkill as AgentSkillSchema
 
@@ -22,6 +22,24 @@ class AgentBase(BaseModel):
     persona_prompt: Optional[str] = None
     memory_domains: Optional[List[str]] = None
     escalation_agent_id: Optional[uuid.UUID] = None
+
+    # Null-tolerant validators. Legacy agent rows sometimes carry stray
+    # `null` entries in the JSONB array (e.g. tool_groups: [null, "meta"]
+    # from a half-applied backfill). Pydantic's default `List[str]` then
+    # rejects the whole agent at serialize-time, which crashes
+    # GET /api/v1/agents (FastAPI 500 → ResponseValidationError →
+    # 'tool_groups[0]': Input should be a valid string). We strip nulls
+    # transparently here so the read path is resilient; the migration
+    # 124 added 2026-05-11 cleans the existing data, but the validator
+    # is the long-term guard.
+    @field_validator("tool_groups", "memory_domains", "capabilities", mode="before")
+    @classmethod
+    def _strip_nulls_in_string_list(cls, v):
+        if v is None:
+            return None
+        if isinstance(v, list):
+            return [x for x in v if x is not None]
+        return v
 
 class AgentCreate(AgentBase):
     status: str = "draft"
