@@ -38,11 +38,24 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urlparse
 
 import httpx
-from bs4 import BeautifulSoup
 from mcp.server.fastmcp import Context
 
 from src.mcp_app import mcp
 from src.mcp_auth import resolve_tenant_id
+
+# `beautifulsoup4` is imported lazily inside the two helpers that need it.
+# The mcp-tools Dockerfile has a hardcoded dep list (see the inline
+# comment in apps/mcp-server/Dockerfile) — when the image is rebuilt
+# without bs4 we want the module to still load so the rest of the MCP
+# tool surface stays up. The two helpers check `_have_bs4()` and degrade
+# gracefully (empty DDG results, raw-text fetch_url) instead of crashing
+# the entire container on import.
+try:
+    from bs4 import BeautifulSoup as _BeautifulSoup  # type: ignore[import-not-found]
+    _BS4_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    _BeautifulSoup = None  # type: ignore[assignment]
+    _BS4_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +150,15 @@ async def _duckduckgo_html_search(query: str, max_results: int) -> List[Dict[str
         "Accept": "text/html,application/xhtml+xml",
         "Accept-Language": "en-US,en;q=0.5",
     }
+    if not _BS4_AVAILABLE:
+        logger.warning("bs4 not installed — DDG fallback unavailable. See Dockerfile sync note.")
+        return []
     try:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url, headers=headers)
         if resp.status_code != 200:
             return []
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = _BeautifulSoup(resp.text, "html.parser")
         out: List[Dict[str, str]] = []
         # Result anchors in DDG HTML have the `.result__a` class. Their
         # `href` is sometimes wrapped in a redirector — strip the prefix.
@@ -289,7 +305,22 @@ async def fetch_url(
             "content_type": content_type,
         }
 
-    soup = BeautifulSoup(resp.text, "html.parser")
+    if not _BS4_AVAILABLE:
+        # bs4 not installed in this image — degrade to raw text. Better
+        # than 500-ing because the dependency drifted from pyproject.
+        text = resp.text[:max_chars]
+        return {
+            "url": final_url,
+            "status": resp.status_code,
+            "title": "",
+            "text": text,
+            "char_count": len(resp.text),
+            "truncated": len(resp.text) > max_chars,
+            "content_type": content_type,
+            "degraded": "bs4 unavailable",
+        }
+
+    soup = _BeautifulSoup(resp.text, "html.parser")
     # Strip elements that never carry main content. The order matters
     # only marginally — `script` / `style` are the biggest offenders.
     for tag_name in ("script", "style", "nav", "footer", "header", "aside", "form", "noscript"):
