@@ -248,9 +248,11 @@ async fn runs(args: RunsArgs, ctx: Context) -> anyhow::Result<()> {
                 .duration_ms
                 .map(|ms| format!("{}ms", ms))
                 .unwrap_or_else(|| "—".into());
-            // Trim sub-second precision on the displayed timestamp; the
-            // raw value stays in --json output for scripting.
-            let started = r.started_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            // Trim sub-second precision on the displayed timestamp. The
+            // server returns a naive ISO string like "2026-05-11T12:50:17.459548";
+            // chop the microseconds for the table. Raw value flows through
+            // --json untouched.
+            let started = trim_micros(&r.started_at);
             println!(
                 "{:<10}  {:<24}  {:>8}  {}",
                 r.status, started, duration, r.id
@@ -301,6 +303,17 @@ fn trigger_type(w: &agentprovision_core::models::DynamicWorkflow) -> Option<Stri
         .and_then(|c| c.get("type"))
         .and_then(|t| t.as_str())
         .map(|s| s.to_lowercase())
+}
+
+/// Drop microseconds and beyond from a naive ISO timestamp like
+/// "2026-05-11T12:50:17.459548" → "2026-05-11T12:50:17". Falls back to
+/// the input unchanged when there's no "." separator, so a value that
+/// already lacks microseconds (or is non-conforming) round-trips
+/// unharmed.
+fn trim_micros(s: &str) -> String {
+    s.split_once('.')
+        .map(|(head, _)| head.to_string())
+        .unwrap_or_else(|| s.to_string())
 }
 
 /// Same fixed-width hard wrap helper as `commands::agent::truncate`. Kept
