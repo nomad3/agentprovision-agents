@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::{chat, login, logout, status, upgrade};
+use crate::commands::{agent, chat, login, logout, status, upgrade};
 use crate::context::Context;
 
 #[derive(Debug, Parser)]
@@ -57,6 +57,10 @@ pub enum Command {
 
     /// Self-update the `ap` binary from GitHub Releases.
     Upgrade(upgrade::UpgradeArgs),
+
+    /// List and inspect agents in the current tenant.
+    #[command(subcommand)]
+    Agent(agent::AgentCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -75,5 +79,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Chat(ChatCommand::Send(a)) => chat::send(a, ctx).await,
         Command::Chat(ChatCommand::Repl(a)) => chat::repl(a, ctx).await,
         Command::Upgrade(a) => upgrade::run(a, ctx).await,
+        Command::Agent(cmd) => agent::dispatch(cmd, ctx).await,
     }
 }
