@@ -36,11 +36,12 @@ import logging
 import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
+from app.core.rate_limit import limiter
 from app.models.agent import Agent
 from app.models.agent_permission import AgentPermission
 from app.models.user import User
@@ -81,7 +82,9 @@ class MintTokenResponse(BaseModel):
 
 
 @router.post("/agent-tokens/mint", response_model=MintTokenResponse)
+@limiter.limit("30/minute")
 def mint_user_agent_token(
+    request: Request,  # required by slowapi to derive the rate-limit key
     body: UserMintAgentTokenBody,
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
