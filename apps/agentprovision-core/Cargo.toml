@@ -31,7 +31,16 @@ dirs = "5"
 async-trait = "0.1"
 futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros", "io-util"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# `gzip` + `brotli` enable transparent response decompression. Without
+# them reqwest only sends `Accept-Encoding: identity`, but Cloudflare in
+# front of agentprovision.com still returns Brotli-compressed bodies for
+# JSON > ~500 bytes (likely Cloudflare's auto-minify on responses to
+# clients that DO advertise br via the `Accept` header set by tokio's
+# default User-Agent path) — at which point `serde_json::from_slice`
+# trips on the compressed bytes with "premature end of input". Enabling
+# the features makes reqwest decode based on `Content-Encoding`
+# regardless of what we advertised.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "gzip", "brotli"] }
 eventsource-stream = "0.2"
 keyring = { version = "2", optional = true }
 

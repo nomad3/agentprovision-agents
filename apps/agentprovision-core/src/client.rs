@@ -22,6 +22,37 @@ use crate::models::{
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
 
+/// Render a bounded preview of a response body for error messages. Returns
+/// the body as UTF-8 if it decodes; otherwise shows a hex fingerprint of
+/// the first 32 bytes so callers can distinguish 'truncated JSON' from
+/// 'compressed bytes we couldn't decode' from 'binary garbage'.
+fn preview_body(bytes: &[u8]) -> String {
+    const MAX_PREVIEW: usize = 400;
+    match std::str::from_utf8(bytes) {
+        Ok(s) if s.len() <= MAX_PREVIEW => s.to_string(),
+        Ok(s) => {
+            let head: String = s.chars().take(MAX_PREVIEW / 2).collect();
+            let tail: String = s
+                .chars()
+                .rev()
+                .take(MAX_PREVIEW / 2)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            format!("{}…{}", head, tail)
+        }
+        Err(_) => {
+            // Binary — show first 32 bytes as hex. Brotli starts 0x1B/0xCE
+            // and similar fingerprints, so users seeing hex here know to
+            // suspect compression.
+            let n = bytes.len().min(32);
+            let hex: String = bytes[..n].iter().map(|b| format!("{:02x}", b)).collect();
+            format!("<non-utf8, first {} bytes hex: {}>", n, hex)
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     inner: Client,
@@ -122,8 +153,31 @@ impl ApiClient {
             // fail loud.
             return Err(Error::other("expected JSON response, got empty body"));
         }
-        let parsed: T = serde_json::from_slice(&bytes)?;
-        Ok(parsed)
+        match serde_json::from_slice::<T>(&bytes) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                // Surface the actual response so the cryptic
+                // "premature end of input at line 1 column 600"
+                // error has a fighting chance of being debugged. The
+                // first/last 200 bytes are a fingerprint: header (open
+                // brace / bracket) + trailing structure usually tell us
+                // whether the body is truncated mid-stream, returned
+                // compressed, or shaped differently than our model
+                // expects. We log on stderr at the `info` level via
+                // `log::warn!` so users running with `-v` see it
+                // without polluting normal output.
+                let body_dump = preview_body(&bytes);
+                log::warn!(
+                    "serde decode failed at line {} column {}: {}\n  bytes len: {}\n  preview: {}",
+                    e.line(),
+                    e.column(),
+                    e,
+                    bytes.len(),
+                    body_dump,
+                );
+                Err(Error::Serde(e))
+            }
+        }
     }
 
     pub async fn send_no_body(&self, req: RequestBuilder) -> Result<()> {

@@ -46,7 +46,12 @@ crossterm = "0.27"
 # gzip support and force-pulls `archive-tar`; the correct knob for zip-only
 # is `compression-zip-deflate`.
 self_update = { version = "0.41", default-features = false, features = ["rustls", "archive-zip", "compression-zip-deflate"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Note: agentprovision-core also depends on reqwest with the same flags
+# plus `gzip` + `brotli` for transparent response decompression. Cargo's
+# feature unification means our request here gets those decompression
+# features too — but we list them explicitly so a future direct caller
+# from this crate (e.g. self_update internals) gets the same behaviour.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli"] }
 sha2 = "0.10"
 semver = "1"
 
