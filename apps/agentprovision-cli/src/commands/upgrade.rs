@@ -63,8 +63,9 @@ pub struct UpgradeArgs {
 
 pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
     let current_raw = env!("CARGO_PKG_VERSION");
-    let current = Version::parse(current_raw)
-        .map_err(|e| anyhow::anyhow!("could not parse current CARGO_PKG_VERSION `{current_raw}`: {e}"))?;
+    let current = Version::parse(current_raw).map_err(|e| {
+        anyhow::anyhow!("could not parse current CARGO_PKG_VERSION `{current_raw}`: {e}")
+    })?;
 
     // Resolve the target version. Pin > latest. We do this ourselves rather
     // than leaning on `self_update::backends::github::Update::get_latest_release`
@@ -98,7 +99,11 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
     }
 
     if args.check {
-        let direction = if target > current { "available" } else { "downgrade" };
+        let direction = if target > current {
+            "available"
+        } else {
+            "downgrade"
+        };
         if ctx.json {
             output::emit(
                 true,
@@ -144,7 +149,11 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
 
     // Confirmation.
     if !args.yes && !ctx.json {
-        let direction = if target > current { "upgrade" } else { "downgrade" };
+        let direction = if target > current {
+            "upgrade"
+        } else {
+            "downgrade"
+        };
         let prompt = format!("{direction} ap from v{current} to v{target}?");
         let go = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
@@ -315,9 +324,8 @@ async fn resolve_latest_version(allow_prerelease: bool) -> anyhow::Result<Versio
     }
 
     // Fallback: walk the releases list looking for the first cli-v* tag.
-    let list_url = format!(
-        "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases?per_page=30"
-    );
+    let list_url =
+        format!("https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases?per_page=30");
     let releases: Vec<Release> = client
         .get(&list_url)
         .send()
@@ -355,9 +363,8 @@ async fn resolve_latest_version(allow_prerelease: bool) -> anyhow::Result<Versio
 /// `SHA256SUMS` manifest. Mirrors install.sh's `grep -F "  ${ARCHIVE}"`
 /// approach — exact-string filename match, no regex surprises.
 async fn fetch_expected_sha(tag: &str, asset_name: &str) -> anyhow::Result<String> {
-    let url = format!(
-        "https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{tag}/SHA256SUMS"
-    );
+    let url =
+        format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{tag}/SHA256SUMS");
     let client = reqwest::Client::builder()
         .user_agent(concat!("ap-cli/", env!("CARGO_PKG_VERSION")))
         .build()?;
