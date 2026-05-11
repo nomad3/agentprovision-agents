@@ -190,7 +190,7 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         status="production",
         persona_prompt=luna_persona_prompt,
         capabilities=luna_skills,
-        tool_groups=["knowledge", "email"],
+        tool_groups=["knowledge", "email", "meta"],
         default_model_tier="light",
         memory_domains=["conversation", "user"],
         role="supervisor",

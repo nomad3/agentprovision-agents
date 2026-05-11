@@ -168,6 +168,20 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "submit_learning_feedback",
         "get_simulation_summary",
     ],
+    # Platform introspection — answers "what's on this tenant?" questions like
+    # "list my agents", "what workflows do I have", "which MCP servers are
+    # connected?". Without this group Luna falls back to "I couldn't access
+    # the live MCP registry" because she has no tool to enumerate registry
+    # state. All tool names below are real MCP tools registered in
+    # apps/mcp-server/src/mcp_tools/* (verified 2026-05-10).
+    "meta": [
+        "find_agent",               # agent_messaging.py — wraps GET /agents/discover
+        "list_dynamic_workflows",   # dynamic_workflows.py
+        "list_skills",              # skills.py
+        "read_library_skill",       # skills.py — inspect skill source
+        "list_mcp_servers",         # mcp_servers.py
+        "discover_mcp_tools",       # mcp_servers.py — enumerate tools on a server
+    ],
     # Vet-vertical tool groups (Phase 4.5 — added to support the Animal Doctor
     # SOC agent fleet, see seed_animaldoctor_agent_fleet.py). Logical groupings
     # over the real MCP tools registered in apps/mcp-server/src/mcp_tools/.
