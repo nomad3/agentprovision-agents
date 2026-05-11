@@ -24,6 +24,11 @@ dependencies = [
     # apps/api/requirements.txt so the verifier stays in sync with
     # the API-side minter (HS256, settings.SECRET_KEY).
     "python-jose>=3.3.0",
+    # web_research tool module — DuckDuckGo HTML result parsing +
+    # readability-style main-content extraction from URLs. bs4 is the
+    # de-facto stdlib add-on and keeps the dep tree small (playwright is
+    # already there for cases where JS rendering is required).
+    "beautifulsoup4>=4.12.0",
 ]
 
 [project.optional-dependencies]

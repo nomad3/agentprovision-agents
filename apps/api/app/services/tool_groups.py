@@ -42,6 +42,16 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "get_pipeline_summary",
         "schedule_followup",
     ],
+    # General web research — unblocks the leads-list / market-intelligence
+    # use cases. ``discover_companies`` is the entry point most sales
+    # agents will hit; ``web_search`` + ``fetch_url`` are the primitives
+    # the underlying agent can compose for deeper research (e.g. read a
+    # 10-K, summarise a press release).
+    "web_research": [
+        "web_search",
+        "fetch_url",
+        "discover_companies",
+    ],
     "bookings": [
         "list_calendar_events",
         "create_calendar_event",
