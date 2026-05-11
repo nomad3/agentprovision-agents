@@ -99,9 +99,7 @@ pub async fn stream_chat(
                         return Err(Error::other(format!("backend error: {detail}")));
                     }
                     // New shape: explicit `type: done` finalises the stream.
-                    if w.event_type.as_deref() == Some("done")
-                        || w.done.unwrap_or(false)
-                    {
+                    if w.event_type.as_deref() == Some("done") || w.done.unwrap_or(false) {
                         return Ok(ChatStreamEvent::Done);
                     }
                     // New shape: `type: token` carries the incremental text

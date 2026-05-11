@@ -116,6 +116,18 @@ async def execute_dynamic_step(
                     },
                     state_text=f"Workflow step {step_id} ({step_type}) completed in {duration_ms}ms",
                 )
+            except Exception:
+                # Roll back the SQLAlchemy session BEFORE close(): a poisoned
+                # psycopg2 txn would otherwise be returned to the pool dirty
+                # and cascade into the next workflow step as
+                # `InFailedSqlTransaction`. Belt-and-suspenders for the
+                # default pool_reset_on_return='rollback' behaviour, which
+                # has been observed to miss async/error paths in production.
+                try:
+                    rl_db.rollback()
+                except Exception:
+                    pass
+                raise
             finally:
                 rl_db.close()
         except Exception as rl_err:
@@ -161,6 +173,18 @@ async def _call_mcp_tool(step: dict, context: dict, tenant_id: str, run_id: str)
                 agent_slug=context.get("agent_slug") or step.get("agent"),
             ),
         )
+    except Exception:
+        # Roll back the SQLAlchemy session BEFORE close(): a poisoned
+        # psycopg2 txn would otherwise be returned to the pool dirty
+        # and cascade into the next workflow step as
+        # `InFailedSqlTransaction`. Belt-and-suspenders for the
+        # default pool_reset_on_return='rollback' behaviour, which
+        # has been observed to miss async/error paths in production.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -328,6 +352,18 @@ async def _call_agent(step: dict, context: dict, tenant_id: str) -> dict:
             "cost_usd": (metadata or {}).get("cost_usd", 0.0),
             "platform": (metadata or {}).get("platform", "claude_code"),
         }
+    except Exception:
+        # Roll back the SQLAlchemy session BEFORE close(): a poisoned
+        # psycopg2 txn would otherwise be returned to the pool dirty
+        # and cascade into the next workflow step as
+        # `InFailedSqlTransaction`. Belt-and-suspenders for the
+        # default pool_reset_on_return='rollback' behaviour, which
+        # has been observed to miss async/error paths in production.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -507,6 +543,18 @@ async def _notify_approval_requested(step: dict, tenant_id: str, run_id: str) ->
             logger.info(
                 "Approval notification created for run=%s step=%s", run_id[:8], step_id
             )
+        except Exception:
+            # Roll back the SQLAlchemy session BEFORE close(): a poisoned
+            # psycopg2 txn would otherwise be returned to the pool dirty
+            # and cascade into the next workflow step as
+            # `InFailedSqlTransaction`. Belt-and-suspenders for the
+            # default pool_reset_on_return='rollback' behaviour, which
+            # has been observed to miss async/error paths in production.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             db.close()
     except Exception as e:
@@ -560,6 +608,18 @@ def _log_step(run_id: str, step_id: str, step_type: str, status: str,
                     "error": error, "tokens": tokens,
                 })
             db.commit()
+        except Exception:
+            # Roll back the SQLAlchemy session BEFORE close(): a poisoned
+            # psycopg2 txn would otherwise be returned to the pool dirty
+            # and cascade into the next workflow step as
+            # `InFailedSqlTransaction`. Belt-and-suspenders for the
+            # default pool_reset_on_return='rollback' behaviour, which
+            # has been observed to miss async/error paths in production.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             db.close()
     except Exception as e:
@@ -623,6 +683,18 @@ async def finalize_workflow_run(
             else:
                 logger.warning("Workflow run %s not found for finalization", run_id)
                 return {"finalized": False, "error": "run not found"}
+        except Exception:
+            # Roll back the SQLAlchemy session BEFORE close(): a poisoned
+            # psycopg2 txn would otherwise be returned to the pool dirty
+            # and cascade into the next workflow step as
+            # `InFailedSqlTransaction`. Belt-and-suspenders for the
+            # default pool_reset_on_return='rollback' behaviour, which
+            # has been observed to miss async/error paths in production.
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise
         finally:
             db.close()
     except Exception as e:

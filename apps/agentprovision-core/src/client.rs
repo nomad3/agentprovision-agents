@@ -217,11 +217,7 @@ impl ApiClient {
     }
 
     /// `POST /api/v1/chat/sessions/{id}/messages` — non-streaming send.
-    pub async fn send_chat_message(
-        &self,
-        session_id: &str,
-        content: &str,
-    ) -> Result<ChatTurn> {
+    pub async fn send_chat_message(&self, session_id: &str, content: &str) -> Result<ChatTurn> {
         let req = self
             .request(
                 Method::POST,
