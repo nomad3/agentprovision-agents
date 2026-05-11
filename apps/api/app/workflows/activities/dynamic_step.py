@@ -471,15 +471,53 @@ def _resolve_template(template: str, context: dict) -> str:
 
 
 def _resolve_params(params: dict, context: dict) -> dict:
-    """Resolve all template references in a params dict."""
+    """Resolve all template references in a params dict.
+
+    When a value is *exactly* a single ``{{path}}`` reference (no
+    surrounding text), pass the raw context value through without
+    stringifying — preserves int / float / bool / list / dict types
+    so downstream MCP tool validators don't 422 on numeric params.
+    The Prospect Auto-Pilot template hit this exact bug: `count:
+    "{{input.count}}"` was rendering to the string "5" and
+    `discover_companies` Pydantic int field rejected it.
+    """
     resolved = {}
     for k, v in params.items():
         if isinstance(v, str):
-            resolved[k] = _resolve_template(v, context)
+            stripped = v.strip()
+            # Pure-substitution shortcut: the whole value is one {{...}}.
+            # Use _resolve_value which returns the raw context value.
+            if (
+                stripped.startswith("{{")
+                and stripped.endswith("}}")
+                and stripped.count("{{") == 1
+                and stripped.count("}}") == 1
+            ):
+                resolved[k] = _resolve_value(stripped, context)
+            else:
+                resolved[k] = _resolve_template(v, context)
         elif isinstance(v, dict):
             resolved[k] = _resolve_params(v, context)
         elif isinstance(v, list):
-            resolved[k] = [_resolve_template(str(i), context) if isinstance(i, str) else i for i in v]
+            # Recursive: items may themselves be templates / dicts.
+            new_list = []
+            for i in v:
+                if isinstance(i, str):
+                    stripped = i.strip()
+                    if (
+                        stripped.startswith("{{")
+                        and stripped.endswith("}}")
+                        and stripped.count("{{") == 1
+                        and stripped.count("}}") == 1
+                    ):
+                        new_list.append(_resolve_value(stripped, context))
+                    else:
+                        new_list.append(_resolve_template(i, context))
+                elif isinstance(i, dict):
+                    new_list.append(_resolve_params(i, context))
+                else:
+                    new_list.append(i)
+            resolved[k] = new_list
         else:
             resolved[k] = v
     return resolved

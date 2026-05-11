@@ -1962,6 +1962,158 @@ NATIVE_TEMPLATES = [
             ],
         },
     },
+    # ──────────────────────────────────────────────────────────────
+    # Prospect Auto-Pilot — one-shot end-to-end outbound prospecting
+    # loop. Built after the leads-list demo (2026-05-11) proved every
+    # primitive worked individually but the chat path 524'd on the
+    # multi-tool sequence. A workflow run sidesteps the 100s SSE limit
+    # because step heartbeats keep Temporal alive for the full duration.
+    #
+    # Pipeline:
+    #   1. discover_companies(vertical, count)     — web search + dedupe
+    #   2. for_each company → create_entity        — persist as `lead`
+    #   3. filter_entities(tag)                    — re-fetch with stable ids
+    #   4. for_each lead → qualify_lead            — BANT score, persisted
+    #   5. for_each lead → draft_outreach          — Gemma 4 personalised
+    #   6. notify (Luna agent step)                — summary back to user
+    #
+    # Run with:
+    #   ap workflow run "Prospect Auto-Pilot" \
+    #     --input '{"vertical":"enterprise old-fashioned consolidated
+    #     apparel companies","count":5,"tag":"cli-prospect-auto"}'
+    # ──────────────────────────────────────────────────────────────
+    {
+        "name": "Prospect Auto-Pilot",
+        "description": (
+            "Outbound prospecting in one run: discover companies "
+            "matching an ICP description, persist them as leads in the "
+            "knowledge graph, qualify each with BANT, draft a "
+            "personalised cold email for each, and summarise the result."
+        ),
+        "tier": "native",
+        "public": True,
+        "tags": ["prospecting", "leads", "outbound", "sales", "automation"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "inputs_schema": {
+                "vertical": {
+                    "type": "string",
+                    "description": "ICP description (free-form). E.g. 'enterprise old-fashioned consolidated apparel companies'.",
+                    "required": True,
+                },
+                "count": {
+                    "type": "integer",
+                    "description": "How many companies to discover and process.",
+                    "default": 5,
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Tag applied to every created entity for later retrieval.",
+                    "default": "prospect-autopilot",
+                },
+            },
+            "steps": [
+                {
+                    "id": "discover",
+                    "type": "mcp_tool",
+                    "tool": "discover_companies",
+                    "params": {
+                        "vertical_description": "{{input.vertical}}",
+                        # Pure-substitution — the raw int from input.count
+                        # flows through unchanged thanks to the updated
+                        # _resolve_params passthrough. Caller passes an
+                        # actual int in --input '{"count": 5}'.
+                        "count": "{{input.count}}",
+                    },
+                    "output": "discovery",
+                },
+                {
+                    "id": "persist_loop",
+                    "type": "for_each",
+                    "collection": "{{discovery.companies}}",
+                    "as": "company",
+                    "steps": [
+                        {
+                            "id": "create_lead",
+                            "type": "mcp_tool",
+                            "tool": "create_entity",
+                            "params": {
+                                "name": "{{company.name}}",
+                                "entity_type": "organization",
+                                "category": "lead",
+                                "description": "{{company.snippet}}",
+                                "source_url": "{{company.source_url}}",
+                                "tags": ["{{input.tag}}"],
+                            },
+                            "output": "created",
+                        },
+                    ],
+                },
+                {
+                    "id": "fetch_leads",
+                    "type": "mcp_tool",
+                    "tool": "filter_entities",
+                    "params": {
+                        "category": "lead",
+                        "tag": "{{input.tag}}",
+                        "limit": "{{input.count}}",
+                    },
+                    "output": "leads",
+                },
+                {
+                    "id": "qualify_loop",
+                    "type": "for_each",
+                    "collection": "{{leads}}",
+                    "as": "lead",
+                    "steps": [
+                        {
+                            "id": "qualify",
+                            "type": "mcp_tool",
+                            "tool": "qualify_lead",
+                            "params": {"entity_id": "{{lead.id}}"},
+                            "output": "qual",
+                        },
+                    ],
+                },
+                {
+                    "id": "outreach_loop",
+                    "type": "for_each",
+                    "collection": "{{leads}}",
+                    "as": "lead",
+                    "steps": [
+                        {
+                            "id": "draft",
+                            "type": "mcp_tool",
+                            "tool": "draft_outreach",
+                            "params": {
+                                "entity_id": "{{lead.id}}",
+                                "channel": "email",
+                                "tone": "professional",
+                            },
+                            "output": "draft_result",
+                        },
+                    ],
+                },
+                {
+                    "id": "summarise",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "Prospect Auto-Pilot complete.\n\n"
+                        "ICP: {{input.vertical}}\n"
+                        "Leads created: {{leads | length}}\n"
+                        "Tag: {{input.tag | default('prospect-autopilot')}}\n\n"
+                        "Summarise the top 3 leads by BANT score with their "
+                        "names, scores, and one-line cold-email subject. Then "
+                        "list the remaining leads as 'others' with just names. "
+                        "Recommend the single best first outreach target with "
+                        "reasoning."
+                    ),
+                    "output": "summary",
+                },
+            ],
+        },
+    },
 ]
 
 
