@@ -16,6 +16,41 @@ pub enum MemoryCommand {
     Ls(LsArgs),
     /// Search entities by name (server-side text + embedding).
     Search(SearchArgs),
+    /// Record a new entity in the knowledge graph (`ap memory observe`).
+    Observe(ObserveArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ObserveArgs {
+    /// Display name of the entity. Required.
+    #[arg(long)]
+    pub name: String,
+
+    /// Entity type. One of: customer, product, person, organization,
+    /// concept, prospect, signal. Defaults to "concept" for casual
+    /// note-taking; pass --entity-type to disambiguate.
+    #[arg(long, default_value = "concept")]
+    pub entity_type: String,
+
+    /// Optional category — used by lead/contact/investor/signal pipelines.
+    #[arg(long)]
+    pub category: Option<String>,
+
+    /// Free-text description / observation body.
+    #[arg(long)]
+    pub description: Option<String>,
+
+    /// Optional source URL (e.g. the article you're recording about).
+    #[arg(long)]
+    pub source_url: Option<String>,
+
+    /// Comma-separated tags (e.g. `--tags "lead,inbound,priority"`).
+    #[arg(long)]
+    pub tags: Option<String>,
+
+    /// Optional confidence 0.0-1.0. Defaults to backend's 1.0.
+    #[arg(long)]
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Args)]
@@ -56,7 +91,40 @@ pub async fn dispatch(cmd: MemoryCommand, ctx: Context) -> anyhow::Result<()> {
     match cmd {
         MemoryCommand::Ls(a) => ls(a, ctx).await,
         MemoryCommand::Search(a) => search(a, ctx).await,
+        MemoryCommand::Observe(a) => observe(a, ctx).await,
     }
+}
+
+async fn observe(args: ObserveArgs, ctx: Context) -> anyhow::Result<()> {
+    let tags = args.tags.as_deref().map(|s| {
+        s.split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    });
+    let body = agentprovision_core::models::CreateEntityRequest {
+        entity_type: args.entity_type,
+        name: args.name,
+        category: args.category,
+        description: args.description,
+        source_url: args.source_url,
+        confidence: args.confidence,
+        tags,
+    };
+    let created = ctx.client.create_entity(&body).await?;
+    crate::output::emit(ctx.json, &created, |e| {
+        let h = |t: &str| console::style(t).bold().to_string();
+        output::ok(format!("recorded entity {}", e.name));
+        println!("{}: {}", h("id"), e.id);
+        println!("{}: {}", h("type"), e.entity_type);
+        if let Some(c) = &e.category {
+            println!("{}: {}", h("category"), c);
+        }
+        if let Some(d) = &e.description {
+            println!("{}: {}", h("description"), d);
+        }
+    });
+    Ok(())
 }
 
 async fn ls(args: LsArgs, ctx: Context) -> anyhow::Result<()> {

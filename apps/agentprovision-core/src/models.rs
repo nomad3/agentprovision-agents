@@ -191,6 +191,28 @@ pub struct WorkflowRunRequest {
     pub dry_run: bool,
 }
 
+/// Body for `POST /api/v1/knowledge/entities`. Mirrors
+/// `KnowledgeEntityCreate` in `apps/api/app/schemas/knowledge_entity.py`.
+/// Only the fields the CLI surfaces are modelled; the backend accepts more
+/// optional fields (attributes, enrichment_data, source_agent_id, etc.) —
+/// those flow through if callers feed them via `--json` (the `tags` field
+/// is included because it's a common power-user knob).
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateEntityRequest {
+    pub entity_type: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+}
+
 /// Knowledge-graph entity entry. Matches `KnowledgeEntity` in
 /// `apps/api/app/schemas/knowledge_entity.py`. Only the fields the CLI
 /// renders are modelled here; the API can return a dozen+ extra columns

@@ -15,9 +15,9 @@ use url::Url;
 
 use crate::error::{Error, Result};
 use crate::models::{
-    Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, DynamicWorkflow,
-    DynamicWorkflowRun, FileSkill, IntegrationStatus, KnowledgeEntity, Tenant, Token, User,
-    Workflow, WorkflowRun, WorkflowRunRequest,
+    Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, CreateEntityRequest,
+    DynamicWorkflow, DynamicWorkflowRun, FileSkill, IntegrationStatus, KnowledgeEntity, Tenant,
+    Token, User, Workflow, WorkflowRun, WorkflowRunRequest,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
@@ -413,6 +413,18 @@ impl ApiClient {
         if !params.is_empty() {
             req = req.query(&params);
         }
+        self.send_json(req).await
+    }
+
+    /// `POST /api/v1/knowledge/entities`
+    ///
+    /// Required: `entity_type` + `name`. Other fields fall back to backend
+    /// defaults. Body shape matches `KnowledgeEntityCreate` in
+    /// `apps/api/app/schemas/knowledge_entity.py`.
+    pub async fn create_entity(&self, body: &CreateEntityRequest) -> Result<KnowledgeEntity> {
+        let req = self
+            .request(Method::POST, "/api/v1/knowledge/entities")?
+            .json(body);
         self.send_json(req).await
     }
 
