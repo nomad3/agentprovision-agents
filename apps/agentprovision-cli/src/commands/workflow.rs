@@ -21,6 +21,16 @@ pub enum WorkflowCommand {
     Run(RunArgs),
     /// List recent runs for a workflow.
     Runs(RunsArgs),
+    /// Activate a paused / draft workflow.
+    Activate(ToggleArgs),
+    /// Pause an active workflow.
+    Pause(ToggleArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ToggleArgs {
+    /// Workflow UUID or exact name.
+    pub workflow: String,
 }
 
 #[derive(Debug, Args)]
@@ -72,7 +82,34 @@ pub async fn dispatch(cmd: WorkflowCommand, ctx: Context) -> anyhow::Result<()> 
         WorkflowCommand::Show(a) => show(a, ctx).await,
         WorkflowCommand::Run(a) => run(a, ctx).await,
         WorkflowCommand::Runs(a) => runs(a, ctx).await,
+        WorkflowCommand::Activate(a) => toggle(a, ctx, true).await,
+        WorkflowCommand::Pause(a) => toggle(a, ctx, false).await,
     }
+}
+
+async fn toggle(args: ToggleArgs, ctx: Context, activate: bool) -> anyhow::Result<()> {
+    let workflow = resolve_workflow(&args.workflow, &ctx).await?;
+    if activate {
+        ctx.client
+            .activate_dynamic_workflow(&workflow.id.to_string())
+            .await?;
+    } else {
+        ctx.client
+            .pause_dynamic_workflow(&workflow.id.to_string())
+            .await?;
+    }
+    let verb = if activate { "activated" } else { "paused" };
+    output::ok(format!("{} workflow {}", verb, workflow.name));
+    // Re-fetch the freshly-mutated row and emit it so --json callers see
+    // the new state without a second request.
+    if ctx.json {
+        let updated = ctx
+            .client
+            .get_dynamic_workflow(&workflow.id.to_string())
+            .await?;
+        crate::output::emit(ctx.json, &updated, |_| {});
+    }
+    Ok(())
 }
 
 async fn ls(args: LsArgs, ctx: Context) -> anyhow::Result<()> {
