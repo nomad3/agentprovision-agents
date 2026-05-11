@@ -126,6 +126,71 @@ pub struct WorkflowRun {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+/// Dynamic workflow — the modern, JSON-defined workflow that the web UI's
+/// `WorkflowsPage` lists. Distinct from the legacy `Workflow` struct above
+/// which targets the older `/api/v1/workflows` summary endpoint. Field set
+/// matches `DynamicWorkflowInDB` in `apps/api/app/schemas/dynamic_workflow.py`;
+/// optional rollup counters are wrapped in Option so older deployments that
+/// haven't run migration 103 still deserialise cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicWorkflow {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub trigger_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub definition: Option<serde_json::Value>,
+    #[serde(default)]
+    pub run_count: i64,
+    #[serde(default)]
+    pub last_run_at: Option<DateTime<Utc>>,
+}
+
+/// Run record for a dynamic workflow. Matches `WorkflowRunInDB` in
+/// `apps/api/app/schemas/dynamic_workflow.py`. Wider than the legacy
+/// `WorkflowRun` above because `status`, `started_at`, and `duration_ms`
+/// are needed for the `ap workflow runs` table view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DynamicWorkflowRun {
+    pub id: Uuid,
+    pub workflow_id: Uuid,
+    #[serde(default)]
+    pub trigger_type: Option<String>,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
+    #[serde(default)]
+    pub current_step: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub total_tokens: Option<i64>,
+    #[serde(default)]
+    pub total_cost_usd: Option<f64>,
+}
+
+/// Body for `POST /api/v1/dynamic-workflows/{id}/run`.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRunRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_data: Option<serde_json::Value>,
+    /// Set to true to validate without executing — matches the web
+    /// TestConsole's dry_run button.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
+}
+
 /// Device-flow login response. Mirrors GitHub's device-flow shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceCodeResponse {

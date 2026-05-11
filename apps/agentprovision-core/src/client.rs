@@ -15,8 +15,8 @@ use url::Url;
 
 use crate::error::{Error, Result};
 use crate::models::{
-    Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, Tenant, Token, User, Workflow,
-    WorkflowRun,
+    Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, DynamicWorkflow,
+    DynamicWorkflowRun, Tenant, Token, User, Workflow, WorkflowRun, WorkflowRunRequest,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
@@ -244,6 +244,82 @@ impl ApiClient {
     /// `GET /api/v1/workflows/runs/{id}`
     pub async fn get_workflow_run(&self, run_id: &str) -> Result<WorkflowRun> {
         let req = self.request(Method::GET, &format!("/api/v1/workflows/runs/{run_id}"))?;
+        self.send_json(req).await
+    }
+
+    // ── Dynamic workflows ───────────────────────────────────────────
+    // These match the endpoints the web `WorkflowsPage` hits via
+    // `apps/web/src/services/dynamicWorkflowService.js`. The legacy
+    // `list_workflows` / `get_workflow_run` methods above hit the
+    // older `/workflows` summary endpoint and are kept for compatibility.
+
+    /// `GET /api/v1/dynamic-workflows[?status=<state>]`
+    pub async fn list_dynamic_workflows(
+        &self,
+        status: Option<&str>,
+    ) -> Result<Vec<DynamicWorkflow>> {
+        let mut req = self.request(Method::GET, "/api/v1/dynamic-workflows")?;
+        if let Some(s) = status {
+            req = req.query(&[("status", s)]);
+        }
+        self.send_json(req).await
+    }
+
+    /// `GET /api/v1/dynamic-workflows/{id}`
+    pub async fn get_dynamic_workflow(&self, workflow_id: &str) -> Result<DynamicWorkflow> {
+        let req = self.request(
+            Method::GET,
+            &format!("/api/v1/dynamic-workflows/{workflow_id}"),
+        )?;
+        self.send_json(req).await
+    }
+
+    /// `POST /api/v1/dynamic-workflows/{id}/run`
+    ///
+    /// `dry_run` mirrors the web TestConsole — the backend validates the
+    /// definition without dispatching to Temporal, useful for `ap workflow run
+    /// --dry-run` ahead of a real run.
+    pub async fn run_dynamic_workflow(
+        &self,
+        workflow_id: &str,
+        input_data: Option<serde_json::Value>,
+        dry_run: bool,
+    ) -> Result<DynamicWorkflowRun> {
+        let body = WorkflowRunRequest {
+            input_data,
+            dry_run,
+        };
+        let req = self
+            .request(
+                Method::POST,
+                &format!("/api/v1/dynamic-workflows/{workflow_id}/run"),
+            )?
+            .json(&body);
+        self.send_json(req).await
+    }
+
+    /// `GET /api/v1/dynamic-workflows/{id}/runs?limit=N`
+    pub async fn list_dynamic_workflow_runs(
+        &self,
+        workflow_id: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<DynamicWorkflowRun>> {
+        let mut req = self.request(
+            Method::GET,
+            &format!("/api/v1/dynamic-workflows/{workflow_id}/runs"),
+        )?;
+        if let Some(n) = limit {
+            req = req.query(&[("limit", n.to_string())]);
+        }
+        self.send_json(req).await
+    }
+
+    /// `GET /api/v1/dynamic-workflows/runs/{run_id}`
+    pub async fn get_dynamic_workflow_run(&self, run_id: &str) -> Result<DynamicWorkflowRun> {
+        let req = self.request(
+            Method::GET,
+            &format!("/api/v1/dynamic-workflows/runs/{run_id}"),
+        )?;
         self.send_json(req).await
     }
 }
