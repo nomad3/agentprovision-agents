@@ -191,6 +191,32 @@ pub struct WorkflowRunRequest {
     pub dry_run: bool,
 }
 
+/// Knowledge-graph entity entry. Matches `KnowledgeEntity` in
+/// `apps/api/app/schemas/knowledge_entity.py`. Only the fields the CLI
+/// renders are modelled here; the API can return a dozen+ extra columns
+/// (tags, score, extraction_model, etc.) — those flow through to `--json`
+/// because we don't `deny_unknown_fields`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeEntity {
+    pub id: Uuid,
+    pub entity_type: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<f64>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 /// File-based skill entry. Matches `FileSkill` in
 /// `apps/api/app/schemas/file_skill.py`. Only the fields the CLI actually
 /// renders are modelled; unknowns are tolerated via the default attrs. `slug`
