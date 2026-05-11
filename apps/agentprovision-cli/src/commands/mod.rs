@@ -4,3 +4,4 @@ pub mod login;
 pub mod logout;
 pub mod status;
 pub mod upgrade;
+pub mod workflow;
