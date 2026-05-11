@@ -30,3 +30,4 @@ from src.mcp_tools import sms  # noqa: F401
 from src.mcp_tools import scribblevet  # noqa: F401
 from src.mcp_tools import bookkeeper_export  # noqa: F401
 from src.mcp_tools import agents  # noqa: F401  # Phase 4 — dispatch_agent + request_human_approval
+from src.mcp_tools import web  # noqa: F401  # web_search + fetch_url + discover_companies
