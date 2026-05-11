@@ -26,6 +26,18 @@ ingress:
     path: /api/*
     service: http://api:8000
 
+  # PR-D-3 install one-liners. agentprovision.com/install.{sh,ps1} must
+  # land on the API's static-file router, NOT the SPA. Without these
+  # rules cloudflared sends them through the catch-all to web nginx and
+  # `curl -fsSL https://agentprovision.com/install.sh | sh` pipes HTML
+  # into a shell. Anchored regex so /install.sh matches exactly.
+  - hostname: agentprovision.com
+    path: ^/install\.sh$
+    service: http://api:8000
+  - hostname: agentprovision.com
+    path: ^/install\.ps1$
+    service: http://api:8000
+
   # Luna PWA client
   - hostname: luna.agentprovision.com
     service: http://luna-client:80
