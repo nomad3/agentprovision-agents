@@ -38,6 +38,18 @@ async def collect_tenant_experiences(tenant_id: str) -> dict:
                 for s in stats
             },
         }
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -100,6 +112,18 @@ async def update_tenant_policy(tenant_id: str, decision_point: str) -> dict:
 
         db.commit()
         return {"tenant_id": tenant_id, "decision_point": decision_point, "updated": True, "version": policy.version}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -169,6 +193,18 @@ async def anonymize_and_aggregate_global(decision_point: str) -> dict:
 
         db.commit()
         return {"decision_point": decision_point, "updated": True, "tenants": len(opt_in_ids)}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -180,6 +216,18 @@ async def archive_old_experiences(tenant_id: str, retention_days: int = 90) -> d
     try:
         count = rl_experience_service.archive_old_experiences(db, uuid.UUID(tenant_id), retention_days)
         return {"tenant_id": tenant_id, "archived": count}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
 
@@ -270,5 +318,17 @@ async def experience_to_observation(tenant_id: str) -> dict:
 
         db.commit()
         return {"tenant_id": tenant_id, "observations_created": created}
+    except Exception:
+        # Roll back BEFORE close(): a poisoned psycopg2 txn
+        # would otherwise return to the pool dirty and
+        # cascade into the next worker pickup as
+        # InFailedSqlTransaction. Belt-and-suspenders for
+        # the default pool_reset_on_return='rollback', which
+        # has been observed to miss async/error paths.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         db.close()
