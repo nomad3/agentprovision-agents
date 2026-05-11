@@ -7,10 +7,10 @@ use crate::context::Context;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "agentprovision",
+    name = "ap",
     version,
-    about = "Command-line client for the AgentProvision platform.",
-    long_about = "Login, chat, run workflows, and orchestrate agents from your terminal.\n\nDocs: https://agentprovision.com/docs/cli"
+    about = "AgentProvision CLI — orchestrator of CLIs.",
+    long_about = "ap — the AgentProvision command-line client. Login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / Copilot) from your terminal.\n\nDocs: https://agentprovision.com/docs/cli"
 )]
 pub struct Cli {
     /// Override the API server URL (defaults to https://agentprovision.com or `server` from config.toml).

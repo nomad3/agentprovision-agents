@@ -1,4 +1,4 @@
-//! `agentprovision logout` — clear the keychain entry.
+//! `ap logout` — clear the keychain entry.
 
 use crate::context::Context;
 use crate::output;

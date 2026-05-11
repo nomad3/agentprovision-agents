@@ -1,40 +1,62 @@
-# agentprovision
+# ap
 
-Single-binary CLI for the AgentProvision platform — login, chat, run workflows, and orchestrate agents from your terminal.
+`ap` — the AgentProvision CLI. Single-binary client for the AgentProvision platform: login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / GitHub Copilot CLI) from your terminal.
 
-This crate is the **PR-B skeleton**: `login`, `logout`, `status`, `chat send`, and an interactive `chat repl`. PR-C extends this with `agent`, `workflow`, `integration`, `memory`, `skill`, `tenant`, `config`, and `tool` subcommands. PR-D adds Homebrew + GitHub Releases distribution.
+The CLI is the orchestrator-of-CLIs: every command you run flows through the agentprovision.com control plane, which dispatches to the right runtime (Temporal workflows, MCP tool calls, A2A coalitions) under the hood.
 
 Plan: [`docs/plans/2026-05-09-agentprovision-cli-design.md`](../../docs/plans/2026-05-09-agentprovision-cli-design.md).
+
+## Install
+
+```bash
+# macOS
+curl -fsSL https://agentprovision.com/install.sh | sh
+
+# Windows (PowerShell)
+iwr -useb https://agentprovision.com/install.ps1 | iex
+```
+
+No sudo. No admin. Drops `ap` in `~/.local/bin/` (POSIX) or `%USERPROFILE%\.agentprovision\bin\` (Windows). Linux musl + Windows ARM64 cross-compile ship in PR-D-1.5.
+
+For Rust devs:
+
+```bash
+cargo install agentprovision-cli  # installs the `ap` binary onto PATH
+```
 
 ## Quick start
 
 ```bash
-# Build
-cd apps/agentprovision-cli
-cargo build --release
-
 # Login (device-flow first, falls back to email/password if backend doesn't support it)
-./target/release/agentprovision login
+ap login
 
-# Or in CI / scripts
-AGENTPROVISION_PASSWORD=... ./target/release/agentprovision login \
+# In CI / scripts
+AGENTPROVISION_PASSWORD=... ap login \
     --password --email me@example.com --password-env AGENTPROVISION_PASSWORD
 
 # Confirm
-./target/release/agentprovision status
-./target/release/agentprovision --json status
+ap status
+ap --json status
 
 # One-shot chat
-./target/release/agentprovision chat send "what's the status of yesterday's lead pipeline?"
+ap chat send "what's the status of yesterday's lead pipeline?"
 
 # Streaming chat (default)
-./target/release/agentprovision chat send "summarise the Levi's MDM incident in 3 bullets"
+ap chat send "summarise the Levi's MDM incident in 3 bullets"
 
 # Non-streaming
-./target/release/agentprovision --no-stream chat send "..."
+ap --no-stream chat send "..."
 
 # Interactive REPL
-./target/release/agentprovision chat repl
+ap chat repl
+```
+
+## Build from source
+
+```bash
+cd apps/agentprovision-cli
+cargo build --release
+./target/release/ap --help
 ```
 
 ## Global flags
@@ -50,7 +72,7 @@ AGENTPROVISION_PASSWORD=... ./target/release/agentprovision login \
 
 Tokens land in the OS keychain (macOS Keychain / Linux secret-service / Windows Credential Manager) under service `agentprovision`. The account string is the host portion of the API URL so prod and self-hosted tokens stay separate.
 
-`agentprovision logout` removes the entry.
+`ap logout` removes the entry.
 
 ## Configuration
 
@@ -58,4 +80,10 @@ Tokens land in the OS keychain (macOS Keychain / Linux secret-service / Windows 
 
 ## Architecture
 
-The CLI is a thin shell around [`agentprovision-core`](../agentprovision-core/), the same Rust crate Luna's Tauri client links against. Auth, API client, models, and SSE consumers live there; the CLI only adds the clap surface, terminal output, and the REPL loop.
+`ap` is a thin shell around [`agentprovision-core`](../agentprovision-core/), the same Rust crate Luna's Tauri client links against. Auth, API client, models, and SSE consumers live there; the CLI only adds the clap surface, terminal output, and the REPL loop.
+
+## Versioning
+
+`cli-v*` git tags trigger the release workflow (`.github/workflows/cli-release.yaml`). Tag version must match `apps/agentprovision-cli/Cargo.toml` `version=` — the validate job fails the build on drift.
+
+Crate name is `agentprovision-cli` (for crates.io); binary name is `ap` (for `$PATH`).
