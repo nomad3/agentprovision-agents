@@ -174,6 +174,14 @@ impl ApiClient {
         self.send_json(req).await
     }
 
+    /// `GET /api/v1/agents/{agent_id}` — single-agent detail. The backend
+    /// returns the same shape as the list endpoint plus runtime fields that
+    /// our `Agent` model carries forward-compatibly via `#[serde(default)]`.
+    pub async fn get_agent(&self, agent_id: &str) -> Result<Agent> {
+        let req = self.request(Method::GET, &format!("/api/v1/agents/{agent_id}"))?;
+        self.send_json(req).await
+    }
+
     /// `GET /api/v1/tenants/{id}` — caller must have the id (from the JWT or
     /// `current_user`).
     pub async fn get_tenant(&self, tenant_id: &str) -> Result<Tenant> {
