@@ -16,7 +16,8 @@ use url::Url;
 use crate::error::{Error, Result};
 use crate::models::{
     Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, DynamicWorkflow,
-    DynamicWorkflowRun, Tenant, Token, User, Workflow, WorkflowRun, WorkflowRunRequest,
+    DynamicWorkflowRun, IntegrationStatus, Tenant, Token, User, Workflow, WorkflowRun,
+    WorkflowRunRequest,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
@@ -320,6 +321,16 @@ impl ApiClient {
             Method::GET,
             &format!("/api/v1/dynamic-workflows/runs/{run_id}"),
         )?;
+        self.send_json(req).await
+    }
+
+    // ── Integration status ─────────────────────────────────────────
+    // Mirrors what the web IntegrationsPage and the workflow
+    // activation-gate consume via `dynamicWorkflowService.getIntegrationStatus`.
+
+    /// `GET /api/v1/integrations/status`
+    pub async fn list_integration_status(&self) -> Result<Vec<IntegrationStatus>> {
+        let req = self.request(Method::GET, "/api/v1/integrations/status")?;
         self.send_json(req).await
     }
 }

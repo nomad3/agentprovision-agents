@@ -191,6 +191,20 @@ pub struct WorkflowRunRequest {
     pub dry_run: bool,
 }
 
+/// Status entry for a single integration in the current tenant. Matches the
+/// shape `GET /api/v1/integrations/status` returns — one row per registered
+/// integration, with `connected = true` when an `IntegrationConfig` row exists
+/// and is enabled. `name` is the registry display name (e.g. "Google
+/// Calendar"); `icon` is an arbitrary identifier the web uses to look up an
+/// SVG. The CLI ignores the icon but preserves it in --json output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationStatus {
+    pub name: String,
+    pub connected: bool,
+    #[serde(default)]
+    pub icon: Option<String>,
+}
+
 /// Device-flow login response. Mirrors GitHub's device-flow shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceCodeResponse {
