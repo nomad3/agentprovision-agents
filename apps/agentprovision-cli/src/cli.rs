@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::{agent, chat, login, logout, status, upgrade, workflow};
+use crate::commands::{agent, chat, login, logout, session, status, upgrade, workflow};
 use crate::context::Context;
 
 #[derive(Debug, Parser)]
@@ -65,6 +65,10 @@ pub enum Command {
     /// List, inspect, run, and tail dynamic workflows.
     #[command(subcommand)]
     Workflow(workflow::WorkflowCommand),
+
+    /// List recent chat sessions and read their message history.
+    #[command(subcommand)]
+    Session(session::SessionCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -85,5 +89,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Upgrade(a) => upgrade::run(a, ctx).await,
         Command::Agent(cmd) => agent::dispatch(cmd, ctx).await,
         Command::Workflow(cmd) => workflow::dispatch(cmd, ctx).await,
+        Command::Session(cmd) => session::dispatch(cmd, ctx).await,
     }
 }
