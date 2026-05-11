@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod chat;
+pub mod integration;
 pub mod login;
 pub mod logout;
 pub mod session;

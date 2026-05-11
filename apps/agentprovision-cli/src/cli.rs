@@ -2,7 +2,9 @@
 
 use clap::{Parser, Subcommand};
 
-use crate::commands::{agent, chat, login, logout, session, status, upgrade, workflow};
+use crate::commands::{
+    agent, chat, integration, login, logout, session, status, upgrade, workflow,
+};
 use crate::context::Context;
 
 #[derive(Debug, Parser)]
@@ -69,6 +71,10 @@ pub enum Command {
     /// List recent chat sessions and read their message history.
     #[command(subcommand)]
     Session(session::SessionCommand),
+
+    /// Inspect integration connection status for the current tenant.
+    #[command(subcommand)]
+    Integration(integration::IntegrationCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -90,5 +96,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Agent(cmd) => agent::dispatch(cmd, ctx).await,
         Command::Workflow(cmd) => workflow::dispatch(cmd, ctx).await,
         Command::Session(cmd) => session::dispatch(cmd, ctx).await,
+        Command::Integration(cmd) => integration::dispatch(cmd, ctx).await,
     }
 }
