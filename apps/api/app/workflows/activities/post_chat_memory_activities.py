@@ -24,6 +24,13 @@ async def detect_commitment(
     from app.models.chat import ChatMessage
     from app.memory.classifiers.commitment import classify_commitment
     from app.memory.record import record_commitment
+    # NameError fix (2026-05-11): `resolve_primary_agent_slug` was referenced
+    # below without being imported. Every assistant-message branch raised
+    # NameError, the activity failed without re-attempting cleanly, and the
+    # unrolled-back SQLAlchemy session poisoned downstream memory_recall queries
+    # on the orchestration worker as InFailedSqlTransaction. `update_world_state`
+    # below already imports it locally — this is the matching fix.
+    from app.services.agent_identity import resolve_primary_agent_slug
 
     db = SessionLocal()
     try:
