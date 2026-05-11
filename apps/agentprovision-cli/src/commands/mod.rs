@@ -4,6 +4,7 @@ pub mod integration;
 pub mod login;
 pub mod logout;
 pub mod session;
+pub mod skill;
 pub mod status;
 pub mod upgrade;
 pub mod workflow;

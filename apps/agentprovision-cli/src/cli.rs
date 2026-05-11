@@ -3,7 +3,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, chat, integration, login, logout, session, status, upgrade, workflow,
+    agent, chat, integration, login, logout, session, skill, status, upgrade, workflow,
 };
 use crate::context::Context;
 
@@ -75,6 +75,10 @@ pub enum Command {
     /// Inspect integration connection status for the current tenant.
     #[command(subcommand)]
     Integration(integration::IntegrationCommand),
+
+    /// Browse the file-based skill library.
+    #[command(subcommand)]
+    Skill(skill::SkillCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -97,5 +101,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Workflow(cmd) => workflow::dispatch(cmd, ctx).await,
         Command::Session(cmd) => session::dispatch(cmd, ctx).await,
         Command::Integration(cmd) => integration::dispatch(cmd, ctx).await,
+        Command::Skill(cmd) => skill::dispatch(cmd, ctx).await,
     }
 }
