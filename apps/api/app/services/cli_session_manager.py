@@ -901,6 +901,17 @@ def _run_agent_session_legacy(
             )
         except Exception as exc:
             logger.warning("Memory recall failed for tenant %s: %s", tenant_id, exc)
+            # Critical: rollback. build_memory_context_with_git runs queries
+            # against pgvector + entity tables; when any of them fail (e.g.
+            # earlier txn already aborted, or an asyncpg type-coerce error
+            # on a NULL column), psycopg2 leaves the session in a poisoned
+            # state. Without this rollback, the very next ORM query in this
+            # dispatch (mcp_server_connectors load at chat_cli build, or
+            # the agent-token / cli session lookups) cascades into
+            # psycopg2.errors.InFailedSqlTransaction. Sister fix to PRs #352
+            # (dispatch-level rollback) and #361 (chat-side rollback) — the
+            # rebuild fallback was the last unguarded catch site.
+            safe_rollback(db)
             memory_context = {}
 
     _mark("memory_recall")
