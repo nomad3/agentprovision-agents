@@ -158,6 +158,24 @@ async fn stream_and_collect(
     // contaminate the JSON envelope printed at the end (which scripts pipe
     // to jq). Reviewer Important #1 from the PR #332 final review.
     let render_live = !ctx.json;
+
+    // Track how many terminal rows the live stream occupies so we can erase
+    // it before re-rendering with markdown styling. We only consume the
+    // terminal width once at the start of the stream — column count rarely
+    // changes mid-turn and re-querying per delta is wasteful. If the width
+    // probe fails (non-TTY, unusual stream), we leave `term_cols` as None
+    // and SKIP the erase entirely (better to see a duplicate than to clobber
+    // unrelated scrollback).
+    let term_cols: Option<u16> = if render_live {
+        crossterm::terminal::size().ok().map(|(c, _)| c)
+    } else {
+        None
+    };
+    // Logical column the cursor sits in on the current row. We count
+    // newlines as row-consumers explicitly, and wrap when col >= cols.
+    let mut cur_col: u32 = 0;
+    let mut rows_used: u32 = 0;
+
     while let Some(item) = stream.next().await {
         match item? {
             ChatStreamEvent::Delta(d) => {
@@ -165,6 +183,23 @@ async fn stream_and_collect(
                 if render_live {
                     let _ = stdout.write_all(d.as_bytes());
                     let _ = stdout.flush();
+                    if let Some(cols) = term_cols {
+                        let cols_u32 = cols.max(1) as u32;
+                        for ch in d.chars() {
+                            if ch == '\n' {
+                                rows_used = rows_used.saturating_add(1);
+                                cur_col = 0;
+                            } else if ch == '\r' {
+                                cur_col = 0;
+                            } else {
+                                cur_col += 1;
+                                if cur_col >= cols_u32 {
+                                    rows_used = rows_used.saturating_add(1);
+                                    cur_col = 0;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             ChatStreamEvent::Done => break,
@@ -175,10 +210,46 @@ async fn stream_and_collect(
     }
     if !ctx.json {
         // Re-render the buffered reply with markdown styling. Streaming gave
-        // the user immediate feedback; the second pass is the polished view.
+        // the user immediate feedback; this second pass is the polished view —
+        // but the user shouldn't see both. Erase the live stream first.
         if !full.is_empty() {
-            println!();
-            render_markdown(&full);
+            if let Some(_cols) = term_cols {
+                // Total rows occupied = full rows wrapped + 1 for the current
+                // (possibly partial) row, but only if we actually printed
+                // anything onto it.
+                let total_rows = if cur_col > 0 {
+                    rows_used.saturating_add(1)
+                } else {
+                    rows_used
+                };
+                // Move to start of current line, then up by (total_rows - 1)
+                // so we land on the first row of the stream, then clear from
+                // cursor down to the end of the screen. If total_rows is 0
+                // (empty stream — shouldn't reach here, full is non-empty)
+                // we skip.
+                if total_rows > 0 {
+                    use crossterm::{cursor, terminal, ExecutableCommand};
+                    let up = total_rows.saturating_sub(1);
+                    let _ = stdout.execute(cursor::MoveToColumn(0));
+                    if up > 0 {
+                        // MoveUp takes u16; clamp to avoid overflow on
+                        // pathologically long streams.
+                        let up_u16: u16 = up.min(u16::MAX as u32) as u16;
+                        let _ = stdout.execute(cursor::MoveUp(up_u16));
+                    }
+                    let _ = stdout.execute(terminal::Clear(
+                        terminal::ClearType::FromCursorDown,
+                    ));
+                    let _ = stdout.flush();
+                }
+                render_markdown(&full);
+            } else {
+                // Width detection failed: don't risk clobbering scrollback.
+                // Fall back to the prior behavior — blank line + markdown
+                // below the live stream (visible duplicate, but safe).
+                println!();
+                render_markdown(&full);
+            }
         }
     }
     Ok(full)
