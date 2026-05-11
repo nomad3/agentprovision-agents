@@ -275,6 +275,24 @@ impl ApiClient {
         self.send_json(req).await
     }
 
+    /// `POST /api/v1/dynamic-workflows/{id}/activate`
+    pub async fn activate_dynamic_workflow(&self, workflow_id: &str) -> Result<()> {
+        let req = self.request(
+            Method::POST,
+            &format!("/api/v1/dynamic-workflows/{workflow_id}/activate"),
+        )?;
+        self.send_no_body(req).await
+    }
+
+    /// `POST /api/v1/dynamic-workflows/{id}/pause`
+    pub async fn pause_dynamic_workflow(&self, workflow_id: &str) -> Result<()> {
+        let req = self.request(
+            Method::POST,
+            &format!("/api/v1/dynamic-workflows/{workflow_id}/pause"),
+        )?;
+        self.send_no_body(req).await
+    }
+
     /// `POST /api/v1/dynamic-workflows/{id}/run`
     ///
     /// `dry_run` mirrors the web TestConsole — the backend validates the
