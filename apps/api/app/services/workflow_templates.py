@@ -2019,7 +2019,11 @@ NATIVE_TEMPLATES = [
                     "tool": "discover_companies",
                     "params": {
                         "vertical_description": "{{input.vertical}}",
-                        "count": "{{input.count | default(5)}}",
+                        # Pure-substitution — the raw int from input.count
+                        # flows through unchanged thanks to the updated
+                        # _resolve_params passthrough. Caller passes an
+                        # actual int in --input '{"count": 5}'.
+                        "count": "{{input.count}}",
                     },
                     "output": "discovery",
                 },
@@ -2039,7 +2043,7 @@ NATIVE_TEMPLATES = [
                                 "category": "lead",
                                 "description": "{{company.snippet}}",
                                 "source_url": "{{company.source_url}}",
-                                "tags": ["{{input.tag | default('prospect-autopilot')}}"],
+                                "tags": ["{{input.tag}}"],
                             },
                             "output": "created",
                         },
@@ -2051,8 +2055,8 @@ NATIVE_TEMPLATES = [
                     "tool": "filter_entities",
                     "params": {
                         "category": "lead",
-                        "tag": "{{input.tag | default('prospect-autopilot')}}",
-                        "limit": "{{input.count | default(5)}}",
+                        "tag": "{{input.tag}}",
+                        "limit": "{{input.count}}",
                     },
                     "output": "leads",
                 },
