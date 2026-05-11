@@ -1,5 +1,5 @@
 """API routes for knowledge graph"""
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -165,6 +165,80 @@ def get_entity(
 ):
     """Get entity by ID."""
     entity = service.get_entity(db, entity_id, current_user.tenant_id)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
+
+
+# ── internal getters/updaters ────────────────────────────────────────
+# Used by MCP-server tools (sales.qualify_lead, etc.) that need to read
+# or mutate entities outside a user-Bearer context. The MCP server
+# passes X-Internal-Key + tenant_id; we mount these under the resource
+# path (not /api/v1/internal/*) because the MCP tool URLs were already
+# written that way before the surface existed — adding them here means
+# the long-broken qualify_lead flow starts working without touching
+# every caller. Cloudflared blocks /api/v1/*/internal($|/) from the
+# public internet so this is safe to expose at the resource path.
+
+def _verify_internal_key_kg(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+):
+    from app.core.config import settings as _s
+    if x_internal_key not in (_s.API_INTERNAL_KEY, _s.MCP_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid internal key")
+
+
+@router.get("/entities/{entity_id}/internal", response_model=KnowledgeEntity)
+def get_entity_internal(
+    entity_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    include_relations: bool = False,  # noqa: ARG001 — kept for caller compat
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal read of an entity for MCP-server tools.
+
+    Same semantics as ``GET /entities/{id}`` but auth is X-Internal-Key
+    instead of user-Bearer, and tenant_id comes through as a query
+    param (the caller knows it; we just validate the entity row matches).
+    """
+    entity = service.get_entity(db, entity_id, tenant_id)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
+
+
+@router.patch("/entities/{entity_id}/internal", response_model=KnowledgeEntity)
+def update_entity_internal(
+    entity_id: uuid.UUID,
+    payload: dict,
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal partial-update for MCP-server tools.
+
+    The body shape is open — ``tenant_id`` is required, ``reason`` is
+    optional, every other key is treated as a field update routed
+    through ``KnowledgeEntityUpdate``. Used by sales.qualify_lead to
+    write the BANT qualification back to entity.properties.
+    """
+    tenant_id_raw = payload.get("tenant_id")
+    if not tenant_id_raw:
+        raise HTTPException(status_code=422, detail="tenant_id is required")
+    try:
+        tenant_id = uuid.UUID(str(tenant_id_raw))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="tenant_id must be a UUID")
+    # Strip helper keys before validating the update body. `reason`
+    # would have been useful to wire into the audit log; the existing
+    # `update_entity` service signature doesn't take one, so we drop
+    # it silently rather than break the contract.
+    updates = {k: v for k, v in payload.items() if k not in ("tenant_id", "reason")}
+    try:
+        entity_in = KnowledgeEntityUpdate(**updates)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"invalid update body: {e}")
+    entity = service.update_entity(db, entity_id, tenant_id, entity_in)
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
