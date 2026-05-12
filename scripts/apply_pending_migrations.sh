@@ -45,16 +45,36 @@ fi
 # ── discover ───────────────────────────────────────────────────────
 # Build {applied_stems} from the tracker. Strip a trailing `.sql` so
 # both legacy (bare stem) and current (`.sql`) rows count as applied.
-applied_stems_raw=$(docker exec "$DB_CONTAINER" psql -U postgres -d "$DB_NAME" -At \
-  -c "SELECT filename FROM _migrations;" 2>/dev/null)
+# The query is wrapped so a transient psql failure doesn't get
+# converted to a "no migrations applied" lie by `set -e` + pipefail
+# silently terminating the pipeline. We capture stderr too and bail
+# loudly if the read fails — better to fail the deploy than to
+# re-apply every shipped migration on a flaky connection.
+if ! applied_stems_raw=$(docker exec "$DB_CONTAINER" psql -U postgres -d "$DB_NAME" -At \
+      -c "SELECT filename FROM _migrations;" 2>&1); then
+  echo "[migrations] error: could not read _migrations tracker:" >&2
+  echo "$applied_stems_raw" >&2
+  exit 2
+fi
 applied_stems=$(printf '%s\n' "$applied_stems_raw" | sed 's/\.sql$//' | sort -u)
 
 # Build {file_stems} from the working tree.
-file_paths=$(ls "$MIG_DIR"/*.sql 2>/dev/null | sort)
-if [ -z "$file_paths" ]; then
+#
+# `shopt -s nullglob` makes an unmatched glob expand to nothing
+# rather than the literal pattern, so an empty migrations directory
+# under `set -euo pipefail` doesn't abort the script before the
+# empty-list guard below can run (reviewer B1, 2026-05-12).
+shopt -s nullglob
+file_paths_arr=( "$MIG_DIR"/*.sql )
+shopt -u nullglob
+if [ ${#file_paths_arr[@]} -eq 0 ]; then
   echo "[migrations] no .sql files in $MIG_DIR — nothing to do"
   exit 0
 fi
+# Stable sort by filename. The migrations are numerically prefixed
+# (NNN_name.sql) so lexical sort = numeric sort up to 999.
+IFS=$'\n' file_paths=$(printf '%s\n' "${file_paths_arr[@]}" | sort)
+unset IFS
 
 # ── plan ──────────────────────────────────────────────────────────
 pending=()
@@ -99,8 +119,18 @@ for base in "${pending[@]}"; do
   # leave a "this is done" lie in the tracker. Use the full filename
   # (`.sql`) per the current contract — legacy bare-stem rows still
   # de-dup via the stem-comparison above.
-  docker exec "$DB_CONTAINER" psql -U postgres -d "$DB_NAME" \
-    -c "INSERT INTO _migrations (filename) VALUES ('$base') ON CONFLICT DO NOTHING;" >/dev/null
+  #
+  # `psql -v` + the `:'fn'` substitution binds the filename as a
+  # single-quoted literal so a future migration named like
+  # `091_o'malley.sql` can't break the INSERT. psql variable
+  # substitution only happens when SQL comes in via stdin (NOT
+  # `-c`), so we feed the statement via heredoc. Today's filename
+  # convention forbids quotes, but the failure mode (silent tracker
+  # drift → infinite retry on every deploy) is exactly the bug class
+  # this script exists to prevent (reviewer I1, 2026-05-12).
+  docker exec -i "$DB_CONTAINER" psql -v "fn=$base" -U postgres -d "$DB_NAME" >/dev/null <<'SQL'
+INSERT INTO _migrations (filename) VALUES (:'fn') ON CONFLICT DO NOTHING;
+SQL
   applied_count=$((applied_count + 1))
 done
 

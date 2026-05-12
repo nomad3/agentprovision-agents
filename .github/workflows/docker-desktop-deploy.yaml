@@ -151,13 +151,19 @@ jobs:
         # a no-op. Failure here fails the deploy — drift between the
         # image's ORM models and the live schema is exactly the kind
         # of bug this script exists to prevent.
+        env:
+          # Single source of truth for the container name — the
+          # script honours this env var and so does the readiness
+          # probe below. Override at workflow-dispatch time if the
+          # compose project ever gets renamed.
+          DB_CONTAINER: servicetsunami-agents-db-1
         run: |
           # The db needs a few seconds after `up -d` even when the
           # container was already running, because compose may have
           # restarted dependent services around it. Wait up to 30s
           # for pg_isready before invoking the apply script.
           for i in $(seq 1 30); do
-            if docker exec servicetsunami-agents-db-1 pg_isready -U postgres -d agentprovision >/dev/null 2>&1; then
+            if docker exec "$DB_CONTAINER" pg_isready -U postgres -d agentprovision >/dev/null 2>&1; then
               break
             fi
             sleep 1
