@@ -26,7 +26,7 @@ That's 30+ steps and ~30 minutes before the user sees value. Most never get ther
 ## 2. The flow
 
 ```
-$ ap quickstart
+$ ap quickstart          (or: auto-fires on first ap login for new tenants)
    │
    ├─ (1) login           — device-flow, opens browser; idempotent
    ├─ (2) tenant resolve  — auto-join existing or create new based on email domain
@@ -39,20 +39,62 @@ $ ap quickstart
 
 Step (5) is the centerpiece. Everything else is plumbing.
 
-## 3. The four wedge channels
+## 2.1 Auto-trigger: this is NOT a hidden command
+
+Quickstart isn't something users have to discover and type. **It auto-fires on first contact** with the platform on both surfaces:
+
+### Web (UI)
+
+After a successful registration → first dashboard load, the SPA checks the tenant's onboarding status. If unfinished, it routes to `/onboarding/*` (modal-style, can't dismiss until done or skipped) which walks the same 7-step flow but rendered as React screens. On completion, the server stamps `tenants.onboarded_at` and the user lands on the dashboard with memory already pre-loaded.
+
+### CLI
+
+After a successful `ap login`, the CLI calls `GET /api/v1/onboarding/status`. If the tenant is unfinished, the CLI prints:
+
+```
+Welcome to AgentProvision. Let's set up your first agent (~2 minutes).
+Skip with --no-onboarding next time.
+
+[1/4] Pick a source so I can learn your context →
+```
+
+…and dispatches straight into the wedge-picker. The user can press `q` to skip; that records `onboarding.deferred_at` so the next `ap login` doesn't re-prompt but `ap quickstart` still works to opt in later.
+
+### Idempotency rules
+
+- `tenants.onboarded_at` (timestamp): once set, onboarding never auto-triggers again. Manual `ap quickstart` or `/onboarding` URL still works for re-syncing.
+- `tenants.onboarding_deferred_at` (timestamp): user said "skip"; auto-trigger suppressed until they explicitly request it.
+- `--force` flag on `ap quickstart` ignores both flags and re-runs the flow.
+
+### Why on first login and not on first registration
+
+Registration sets the user/tenant up but doesn't know which device the user is on or what local context exists. By moving auto-trigger to first **login** (the moment the user actually shows up on a surface), we can:
+- Detect installed local CLIs (`ap`) or detect which OAuth providers the email domain already uses (web)
+- Make a smart channel recommendation based on real signal
+- Avoid forcing onboarding on a user who registered just to invite a teammate
+
+## 3. The wedge channels
 
 | Wedge | Friction | Signal strength | Best for |
 |---|---|---|---|
-| **Local CLI** (Claude/Codex/Gemini/Copilot history + git) | none — files read locally | very high for devs | engineers / IC roles |
+| **Local AI CLI** (Claude / Codex / Gemini / Copilot history + git) | none — files read locally | very high for devs who use AI CLIs | engineers using AI assistants |
+| **GitHub CLI** (`gh`) | none — uses existing `gh auth` | very high for OSS / repo work | engineers, OSS contributors |
+| **Cloud CLI** (`gcloud` / `aws` / `az`) | none — uses existing local config | very high for DevOps / SRE / platform | infra engineers, SREs, platform teams |
 | **Gmail + Calendar** | one OAuth click | very high | managers, salespeople, ops |
 | **Slack** | one OAuth click + workspace pick | medium-high | team workers |
 | **WhatsApp** | QR pair | high (personal context) | SMB owners, LATAM markets |
 
+All "Local *" / "GitHub CLI" / "Cloud CLI" wedges share the property that the user **already** authenticated their tool (`claude login`, `gh auth login`, `gcloud auth`) — quickstart just *reads* the resulting local state. No new OAuth dance.
+
 Quickstart's interactive picker biases the order based on local detection:
 
-- If `which claude`/`codex`/`gemini`/`copilot` resolves → suggest local-CLI first.
-- Else if email domain looks like a company → suggest Gmail first.
-- Always show all four; user can override.
+- `gh auth status` returns "Logged in" → suggest GitHub CLI first.
+- `gcloud config get-value account` or `aws sts get-caller-identity` succeeds → suggest Cloud CLI.
+- `which claude`/`codex`/`gemini`/`copilot` resolves → suggest Local AI CLI.
+- Else if email domain looks like a company → suggest Gmail.
+- Always show all wedges; user can override.
+
+The picker is greedy: if multiple local signals fire, run the cheapest first (typically `gh` — single `gh api user` call) and offer to extend with the next wedge after the first chat lands.
 
 ## 4. Initial training — the actual work
 
@@ -62,7 +104,7 @@ For each wedge, the training pipeline:
 source → fetch raw items → batched Gemma extract → upsert entities/observations/commitments → embed
 ```
 
-### 4.1 Local CLI wedge (the novel one)
+### 4.1 Local AI CLI wedge (the novel one)
 
 The CLI scans the local machine (with explicit consent — opt-in prompt):
 
@@ -86,6 +128,34 @@ The snapshot is POSTed to `/api/v1/memory/training/bulk-ingest`. Backend extract
 - Projects (one per active repo) — category=`project`, attributes `languages`, `repo_path`, `last_commit`.
 - Technologies (Rust, Python, etc.) — observations linked to projects.
 - Recurring topics from Claude history — observations linked to relevant projects.
+
+### 4.1b GitHub CLI wedge
+
+When `gh auth status` is authenticated, quickstart shells out to:
+
+```
+gh api user                                  # → person entity (self)
+gh repo list --limit 50 --json ...           # → project entities
+gh api /user/orgs                            # → organization entities
+gh search prs --author=@me --limit 50 ...    # → recent activity observations
+gh search issues --involves=@me ...          # → recent issues observations
+```
+
+Why this is different from the AI-CLI wedge: a dev might not use any AI CLI yet but already have `gh` set up. This wedge captures their **public** repo activity (open source, work-org-public repos they have access to) without ever needing OAuth on the AgentProvision side — the `gh` CLI already has the token.
+
+Wire payload: just the structured `gh api` JSON, batched and ingested by the bulk endpoint. No raw repo content is read.
+
+### 4.1c Cloud CLI wedge
+
+When any of `gcloud auth list` / `aws sts get-caller-identity` / `az account show` succeeds, quickstart pulls:
+
+- **GCP** (`gcloud`): active project, recent BigQuery queries, GKE cluster names, Cloud Run services, IAM members. Each becomes a `cloud_resource` entity.
+- **AWS** (`aws`): account id, configured profiles, recent CloudFormation stacks, Lambda function names, S3 bucket names.
+- **Azure** (`az`): subscription, resource groups, AKS clusters.
+
+For DevOps/SRE/platform users this is the highest-signal wedge. After ingest, the first chat can answer *"what GKE clusters do I manage?"* or *"what AWS regions am I active in?"* with real data.
+
+Privacy: only metadata is pulled (resource names, IDs, regions). No object contents, no logs, no secrets. The user sees the exact `gcloud`/`aws`/`az` commands quickstart will run, and can deselect any before consenting.
 
 ### 4.2 Gmail/Calendar wedge
 
@@ -130,6 +200,32 @@ After training + agent select, the CLI opens an interactive REPL pre-bound to th
 That sentence is the entire product pitch. If the user reads it and types a follow-up, adoption succeeded.
 
 ## 7. Backend precursors
+
+### 7.0 Tenant onboarding state — schema + endpoints
+
+Add to `tenants` table (migration 126 or next):
+
+```sql
+ALTER TABLE tenants
+  ADD COLUMN onboarded_at         TIMESTAMP NULL,
+  ADD COLUMN onboarding_deferred_at TIMESTAMP NULL,
+  ADD COLUMN onboarding_source    VARCHAR(32) NULL;  -- 'cli' | 'web'
+```
+
+Endpoints:
+
+```
+GET  /api/v1/onboarding/status
+     → 200 { onboarded: bool, deferred: bool, recommended_channel: str, detected_signals: {...} }
+
+POST /api/v1/onboarding/defer
+     → 204 (sets onboarding_deferred_at = now())
+
+POST /api/v1/onboarding/complete
+     → 204 (sets onboarded_at = now(); idempotent if already set)
+```
+
+`status` is what auto-trigger keys off. `recommended_channel` is server-side logic (email domain ∈ known-corp-mailservers list → gmail; presence of GitHub OAuth in tenant signals → github; etc.) — keeps the wedge-picker bias logic in one place.
 
 ### 7.1 `POST /api/v1/memory/training/bulk-ingest`
 
@@ -183,11 +279,15 @@ State is persisted to `~/.config/agentprovision/quickstart.toml` so a crash mid-
 
 ## 9. PR breakdown (chained branches)
 
+- **PR-Q0** (S, 1d): tenant onboarding state migration + `/onboarding/status|defer|complete` endpoints. Web SPA auto-trigger route guard. Doesn't require any new training pipeline yet — just the routing flag.
 - **PR-Q1** (M, 2-3d): backend training endpoint + `TrainingIngestionWorkflow` + SSE progress stream. No CLI changes. Tested via `curl` + a script-driven test tenant.
-- **PR-Q2** (S, 1d): CLI `quickstart` command skeleton — auth gate, tenant resolve, channel picker UI, calls training endpoint with a stub `local_cli` items payload, renders SSE progress, fires first chat.
-- **PR-Q3** (M, 2d): real `local_cli` scanner in `agentprovision-core::training` — git config + repo enumeration + Claude session reading + opt-in consent prompt + entity extraction local pre-processing.
+- **PR-Q2** (S, 1d): CLI `quickstart` command skeleton — auth gate, tenant resolve, channel picker UI, calls training endpoint with a stub `local_cli` items payload, renders SSE progress, fires first chat. Wired into `ap login` post-success auto-trigger via `/onboarding/status`.
+- **PR-Q3a** (M, 2d): Local AI CLI scanner (`agentprovision-core::training::local_ai`) — git config + repo enumeration + Claude/Codex/Gemini session reading + opt-in consent prompt + entity extraction.
+- **PR-Q3b** (S, 1d): GitHub CLI wedge — shells out to `gh api` / `gh repo list` / `gh search`.
+- **PR-Q3c** (M, 2d): Cloud CLI wedge — `gcloud` + `aws` + `az` adapters; per-vendor command allowlist; preview-before-run consent UI.
 - **PR-Q4** (M, 2d): Gmail/Calendar wedge — reuses existing inbox_monitor activities in bulk mode.
 - **PR-Q5** (S, 1d each): Slack, WhatsApp wedges.
+- **PR-Q6** (M, 2d): Web SPA onboarding screens — mirror the CLI wedge picker as React pages mounted at `/onboarding/*`. Shares the same training pipeline.
 
 Chained branching per the project rule (each PR off the previous, not main).
 
