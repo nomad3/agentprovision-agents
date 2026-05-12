@@ -120,5 +120,24 @@ INSERT INTO _migrations (filename) VALUES
     ('123_luna_meta_tool_group.sql'),
     ('124_agents_strip_null_tool_group_entries.sql'),
     ('125_luna_prospecting_tool_groups.sql'),
+    -- PR-Q0 migration on the feat/quickstart-q0-onboarding-state branch.
+    -- Pre-recorded here so that when Q0 merges and the deploy runner
+    -- picks up its file on disk, it doesn't try to re-apply 126 on long-
+    -- lived envs (where 127's backfill will already have stamped it).
+    -- Idempotent for Q0 itself: 126 is ADD COLUMN IF NOT EXISTS, but
+    -- belt-and-suspenders means it never has the chance to re-run.
+    ('126_tenants_onboarding_state.sql'),
+    -- Down-migrations live in the repo for review + manual recovery but
+    -- must NEVER be auto-applied. Pre-record them here so that even if a
+    -- future deploy runner change forgets to skip *.down.sql, the
+    -- _migrations row already exists and the runner's skip-if-recorded
+    -- check kicks in. Defense-in-depth alongside the explicit
+    -- `case *.down.sql) continue` guard added in scripts/deploy_k8s_local.sh.
+    ('106_aremko_receptionist_skill.down.sql'),
+    ('107_aremko_catalog_seed.down.sql'),
+    ('113_tenant_github_primary_account.down.sql'),
+    ('114_user_preferences_value_json.down.sql'),
+    ('117_tenant_features_cpa_export_format.down.sql'),
+    ('121_tenant_features_resilient_executor.down.sql'),
     ('127_backfill_migrations_applied.sql')
 ON CONFLICT DO NOTHING;
