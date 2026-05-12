@@ -135,6 +135,12 @@ async fn messages(args: MessagesArgs, ctx: Context) -> anyhow::Result<()> {
             .filter_map(|m| m.tokens_used.map(i64::from))
             .sum();
         let measured = list.iter().filter(|m| m.tokens_used.is_some()).count();
+        // Cost aggregate uses the same NULL-distinct semantics. f64
+        // is fine for accumulation up to ~$9e15 — far beyond any
+        // plausible session lifetime cost (a $1000-per-month tenant
+        // takes ~750000 years to overflow).
+        let cost_total: f64 = list.iter().filter_map(|m| m.cost_usd).sum();
+        let cost_measured = list.iter().filter(|m| m.cost_usd.is_some()).count();
 
         for m in list {
             // Coloured role prefix so `user:` vs `assistant:` is glanceable
@@ -153,9 +159,24 @@ async fn messages(args: MessagesArgs, ctx: Context) -> anyhow::Result<()> {
             // `—` for unmeasured, `<n>tok` for measured. Keeping it in
             // the line trailer so it lines up visually and doesn't
             // disrupt the role:content reading flow.
-            let token_str = match m.tokens_used {
-                Some(n) => format!(" [{n}tok]"),
-                None => String::new(),
+            //
+            // Cost is added next to tokens when present, formatted to
+            // 4 decimal places so cents are legible without
+            // engineering-notation oddness for sub-cent values. Local
+            // CLIs leave cost NULL even with tokens populated — keep
+            // the two trailers independent so OpenCode runs show just
+            // the token count.
+            let mut trailer_parts: Vec<String> = Vec::new();
+            if let Some(n) = m.tokens_used {
+                trailer_parts.push(format!("{n}tok"));
+            }
+            if let Some(c) = m.cost_usd {
+                trailer_parts.push(format!("${c:.4}"));
+            }
+            let token_str = if trailer_parts.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", trailer_parts.join(" "))
             };
             if stamp.is_empty() {
                 println!("{}{}: {}", role_styled, token_str, m.content);
@@ -171,17 +192,28 @@ async fn messages(args: MessagesArgs, ctx: Context) -> anyhow::Result<()> {
         }
         // Footer summary only when at least one message had a measured
         // count — silence when the server has no token data yet beats
-        // a confusing "0 tokens across N messages" line.
+        // a confusing "0 tokens across N measured turns" line. Cost
+        // is appended when at least one turn had a measured cost; the
+        // two sources can differ (OpenCode reports tokens but no
+        // cost), so we report each with its own count.
         if measured > 0 {
+            let mut parts = vec![format!(
+                "{} tokens across {} measured turn{}",
+                token_total,
+                measured,
+                if measured == 1 { "" } else { "s" },
+            )];
+            if cost_measured > 0 {
+                parts.push(format!(
+                    "${:.4} across {} priced turn{}",
+                    cost_total,
+                    cost_measured,
+                    if cost_measured == 1 { "" } else { "s" },
+                ));
+            }
             println!(
                 "{}",
-                console::style(format!(
-                    "── {} tokens across {} measured turn{}",
-                    token_total,
-                    measured,
-                    if measured == 1 { "" } else { "s" },
-                ))
-                .dim()
+                console::style(format!("── {}", parts.join(" · "))).dim()
             );
         }
     });

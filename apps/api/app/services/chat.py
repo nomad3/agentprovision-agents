@@ -171,6 +171,47 @@ def _detect_emotion(text: str) -> str:
     return "responding"
 
 
+def _extract_int(context: Dict[str, Any] | None, key: str) -> int | None:
+    """Pull a key from the context dict and coerce to int, or return
+    None if the key is missing or unparseable. Used for the per-
+    message cost/token split columns added in migration 129 — same
+    failure mode as `_extract_tokens_used`: None means "not measured",
+    NOT zero."""
+    if not isinstance(context, dict):
+        return None
+    value = context.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_float(context: Dict[str, Any] | None, key: str) -> float | None:
+    """Same as `_extract_int` but for floats (cost_usd)."""
+    if not isinstance(context, dict):
+        return None
+    value = context.get(key)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_str(context: Dict[str, Any] | None, key: str, max_len: int) -> str | None:
+    """Same shape as the others but for strings (model id). Truncates
+    to `max_len` because the DB column is VARCHAR(64)."""
+    if not isinstance(context, dict):
+        return None
+    value = context.get(key)
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:max_len]
+
+
 def _append_message(
     db: Session,
     *,
@@ -183,12 +224,26 @@ def _append_message(
     tokens_used = _extract_tokens_used(normalized_context) if role == "assistant" else None
     if role == "assistant" and tokens_used is not None and normalized_context.get("tokens_used") is None:
         normalized_context["tokens_used"] = tokens_used
+    # Per-message cost/token split (migration 129). Only assistant
+    # turns carry these fields — user messages by definition have no
+    # generation cost. None ⇒ "not measured", preserved end-to-end.
+    if role == "assistant":
+        input_tokens = _extract_int(normalized_context, "input_tokens")
+        output_tokens = _extract_int(normalized_context, "output_tokens")
+        cost_usd = _extract_float(normalized_context, "cost_usd")
+        model = _extract_str(normalized_context, "model", max_len=64)
+    else:
+        input_tokens = output_tokens = cost_usd = model = None
     message = ChatMessage(
         session_id=session.id,
         role=role,
         content=content,
         context=normalized_context or None,
         tokens_used=tokens_used,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_usd=cost_usd,
+        model=model,
     )
     db.add(message)
     db.commit()

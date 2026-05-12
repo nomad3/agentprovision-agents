@@ -45,13 +45,20 @@ class ChatMessage(ChatMessageBase):
     context: dict | None = None
     emotion: str | None = None
     created_at: datetime
-    # ``tokens_used`` is already on the ORM model (chat_messages.tokens_used,
-    # Integer NULL) and populated by the code-worker callback after each
-    # CLI dispatch. Surfacing it here lets `ap session messages` and the
-    # web ChatPage show per-message token cost without a schema change.
-    # NULL means "not measured" (older messages, agents that don't emit a
-    # usage struct) — callers must render the absence as `—`, not 0.
+    # ``tokens_used`` is the back-compat total (input + output) populated
+    # by the code-worker callback after each CLI dispatch. NULL means
+    # "not measured" (older messages, agents that don't emit a usage
+    # struct) — callers MUST render absence as `—`, not 0.
     tokens_used: int | None = None
+    # Cost/token split — migration 129 (PR #420). Same NULL semantics:
+    # absence means "not measured", NOT zero. cost_usd is in USD with
+    # 6-decimal precision (NUMERIC(12,6) on the DB side). Local CLIs
+    # (OpenCode + gemma4) leave cost_usd NULL even when token counts
+    # are populated.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost_usd: float | None = None
+    model: str | None = None
 
     @model_validator(mode="after")
     def extract_emotion_from_context(self):
