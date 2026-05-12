@@ -29,6 +29,7 @@ use serde_json::Value;
 
 use agentprovision_core::error::Error;
 use agentprovision_core::models::{BulkIngestResponse, OnboardingStatus, TrainingRun};
+use agentprovision_core::training::local_ai_cli;
 
 use crate::context::Context;
 
@@ -197,12 +198,11 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
     // then interactive picker biased toward `status.recommended_channel`.
     let (channel, resume_existing) = resolve_channel(&args, &status)?;
 
-    // (3) Items collection — STUB in PR-Q2. Each wedge PR replaces
-    // this branch with its real collector (read ~/.claude history,
-    // gh api, IMAP fetch, etc). The stub returns a synthetic item so
-    // the workflow path is exercised end-to-end and we can verify the
-    // CLI ↔ API contract before the per-source code lands.
-    let items = collect_items_stub(channel)?;
+    // (3) Items collection. PR-Q3a wires the Local-AI-CLI wedge to a
+    // real scanner that reads git config + ~/.{claude,codex,gemini,
+    // local/share/opencode} session metadata. Other wedges still
+    // use the stub until their respective PRs land.
+    let items = collect_items(channel, &ctx).await?;
 
     // (4) Dispatch the bulk-ingest. snapshot_id is generated once per
     // quickstart run and persisted to disk so `--resume` re-POSTs the
@@ -337,16 +337,54 @@ fn resolve_channel(
     Ok((options[selection], None))
 }
 
-/// PR-Q2 placeholder. Returns a single synthetic item so the workflow
-/// runs end-to-end without per-source collectors. Replaced wedge-by-wedge
-/// in PR-Q3a/b, PR-Q4, PR-Q5 — each one returns real items from its
-/// channel (Claude session metadata, `gh api` rows, Gmail messages…).
-fn collect_items_stub(channel: WedgeChannel) -> anyhow::Result<Vec<Value>> {
-    Ok(vec![serde_json::json!({
-        "kind": "quickstart-stub",
-        "channel": channel.as_wire(),
-        "note": "placeholder item — real collector ships in the per-wedge PR"
-    })])
+/// Per-wedge item collection. Dispatches to the right scanner; the
+/// stub branch still covers wedges whose PR hasn't landed yet so the
+/// flow is end-to-end testable.
+async fn collect_items(channel: WedgeChannel, ctx: &Context) -> anyhow::Result<Vec<Value>> {
+    match channel {
+        WedgeChannel::LocalAiCli => collect_local_ai_cli(ctx),
+        // Stub branches — replaced by Q3b / Q4 / Q5 as those land.
+        WedgeChannel::GithubCli
+        | WedgeChannel::Gmail
+        | WedgeChannel::Calendar
+        | WedgeChannel::Slack
+        | WedgeChannel::Whatsapp => Ok(vec![serde_json::json!({
+            "kind": "quickstart-stub",
+            "channel": channel.as_wire(),
+            "note": "placeholder item — real collector ships in the per-wedge PR"
+        })]),
+    }
+}
+
+/// Local-AI-CLI wedge (PR-Q3a). Shows the consent summary, prompts
+/// for confirmation, then runs the scanner. JSON mode auto-consents
+/// because the scanner has the same blast radius as `ap memory ls`
+/// — fileystem reads bounded to the documented directories — and
+/// scripted callers shouldn't hang on a tty prompt.
+fn collect_local_ai_cli(ctx: &Context) -> anyhow::Result<Vec<Value>> {
+    use dialoguer::{theme::ColorfulTheme, Confirm};
+
+    if !ctx.json && console::Term::stdout().is_term() {
+        println!("\n{}", local_ai_cli::consent_summary());
+        let ok = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Scan local AI CLI history and upload extracted metadata?")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if !ok {
+            anyhow::bail!("local AI CLI scan declined — rerun and choose another wedge");
+        }
+    }
+
+    let snap = local_ai_cli::scan(local_ai_cli::ScanOptions::default()).map_err(map_api_error)?;
+    let items = snap.to_items();
+    if !ctx.json {
+        println!(
+            "  scanned: {} sessions across Claude / Codex / Gemini / OpenCode",
+            snap.total_sessions()
+        );
+    }
+    Ok(items)
 }
 
 async fn poll_until_terminal(ctx: &Context, run_id: &str) -> anyhow::Result<TrainingRun> {
