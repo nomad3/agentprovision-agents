@@ -46,8 +46,21 @@ pub fn consent_summary() -> &'static str {
      • repo contents (no clone, no read of source files)"
 }
 
+/// Per-bucket limits for the scan.
+///
+/// **`repos_limit` is hard-capped at 100 by GitHub's REST API
+/// (`per_page=100` max).** A caller setting `repos_limit: 500` will
+/// silently get the 100 most-recently-pushed repos. The proper fix
+/// once we need full repo coverage is to switch to paginated calls
+/// (`--paginate` flag or successive `?page=N` queries); for now the
+/// design intent is "seed enough signal for a useful KG, not build
+/// a mirror" and 100 is the right number. Reviewer (PR #407 NIT
+/// finding #3) flagged the soft-cap as fuzzy contract — documenting
+/// it on the field is the cheap fix.
 #[derive(Debug, Clone, Copy)]
 pub struct ScanOptions {
+    /// Cap at 100 due to GitHub's REST `per_page` limit (see struct
+    /// docstring). Values >100 are accepted but silently capped.
     pub repos_limit: u32,
     pub orgs_limit: u32,
     pub prs_limit: u32,
@@ -89,6 +102,17 @@ impl GithubCliSnapshot {
     /// Flatten to the wire-shape `Vec<Value>` the bulk-ingest endpoint
     /// accepts. Each item is tagged with `kind` so the server-side
     /// extract activity can dispatch per source.
+    ///
+    /// The `or_else` chains on `url` / `repository` / `updated_at`
+    /// look like dead code today — `gh search prs --json` always
+    /// emits the camelCase form. They exist as forward-compat for
+    /// a future change to `gh api /search/issues` (REST) which uses
+    /// `html_url` / `repo` / `updated_at` (snake_case). Reviewer
+    /// (PR #407 NIT finding #6) flagged the chains — leaving the
+    /// fallback in with this doc note rather than deleting it,
+    /// since the cost is one branch per item and the wire schema
+    /// drift between GraphQL and REST is the kind of thing that
+    /// shows up in a 2.x → 3.x gh major bump.
     pub fn to_items(&self) -> Vec<Value> {
         let mut items = Vec::new();
 
@@ -187,7 +211,31 @@ pub fn ensure_gh_authenticated() -> Result<()> {
 /// is more structured and version-stable. Failures bubble up — the
 /// wedge can recover from a single endpoint failing (we just emit
 /// fewer items) so callers wrap individual calls in `Result`.
+///
+/// **Subprocess-arg safety contract** (reviewer PR #407 finding #1):
+/// every `arg` passed in by callers MUST NOT start with `--` unless
+/// it is a hand-validated flag literal in this module. `Command::args`
+/// protects against shell-metacharacter injection (it spawns via
+/// `execve`, no shell), but NOT against flag-style injection where a
+/// user-controlled string `--token=…` becomes a new flag to `gh`.
+/// Today all args originate from this module's own templates — no
+/// user input reaches here. When the next PR adds `--user <name>` or
+/// `--org <name>` parameters, the caller must validate that the value
+/// doesn't begin with `--`, or use `Command::arg("--")` as an end-of-
+/// flags marker before the user value.
 fn gh_api(args: &[&str]) -> Result<Value> {
+    // Defensive guard for the contract above: refuse any arg that
+    // begins with "--" since this module currently doesn't have any
+    // legitimate need to pass flags through `args`. If a future PR
+    // wants to use this for a flag-passing call, lift the guard
+    // explicitly per-call rather than punching a hole here.
+    if args.iter().any(|a| a.starts_with("--")) {
+        return Err(Error::Other(format!(
+            "gh_api refuses flag-style arg (got `{}`). \
+             Callers must use the typed flag-builder helpers.",
+            args.iter().find(|a| a.starts_with("--")).unwrap_or(&""),
+        )));
+    }
     let mut cmd = Command::new("gh");
     cmd.arg("api");
     for a in args {
@@ -197,11 +245,22 @@ fn gh_api(args: &[&str]) -> Result<Value> {
         .output()
         .map_err(|e| Error::Other(format!("gh api spawn failed: {e}")))?;
     if !output.status.success() {
+        // Cap stderr at 512 chars (reviewer PR #407 NIT #2): prevents
+        // log pollution from a runaway gh backtrace + bounds the
+        // size of any PII (login / org name) that might land in
+        // off-box telemetry through the error path.
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        let capped = if trimmed.chars().count() > 512 {
+            let head: String = trimmed.chars().take(509).collect();
+            format!("{head}...")
+        } else {
+            trimmed.to_string()
+        };
         return Err(Error::Other(format!(
             "gh api failed (exit {:?}): {}",
             output.status.code(),
-            stderr.trim()
+            capped,
         )));
     }
     serde_json::from_slice::<Value>(&output.stdout)
@@ -244,7 +303,21 @@ pub fn scan(opts: ScanOptions) -> Result<GithubCliSnapshot> {
 /// Shell out to `gh search prs/issues --author=@me ... --json …`. We
 /// pass `--json` so the binary returns a Vec<Value> directly,
 /// avoiding the gh-pager interactive flow.
+///
+/// **Subprocess-arg safety contract** — every arg here is a literal
+/// from this module's source. `kind` is `"prs"` / `"issues"`
+/// (the only call sites in `scan()`); a future caller passing user
+/// input must validate it can't begin with `--`. See `gh_api()`
+/// docstring for the broader contract.
 fn run_gh_search(kind: &str, limit: u32) -> Result<Vec<Value>> {
+    // Hard guard: reject `kind` values that look like flags. The
+    // production call sites pass literal "prs" or "issues", but a
+    // future refactor could expose this to user input — fail fast.
+    if kind.starts_with("--") || kind.contains(' ') {
+        return Err(Error::Other(format!(
+            "run_gh_search refuses suspicious kind `{kind}`"
+        )));
+    }
     // Projection covers exactly the fields `to_items()` reads —
     // never include `body` so the body text stays on GitHub.
     let json_fields = "title,url,state,repository,updatedAt";
@@ -262,10 +335,18 @@ fn run_gh_search(kind: &str, limit: u32) -> Result<Vec<Value>> {
         .output()
         .map_err(|e| Error::Other(format!("gh search {kind} spawn failed: {e}")))?;
     if !output.status.success() {
+        // Same 512-char cap as `gh_api` for the same reasons —
+        // reviewer PR #407 NIT #2.
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let trimmed = stderr.trim();
+        let capped = if trimmed.chars().count() > 512 {
+            let head: String = trimmed.chars().take(509).collect();
+            format!("{head}...")
+        } else {
+            trimmed.to_string()
+        };
         return Err(Error::Other(format!(
-            "gh search {kind} failed: {}",
-            stderr.trim()
+            "gh search {kind} failed: {capped}"
         )));
     }
     let val: Value = serde_json::from_slice(&output.stdout)
