@@ -51,8 +51,10 @@ pub enum Command {
     /// Remove the stored token from the OS keychain.
     Logout,
 
-    /// Show the current user, tenant, server, and CLI version.
-    Status,
+    /// Show the current user, tenant, server, and CLI version. With
+    /// `--runtimes`, also reports preflight status for Claude Code,
+    /// Codex, Gemini CLI, and Copilot CLI.
+    Status(status::StatusArgs),
 
     /// Chat with the default agent. Run without subcommand for an interactive REPL.
     #[command(subcommand)]
@@ -101,7 +103,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
     match args.command {
         Command::Login(a) => login::run(a, ctx).await,
         Command::Logout => logout::run(ctx).await,
-        Command::Status => status::run(ctx).await,
+        Command::Status(a) => status::run(ctx, a.runtimes).await,
         Command::Chat(ChatCommand::Send(a)) => chat::send(a, ctx).await,
         Command::Chat(ChatCommand::Repl(a)) => chat::repl(a, ctx).await,
         Command::Upgrade(a) => upgrade::run(a, ctx).await,

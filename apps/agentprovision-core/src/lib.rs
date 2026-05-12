@@ -23,6 +23,11 @@ pub mod error;
 pub mod events;
 pub mod mcp;
 pub mod models;
+pub mod runtime;
 
 pub use client::ApiClient;
 pub use error::{Error, Result};
+pub use runtime::{
+    mint_agent_token_for_runtime, preflight, preflight_all, MintedAgentToken, PreflightReport,
+    RuntimeId,
+};
