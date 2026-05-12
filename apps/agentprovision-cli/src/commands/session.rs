@@ -117,6 +117,17 @@ async fn messages(args: MessagesArgs, ctx: Context) -> anyhow::Result<()> {
             output::info("no messages in this session.".to_string());
             return;
         }
+        // Per-session aggregate. Sums NON-NULL token counts; NULL
+        // means "the server didn't measure this turn" (older messages
+        // or agents that don't emit a usage struct), so it stays
+        // separate from `0`-measured turns to avoid hiding "we have no
+        // data" behind a numeric zero.
+        let token_total: i64 = list
+            .iter()
+            .filter_map(|m| m.tokens_used.map(i64::from))
+            .sum();
+        let measured = list.iter().filter(|m| m.tokens_used.is_some()).count();
+
         for m in list {
             // Coloured role prefix so `user:` vs `assistant:` is glanceable
             // in a long backlog. Same convention `git log --oneline` uses
@@ -131,16 +142,39 @@ async fn messages(args: MessagesArgs, ctx: Context) -> anyhow::Result<()> {
                 .created_at
                 .map(|d| d.format("%H:%M:%S").to_string())
                 .unwrap_or_default();
+            // `—` for unmeasured, `<n>tok` for measured. Keeping it in
+            // the line trailer so it lines up visually and doesn't
+            // disrupt the role:content reading flow.
+            let token_str = match m.tokens_used {
+                Some(n) => format!(" [{n}tok]"),
+                None => String::new(),
+            };
             if stamp.is_empty() {
-                println!("{}: {}", role_styled, m.content);
+                println!("{}{}: {}", role_styled, token_str, m.content);
             } else {
                 println!(
-                    "[{}] {}: {}",
+                    "[{}] {}{}: {}",
                     console::style(stamp).dim(),
                     role_styled,
+                    token_str,
                     m.content
                 );
             }
+        }
+        // Footer summary only when at least one message had a measured
+        // count — silence when the server has no token data yet beats
+        // a confusing "0 tokens across N messages" line.
+        if measured > 0 {
+            println!(
+                "{}",
+                console::style(format!(
+                    "── {} tokens across {} measured turn{}",
+                    token_total,
+                    measured,
+                    if measured == 1 { "" } else { "s" },
+                ))
+                .dim()
+            );
         }
     });
     Ok(())

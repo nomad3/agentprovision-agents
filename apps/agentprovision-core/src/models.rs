@@ -82,6 +82,13 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
+    /// Per-message token count. NULL when the server didn't measure
+    /// (older messages, agents that don't emit a usage struct). The
+    /// CLI must render absence as `—`, NOT 0 — they mean different
+    /// things. Exposed via
+    /// `apps/api/app/schemas/chat.py::ChatMessage.tokens_used`.
+    #[serde(default)]
+    pub tokens_used: Option<i32>,
 }
 
 /// Request body for `POST /api/v1/chat/sessions/{id}/messages`.

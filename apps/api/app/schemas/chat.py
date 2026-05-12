@@ -45,6 +45,13 @@ class ChatMessage(ChatMessageBase):
     context: dict | None = None
     emotion: str | None = None
     created_at: datetime
+    # ``tokens_used`` is already on the ORM model (chat_messages.tokens_used,
+    # Integer NULL) and populated by the code-worker callback after each
+    # CLI dispatch. Surfacing it here lets `ap session messages` and the
+    # web ChatPage show per-message token cost without a schema change.
+    # NULL means "not measured" (older messages, agents that don't emit a
+    # usage struct) — callers must render the absence as `—`, not 0.
+    tokens_used: int | None = None
 
     @model_validator(mode="after")
     def extract_emotion_from_context(self):
