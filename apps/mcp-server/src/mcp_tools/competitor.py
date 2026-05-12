@@ -98,7 +98,7 @@ async def add_competitor(
     Returns:
         Dict with status, entity_id, and confirmation message.
     """
-    tid = resolve_tenant_id(ctx) or tenant_id
+    tid = resolve_tenant_id(ctx, fallback=tenant_id)
     if not tid:
         return {"error": "tenant_id is required."}
     if not name:
@@ -152,7 +152,7 @@ async def list_competitors(
     Returns:
         Dict with status and list of competitor entities.
     """
-    tid = resolve_tenant_id(ctx) or tenant_id
+    tid = resolve_tenant_id(ctx, fallback=tenant_id)
     if not tid:
         return {"error": "tenant_id is required."}
 
@@ -195,7 +195,7 @@ async def remove_competitor(
     Returns:
         Dict with status and confirmation message.
     """
-    tid = resolve_tenant_id(ctx) or tenant_id
+    tid = resolve_tenant_id(ctx, fallback=tenant_id)
     if not tid:
         return {"error": "tenant_id is required."}
     if not name:
@@ -261,7 +261,7 @@ async def get_competitor_report(
     Returns:
         Dict with status, competitor details, relations, and timeline.
     """
-    tid = resolve_tenant_id(ctx) or tenant_id
+    tid = resolve_tenant_id(ctx, fallback=tenant_id)
     if not tid:
         return {"error": "tenant_id is required."}
     if not name:
@@ -332,7 +332,7 @@ async def compare_campaigns(
     Returns:
         Dict with status, competitor details, and filtered ad observations.
     """
-    tid = resolve_tenant_id(ctx) or tenant_id
+    tid = resolve_tenant_id(ctx, fallback=tenant_id)
     if not tid:
         return {"error": "tenant_id is required."}
     if not competitor_name:
