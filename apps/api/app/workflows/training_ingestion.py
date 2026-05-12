@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from temporalio import activity, workflow
 
@@ -157,6 +157,53 @@ async def extract_and_persist_batch(
         db.close()
 
 
+def _existing_entity_id(
+    db,
+    tenant_id,
+    entity_type: str,
+    *,
+    name: Optional[str] = None,
+    attr_key: Optional[str] = None,
+    attr_value: Optional[Any] = None,
+):
+    """Get-or-create lookup helper for the rule extractor.
+
+    Reviewer (PR #408 findings #5 + #6) caught that the v1 extractor
+    inserts duplicate Project / Person rows on every quickstart
+    re-run. The simplest fix is a cheap query against either the
+    `name` field or a key attribute before insert. We prefer
+    attribute-keyed matching when the caller provides one
+    (project_path / github_login / full_name / email) since name
+    collisions across users are realistic; name-only is the fallback.
+
+    Returns the existing entity id or None. The caller decides what
+    to do with the answer — typically: skip the insert and return
+    'persisted' (the row is already there) instead of creating a
+    duplicate.
+    """
+    from app.models.knowledge_entity import KnowledgeEntity
+
+    q = db.query(KnowledgeEntity.id).filter(
+        KnowledgeEntity.tenant_id == tenant_id,
+        KnowledgeEntity.entity_type == entity_type,
+        KnowledgeEntity.deleted_at.is_(None),
+    )
+    if attr_key is not None and attr_value is not None:
+        # attributes is a JSONB column; ->> coerces to text. Postgres
+        # operator binding is via SQLAlchemy's `op('->>')` since
+        # SQLAlchemy 2.x's typed accessor (`.astext`) isn't on the
+        # KnowledgeEntity column directly in this codebase.
+        q = q.filter(
+            KnowledgeEntity.attributes.op("->>")(attr_key) == str(attr_value)
+        )
+    elif name is not None:
+        q = q.filter(KnowledgeEntity.name == name)
+    else:
+        return None
+    row = q.first()
+    return row.id if row else None
+
+
 def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
     """Map one wedge-emitted item onto a knowledge entity.
 
@@ -192,18 +239,23 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
     kind = item.get("kind", "")
     if kind == "local_user_identity":
         name = item.get("name") or item.get("email") or "Local user"
+        # Dedup on email when available (the natural key); fall back
+        # to name otherwise. A re-run of ap quickstart on the same
+        # tenant must not create N Person rows for the same user.
+        email = item.get("email")
+        if email and _existing_entity_id(
+            db, tenant_id, "person", attr_key="email", attr_value=email
+        ):
+            return "persisted"
+        if _existing_entity_id(db, tenant_id, "person", name=name):
+            return "persisted"
         ent = KnowledgeEntityCreate(
             entity_type="person",
             category="user",
             name=name,
-            # Bio-only would also work, but local_user_identity items
-            # don't carry a bio — keeping email as description for the
-            # user-anchor entity is informative without doubling up
-            # with the attributes.email field. (github_user has a real
-            # bio; that branch prefers bio.)
-            description=item.get("email") or None,
+            description=email or None,
             attributes={
-                "email": item.get("email"),
+                "email": email,
                 "source": "ap_quickstart_local_ai_cli",
             },
         )
@@ -215,6 +267,16 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
         if not project_path:
             # Recognised kind, but nothing to anchor the Project on.
             return "recognised"
+        # Dedup on project_path — 20 Claude sessions on the same repo
+        # must yield ONE Project entity, not 20.
+        if _existing_entity_id(
+            db,
+            tenant_id,
+            "project",
+            attr_key="project_path",
+            attr_value=project_path,
+        ):
+            return "persisted"
         name = project_path.rstrip("/").split("/")[-1] or project_path
         ent = KnowledgeEntityCreate(
             entity_type="project",
@@ -233,6 +295,17 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
     if kind == "github_user":
         login = item.get("login") or ""
         name = item.get("name") or login or "GitHub user"
+        # Dedup on github_login (a strong key) when present;
+        # fall back to email or name.
+        if login and _existing_entity_id(
+            db, tenant_id, "person", attr_key="github_login", attr_value=login
+        ):
+            return "persisted"
+        email = item.get("email")
+        if email and _existing_entity_id(
+            db, tenant_id, "person", attr_key="email", attr_value=email
+        ):
+            return "persisted"
         # Reviewer NIT (PR #408 #8): prefer bio for description and
         # leave email solely in attributes.email — email-as-description
         # is odd when bio is the natural one-liner descriptor.
@@ -243,7 +316,7 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
             description=item.get("bio") or None,
             attributes={
                 "github_login": login,
-                "email": item.get("email"),
+                "email": email,
                 "company": item.get("company"),
                 "location": item.get("location"),
                 "source": "ap_quickstart_github_cli",
@@ -253,7 +326,15 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
         return "persisted"
 
     if kind == "github_repo":
-        name = item.get("name") or item.get("full_name") or "GitHub repo"
+        full_name = item.get("full_name")
+        name = item.get("name") or full_name or "GitHub repo"
+        # Dedup on full_name (e.g. "alice/myrepo"); falls back to
+        # name when full_name is missing (rare; fork-of-deleted-user
+        # case).
+        if full_name and _existing_entity_id(
+            db, tenant_id, "project", attr_key="full_name", attr_value=full_name
+        ):
+            return "persisted"
         ent = KnowledgeEntityCreate(
             entity_type="project",
             category="project",
@@ -266,7 +347,7 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
                 # before emitting; do NOT read item["owner"]["login"]
                 # here — it's already a string at this layer.
                 "owner": item.get("owner"),
-                "full_name": item.get("full_name"),
+                "full_name": full_name,
                 "language": item.get("language"),
                 "private": item.get("private"),
                 "source": "ap_quickstart_github_cli",
@@ -276,10 +357,16 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
         return "persisted"
 
     if kind == "github_org":
+        login = item.get("login") or "GitHub org"
+        # Dedup orgs on login. Same name across tenants is fine; same
+        # name within one tenant on re-runs is the duplicate we want
+        # to suppress.
+        if _existing_entity_id(db, tenant_id, "organization", name=login):
+            return "persisted"
         ent = KnowledgeEntityCreate(
             entity_type="organization",
             category="organization",
-            name=item.get("login") or "GitHub org",
+            name=login,
             description=item.get("description"),
             attributes={"source": "ap_quickstart_github_cli"},
         )
