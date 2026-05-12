@@ -157,6 +157,137 @@ def bulk_create_entities(
     return service.bulk_create_entities(db, bulk_in.entities, current_user.tenant_id)
 
 
+# ── internal getters/updaters ────────────────────────────────────────
+# Used by MCP-server tools (sales.qualify_lead, competitor.*, etc.)
+# that need to read or mutate entities outside a user-Bearer context.
+# The MCP server passes X-Internal-Key + tenant_id; we mount these
+# under the resource path (not /api/v1/internal/*) because the MCP
+# tool URLs were already written that way before the surface existed
+# — adding them here means the long-broken flows start working
+# without touching every caller. Cloudflared blocks
+# /api/v1/*/internal($|/) from the public internet so this is safe
+# to expose at the resource path.
+#
+# ROUTE ORDER MATTERS: the static-prefix internal routes
+# (`/entities/internal`, `/entities/internal/search`) MUST register
+# BEFORE the parameterized `/entities/{entity_id}` route below — same
+# precedent as `/entities/search` at line 65. FastAPI/Starlette
+# matches in registration order and the UUID path-converter on
+# `{entity_id}` rejects the string "internal" with 422 before the
+# router falls through to the next route, so a wrong order silently
+# breaks the very bug this section exists to fix (caught by reviewer
+# afb7dccb on PR #417, 2026-05-12).
+
+def _verify_internal_key_kg(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+):
+    from app.core.config import settings as _s
+    if x_internal_key not in (_s.API_INTERNAL_KEY, _s.MCP_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid internal key")
+
+
+@router.get("/entities/internal", response_model=List[KnowledgeEntity])
+def list_entities_internal(
+    tenant_id: uuid.UUID,
+    entity_type: Optional[str] = None,
+    category: Optional[str] = None,
+    status: Optional[str] = None,
+    exclude_archived: bool = False,
+    limit: int = 100,
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal list endpoint for MCP-server tools.
+
+    Mirrors ``GET /entities`` but auths via X-Internal-Key with an
+    explicit ``tenant_id`` query param. The competitor monitor MCP
+    tool (apps/mcp-server/src/mcp_tools/competitor.py:160) has been
+    calling this for months and hitting 404 — every poll cycle
+    spammed the api logs with HTTPStatusError tracebacks.
+
+    ``exclude_archived=true`` is sugar for ``status != 'archived'``,
+    implemented via the service's ``exclude_status`` arg so the
+    filter happens in SQL before LIMIT (a tenant with 99 archived
+    rows + 1 active row gets the 1 row, not `[]` — reviewer I1).
+    Mutually exclusive with an explicit ``status`` filter: if both
+    are passed, ``status`` wins (the inclusion filter is more
+    specific).
+    """
+    # Defensive limit cap — caller is trusted (X-Internal-Key) but
+    # `?limit=999999` should not be able to pull the entire tenant.
+    safe_limit = max(1, min(limit, 500))
+    if status:
+        return service.get_entities(
+            db, tenant_id, entity_type, skip=0, limit=safe_limit,
+            status=status, category=category,
+        )
+    return service.get_entities(
+        db, tenant_id, entity_type, skip=0, limit=safe_limit,
+        category=category,
+        exclude_status="archived" if exclude_archived else None,
+    )
+
+
+@router.post("/entities/internal", response_model=KnowledgeEntity, status_code=201)
+def create_entity_internal(
+    payload: dict,
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal entity create for MCP-server tools.
+
+    Body shape: ``tenant_id`` plus the fields of ``KnowledgeEntityCreate``.
+    The MCP competitor tool (competitor.py:117) calls this when the
+    user runs ``add_competitor`` from chat — failure here meant the
+    user got an MCP error and the entity never persisted.
+
+    Validates tenant_id, strips it from the payload, then routes the
+    rest through the normal Pydantic validator. Same error shapes as
+    the existing internal endpoints (422 on bad UUID / bad body).
+    Unknown keys in the payload are dropped silently (Pydantic v2
+    default ``extra='ignore'`` on KnowledgeEntityCreate); the
+    contract is open by design — see reviewer N1 on PR #417.
+    """
+    tenant_id_raw = payload.get("tenant_id")
+    if not tenant_id_raw:
+        raise HTTPException(status_code=422, detail="tenant_id is required")
+    try:
+        tenant_id = uuid.UUID(str(tenant_id_raw))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="tenant_id must be a UUID")
+
+    create_fields = {k: v for k, v in payload.items() if k != "tenant_id"}
+    try:
+        entity_in = KnowledgeEntityCreate(**create_fields)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"invalid create body: {e}")
+    return service.create_entity(db, entity_in, tenant_id)
+
+
+@router.get("/entities/internal/search", response_model=List[KnowledgeEntity])
+def search_entities_internal(
+    tenant_id: uuid.UUID,
+    q: str,
+    entity_type: Optional[str] = None,
+    category: Optional[str] = None,
+    limit: int = 50,
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal name-search for MCP-server tools.
+
+    Mirrors ``GET /entities/search`` but X-Internal-Key + explicit
+    ``tenant_id``. Used by ``remove_competitor`` and ``get_competitor_report``
+    to resolve a competitor's UUID from a chat-supplied name string —
+    those two tools were the primary source of the 2026-05-12 traceback
+    spam (`competitor.py:271` and `:207`).
+    """
+    safe_limit = max(1, min(limit, 500))
+    return service.search_entities(
+        db, tenant_id, q, entity_type, category=category, limit=safe_limit,
+    )
+
+
 @router.get("/entities/{entity_id}", response_model=KnowledgeEntity)
 def get_entity(
     entity_id: uuid.UUID,
@@ -168,24 +299,6 @@ def get_entity(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
-
-
-# ── internal getters/updaters ────────────────────────────────────────
-# Used by MCP-server tools (sales.qualify_lead, etc.) that need to read
-# or mutate entities outside a user-Bearer context. The MCP server
-# passes X-Internal-Key + tenant_id; we mount these under the resource
-# path (not /api/v1/internal/*) because the MCP tool URLs were already
-# written that way before the surface existed — adding them here means
-# the long-broken qualify_lead flow starts working without touching
-# every caller. Cloudflared blocks /api/v1/*/internal($|/) from the
-# public internet so this is safe to expose at the resource path.
-
-def _verify_internal_key_kg(
-    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
-):
-    from app.core.config import settings as _s
-    if x_internal_key not in (_s.API_INTERNAL_KEY, _s.MCP_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid internal key")
 
 
 @router.get("/entities/{entity_id}/internal", response_model=KnowledgeEntity)
@@ -242,6 +355,97 @@ def update_entity_internal(
     if not entity:
         raise HTTPException(status_code=404, detail="Entity not found")
     return entity
+
+
+@router.post("/entities/{entity_id}/internal/archive", response_model=KnowledgeEntity)
+def archive_entity_internal(
+    entity_id: uuid.UUID,
+    payload: dict,
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal archive — sets status='archived' on the entity.
+
+    Convenience wrapper over the update path so the MCP competitor
+    tool (competitor.py:230) gets a single round-trip for the common
+    ``remove_competitor`` flow instead of having to:
+      1. PATCH /entities/{id}/internal with `{"status":"archived"}`
+      2. handle the open dict shape
+
+    Body: ``{"tenant_id": "<uuid>", "reason": "<optional>"}``.
+    Always sets ``status='archived'``; if the entity is already
+    archived this is a no-op (returns the row unchanged, 200).
+    """
+    tenant_id_raw = payload.get("tenant_id")
+    if not tenant_id_raw:
+        raise HTTPException(status_code=422, detail="tenant_id is required")
+    try:
+        tenant_id = uuid.UUID(str(tenant_id_raw))
+    except ValueError:
+        raise HTTPException(status_code=422, detail="tenant_id must be a UUID")
+
+    entity_in = KnowledgeEntityUpdate(status="archived")
+    entity = service.update_entity(db, entity_id, tenant_id, entity_in)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
+
+
+@router.get("/entities/{entity_id}/internal/timeline")
+def entity_timeline_internal(
+    entity_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    limit: int = 100,
+    _auth: None = Depends(_verify_internal_key_kg),
+    db: Session = Depends(get_db),
+):
+    """Internal entity-history feed — returns ``knowledge_entity_history``
+    rows for the given entity, newest first.
+
+    The MCP competitor tool (competitor.py:301) calls this after
+    resolving the competitor UUID to render a chronological view of
+    what changed (price moves, ad-creative refreshes, status flips).
+
+    Response: ``{"history": [<row>, ...], "count": N}``. Empty list
+    when the entity exists but has no history rows yet — distinct
+    from 404 (entity doesn't exist at all in this tenant).
+    """
+    from app.models.knowledge_entity_history import KnowledgeEntityHistory
+
+    # Tenant-scope check first — refuse to leak history rows for an
+    # entity that belongs to a different tenant. ``get_entity`` does
+    # this filter for us.
+    entity = service.get_entity(db, entity_id, tenant_id)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    rows = (
+        db.query(KnowledgeEntityHistory)
+        .filter(KnowledgeEntityHistory.entity_id == entity_id)
+        .order_by(KnowledgeEntityHistory.changed_at.desc())
+        .limit(max(1, min(limit, 500)))
+        .all()
+    )
+    # Serialise via dict() — the history model has stable columns
+    # and the caller is the MCP tool, not a Pydantic-validated SDK.
+    # Keeping the shape open here matches `_api_get`'s consumption
+    # at competitor.py:304 (`timeline_result.get("history", [])`).
+    return {
+        "count": len(rows),
+        "history": [
+            {
+                "id": str(r.id),
+                "entity_id": str(r.entity_id),
+                "version": r.version,
+                "properties_snapshot": r.properties_snapshot,
+                "attributes_snapshot": r.attributes_snapshot,
+                "change_reason": r.change_reason,
+                "changed_by_platform": r.changed_by_platform,
+                "changed_at": r.changed_at.isoformat() if r.changed_at else None,
+            }
+            for r in rows
+        ],
+    }
 
 
 @router.put("/entities/{entity_id}", response_model=KnowledgeEntity)
