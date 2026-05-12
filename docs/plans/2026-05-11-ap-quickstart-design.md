@@ -77,24 +77,28 @@ Registration sets the user/tenant up but doesn't know which device the user is o
 
 | Wedge | Friction | Signal strength | Best for |
 |---|---|---|---|
-| **Local AI CLI** (Claude / Codex / Gemini / Copilot history + git) | none — files read locally | very high for devs who use AI CLIs | engineers using AI assistants |
+| **Claude Code** (history + repos touched) | none — reads `~/.claude/projects/*.jsonl` | very high for Claude users | engineers using Claude |
+| **Codex** (history) | none — reads `~/.codex/*` | very high for Codex users | engineers using Codex |
+| **Gemini CLI** (history) | none — reads `~/.gemini/*` | high | engineers using Gemini |
+| **GitHub Copilot CLI** (config) | none — local config | medium | Copilot users |
 | **GitHub CLI** (`gh`) | none — uses existing `gh auth` | very high for OSS / repo work | engineers, OSS contributors |
-| **Cloud CLI** (`gcloud` / `aws` / `az`) | none — uses existing local config | very high for DevOps / SRE / platform | infra engineers, SREs, platform teams |
 | **Gmail + Calendar** | one OAuth click | very high | managers, salespeople, ops |
 | **Slack** | one OAuth click + workspace pick | medium-high | team workers |
 | **WhatsApp** | QR pair | high (personal context) | SMB owners, LATAM markets |
 
-All "Local *" / "GitHub CLI" / "Cloud CLI" wedges share the property that the user **already** authenticated their tool (`claude login`, `gh auth login`, `gcloud auth`) — quickstart just *reads* the resulting local state. No new OAuth dance.
+All "Local AI CLI" + "GitHub CLI" wedges share the same property that the user **already** authenticated their tool (`claude login`, `gh auth login`, `gemini auth`, etc.) — quickstart just *reads* the resulting local state. No new OAuth dance, no platform-side credential exchange.
 
 Quickstart's interactive picker biases the order based on local detection:
 
-- `gh auth status` returns "Logged in" → suggest GitHub CLI first.
-- `gcloud config get-value account` or `aws sts get-caller-identity` succeeds → suggest Cloud CLI.
-- `which claude`/`codex`/`gemini`/`copilot` resolves → suggest Local AI CLI.
+- `gh auth status` returns "Logged in" → suggest GitHub CLI first (single API call, broadest dev coverage).
+- `which claude` + `~/.claude/projects/` non-empty → suggest Claude Code.
+- `which codex` + `~/.codex/` non-empty → suggest Codex.
+- `which gemini` + `~/.gemini/` non-empty → suggest Gemini.
+- `which copilot` → suggest Copilot.
 - Else if email domain looks like a company → suggest Gmail.
 - Always show all wedges; user can override.
 
-The picker is greedy: if multiple local signals fire, run the cheapest first (typically `gh` — single `gh api user` call) and offer to extend with the next wedge after the first chat lands.
+The picker is greedy: if multiple AI-CLI signals fire (user has all four installed), default to the one with the most recent activity (`stat` the newest file under each `~/.<cli>/` directory). A single quickstart run can chain multiple wedges — after the first one trains, the picker offers "Add another source? (recommended for richer context)".
 
 ## 4. Initial training — the actual work
 
@@ -144,18 +148,6 @@ gh search issues --involves=@me ...          # → recent issues observations
 Why this is different from the AI-CLI wedge: a dev might not use any AI CLI yet but already have `gh` set up. This wedge captures their **public** repo activity (open source, work-org-public repos they have access to) without ever needing OAuth on the AgentProvision side — the `gh` CLI already has the token.
 
 Wire payload: just the structured `gh api` JSON, batched and ingested by the bulk endpoint. No raw repo content is read.
-
-### 4.1c Cloud CLI wedge
-
-When any of `gcloud auth list` / `aws sts get-caller-identity` / `az account show` succeeds, quickstart pulls:
-
-- **GCP** (`gcloud`): active project, recent BigQuery queries, GKE cluster names, Cloud Run services, IAM members. Each becomes a `cloud_resource` entity.
-- **AWS** (`aws`): account id, configured profiles, recent CloudFormation stacks, Lambda function names, S3 bucket names.
-- **Azure** (`az`): subscription, resource groups, AKS clusters.
-
-For DevOps/SRE/platform users this is the highest-signal wedge. After ingest, the first chat can answer *"what GKE clusters do I manage?"* or *"what AWS regions am I active in?"* with real data.
-
-Privacy: only metadata is pulled (resource names, IDs, regions). No object contents, no logs, no secrets. The user sees the exact `gcloud`/`aws`/`az` commands quickstart will run, and can deselect any before consenting.
 
 ### 4.2 Gmail/Calendar wedge
 
@@ -282,9 +274,8 @@ State is persisted to `~/.config/agentprovision/quickstart.toml` so a crash mid-
 - **PR-Q0** (S, 1d): tenant onboarding state migration + `/onboarding/status|defer|complete` endpoints. Web SPA auto-trigger route guard. Doesn't require any new training pipeline yet — just the routing flag.
 - **PR-Q1** (M, 2-3d): backend training endpoint + `TrainingIngestionWorkflow` + SSE progress stream. No CLI changes. Tested via `curl` + a script-driven test tenant.
 - **PR-Q2** (S, 1d): CLI `quickstart` command skeleton — auth gate, tenant resolve, channel picker UI, calls training endpoint with a stub `local_cli` items payload, renders SSE progress, fires first chat. Wired into `ap login` post-success auto-trigger via `/onboarding/status`.
-- **PR-Q3a** (M, 2d): Local AI CLI scanner (`agentprovision-core::training::local_ai`) — git config + repo enumeration + Claude/Codex/Gemini session reading + opt-in consent prompt + entity extraction.
+- **PR-Q3a** (M, 2d): Local AI CLI scanner (`agentprovision-core::training::local_ai`) — git config + repo enumeration + Claude / Codex / Gemini / Copilot session reading + opt-in consent prompt + entity extraction. One adapter per CLI; each ships its own session-file parser.
 - **PR-Q3b** (S, 1d): GitHub CLI wedge — shells out to `gh api` / `gh repo list` / `gh search`.
-- **PR-Q3c** (M, 2d): Cloud CLI wedge — `gcloud` + `aws` + `az` adapters; per-vendor command allowlist; preview-before-run consent UI.
 - **PR-Q4** (M, 2d): Gmail/Calendar wedge — reuses existing inbox_monitor activities in bulk mode.
 - **PR-Q5** (S, 1d each): Slack, WhatsApp wedges.
 - **PR-Q6** (M, 2d): Web SPA onboarding screens — mirror the CLI wedge picker as React pages mounted at `/onboarding/*`. Shares the same training pipeline.
