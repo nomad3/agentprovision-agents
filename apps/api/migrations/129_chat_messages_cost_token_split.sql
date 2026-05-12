@@ -30,33 +30,40 @@ ALTER TABLE chat_messages
     ADD COLUMN IF NOT EXISTS cost_usd      NUMERIC(12,6),
     ADD COLUMN IF NOT EXISTS model         VARCHAR(64);
 
--- Backfill from the `context` JSONB blob where the code-worker
+-- Backfill from the `context` JSON blob where the code-worker
 -- callback wrote these fields. Idempotent: only touches rows where
 -- the new columns are still NULL (so a re-run after manual fixups
--- doesn't clobber later corrections). Skips rows whose JSONB values
+-- doesn't clobber later corrections). Skips rows whose JSON values
 -- aren't numeric — the `~ '^[0-9]+$'` filter on text-coerced values
 -- avoids `invalid input syntax for integer` if a malformed event
 -- ever wrote a string into one of these slots.
+--
+-- Column type quirk: chat_messages.context is JSON (not JSONB), so
+-- the `?` (key-existence) operator doesn't apply — that's a JSONB-
+-- only operator. Use `(context -> 'key') IS NOT NULL` instead, which
+-- works on both JSON and JSONB. (Caught by the docker-desktop-deploy
+-- CI run on PR #420 — psql error "operator does not exist: json ?
+-- unknown" on 2026-05-12.)
 UPDATE chat_messages
 SET input_tokens = (context ->> 'input_tokens')::int
 WHERE input_tokens IS NULL
-  AND context ? 'input_tokens'
+  AND (context -> 'input_tokens') IS NOT NULL
   AND (context ->> 'input_tokens') ~ '^[0-9]+$';
 
 UPDATE chat_messages
 SET output_tokens = (context ->> 'output_tokens')::int
 WHERE output_tokens IS NULL
-  AND context ? 'output_tokens'
+  AND (context -> 'output_tokens') IS NOT NULL
   AND (context ->> 'output_tokens') ~ '^[0-9]+$';
 
 UPDATE chat_messages
 SET cost_usd = (context ->> 'cost_usd')::numeric(12, 6)
 WHERE cost_usd IS NULL
-  AND context ? 'cost_usd'
+  AND (context -> 'cost_usd') IS NOT NULL
   AND (context ->> 'cost_usd') ~ '^[0-9]+(\.[0-9]+)?$';
 
 UPDATE chat_messages
 SET model = LEFT((context ->> 'model'), 64)
 WHERE model IS NULL
-  AND context ? 'model'
+  AND (context -> 'model') IS NOT NULL
   AND length(context ->> 'model') > 0;
