@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from temporalio import activity, workflow
 
@@ -62,23 +62,38 @@ async def extract_and_persist_batch(
     the workflow can advance `training_runs.items_processed` precisely
     even when a subset of items fails to parse.
 
-    PR-Q1 scope: minimum-viable wiring. Each source-specific adapter
-    (PR-Q3a/b, PR-Q4, PR-Q5) will replace the placeholder body with
-    its own normalization step that turns raw `items` into
-    `knowledge_extraction.extract_from_content` calls.
+    PR-Q4 scope: rule-based extraction for kinds emitted by the
+    Q3a (Local AI CLI) and Q3b (GitHub CLI) scanners. Each kind maps
+    deterministically onto one or more knowledge entities. Items
+    whose `kind` we don't recognise are counted as 'processed' but
+    not persisted — better to make progress on the known shapes than
+    fail the whole batch on a single unknown kind.
+
+    Future (PR-Q4b/Q5): server-side bootstrappers for Gmail / Calendar
+    / Slack / WhatsApp that fetch items from those integrations and
+    feed the same `items` shape into this function. Gemma-based free-
+    text extraction is deferred — the rule-based path covers the
+    structured-source wedges and is fast (no LLM call per item).
     """
-    # Lazy import inside the activity body so the workflow process
-    # (which never imports app.db.session) doesn't pay the import cost.
+    # Lazy imports — the workflow process never touches the DB
+    # session directly; only the activity does. Keeps replay fast.
     from app.db.session import SessionLocal
     from app.db.safe_ops import safe_rollback
 
     db = SessionLocal()
-    processed = 0
+    # Reviewer (PR #408 finding #3) caught that conflating 'seen' with
+    # 'persisted' regresses toward the success-without-effect anti-
+    # pattern called out in orchestration_cascade_root_cause.md.
+    # Counters keep both numbers honest: `persisted` is what actually
+    # landed in knowledge_entities; `recognised` includes deferred
+    # kinds (github_pr/issue, quickstart-stub) plus persisted; the
+    # difference between (recognised + unknown) and items.len() lets
+    # the workflow surface unknown-kind drift in a single WARN per
+    # batch instead of silently inflating the progress bar.
+    persisted = 0
+    recognised = 0
+    unknown_kinds: Dict[str, int] = {}
     try:
-        # Stub body — the real implementation lives in each wedge PR.
-        # We touch the DB intentionally so the activity exercises the
-        # tenancy + session boundary in tests, but skip the actual
-        # extract until the source-adapter PRs land.
         from app.models.training_run import TrainingRun
         import uuid as _uuid
 
@@ -87,20 +102,313 @@ async def extract_and_persist_batch(
             activity.logger.warning("training_run %s vanished mid-flight — skipping batch", run_id)
             return 0
 
-        processed = len(items)
-        run.items_processed = (run.items_processed or 0) + processed
+        tenant_uuid = _uuid.UUID(tenant_id)
+        for item in items:
+            kind = item.get("kind", "") or "<missing>"
+            try:
+                outcome = _persist_item(db, tenant_uuid, item)
+                if outcome == "persisted":
+                    persisted += 1
+                    recognised += 1
+                elif outcome == "recognised":
+                    recognised += 1
+                else:
+                    # Genuinely unknown kind — accumulate into the
+                    # per-batch histogram so a single WARN below
+                    # surfaces wire-format drift without flooding logs.
+                    unknown_kinds[kind] = unknown_kinds.get(kind, 0) + 1
+            except Exception:
+                safe_rollback(db)
+                activity.logger.exception(
+                    "item persist failed (kind=%s) — continuing batch",
+                    kind,
+                )
+
+        if unknown_kinds:
+            # One log line per batch, not per item — keeps log volume
+            # bounded even when a misconfigured wedge ships 10k unknowns.
+            # Reviewer re-review NIT #5: sanitise kind strings before
+            # logging — the endpoint accepts arbitrary JSON so a
+            # malicious tenant could POST `kind: "\n[CRITICAL] ..."`
+            # and land that in worker logs scraped by alerting
+            # systems. Strip non-printable + cap at 60 chars per kind.
+            def _safe_kind(k: str, max_len: int = 60) -> str:
+                cleaned = "".join(
+                    c if (c.isprintable() and c not in "\r\n") else "?" for c in k
+                )
+                return cleaned[:max_len]
+
+            safe_unknown = {
+                _safe_kind(k): v for k, v in sorted(unknown_kinds.items())
+            }
+            activity.logger.warning(
+                "batch %s: %d unknown-kind items skipped (not persisted): %s",
+                batch_index,
+                sum(unknown_kinds.values()),
+                safe_unknown,
+            )
+
+        # `items_processed` reflects RECOGNISED items only — the user's
+        # progress bar shows what the workflow actually saw and could
+        # do something with. Unknown items don't move the bar; they
+        # surface as the per-batch WARN above. If the whole snapshot
+        # turns out to be unknown, items_processed stays 0 and the
+        # caller can present a meaningful 'no items recognised'
+        # outcome instead of '10000/10000 succeeded but graph empty'.
+        run.items_processed = (run.items_processed or 0) + recognised
         db.commit()
 
         activity.heartbeat(
-            f"batch {batch_index} processed: tenant={tenant_id[:8]} +{processed}"
+            f"batch {batch_index}: tenant={tenant_id[:8]} "
+            f"persisted={persisted} recognised={recognised} unknown={sum(unknown_kinds.values())}"
         )
-        return processed
+        return recognised
     except Exception:
         safe_rollback(db)
         activity.logger.exception("extract_and_persist_batch failed")
         raise
     finally:
         db.close()
+
+
+def _existing_entity_id(
+    db,
+    tenant_id,
+    entity_type: str,
+    *,
+    name: Optional[str] = None,
+    attr_key: Optional[str] = None,
+    attr_value: Optional[Any] = None,
+):
+    """Get-or-create lookup helper for the rule extractor.
+
+    Reviewer (PR #408 findings #5 + #6) caught that the v1 extractor
+    inserts duplicate Project / Person rows on every quickstart
+    re-run. The simplest fix is a cheap query against either the
+    `name` field or a key attribute before insert. We prefer
+    attribute-keyed matching when the caller provides one
+    (project_path / github_login / full_name / email) since name
+    collisions across users are realistic; name-only is the fallback.
+
+    Returns the existing entity id or None. The caller decides what
+    to do with the answer — typically: skip the insert and return
+    'persisted' (the row is already there) instead of creating a
+    duplicate.
+    """
+    from app.models.knowledge_entity import KnowledgeEntity
+
+    q = db.query(KnowledgeEntity.id).filter(
+        KnowledgeEntity.tenant_id == tenant_id,
+        KnowledgeEntity.entity_type == entity_type,
+        KnowledgeEntity.deleted_at.is_(None),
+    )
+    if attr_key is not None and attr_value is not None:
+        # Reviewer re-review NIT #1 (PR #408): the `->>` operator
+        # coerces JSONB to text, so a non-string attr_value would
+        # silently mismatch (e.g. `private: false` stored as JSON
+        # `"false"` but `str(False)` produces "False"). All current
+        # call sites pass strings — assert it so the next refactor
+        # that introduces a boolean / number key fails loudly here
+        # rather than silently mis-deduplicating.
+        assert isinstance(attr_value, str), (
+            "JSONB ->> lookup requires str attr_value "
+            "(booleans encode as 'true'/'false', not str(bool); "
+            "numbers stringify differently across Python/JSON)"
+        )
+        # attributes is a JSONB column; ->> coerces to text. Postgres
+        # operator binding is via SQLAlchemy's `op('->>')` since
+        # SQLAlchemy 2.x's typed accessor (`.astext`) isn't on the
+        # KnowledgeEntity column directly in this codebase.
+        q = q.filter(
+            KnowledgeEntity.attributes.op("->>")(attr_key) == attr_value
+        )
+    elif name is not None:
+        q = q.filter(KnowledgeEntity.name == name)
+    else:
+        return None
+    row = q.first()
+    return row.id if row else None
+
+
+def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
+    """Map one wedge-emitted item onto a knowledge entity.
+
+    Returns one of three outcome strings so the caller can keep the
+    user-visible counters honest:
+
+        "persisted"   — the item was a recognised kind AND a
+                        knowledge_entities row was created.
+        "recognised"  — the item was a recognised kind but
+                        deliberately not persisted in v1 (github_pr /
+                        github_issue → deferred to Q4-back-2; the
+                        quickstart-stub items that the wedge stubs
+                        emit during not-yet-implemented branches).
+        "unknown"     — neither — counted into the per-batch unknown
+                        histogram so wire-format drift surfaces in
+                        logs instead of silently inflating progress.
+
+    Rule table:
+      local_user_identity → Person (persisted)
+      local_ai_session    → Project keyed on project_path (persisted
+                            when project_path is non-empty; recognised
+                            otherwise because there's nothing to anchor)
+      github_user         → Person (persisted)
+      github_repo         → Project (persisted)
+      github_org          → Organization (persisted)
+      github_pr           → recognised, not persisted (Q4-back-2)
+      github_issue        → recognised, not persisted (Q4-back-2)
+      quickstart-stub     → recognised, not persisted
+    """
+    from app.schemas.knowledge_entity import KnowledgeEntityCreate
+    from app.services.knowledge import create_entity
+
+    kind = item.get("kind", "")
+    if kind == "local_user_identity":
+        name = item.get("name") or item.get("email") or "Local user"
+        # Dedup on email when available (the natural key); fall back
+        # to name otherwise. A re-run of ap quickstart on the same
+        # tenant must not create N Person rows for the same user.
+        email = item.get("email")
+        if email and _existing_entity_id(
+            db, tenant_id, "person", attr_key="email", attr_value=email
+        ):
+            return "persisted"
+        if _existing_entity_id(db, tenant_id, "person", name=name):
+            return "persisted"
+        ent = KnowledgeEntityCreate(
+            entity_type="person",
+            category="user",
+            name=name,
+            description=email or None,
+            attributes={
+                "email": email,
+                "source": "ap_quickstart_local_ai_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return "persisted"
+
+    if kind == "local_ai_session":
+        project_path = item.get("project_path") or ""
+        if not project_path:
+            # Recognised kind, but nothing to anchor the Project on.
+            return "recognised"
+        # Dedup on project_path — 20 Claude sessions on the same repo
+        # must yield ONE Project entity, not 20.
+        if _existing_entity_id(
+            db,
+            tenant_id,
+            "project",
+            attr_key="project_path",
+            attr_value=project_path,
+        ):
+            return "persisted"
+        name = project_path.rstrip("/").split("/")[-1] or project_path
+        ent = KnowledgeEntityCreate(
+            entity_type="project",
+            category="project",
+            name=name,
+            description=item.get("derived_topic_hint") or None,
+            attributes={
+                "project_path": project_path,
+                "runtime": item.get("runtime"),
+                "source": "ap_quickstart_local_ai_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return "persisted"
+
+    if kind == "github_user":
+        login = item.get("login") or ""
+        name = item.get("name") or login or "GitHub user"
+        # Dedup on github_login (a strong key) when present;
+        # fall back to email or name.
+        if login and _existing_entity_id(
+            db, tenant_id, "person", attr_key="github_login", attr_value=login
+        ):
+            return "persisted"
+        email = item.get("email")
+        if email and _existing_entity_id(
+            db, tenant_id, "person", attr_key="email", attr_value=email
+        ):
+            return "persisted"
+        # Reviewer NIT (PR #408 #8): prefer bio for description and
+        # leave email solely in attributes.email — email-as-description
+        # is odd when bio is the natural one-liner descriptor.
+        ent = KnowledgeEntityCreate(
+            entity_type="person",
+            category="user",
+            name=name,
+            description=item.get("bio") or None,
+            attributes={
+                "github_login": login,
+                "email": email,
+                "company": item.get("company"),
+                "location": item.get("location"),
+                "source": "ap_quickstart_github_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return "persisted"
+
+    if kind == "github_repo":
+        full_name = item.get("full_name")
+        name = item.get("name") or full_name or "GitHub repo"
+        # Dedup on full_name (e.g. "alice/myrepo"); falls back to
+        # name when full_name is missing (rare; fork-of-deleted-user
+        # case).
+        if full_name and _existing_entity_id(
+            db, tenant_id, "project", attr_key="full_name", attr_value=full_name
+        ):
+            return "persisted"
+        ent = KnowledgeEntityCreate(
+            entity_type="project",
+            category="project",
+            name=name,
+            description=None,
+            source_url=item.get("html_url"),
+            attributes={
+                # Note: the Q3b scanner flattens owner to a login
+                # string (`r.get("owner").and_then(|o| o.get("login"))`)
+                # before emitting; do NOT read item["owner"]["login"]
+                # here — it's already a string at this layer.
+                "owner": item.get("owner"),
+                "full_name": full_name,
+                "language": item.get("language"),
+                "private": item.get("private"),
+                "source": "ap_quickstart_github_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return "persisted"
+
+    if kind == "github_org":
+        login = item.get("login") or "GitHub org"
+        # Dedup orgs on login. Same name across tenants is fine; same
+        # name within one tenant on re-runs is the duplicate we want
+        # to suppress.
+        if _existing_entity_id(db, tenant_id, "organization", name=login):
+            return "persisted"
+        ent = KnowledgeEntityCreate(
+            entity_type="organization",
+            category="organization",
+            name=login,
+            description=item.get("description"),
+            attributes={"source": "ap_quickstart_github_cli"},
+        )
+        create_entity(db, ent, tenant_id)
+        return "persisted"
+
+    if kind in ("github_pr", "github_issue", "quickstart-stub"):
+        # PRs / issues are better modelled as observations on the
+        # parent repo (PR-Q4-back-2). 'quickstart-stub' lands during
+        # stub-wedge runs (Q5 sources before they have real
+        # collectors). Returning "recognised" lets the user-visible
+        # counter reflect that the workflow saw and understood the
+        # item even though nothing landed in the graph.
+        return "recognised"
+
+    return "unknown"
 
 
 @activity.defn
