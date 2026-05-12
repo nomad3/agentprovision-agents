@@ -28,6 +28,9 @@ chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
 toml = "0.8"
 dirs = "5"
+# Resolve runtime binaries on PATH for `runtime::preflight`. Same crate
+# `cargo` itself uses for `cargo install --root`; standard pick.
+which = "6"
 async-trait = "0.1"
 futures-util = "0.3"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros", "io-util"] }
