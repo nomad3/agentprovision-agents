@@ -346,6 +346,66 @@ class TestEnforcement:
 
     @patch("app.services.safety_enforcement.safety_trust.get_agent_trust_profile")
     @patch("app.services.safety_enforcement.safety_policies.evaluate_action")
+    def test_workflow_channel_carveout_applies_without_trust_profile(
+        self,
+        mock_evaluate,
+        mock_get_trust,
+    ):
+        """Cascade-third-order regression (2026-05-12). The PR #418/#423
+        carve-out lived inside `_apply_agent_autonomy_restrictions`,
+        which returns early when there's no trust profile for the
+        agent_slug. Workflow steps that don't resolve an agent_slug
+        (or use a fresh agent with no trust events yet) skipped past
+        the carve-out and the upstream policy BLOCK persisted.
+
+        Fix: top-level carve-out in `enforce_action` after the tier
+        logic. This test pins the no-trust-profile path.
+        """
+        mock_evaluate.return_value = safety_policies.SafetyActionEvaluation(
+            action_key="mcp_tool:call_mcp_tool",
+            action_type=ActionType.MCP_TOOL,
+            action_name="call_mcp_tool",
+            category="workflow",
+            channel="workflow",
+            risk_class=RiskClass.EXTERNAL_WRITE,
+            risk_level=RiskLevel.HIGH,
+            side_effect_level=SideEffectLevel.EXTERNAL_WRITE,
+            reversibility=Reversibility.PARTIAL,
+            default_decision=PolicyDecision.BLOCK,
+            decision=PolicyDecision.BLOCK,
+            decision_source="default",
+            rationale="High-risk MCP tool dispatch",
+            policy_override_id=None,
+        )
+        # No trust profile — the inner carve-out doesn't fire because
+        # _apply_agent_autonomy_restrictions returns at the `if not
+        # profile:` early-return.
+        mock_get_trust.return_value = None
+        db = MagicMock()
+        request = SafetyEnforcementRequest(
+            action_type=ActionType.MCP_TOOL,
+            action_name="call_mcp_tool",
+            channel="workflow",
+            proposed_action={"arguments": {"foo": "bar"}},
+            assumptions=["Workflow step."],
+            uncertainty_notes=["No inline confirmation."],
+            expected_downside="Tool may mutate state.",
+            agent_slug=None,  # the trigger condition
+        )
+
+        result = safety_enforcement.enforce_action(
+            db,
+            tenant_id=uuid.uuid4(),
+            request=request,
+        )
+
+        # Top-level carve-out must demote BLOCK → ALLOW_WITH_LOGGING
+        # even without a trust profile.
+        assert result.decision == PolicyDecision.ALLOW_WITH_LOGGING
+        assert "top-level carve-out" in result.rationale
+
+    @patch("app.services.safety_enforcement.safety_trust.get_agent_trust_profile")
+    @patch("app.services.safety_enforcement.safety_policies.evaluate_action")
     def test_observe_only_chat_channel_still_blocks_high_risk_agent(
         self,
         mock_evaluate,
