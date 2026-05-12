@@ -62,23 +62,27 @@ async def extract_and_persist_batch(
     the workflow can advance `training_runs.items_processed` precisely
     even when a subset of items fails to parse.
 
-    PR-Q1 scope: minimum-viable wiring. Each source-specific adapter
-    (PR-Q3a/b, PR-Q4, PR-Q5) will replace the placeholder body with
-    its own normalization step that turns raw `items` into
-    `knowledge_extraction.extract_from_content` calls.
+    PR-Q4 scope: rule-based extraction for kinds emitted by the
+    Q3a (Local AI CLI) and Q3b (GitHub CLI) scanners. Each kind maps
+    deterministically onto one or more knowledge entities. Items
+    whose `kind` we don't recognise are counted as 'processed' but
+    not persisted — better to make progress on the known shapes than
+    fail the whole batch on a single unknown kind.
+
+    Future (PR-Q4b/Q5): server-side bootstrappers for Gmail / Calendar
+    / Slack / WhatsApp that fetch items from those integrations and
+    feed the same `items` shape into this function. Gemma-based free-
+    text extraction is deferred — the rule-based path covers the
+    structured-source wedges and is fast (no LLM call per item).
     """
-    # Lazy import inside the activity body so the workflow process
-    # (which never imports app.db.session) doesn't pay the import cost.
+    # Lazy imports — the workflow process never touches the DB
+    # session directly; only the activity does. Keeps replay fast.
     from app.db.session import SessionLocal
     from app.db.safe_ops import safe_rollback
 
     db = SessionLocal()
     processed = 0
     try:
-        # Stub body — the real implementation lives in each wedge PR.
-        # We touch the DB intentionally so the activity exercises the
-        # tenancy + session boundary in tests, but skip the actual
-        # extract until the source-adapter PRs land.
         from app.models.training_run import TrainingRun
         import uuid as _uuid
 
@@ -87,7 +91,24 @@ async def extract_and_persist_batch(
             activity.logger.warning("training_run %s vanished mid-flight — skipping batch", run_id)
             return 0
 
-        processed = len(items)
+        tenant_uuid = _uuid.UUID(tenant_id)
+        for item in items:
+            try:
+                if _persist_item(db, tenant_uuid, item):
+                    processed += 1
+                else:
+                    # Unknown kind — count as processed (advances the
+                    # progress bar) but skip the persist step. The
+                    # alternative is to fail the whole batch on one
+                    # unknown kind, which is worse UX.
+                    processed += 1
+            except Exception:
+                safe_rollback(db)
+                activity.logger.exception(
+                    "item persist failed (kind=%s) — continuing batch",
+                    item.get("kind"),
+                )
+
         run.items_processed = (run.items_processed or 0) + processed
         db.commit()
 
@@ -101,6 +122,120 @@ async def extract_and_persist_batch(
         raise
     finally:
         db.close()
+
+
+def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
+    """Map one wedge-emitted item onto a knowledge entity. Returns
+    True if the item was a recognised kind (regardless of whether the
+    persist itself succeeded — the caller is responsible for catching
+    persist failures and continuing the batch).
+
+    Rule table:
+      local_user_identity → Person (category=user)
+      local_ai_session    → Project (category=project) keyed on project_path
+      github_user         → Person (category=user)
+      github_repo         → Project (category=project)
+      github_org          → Organization (category=organization)
+      github_pr           → not persisted as entity in v1 (would be
+                            observation on the parent repo; deferred)
+      github_issue        → same as github_pr; deferred to Q4-back-2.
+    """
+    from app.schemas.knowledge_entity import KnowledgeEntityCreate
+    from app.services.knowledge import create_entity
+
+    kind = item.get("kind", "")
+    if kind == "local_user_identity":
+        name = item.get("name") or item.get("email") or "Local user"
+        ent = KnowledgeEntityCreate(
+            entity_type="person",
+            category="user",
+            name=name,
+            description=item.get("email") or None,
+            attributes={
+                "email": item.get("email"),
+                "source": "ap_quickstart_local_ai_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return True
+
+    if kind == "local_ai_session":
+        project_path = item.get("project_path") or ""
+        if not project_path:
+            return True  # known kind, just nothing to anchor on
+        name = project_path.rstrip("/").split("/")[-1] or project_path
+        ent = KnowledgeEntityCreate(
+            entity_type="project",
+            category="project",
+            name=name,
+            description=item.get("derived_topic_hint") or None,
+            attributes={
+                "project_path": project_path,
+                "runtime": item.get("runtime"),
+                "source": "ap_quickstart_local_ai_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return True
+
+    if kind == "github_user":
+        login = item.get("login") or ""
+        name = item.get("name") or login or "GitHub user"
+        ent = KnowledgeEntityCreate(
+            entity_type="person",
+            category="user",
+            name=name,
+            description=item.get("bio") or item.get("email"),
+            attributes={
+                "github_login": login,
+                "email": item.get("email"),
+                "company": item.get("company"),
+                "location": item.get("location"),
+                "source": "ap_quickstart_github_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return True
+
+    if kind == "github_repo":
+        name = item.get("name") or item.get("full_name") or "GitHub repo"
+        ent = KnowledgeEntityCreate(
+            entity_type="project",
+            category="project",
+            name=name,
+            description=None,
+            source_url=item.get("html_url"),
+            attributes={
+                "owner": item.get("owner"),
+                "full_name": item.get("full_name"),
+                "language": item.get("language"),
+                "private": item.get("private"),
+                "source": "ap_quickstart_github_cli",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+        return True
+
+    if kind == "github_org":
+        ent = KnowledgeEntityCreate(
+            entity_type="organization",
+            category="organization",
+            name=item.get("login") or "GitHub org",
+            description=item.get("description"),
+            attributes={"source": "ap_quickstart_github_cli"},
+        )
+        create_entity(db, ent, tenant_id)
+        return True
+
+    if kind in ("github_pr", "github_issue", "quickstart-stub"):
+        # Recognised kinds — defer persistence. PRs / issues are
+        # better modelled as observations on the parent repo (PR-Q4-
+        # back-2). 'quickstart-stub' lands during stub-wedge runs;
+        # counting them as 'processed' keeps the progress bar
+        # honest without persisting noise.
+        return True
+
+    return False
 
 
 @activity.defn
