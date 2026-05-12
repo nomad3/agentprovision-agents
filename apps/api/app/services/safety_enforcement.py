@@ -317,6 +317,37 @@ def enforce_action(
     )
     result = _resolve_automated_channel_decision(result, request.channel)
     result = _apply_agent_autonomy_restrictions(result, request, tenant_id, db)
+
+    # Workflow-channel platform-action carve-out — applied AFTER the
+    # tier-based logic so it covers BOTH:
+    #   - Agents WITH a trust profile, regardless of tier (the
+    #     OBSERVE_ONLY branch inside `_apply_agent_autonomy_restrictions`
+    #     also catches this; this top-level check is a backstop)
+    #   - Workflow steps with NO trust profile (no resolved agent_slug,
+    #     or fresh agent with no recorded trust events). The autonomy
+    #     restrictions function returns early for these without
+    #     touching `result.decision`, so an upstream policy BLOCK
+    #     persists and the cascade re-emerges (caught 2026-05-12 after
+    #     PR #423 fixed the action_type matching).
+    #
+    # Scope is identical to the inner carve-out: workflow channel +
+    # action_type in {WORKFLOW_ACTION, MCP_TOOL}. Demoted to
+    # ALLOW_WITH_LOGGING so the evidence_pack is still persisted
+    # (audit-trail discipline).
+    if (
+        result.decision == PolicyDecision.BLOCK
+        and request.channel == "workflow"
+        and request.action_type in (ActionType.WORKFLOW_ACTION, ActionType.MCP_TOOL)
+    ):
+        result.decision = PolicyDecision.ALLOW_WITH_LOGGING
+        result.rationale = (
+            f"Workflow-channel platform action (top-level carve-out): "
+            f"action_type={request.action_type.value}, "
+            f"name='{request.action_name}', risk={result.risk_level.value}. "
+            f"BLOCK would cascade-poison the orchestration worker — "
+            f"demoted to ALLOW_WITH_LOGGING; evidence pack persisted."
+        )
+
     result.evidence_required = _evidence_required(result)
     result.evidence_sufficient = (
         _evidence_sufficient(request) if result.evidence_required else True
