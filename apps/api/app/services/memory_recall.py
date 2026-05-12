@@ -18,6 +18,7 @@ from app.models.agent_memory import AgentMemory
 from app.models.world_state import WorldStateAssertion
 from app.services import embedding_service
 from app.services.rl_experience_service import log_experience
+from app.db.safe_ops import safe_rollback
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,12 @@ def build_memory_context(
         include_relations: When False, skip relation fetching entirely (default True).
         include_episodes: When False, skip episode fetching entirely (default True).
     """
+    # Defensive: if the caller's session arrived with an aborted txn,
+    # every query below would cascade InFailedSqlTransaction. Clean
+    # entry guarantees recall starts from a usable session. Sister fix
+    # to the same defense in `app.memory.recall.recall()`.
+    safe_rollback(db)
+
     # Always fetch the user/owner entity — pinned into context regardless of query
     user_entity = _fetch_user_entity(db, tenant_id)
     anticipatory_context = _build_anticipatory_context(db, tenant_id)

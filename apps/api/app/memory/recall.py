@@ -306,6 +306,14 @@ def _compare_and_log(
 
 def recall(db: Session, request: RecallRequest) -> RecallResponse:
     """Pre-load memory context for a chat turn."""
+    # Belt-and-suspenders for the cascade: if the caller handed us a
+    # session whose txn was already aborted (e.g. an earlier step in
+    # the chat hot path that didn't rollback its own failure), every
+    # raw-SQL search below will trip InFailedSqlTransaction. One
+    # cheap rollback up-front guarantees recall starts from a clean
+    # state. Idempotent on a clean session.
+    safe_rollback(db)
+
     use_rust = os.environ.get("USE_RUST_MEMORY", "false").lower() == "true"
     dual_read = os.environ.get("MEMORY_DUAL_READ", "false").lower() == "true"
 
@@ -363,6 +371,15 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
     goals = []
     contradictions: list[ContradictionSummary] = []
 
+    # NOTE: each search uses raw `db.execute(text(...))`. When one fails
+    # mid-statement, psycopg2 leaves the session in "current transaction
+    # is aborted" state — every subsequent `db.execute(...)` raises
+    # InFailedSqlTransaction even though the except below swallowed the
+    # original error. Without a per-failure rollback, recall returned to
+    # the caller with a poisoned session, and the caller's next ORM
+    # query cascaded. Watchdog has been firing the cascade pattern
+    # nonstop because of this exact path. Issue safe_rollback after
+    # every except so the next search (and the caller) gets a clean txn.
     try:
         entities = _query.search_entities(
             db, request.tenant_id, query_embedding,
@@ -373,6 +390,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
         logger.info("recall: found %d raw entities", len(entities))
     except Exception:
         logger.exception("search_entities failed")
+        safe_rollback(db)
 
     if _query._check_deadline(deadline):
         metadata.degraded = True
@@ -387,6 +405,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
             )
         except Exception:
             logger.exception("search_observations failed")
+            safe_rollback(db)
 
         try:
             episodes = _query.search_episodes(
@@ -396,6 +415,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
             )
         except Exception:
             logger.exception("search_episodes failed")
+            safe_rollback(db)
 
         try:
             commitments = _query.search_commitments(
@@ -406,6 +426,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
             )
         except Exception:
             logger.exception("search_commitments failed")
+            safe_rollback(db)
 
         try:
             goals = _query.search_goals(
@@ -416,6 +437,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
             )
         except Exception:
             logger.exception("search_goals failed")
+            safe_rollback(db)
 
         try:
             relations = _query.search_relations(
@@ -423,6 +445,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
             )
         except Exception:
             logger.exception("search_relations failed")
+            safe_rollback(db)
 
         try:
             contradictions = _query.search_world_state_contradictions(
@@ -431,6 +454,7 @@ def recall(db: Session, request: RecallRequest) -> RecallResponse:
             )
         except Exception:
             logger.exception("search_world_state_contradictions failed")
+            safe_rollback(db)
 
         if _query._check_deadline(deadline):
             metadata.degraded = True
