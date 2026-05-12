@@ -6,6 +6,7 @@ import { useAuth } from '../App';
 import LiveActivityFeed from '../components/dashboard/LiveActivityFeed';
 import Layout from '../components/Layout';
 import { getDashboardStats } from '../services/analytics';
+import { getOnboardingStatus } from '../services/onboarding';
 
 const DashboardPage = () => {
   const { t } = useTranslation('dashboard');
@@ -15,6 +16,34 @@ const DashboardPage = () => {
   const [dashboardData, setDashboardData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // PR-Q6: route guard. On first dashboard mount after login, probe
+  // /onboarding/status. If the tenant hasn't onboarded AND hasn't
+  // pressed Skip, redirect to the wizard. Failure modes (404 from
+  // an older API server, transient 5xx) are swallowed silently — same
+  // semantics as the CLI's `maybe_auto_trigger` helper. The wizard
+  // itself also checks status on its own mount, so a server flake
+  // here won't trap the user there either.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const status = await getOnboardingStatus();
+        if (cancelled) return;
+        if (!status?.onboarded && !status?.deferred) {
+          navigate('/onboarding', { replace: true });
+        }
+      } catch (e) {
+        // Don't bubble — onboarding probe failure shouldn't block
+        // the dashboard. Mirrors the CLI's fail-soft contract.
+        // eslint-disable-next-line no-console
+        console.warn('onboarding-status probe failed:', e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [navigate]);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
