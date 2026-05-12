@@ -377,12 +377,19 @@ mod tests {
         snap.repos
             .push(serde_json::json!({"name":"r","owner":{"login":"alice"}}));
         snap.orgs.push(serde_json::json!({"login":"acme"}));
-        snap.prs.push(serde_json::json!({"title":"fix x","state":"OPEN"}));
+        snap.prs
+            .push(serde_json::json!({"title":"fix x","state":"OPEN"}));
         snap.issues
             .push(serde_json::json!({"title":"bug y","state":"CLOSED"}));
         let items = snap.to_items();
         let kinds: Vec<_> = items.iter().filter_map(|i| i.get("kind")).collect();
-        let expected = vec!["github_user", "github_repo", "github_org", "github_pr", "github_issue"];
+        let expected = vec![
+            "github_user",
+            "github_repo",
+            "github_org",
+            "github_pr",
+            "github_issue",
+        ];
         for k in expected {
             assert!(
                 kinds.iter().any(|v| v.as_str() == Some(k)),
