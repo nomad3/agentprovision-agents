@@ -83,9 +83,9 @@ pub async fn run(ctx: Context, show_runtimes: bool) -> anyhow::Result<()> {
     };
 
     // Runtime preflight is opt-in (`--runtimes`) so the default `ap status`
-    // stays a sub-200ms round-trip. Spawning four `--version` subprocesses
-    // adds ~100-300ms depending on shell init cost, which is annoying for
-    // users who just want to confirm auth.
+    // stays a sub-200ms round-trip. Spawning five `--version` subprocesses
+    // (one per supported CLI runtime) adds ~100-400ms depending on shell
+    // init cost, which is annoying for users who just want to confirm auth.
     let runtimes = if show_runtimes {
         let _ = RuntimeId::all; // explicit dependency on the enum
         Some(preflight_all().into_iter().map(Into::into).collect())

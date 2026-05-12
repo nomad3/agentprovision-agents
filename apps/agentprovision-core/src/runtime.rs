@@ -1,6 +1,6 @@
 //! Local-runtime dispatch — detect, mint tokens for, and characterize the
-//! four CLI runtimes the platform orchestrates from the server side
-//! (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI).
+//! five CLI runtimes the platform orchestrates from the server side
+//! (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode).
 //!
 //! The `ap` CLI uses this module to bring the same orchestration to a
 //! user's local terminal: `ap claude-code "fix X"` resolves an agent,
@@ -17,10 +17,16 @@ use serde::{Deserialize, Serialize};
 use crate::client::ApiClient;
 use crate::error::{Error, Result};
 
-/// One of the four CLI runtimes the platform supports. Wire format mirrors
+/// One of the five CLI runtimes the platform supports. Wire format mirrors
 /// the server-side `tenant_features.default_cli_platform` enum so the same
 /// string round-trips through `/api/v1/chat/sessions/.../messages` audit
 /// logs whether dispatch happened server-side or client-side.
+///
+/// `OpenCode` is the always-available local-Gemma-4 floor — it runs against
+/// the user's local Ollama and needs no cloud subscription, which is why
+/// `cli_platform_resolver.py` slots it last in the quota-fallback chain. The
+/// other four runtimes need either a tenant-stored OAuth token (server
+/// dispatch) or a local credential file (client dispatch via `ap`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeId {
@@ -28,6 +34,7 @@ pub enum RuntimeId {
     Codex,
     GeminiCli,
     CopilotCli,
+    OpenCode,
 }
 
 impl RuntimeId {
@@ -39,6 +46,11 @@ impl RuntimeId {
             RuntimeId::Codex => "codex",
             RuntimeId::GeminiCli => "gemini_cli",
             RuntimeId::CopilotCli => "copilot_cli",
+            // Server-side wire id is the bare "opencode" string (see
+            // apps/api/app/services/cli_platform_resolver.py:60), not
+            // "opencode_cli" — matches the npm package name (opencode-ai)
+            // and the binary on PATH.
+            RuntimeId::OpenCode => "opencode",
         }
     }
 
@@ -50,6 +62,7 @@ impl RuntimeId {
             RuntimeId::Codex => "codex",
             RuntimeId::GeminiCli => "gemini",
             RuntimeId::CopilotCli => "copilot",
+            RuntimeId::OpenCode => "opencode",
         }
     }
 
@@ -61,12 +74,18 @@ impl RuntimeId {
             RuntimeId::Codex => "Install with: npm i -g @openai/codex (or: brew install codex)",
             RuntimeId::GeminiCli => "Install with: npm i -g @google/gemini-cli",
             RuntimeId::CopilotCli => "Install with: gh extension install github/gh-copilot",
+            // OpenCode is the local-Gemma fallback — pair with a running
+            // Ollama (`brew install ollama && ollama pull gemma4`) for the
+            // intended zero-cloud-cost experience.
+            RuntimeId::OpenCode => {
+                "Install with: npm i -g opencode-ai (needs local Ollama + gemma4)"
+            }
         }
     }
 
     /// Parse from the wire-format string. Returns `None` for unknown inputs
     /// so the caller can render a "supported runtimes: …" error rather than
-    /// panic. The four canonical names are accepted, plus `gemini` and
+    /// panic. The five canonical names are accepted, plus `gemini` and
     /// `copilot` as short aliases that users will reach for.
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
@@ -74,11 +93,15 @@ impl RuntimeId {
             "codex" => Some(RuntimeId::Codex),
             "gemini_cli" | "gemini-cli" | "gemini" => Some(RuntimeId::GeminiCli),
             "copilot_cli" | "copilot-cli" | "copilot" => Some(RuntimeId::CopilotCli),
+            // OpenCode has no `_cli`/`-cli` variant on the server (the wire
+            // id is the bare word) but accept the suffixed forms anyway —
+            // users coming from the other four naturally type them.
+            "opencode" | "opencode_cli" | "opencode-cli" => Some(RuntimeId::OpenCode),
             _ => None,
         }
     }
 
-    /// All four — useful for `--parallel` fan-out plumbing (Section 9 of
+    /// All five — useful for `--parallel` fan-out plumbing (Section 9 of
     /// the plan) and for `ap status` enumeration.
     pub fn all() -> &'static [RuntimeId] {
         &[
@@ -86,6 +109,7 @@ impl RuntimeId {
             RuntimeId::Codex,
             RuntimeId::GeminiCli,
             RuntimeId::CopilotCli,
+            RuntimeId::OpenCode,
         ]
     }
 }
@@ -178,6 +202,17 @@ fn detect_local_auth(runtime: RuntimeId) -> bool {
         RuntimeId::Codex => &[".codex/auth.json"],
         RuntimeId::GeminiCli => &[".gemini/oauth_creds.json", ".gemini/credentials.json"],
         RuntimeId::CopilotCli => &[".copilot/mcp-config.json"],
+        // OpenCode stores its provider auth (Ollama base URL + selected
+        // model) in `~/.local/share/opencode/auth.json`. Config-only
+        // `~/.config/opencode/opencode.json` is enough to count as
+        // "local auth present" too — it's how users typically pin the
+        // model — so accept either path. Both are macOS/Linux conventions;
+        // Windows users get a false negative (harmless) until we add the
+        // %APPDATA% path.
+        RuntimeId::OpenCode => &[
+            ".local/share/opencode/auth.json",
+            ".config/opencode/opencode.json",
+        ],
     };
     candidates.iter().any(|rel| home.join(rel).is_file())
 }
@@ -260,6 +295,18 @@ mod tests {
             RuntimeId::from_wire("claude-code"),
             Some(RuntimeId::ClaudeCode)
         );
+        // OpenCode tolerates `_cli` / `-cli` suffixes that users from the
+        // other four runtimes naturally type, even though the canonical
+        // wire id is the bare word.
+        assert_eq!(RuntimeId::from_wire("opencode"), Some(RuntimeId::OpenCode));
+        assert_eq!(
+            RuntimeId::from_wire("opencode-cli"),
+            Some(RuntimeId::OpenCode)
+        );
+        assert_eq!(
+            RuntimeId::from_wire("opencode_cli"),
+            Some(RuntimeId::OpenCode)
+        );
         assert!(RuntimeId::from_wire("unknown").is_none());
     }
 
@@ -277,10 +324,20 @@ mod tests {
         // that preflight runs without panic and yields one report per
         // runtime regardless of host install state.
         let reports = preflight_all();
-        assert_eq!(reports.len(), 4);
+        assert_eq!(reports.len(), 5);
         for (i, r) in reports.iter().enumerate() {
             assert_eq!(r.runtime, RuntimeId::all()[i]);
             assert!(!r.install_hint.is_empty());
         }
+    }
+
+    #[test]
+    fn opencode_wire_matches_server() {
+        // Server-side wire id is the bare "opencode" string (see
+        // apps/api/app/services/cli_platform_resolver.py:60). Locking
+        // it in here so a future refactor can't silently rename the
+        // client-side wire to "opencode_cli" and break the round-trip
+        // through the messages audit log.
+        assert_eq!(RuntimeId::OpenCode.as_wire(), "opencode");
     }
 }
