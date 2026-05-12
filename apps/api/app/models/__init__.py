@@ -79,6 +79,7 @@ from .agent_integration_config import AgentIntegrationConfig
 from .external_agent import ExternalAgent
 from .agent_marketplace_listing import AgentMarketplaceListing, AgentMarketplaceSubscription
 from .agent_test_suite import AgentTestCase, AgentTestRun
+from .training_run import TrainingRun
 
 __all__ = [
     "Tenant", "User",
@@ -124,4 +125,5 @@ __all__ = [
     "ExternalAgent",
     "AgentMarketplaceListing", "AgentMarketplaceSubscription",
     "AgentTestCase", "AgentTestRun",
+    "TrainingRun",
 ]
