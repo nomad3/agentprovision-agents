@@ -32,6 +32,28 @@ use serde_json::Value;
 
 use crate::error::{Error, Result};
 
+/// Cap stderr at 1024 chars with a head+tail keep when truncation
+/// fires. Reviewer (PR #407 re-review NIT #3): the previous 512-char
+/// head-only cap discarded gh's actionable remediation hint which
+/// always lives at the END of stderr (e.g. "To request missing
+/// scopes, run: gh auth refresh -s read:org"). Head+tail keeps both
+/// the banner (HTTP code + first line) AND the fix-it hint, which
+/// is what makes the error usable for the end user.
+///
+/// 1024 covers ~99% of gh error shapes; the rare 1500-char OAuth
+/// scope-mismatch dump still ends up readable.
+fn cap_stderr(bytes: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(bytes);
+    let trimmed = stderr.trim();
+    if trimmed.chars().count() <= 1024 {
+        return trimmed.to_string();
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    let head: String = chars.iter().take(400).collect();
+    let tail: String = chars.iter().skip(chars.len() - 600).collect();
+    format!("{head}...[truncated]...{tail}")
+}
+
 pub fn consent_summary() -> &'static str {
     "I'll shell out to `gh api` using your existing `gh auth` session:\n\
      • gh api user                 → your profile (login, name, email, bio)\n\
@@ -245,22 +267,10 @@ fn gh_api(args: &[&str]) -> Result<Value> {
         .output()
         .map_err(|e| Error::Other(format!("gh api spawn failed: {e}")))?;
     if !output.status.success() {
-        // Cap stderr at 512 chars (reviewer PR #407 NIT #2): prevents
-        // log pollution from a runaway gh backtrace + bounds the
-        // size of any PII (login / org name) that might land in
-        // off-box telemetry through the error path.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let trimmed = stderr.trim();
-        let capped = if trimmed.chars().count() > 512 {
-            let head: String = trimmed.chars().take(509).collect();
-            format!("{head}...")
-        } else {
-            trimmed.to_string()
-        };
         return Err(Error::Other(format!(
             "gh api failed (exit {:?}): {}",
             output.status.code(),
-            capped,
+            cap_stderr(&output.stderr),
         )));
     }
     serde_json::from_slice::<Value>(&output.stdout)
@@ -335,18 +345,9 @@ fn run_gh_search(kind: &str, limit: u32) -> Result<Vec<Value>> {
         .output()
         .map_err(|e| Error::Other(format!("gh search {kind} spawn failed: {e}")))?;
     if !output.status.success() {
-        // Same 512-char cap as `gh_api` for the same reasons —
-        // reviewer PR #407 NIT #2.
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let trimmed = stderr.trim();
-        let capped = if trimmed.chars().count() > 512 {
-            let head: String = trimmed.chars().take(509).collect();
-            format!("{head}...")
-        } else {
-            trimmed.to_string()
-        };
         return Err(Error::Other(format!(
-            "gh search {kind} failed: {capped}"
+            "gh search {kind} failed: {}",
+            cap_stderr(&output.stderr),
         )));
     }
     let val: Value = serde_json::from_slice(&output.stdout)
