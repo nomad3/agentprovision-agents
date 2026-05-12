@@ -81,6 +81,7 @@ Registration sets the user/tenant up but doesn't know which device the user is o
 | **Codex** (history) | none — reads `~/.codex/*` | very high for Codex users | engineers using Codex |
 | **Gemini CLI** (history) | none — reads `~/.gemini/*` | high | engineers using Gemini |
 | **GitHub Copilot CLI** (config) | none — local config | medium | Copilot users |
+| **OpenCode + local Gemma 4** (history) | none — reads `~/.local/share/opencode/storage/*` | high; **runs zero-cost on user's GPU** | privacy-sensitive / cost-sensitive / air-gapped |
 | **GitHub CLI** (`gh`) | none — uses existing `gh auth` | very high for OSS / repo work | engineers, OSS contributors |
 | **Gmail + Calendar** | one OAuth click | very high | managers, salespeople, ops |
 | **Slack** | one OAuth click + workspace pick | medium-high | team workers |
