@@ -500,6 +500,76 @@ impl ApiClient {
         req = req.query(&params);
         self.send_json(req).await
     }
+
+    // ─── Onboarding (PR-Q0 endpoints) ─────────────────────────────
+
+    /// `GET /api/v1/onboarding/status` — drives `ap login` auto-trigger
+    /// of `ap quickstart` for un-onboarded tenants.
+    pub async fn get_onboarding_status(&self) -> Result<crate::models::OnboardingStatus> {
+        let req = self.request(Method::GET, "/api/v1/onboarding/status")?;
+        self.send_json(req).await
+    }
+
+    /// `POST /api/v1/onboarding/defer` — user pressed Skip. Suppresses
+    /// next auto-trigger but doesn't block explicit `ap quickstart`.
+    pub async fn defer_onboarding(&self) -> Result<()> {
+        let req = self.request(Method::POST, "/api/v1/onboarding/defer")?;
+        let _ = self.send_no_body(req).await?;
+        Ok(())
+    }
+
+    /// `POST /api/v1/onboarding/complete` — stamps `onboarded_at` so
+    /// the user never sees the wedge picker again unless they pass
+    /// `--force` to `ap quickstart`.
+    pub async fn complete_onboarding(&self, source: &str) -> Result<()> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            source: &'a str,
+        }
+        let req = self
+            .request(Method::POST, "/api/v1/onboarding/complete")?
+            .json(&Body { source });
+        let _ = self.send_no_body(req).await?;
+        Ok(())
+    }
+
+    // ─── Training pipeline (PR-Q1 endpoints) ──────────────────────
+
+    /// `POST /api/v1/memory/training/bulk-ingest` — kick off (or
+    /// re-attach to) an initial-training pass. Idempotent on
+    /// `(tenant_id, snapshot_id)`. The caller generates `snapshot_id`
+    /// once per quickstart run and passes it on every retry so the
+    /// server returns the existing row instead of spawning a parallel
+    /// workflow.
+    pub async fn bulk_ingest_training(
+        &self,
+        source: &str,
+        items: &[serde_json::Value],
+        snapshot_id: &str,
+    ) -> Result<crate::models::BulkIngestResponse> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            source: &'a str,
+            items: &'a [serde_json::Value],
+            snapshot_id: &'a str,
+        }
+        let req = self
+            .request(Method::POST, "/api/v1/memory/training/bulk-ingest")?
+            .json(&Body {
+                source,
+                items,
+                snapshot_id,
+            });
+        self.send_json(req).await
+    }
+
+    /// `GET /api/v1/memory/training/{run_id}` — poll status. The CLI's
+    /// progress bar polls this every 2s until status reaches a terminal
+    /// state (`complete` | `failed`). SSE will replace polling in PR-Q1b.
+    pub async fn get_training_run(&self, run_id: &str) -> Result<crate::models::TrainingRun> {
+        let req = self.request(Method::GET, &format!("/api/v1/memory/training/{run_id}"))?;
+        self.send_json(req).await
+    }
 }
 
 #[cfg(test)]

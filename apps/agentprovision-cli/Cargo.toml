@@ -24,7 +24,12 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "tim
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 console = "0.15"
-dialoguer = { version = "0.11", default-features = false, features = ["password"] }
+dialoguer = { version = "0.11", default-features = false, features = ["password", "completion"] }
+# `ap quickstart` deps:
+#   - uuid for client-side snapshot_id generation (idempotency key)
+#   - toml for ~/.config/agentprovision/quickstart.toml resume state
+uuid = { version = "1", features = ["v4"] }
+toml = "0.8"
 indicatif = "0.17"
 termimad = "0.31"
 rustyline = { version = "14", default-features = false, features = ["with-file-history", "custom-bindings"] }
