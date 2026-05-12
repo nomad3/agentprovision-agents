@@ -400,4 +400,40 @@ mod tests {
         // token_type should still print so logs remain useful.
         assert!(dbg.contains("bearer"), "token_type should remain: {dbg}");
     }
+
+    /// PR #414 reviewer NIT #1: lock the wire-format back-compat for
+    /// `ChatMessage.tokens_used`. The field landed with
+    /// `#[serde(default)]` so an older backend without it still
+    /// deserialises (the most-likely silent-regression mode is someone
+    /// removing the default attr or flipping the type).
+    #[test]
+    fn chat_message_deserialises_without_tokens_used() {
+        let json = r#"{"id":null,"role":"user","content":"hi"}"#;
+        let m: ChatMessage = serde_json::from_str(json).expect("must accept missing field");
+        assert_eq!(m.role, "user");
+        assert_eq!(m.content, "hi");
+        assert!(
+            m.tokens_used.is_none(),
+            "missing field must deserialise to None (NOT Some(0)) — None means 'not measured', \
+             Some(0) means 'zero-token turn', which are not the same thing"
+        );
+    }
+
+    #[test]
+    fn chat_message_deserialises_with_tokens_used() {
+        let json = r#"{"id":null,"role":"assistant","content":"reply","tokens_used":42}"#;
+        let m: ChatMessage = serde_json::from_str(json).expect("must accept the field");
+        assert_eq!(m.tokens_used, Some(42));
+    }
+
+    /// Defensive: an older client built before PR #414 receiving a
+    /// response WITH tokens_used must still parse cleanly. Rust's
+    /// default serde drops unknown fields, so this is essentially a
+    /// canary against someone adding `deny_unknown_fields` later.
+    #[test]
+    fn chat_message_ignores_unknown_fields() {
+        let json = r#"{"id":null,"role":"user","content":"x","future_field":"surprise"}"#;
+        let m: ChatMessage = serde_json::from_str(json).expect("unknown field must be ignored");
+        assert_eq!(m.role, "user");
+    }
 }

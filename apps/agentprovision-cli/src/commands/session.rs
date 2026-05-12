@@ -122,6 +122,14 @@ async fn messages(args: MessagesArgs, ctx: Context) -> anyhow::Result<()> {
         // or agents that don't emit a usage struct), so it stays
         // separate from `0`-measured turns to avoid hiding "we have no
         // data" behind a numeric zero.
+        //
+        // Widen to i64 before summing: an i32 accumulator overflows at
+        // ~2.1B tokens, and while no single turn approaches that, a
+        // long backlog of agentic dispatches (workflow fan-outs,
+        // multi-turn debugging sessions) could plausibly reach it over
+        // a session's lifetime. i64 gives 9.2 quintillion-token
+        // headroom — cheap insurance for what is a single-pass
+        // arithmetic step.
         let token_total: i64 = list
             .iter()
             .filter_map(|m| m.tokens_used.map(i64::from))
