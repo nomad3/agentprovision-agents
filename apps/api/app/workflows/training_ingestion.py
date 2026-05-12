@@ -127,11 +127,25 @@ async def extract_and_persist_batch(
         if unknown_kinds:
             # One log line per batch, not per item — keeps log volume
             # bounded even when a misconfigured wedge ships 10k unknowns.
+            # Reviewer re-review NIT #5: sanitise kind strings before
+            # logging — the endpoint accepts arbitrary JSON so a
+            # malicious tenant could POST `kind: "\n[CRITICAL] ..."`
+            # and land that in worker logs scraped by alerting
+            # systems. Strip non-printable + cap at 60 chars per kind.
+            def _safe_kind(k: str, max_len: int = 60) -> str:
+                cleaned = "".join(
+                    c if (c.isprintable() and c not in "\r\n") else "?" for c in k
+                )
+                return cleaned[:max_len]
+
+            safe_unknown = {
+                _safe_kind(k): v for k, v in sorted(unknown_kinds.items())
+            }
             activity.logger.warning(
                 "batch %s: %d unknown-kind items skipped (not persisted): %s",
                 batch_index,
                 sum(unknown_kinds.values()),
-                dict(sorted(unknown_kinds.items())),
+                safe_unknown,
             )
 
         # `items_processed` reflects RECOGNISED items only — the user's
@@ -189,12 +203,24 @@ def _existing_entity_id(
         KnowledgeEntity.deleted_at.is_(None),
     )
     if attr_key is not None and attr_value is not None:
+        # Reviewer re-review NIT #1 (PR #408): the `->>` operator
+        # coerces JSONB to text, so a non-string attr_value would
+        # silently mismatch (e.g. `private: false` stored as JSON
+        # `"false"` but `str(False)` produces "False"). All current
+        # call sites pass strings — assert it so the next refactor
+        # that introduces a boolean / number key fails loudly here
+        # rather than silently mis-deduplicating.
+        assert isinstance(attr_value, str), (
+            "JSONB ->> lookup requires str attr_value "
+            "(booleans encode as 'true'/'false', not str(bool); "
+            "numbers stringify differently across Python/JSON)"
+        )
         # attributes is a JSONB column; ->> coerces to text. Postgres
         # operator binding is via SQLAlchemy's `op('->>')` since
         # SQLAlchemy 2.x's typed accessor (`.astext`) isn't on the
         # KnowledgeEntity column directly in this codebase.
         q = q.filter(
-            KnowledgeEntity.attributes.op("->>")(attr_key) == str(attr_value)
+            KnowledgeEntity.attributes.op("->>")(attr_key) == attr_value
         )
     elif name is not None:
         q = q.filter(KnowledgeEntity.name == name)
