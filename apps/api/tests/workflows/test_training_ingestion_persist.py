@@ -58,6 +58,31 @@ def _run(item, *, existing_id=None):
     return outcome, captured
 
 
+def _run_with_observation(item, *, existing_id=None):
+    """Variant of `_run` for the github_pr/github_issue branch
+    (PR-Q3a-back-2): patches `create_observation` instead of
+    `create_entity` and returns (outcome, captured_observation_calls).
+
+    Each captured call is the kwargs dict so tests can assert on
+    `entity_id`, `observation_text`, `source_ref`, etc.
+    """
+    captured: list = []
+
+    def _capture(_db, **kwargs):
+        captured.append(kwargs)
+
+    # Same lazy-import quirk — patch at the source module.
+    with patch(
+        "app.workflows.training_ingestion._existing_entity_id",
+        return_value=existing_id,
+    ), patch(
+        "app.services.knowledge.create_observation",
+        new=_capture,
+    ):
+        outcome = _persist_item(_mock_db(), MagicMock(), item)
+    return outcome, captured
+
+
 # ── recognised kinds ─────────────────────────────────────────────────
 
 
@@ -193,13 +218,122 @@ def test_github_org_dedups_on_login_name():
 # ── recognised-but-deferred kinds ────────────────────────────────────
 
 
-@pytest.mark.parametrize("kind", ["github_pr", "github_issue", "quickstart-stub"])
-def test_recognised_kinds_not_persisted(kind):
-    """Deferred-by-design kinds return 'recognised' without inserting.
-    Reviewer (PR #408 finding #4): contract verification."""
-    item = {"kind": kind, "title": "anything"}
-    outcome, captured = _run(item)
+def test_quickstart_stub_is_recognised_not_persisted():
+    """Stub items from Q5 server-side bootstrappers that don't have
+    real collectors yet must surface as 'recognised' so the user-
+    visible progress bar advances honestly. Reviewer (PR #408 finding
+    #4): contract verification."""
+    outcome, captured = _run({"kind": "quickstart-stub", "channel": "gmail"})
     assert outcome == "recognised"
+    assert captured == []
+
+
+# ── github_pr / github_issue → observations on parent repo (Q3a-back-2)
+
+
+def test_github_pr_creates_observation_on_parent_repo():
+    """Q3a-back-2: PR items land as free-text observations on the
+    Project entity persisted by the same snapshot's github_repo
+    branch — NOT as standalone entities (one-entity-per-PR drowns
+    recall ranking)."""
+    item = {
+        "kind": "github_pr",
+        "title": "Fix the cascade",
+        "state": "merged",
+        "url": "https://github.com/nomad3/repo/pull/42",
+        "repository": "nomad3/repo",
+    }
+    outcome, captured = _run_with_observation(item, existing_id="parent-uuid")
+    assert outcome == "persisted"
+    assert len(captured) == 1
+    obs = captured[0]
+    # text shape: "PR: <title> (<state>)" — the human-readable pair
+    # that recall ranks against. URL goes in source_ref to keep the
+    # text compact.
+    assert "PR" in obs["observation_text"]
+    assert "Fix the cascade" in obs["observation_text"]
+    assert "merged" in obs["observation_text"]
+    assert obs["source_ref"] == "https://github.com/nomad3/repo/pull/42"
+    assert obs["entity_id"] == "parent-uuid"
+    assert obs["source_channel"] == "ap_quickstart_github_cli"
+    assert obs["source_platform"] == "github"
+
+
+def test_github_issue_creates_observation_on_parent_repo():
+    """Issues take the same path as PRs, just with the `Issue:` prefix
+    so the observation text reads naturally."""
+    item = {
+        "kind": "github_issue",
+        "title": "Document the cascade fix",
+        "state": "open",
+        "url": "https://github.com/nomad3/repo/issues/17",
+        "repository": "nomad3/repo",
+    }
+    outcome, captured = _run_with_observation(item, existing_id="parent-uuid")
+    assert outcome == "persisted"
+    assert len(captured) == 1
+    obs = captured[0]
+    assert obs["observation_text"].startswith("Issue:")
+    assert "Document the cascade fix" in obs["observation_text"]
+    assert "open" in obs["observation_text"]
+
+
+def test_github_pr_without_parent_repo_is_recognised_not_persisted():
+    """User has gh access to a PR on a repo we don't track (public
+    review, cross-org collab). Orphan observations with no entity_id
+    poison recall, so skip the create_observation call and return
+    'recognised' — the user-visible bar still advances."""
+    item = {
+        "kind": "github_pr",
+        "title": "Some external review",
+        "state": "open",
+        "url": "https://github.com/other-org/other-repo/pull/1",
+        "repository": "other-org/other-repo",
+    }
+    outcome, captured = _run_with_observation(item, existing_id=None)
+    assert outcome == "recognised"
+    assert captured == []
+
+
+def test_github_issue_without_parent_repo_is_recognised_not_persisted():
+    """Same orphan-skip rule as PRs."""
+    item = {
+        "kind": "github_issue",
+        "title": "External issue",
+        "state": "closed",
+        "url": "https://github.com/other-org/other-repo/issues/9",
+        "repository": "other-org/other-repo",
+    }
+    outcome, captured = _run_with_observation(item, existing_id=None)
+    assert outcome == "recognised"
+    assert captured == []
+
+
+@pytest.mark.parametrize("kind", ["github_pr", "github_issue"])
+def test_github_pr_issue_missing_repository_is_unknown(kind):
+    """The Q3b scanner ALWAYS sets `repository` (nameWithOwner). A
+    missing value is wire-format drift — bucket it as 'unknown' so
+    the per-batch WARN histogram surfaces the schema break instead
+    of silently inflating the recognised counter."""
+    item = {"kind": kind, "title": "no repo field", "state": "open"}
+    outcome, captured = _run_with_observation(item, existing_id="parent-uuid")
+    assert outcome == "unknown"
+    assert captured == []
+
+
+def test_github_pr_with_non_string_repository_is_unknown():
+    """Defense against an scanner shipping a non-string repository
+    (e.g. a struct it forgot to flatten). The isinstance check on the
+    activity side bucket-routes this to 'unknown' instead of crashing
+    on the JSONB `->>` lookup."""
+    item = {
+        "kind": "github_pr",
+        "title": "weird shape",
+        "state": "open",
+        "repository": {"unexpected": "nested"},
+    }
+    outcome, captured = _run_with_observation(item, existing_id="parent-uuid")
+    assert outcome == "unknown"
     assert captured == []
 
 
