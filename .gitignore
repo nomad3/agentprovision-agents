@@ -1,5 +1,12 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+# Override the user's global *.sql ignore for migration files.
+# Migrations are a deployment artifact — they MUST be committed and pushed.
+# Putting the unignore early so global patterns set later (including
+# `~/.gitignore_global`'s blanket `*.sql`) don't accidentally re-ignore.
+!apps/api/migrations/*.sql
+!apps/api/migrations/*.down.sql
+
 # Cloudflare Tunnel credentials
 cloudflared/credentials.json
 
