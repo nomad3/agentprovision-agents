@@ -79,6 +79,7 @@ from app.api.v1 import (
     internal_agent_tasks,
     internal_embed,
     agent_tokens,
+    onboarding,
 )
 
 _logger = logging.getLogger(__name__)
@@ -201,6 +202,9 @@ router.include_router(
 # This is the public-internet-reachable sibling that powers `ap claude-code`,
 # `ap codex`, etc. — multi-runtime dispatch from the user's terminal.
 router.include_router(agent_tokens.router, tags=["agent-tokens"])
+# PR-Q0 — tenant onboarding state. Powers ap-quickstart and the web
+# /onboarding/* route guard's auto-trigger on first login.
+router.include_router(onboarding.router, tags=["onboarding"])
 # Internal embedding endpoint — replaces sentence-transformers in apps/mcp-server.
 router.include_router(
     internal_embed.router,
