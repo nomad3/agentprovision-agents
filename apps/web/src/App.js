@@ -23,6 +23,7 @@ import IntegrationsPage from './pages/IntegrationsPage';
 import LoginPage from './pages/LoginPage';
 import MemoryPage from './pages/MemoryPage';
 import NotebooksPage from './pages/NotebooksPage';
+import OnboardingPage from './pages/OnboardingPage';
 import RegisterPage from './pages/RegisterPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import SettingsPage from './pages/SettingsPage';
@@ -135,6 +136,13 @@ function App() {
                 <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/home" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+                {/* PR-Q6: guided initial-training wizard. Mirrors the
+                    CLI `ap quickstart` flow (apps/agentprovision-cli/
+                    src/commands/quickstart.rs) as React screens.
+                    Linked from the dashboard route guard which
+                    auto-redirects un-onboarded tenants on first
+                    mount. See apps/web/src/pages/OnboardingPage.js. */}
+                <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
                 <Route path="/data-sources" element={<Navigate to="/integrations?tab=data-sources" replace />} />
                 <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
                 <Route path="/notebooks" element={<ProtectedRoute><NotebooksPage /></ProtectedRoute>} />
