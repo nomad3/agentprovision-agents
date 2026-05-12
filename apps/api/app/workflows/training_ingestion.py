@@ -442,12 +442,30 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
         title = (item.get("title") or "").strip()
         state = (item.get("state") or "").strip().lower()
         url = item.get("url") or ""
+
+        # Reviewer I1 (2026-05-12): empty title AND empty state would
+        # produce a bare "PR" / "Issue" string that auto-embeds to a
+        # near-stop-word vector. Every untitled-stateless item from
+        # the tenant would then recall-match every other one. The
+        # Q3b scanner contract requires `title` (gh ALWAYS returns
+        # one) so a missing pair is wire-format drift — route it
+        # through the per-batch WARN histogram instead of poisoning
+        # recall with low-signal observations.
+        if not title and not state:
+            return "unknown"
+
         prefix = "PR" if kind == "github_pr" else "Issue"
         text_parts = [f"{prefix}: {title}" if title else prefix]
         if state:
             text_parts.append(f"({state})")
         observation_text = " ".join(text_parts)
 
+        # TODO(Q3a-back-3): observations are append-only, so re-runs
+        # of the wedge create one observation per snapshot per PR.
+        # Either dedup on (entity_id, source_ref) here or bake the
+        # snapshot date into the text so recall can disambiguate.
+        # Bounded for now (snapshot = recent activity, not history),
+        # but a heavy user can accumulate noise over months.
         from app.services.knowledge import create_observation
 
         create_observation(

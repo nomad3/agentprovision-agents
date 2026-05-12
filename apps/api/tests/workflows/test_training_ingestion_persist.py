@@ -321,6 +321,47 @@ def test_github_pr_issue_missing_repository_is_unknown(kind):
     assert captured == []
 
 
+@pytest.mark.parametrize("kind", ["github_pr", "github_issue"])
+def test_github_pr_issue_empty_title_and_state_is_unknown(kind):
+    """Reviewer I1 (PR #413, 2026-05-12): an item with empty title AND
+    empty state would auto-embed to a bare 'PR' or 'Issue' near-stop-
+    word vector. Every untitled-stateless item from the tenant would
+    then recall-match every other one, poisoning the ranker. The Q3b
+    scanner contract guarantees a non-empty title (gh always returns
+    one), so a missing pair is wire-format drift — route it through
+    'unknown' so the per-batch WARN histogram surfaces it instead."""
+    item = {
+        "kind": kind,
+        "title": "",
+        "state": "",
+        "url": "https://x/y",
+        "repository": "nomad3/repo",
+    }
+    outcome, captured = _run_with_observation(item, existing_id="parent-uuid")
+    assert outcome == "unknown"
+    assert captured == []
+
+
+@pytest.mark.parametrize("kind", ["github_pr", "github_issue"])
+def test_github_pr_issue_empty_title_with_state_still_creates_observation(kind):
+    """State-only is acceptable signal — the resulting 'PR (merged)' or
+    'Issue (open)' text still differentiates between observations,
+    even if it's not as informative as a titled version. Only the
+    empty-empty pair is the recall-poisoning case."""
+    item = {
+        "kind": kind,
+        "title": "",
+        "state": "merged",
+        "url": "https://x/y/1",
+        "repository": "nomad3/repo",
+    }
+    outcome, captured = _run_with_observation(item, existing_id="parent-uuid")
+    assert outcome == "persisted"
+    assert len(captured) == 1
+    # State token must be present so vectors stay distinct.
+    assert "merged" in captured[0]["observation_text"]
+
+
 def test_github_pr_with_non_string_repository_is_unknown():
     """Defense against an scanner shipping a non-string repository
     (e.g. a struct it forgot to flatten). The isinstance check on the
