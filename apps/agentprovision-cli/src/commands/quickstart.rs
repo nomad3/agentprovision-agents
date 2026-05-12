@@ -492,10 +492,14 @@ async fn poll_until_terminal(ctx: &Context, run_id: &str) -> anyhow::Result<Trai
             if let Some(pb) = pb.as_ref() {
                 pb.abandon_with_message("timed out");
             }
+            // NIT #11 cleanup: run_id comes from the POST response
+            // (UUID round-trip → always 36 chars), so the defensive
+            // .min(run_id.len()) guard was dead. Match the simpler
+            // slice used at the success path above.
             anyhow::bail!(
                 "training run {} did not complete within 10 minutes — \
                  server status is `{}`; re-run with --resume later",
-                &run_id[..8.min(run_id.len())],
+                &run_id[..8],
                 last.status
             );
         }
