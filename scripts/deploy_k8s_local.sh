@@ -175,6 +175,18 @@ if [ -n "$PG_POD" ]; then
   SKIPPED=0
   for f in $(ls "$MIGRATION_DIR"/*.sql 2>/dev/null | sort); do
     BASENAME=$(basename "$f")
+    # Skip rollback scripts. They live alongside up-migrations as
+    # `NNN_*.down.sql` and were never meant to be auto-applied — they're
+    # manual recovery tools. Until this PR they were only safe because
+    # the user's ~/.gitignore_global silently kept them out of the repo;
+    # making them visible to git (which we want, for review/auditability)
+    # would otherwise expose them to this loop. The runner now treats
+    # `.down.sql` as documentation, not migration input.
+    case "$BASENAME" in
+      *.down.sql)
+        continue
+        ;;
+    esac
     ALREADY=$(kubectl exec -n "$NAMESPACE" "$PG_POD" -- \
       psql -U postgres agentprovision -tAc \
       "SELECT COUNT(*) FROM _migrations WHERE filename = '$BASENAME';" 2>/dev/null || echo "0")
