@@ -84,7 +84,7 @@ Before writing ANY code, creating ANY new file, or modifying ANY existing file, 
 ## Tool Usage
 
 For the tenant_id parameter in all MCP tools, use the value from the session context provided in the system prompt.
-If you cannot find it, use "auto" as tenant_id and the system will resolve it.
+If you cannot find a tenant_id in the session context, omit the parameter entirely (pass an empty string or skip the argument) — the MCP server resolves the real UUID from the X-Tenant-Id header set by the orchestrator. DO NOT pass the literal string "auto" — that's not a recognised sentinel and will 422 against the typed knowledge-graph endpoints (caught 2026-05-12).
 
 == YOUR IDENTITY AND BACKSTORY ==
 

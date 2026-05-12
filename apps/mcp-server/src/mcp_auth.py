@@ -194,13 +194,43 @@ def _audit_tenancy_mismatch(
     )
 
 
-def resolve_tenant_id(ctx) -> Optional[str]:
+# Sentinel strings that an LLM agent might pass when it doesn't know
+# the real tenant_id. None of these resolve server-side — they exist
+# only as legacy hints in older prompt text (Luna's skill.md prior to
+# 2026-05-12 told her to use 'auto' if she couldn't find the real
+# value). Treat them as "no value supplied" so the next-tier resolver
+# (header / fallback arg) takes over.
+_TENANT_SENTINELS = {"", "auto", "none", "null", "self", "current"}
+
+
+def _norm_tenant(value: Optional[str]) -> Optional[str]:
+    """Return None for sentinel strings, otherwise the stripped value."""
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if cleaned.lower() in _TENANT_SENTINELS:
+        return None
+    return cleaned
+
+
+def resolve_tenant_id(ctx, fallback: Optional[str] = None) -> Optional[str]:
     """Extract tenant_id from MCP request context headers.
 
     Thin wrapper around ``resolve_auth_context`` for legacy callers.
-    Returns the tenant_id from whichever tier won.
+    Returns the tenant_id from whichever tier won, with a defensive
+    sentinel-string normaliser layered on top: 'auto' / 'none' / ''
+    all collapse to None so the caller can fall through to its own
+    fallback.
+
+    Two-arg form added 2026-05-12 for tools that want the old
+    `resolve_tenant_id(ctx) or arg_tenant_id` pattern to ALSO ignore
+    sentinel values in the arg. Single-arg form preserves
+    backward-compat with the 135 existing callsites.
     """
-    return resolve_auth_context(ctx).tenant_id
+    header_value = _norm_tenant(resolve_auth_context(ctx).tenant_id)
+    if header_value:
+        return header_value
+    return _norm_tenant(fallback)
 
 
 def resolve_user_id(ctx) -> Optional[str]:
