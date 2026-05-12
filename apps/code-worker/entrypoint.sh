@@ -35,7 +35,27 @@ echo -n "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
 OPENCODE_PORT="${OPENCODE_PORT:-8200}"
 echo "[code-worker] Starting OpenCode server on port ${OPENCODE_PORT}..."
 
-# Write opencode config for the server
+# Write opencode config for the server.
+#
+# mcp servers — without this block, OpenCode comes up with ZERO MCP tools
+# registered, even though apps/mcp-server is running on port 8086 with all
+# 156 AgentProvision tools (find_entities, search_knowledge, recall_memory,
+# etc.). Before the platform-routing flip that started defaulting Luna to
+# OpenCode, the same chat path went through Claude Code which wrote its
+# own .claude.json with the mcpServers block from
+# `cli_session_manager._build_mcp_config()`. OpenCode never got the same
+# treatment — the persistent-server commit (7e5cd727) only wired the
+# Ollama provider. Result: every Luna chat through WhatsApp lost
+# find_entities/search_knowledge/recall_memory access without anyone
+# noticing because Gmail/Calendar still resolved via the user's external
+# Claude.ai connectors, so the symptom looked like "MCP works but
+# AgentProvision tools are gone".
+#
+# Tenant scoping: per-tool tenant_id is injected by the prompt prefix in
+# cli_executors/opencode.py (`Always pass tenant_id in ALL MCP tool calls`),
+# so the static config only needs the X-Internal-Key header. Each MCP
+# tool call already takes tenant_id as an argument.
+MCP_TOOLS_URL_DEFAULT="http://mcp-tools:8086/sse"
 mkdir -p /home/codeworker/.config/opencode
 cat > /home/codeworker/opencode.json <<OCEOF
 {
@@ -54,7 +74,17 @@ cat > /home/codeworker/opencode.json <<OCEOF
       }
     }
   },
-  "model": "ollama/${OPENCODE_MODEL:-gemma4}"
+  "model": "ollama/${OPENCODE_MODEL:-gemma4}",
+  "mcp": {
+    "agentprovision": {
+      "type": "remote",
+      "url": "${MCP_TOOLS_URL:-${MCP_TOOLS_URL_DEFAULT}}",
+      "enabled": true,
+      "headers": {
+        "X-Internal-Key": "${MCP_API_KEY:-dev_mcp_key}"
+      }
+    }
+  }
 }
 OCEOF
 
