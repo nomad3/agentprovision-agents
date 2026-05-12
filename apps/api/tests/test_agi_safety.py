@@ -284,6 +284,68 @@ class TestEnforcement:
 
     @patch("app.services.safety_enforcement.safety_trust.get_agent_trust_profile")
     @patch("app.services.safety_enforcement.safety_policies.evaluate_action")
+    def test_observe_only_workflow_channel_mcp_tool_allows_with_logging(
+        self,
+        mock_evaluate,
+        mock_get_trust,
+    ):
+        """PR #418-followup (2026-05-12): the original carve-out matched on
+        `action_name in ('agent', 'call_mcp_tool')` and missed every MCP
+        tool dispatch — `dynamic_step._call_mcp_tool` passes the SPECIFIC
+        tool name (e.g. 'scrape_competitor_activity'), not the literal
+        string 'call_mcp_tool'. Cascade reappeared on dyn-competitor-monitor
+        ~5 min after PR #418 deployed.
+
+        Fix: match on `action_type` (WORKFLOW_ACTION or MCP_TOOL), which
+        covers both `_call_agent` and `_call_mcp_tool` entry points without
+        enumerating every MCP tool name (90+ tools).
+        """
+        mock_evaluate.return_value = safety_policies.SafetyActionEvaluation(
+            action_key="mcp_tool:scrape_competitor_activity",
+            action_type=ActionType.MCP_TOOL,
+            action_name="scrape_competitor_activity",  # NOT 'call_mcp_tool'
+            category="competitor",
+            channel="workflow",
+            risk_class=RiskClass.EXTERNAL_WRITE,
+            risk_level=RiskLevel.HIGH,
+            side_effect_level=SideEffectLevel.EXTERNAL_WRITE,
+            reversibility=Reversibility.PARTIAL,
+            default_decision=PolicyDecision.BLOCK,
+            decision=PolicyDecision.BLOCK,
+            decision_source="default",
+            rationale="High-risk workflow MCP tool dispatch",
+            policy_override_id=None,
+        )
+        profile = MagicMock()
+        profile.trust_score = 0.2
+        profile.confidence = 0.9
+        profile.autonomy_tier = AutonomyTier.OBSERVE_ONLY.value
+        mock_get_trust.return_value = profile
+        db = MagicMock()
+        request = SafetyEnforcementRequest(
+            action_type=ActionType.MCP_TOOL,
+            action_name="scrape_competitor_activity",
+            channel="workflow",
+            proposed_action={"arguments": {"url": "https://example.com"}},
+            assumptions=["Running as part of automated workflow."],
+            uncertainty_notes=["No inline human confirmation available."],
+            expected_downside="Workflow tool may mutate state.",
+            agent_slug="competitor_analyst",
+        )
+
+        result = safety_enforcement.enforce_action(
+            db,
+            tenant_id=uuid.uuid4(),
+            request=request,
+        )
+
+        # Must NOT be BLOCK — the followup-fix's load-bearing assertion.
+        assert result.decision == PolicyDecision.ALLOW_WITH_LOGGING
+        # Evidence pack still persisted.
+        assert db.add.called
+
+    @patch("app.services.safety_enforcement.safety_trust.get_agent_trust_profile")
+    @patch("app.services.safety_enforcement.safety_policies.evaluate_action")
     def test_observe_only_chat_channel_still_blocks_high_risk_agent(
         self,
         mock_evaluate,

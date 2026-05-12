@@ -175,31 +175,40 @@ def _apply_agent_autonomy_restrictions(
 
         # Workflow-channel platform actions need to land even at high/critical
         # risk — otherwise the orchestration-cascade poisons the worker txn
-        # pool. The `agent` and `call_mcp_tool` action types are the cost of
-        # running ANY dynamic workflow (inbox-monitor, competitor-monitor,
-        # autonomous-learning); blocking them stops the workflow forever and,
-        # because `dynamic_step.py:_call_agent` raises PermissionError on
-        # BLOCK, the next workflow step's `build_memory_context_with_git`
-        # hits a poisoned txn → cascade. (See
-        # orchestration_cascade_root_cause.md.)
+        # pool. Both pathways `dynamic_step.py` uses to fire actions count:
         #
-        # We don't blanket-allow: this is scoped to (a) the two named action
-        # types that are inherent to workflow execution and (b) the workflow
-        # channel only — so a chat-channel agent action at high risk still
-        # falls through to BLOCK as before. The evidence_pack is still
-        # written via the ALLOW_WITH_LOGGING branch (rule: "never silently
-        # swallow"), so a tenant admin can audit every elevated dispatch
-        # post-hoc via `GET /safety/evidence-packs`.
-        if (
-            request.channel == "workflow"
-            and request.action_name in ("agent", "call_mcp_tool")
+        #   - `_call_agent`     → action_type=WORKFLOW_ACTION, action_name='agent'
+        #   - `_call_mcp_tool`  → action_type=MCP_TOOL, action_name=<tool_name>
+        #
+        # PR #418's first cut matched on `action_name in {'agent',
+        # 'call_mcp_tool'}` — which silently MISSED every MCP tool dispatch,
+        # because `_call_mcp_tool` passes the SPECIFIC tool name (e.g.
+        # 'scrape_competitor_activity'), not the literal string
+        # 'call_mcp_tool'. Cascade reappeared on `dyn-competitor-monitor`
+        # workflows ~5 min after the fix deployed. Caught 2026-05-12.
+        #
+        # Match on `action_type` instead — the two enum values cover both
+        # entry points without enumerating every MCP tool name (90+ tools).
+        # Other action types (e.g. SHELL_EXECUTE if it ever gets added) still
+        # fall through to BLOCK as before.
+        #
+        # We don't blanket-allow: the workflow-channel gate keeps a chat-
+        # channel high-risk action from sneaking through this branch.
+        # Evidence_pack is still written via the ALLOW_WITH_LOGGING branch
+        # (rule: "never silently swallow"), so a tenant admin can audit every
+        # elevated dispatch post-hoc via `GET /safety/evidence-packs`.
+        if request.channel == "workflow" and request.action_type in (
+            ActionType.WORKFLOW_ACTION,
+            ActionType.MCP_TOOL,
         ):
             result.decision = PolicyDecision.ALLOW_WITH_LOGGING
             result.rationale = (
-                f"Workflow-channel platform action '{request.action_name}' "
-                f"(risk={result.risk_level.value}) allowed under observe-only "
-                f"with evidence logging — workflows cannot collect inline "
-                f"confirmation, BLOCK would cascade-poison the worker."
+                f"Workflow-channel platform action "
+                f"(action_type={request.action_type.value}, "
+                f"name='{request.action_name}', risk={result.risk_level.value}) "
+                f"allowed under observe-only with evidence logging — workflows "
+                f"cannot collect inline confirmation, BLOCK would cascade-"
+                f"poison the worker."
             )
             return result
 
