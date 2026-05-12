@@ -20,7 +20,7 @@
 //!
 //! ```json
 //! {
-//!   "kind": "local_ai_session"        | "local_repo" | "local_user_identity",
+//!   "kind": "local_ai_session" | "local_user_identity",
 //!   "runtime": "claude_code" | ...,    // only for sessions
 //!   "project_path": "/Users/.../repo", // optional
 //!   "started_at": "2026-…",            // ISO-ish; may be naive
@@ -29,8 +29,13 @@
 //!   "derived_topic_hint": "…first user message preview, ≤200 chars…"
 //! }
 //! ```
+//!
+//! (Earlier drafts of this doc listed `local_repo` as a kind — Q3a does
+//! not emit it. `git remote` based repo discovery is queued as a Q3a-
+//! back follow-up but isn't shipping in this PR.)
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -45,15 +50,22 @@ use crate::error::Result;
 pub fn consent_summary() -> &'static str {
     "I'll read:\n\
      • git config (user.email, user.name)\n\
-     • ~/.claude/projects/*  (Claude Code session metadata only)\n\
-     • ~/.codex/sessions/*   (Codex session metadata only)\n\
-     • ~/.gemini/sessions/*  (Gemini CLI session metadata only)\n\
-     • ~/.local/share/opencode/storage/*  (OpenCode session metadata)\n\
+     • ~/.claude/projects/*  (Claude Code session metadata)\n\
+     • ~/.codex/sessions/*   (Codex session metadata)\n\
+     • ~/.gemini/sessions/*  (Gemini CLI session metadata)\n\
+     • ~/.local/share/opencode/exports/*  (OpenCode session metadata)\n\
+     \n\
+     I WILL upload (per session): runtime + project_path + timestamps +\n\
+     message_count + the first 200 chars of your opening user message\n\
+     in that session as a 'derived_topic_hint'. Pass --no-topic-hints\n\
+     to omit the topic hint entirely.\n\
      \n\
      I will NOT upload:\n\
-     • raw conversation content / message bodies\n\
+     • full conversation bodies (messages 2..N stay on disk)\n\
      • credentials / OAuth tokens\n\
-     • files outside the directories above"
+     • files outside the directories above\n\
+     • directories reached through symlinks (symlinked entries are\n\
+       skipped to avoid loops + cross-tree leakage)"
 }
 
 /// In-memory shape of the scan result before it's serialised into the
@@ -329,6 +341,15 @@ fn scan_opencode_sessions(home: &Path, opts: &ScanOptions) -> Vec<SessionMeta> {
 /// Shallow directory walker. Returns paths up to `max_depth` levels
 /// below `root`. We don't pull in `walkdir` for this since we only
 /// need 1-2 levels and the std iteration is fine.
+///
+/// **Skips symlinks.** `fs::read_dir` follows symlinks by default,
+/// which means a `~/.claude/projects → $HOME` link would have the
+/// scanner enumerating unrelated files as session JSONLs. Reviewer
+/// (PR #406 finding #2) called this out — the loop is bounded by
+/// `max_depth` so no infinite traversal, but cross-tree leakage was
+/// still undesirable. `entry.file_type()` returns the entry's own
+/// type (not the link target), so an `is_symlink()` check skips
+/// links regardless of what they point to.
 fn walk_dir(root: &Path, max_depth: usize) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
@@ -338,6 +359,14 @@ fn walk_dir(root: &Path, max_depth: usize) -> Vec<PathBuf> {
             Err(_) => continue,
         };
         for entry in entries.flatten() {
+            // Skip symlinks regardless of what they target. Saves us
+            // from infinite loops AND from cross-tree leakage when a
+            // user has a `~/.claude/projects` symlinked into `$HOME`.
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_symlink() {
+                    continue;
+                }
+            }
             let p = entry.path();
             out.push(p.clone());
             if p.is_dir() && depth + 1 < max_depth {
@@ -368,22 +397,43 @@ fn decode_claude_project_dir_name(dir: &Path) -> Option<String> {
 }
 
 /// Open a JSONL session file and return (started_at, last_message_at,
-/// count, first-user-msg-preview). Cheap: only the first line is
-/// JSON-parsed for the topic hint; the rest of the file is just
-/// line-counted + last-line peek.
+/// count, first-user-msg-preview). Cheap: only the first line and
+/// the last line are JSON-parsed; the rest of the file is streamed
+/// to count + locate the last non-empty line. Reviewer (PR #406
+/// finding #3) caught that `fs::read_to_string` loads the whole
+/// file into memory — a 200MB Claude session × 100 capped sessions
+/// = 20GB RSS on a pathological tenant. BufReader streaming bounds
+/// resident memory to one line at a time.
 fn read_jsonl_session_meta(
     path: &Path,
     project_path: Option<&str>,
     opts: &ScanOptions,
 ) -> Option<SessionMeta> {
-    let content = fs::read_to_string(path).ok()?;
-    if content.is_empty() {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+
+    let mut first_line: Option<String> = None;
+    let mut last_nonempty_line: Option<String> = None;
+    let mut nonempty_count: usize = 0;
+    for line in reader.lines().map_while(std::result::Result::ok) {
+        if line.is_empty() {
+            continue;
+        }
+        if first_line.is_none() {
+            first_line = Some(line.clone());
+        }
+        nonempty_count += 1;
+        last_nonempty_line = Some(line);
+    }
+    let first_line = first_line?;
+    if nonempty_count == 0 {
         return None;
     }
-    let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-    if lines.is_empty() {
-        return None;
-    }
+    // Synthesise a fake `lines` vec for the rest of the function so
+    // the downstream first/last extraction logic stays identical.
+    let lines: Vec<&str> = std::iter::once(first_line.as_str())
+        .chain(last_nonempty_line.as_deref().filter(|s| *s != first_line.as_str()))
+        .collect();
 
     let (mut started_at, mut last_message_at, mut topic_hint) = (None, None, None);
 
@@ -417,7 +467,12 @@ fn read_jsonl_session_meta(
         project_path: project_path.map(str::to_string),
         started_at,
         last_message_at: last_fallback,
-        message_count: lines.len(),
+        // Use the streamed `nonempty_count` rather than `lines.len()`
+        // — the new BufReader path collapses `lines` to {first, last}
+        // (or just {first}) because we no longer materialise the
+        // entire file into memory. The streamed counter is the only
+        // place the true message count lives.
+        message_count: nonempty_count,
         derived_topic_hint: topic_hint,
     })
 }
@@ -572,5 +627,55 @@ mod tests {
         assert!(scan_codex_sessions(tmp.path(), &opts).is_empty());
         assert!(scan_gemini_sessions(tmp.path(), &opts).is_empty());
         assert!(scan_opencode_sessions(tmp.path(), &opts).is_empty());
+    }
+
+    /// Public-API smoke test (reviewer NIT #7): `scan()` must not
+    /// crash even when invoked with no AI CLIs installed and no
+    /// session history on disk. We can't fully fake `$HOME` from
+    /// safe Rust, so this only asserts the public path is robust
+    /// against `to_items()` panic + serialisation. The host's git
+    /// config may or may not leak in — we don't assert on that.
+    #[test]
+    fn scan_smoke_does_not_crash() {
+        let snap = scan(ScanOptions::default()).expect("scan must not error");
+        // to_items must always serialise cleanly, even if all
+        // per-runtime scanners returned empty.
+        let items = snap.to_items();
+        for it in &items {
+            // each item has a non-empty `kind` field
+            assert!(it.get("kind").and_then(|v| v.as_str()).is_some());
+        }
+    }
+
+    /// Reviewer NIT #3 (PR #406): streaming reader must handle large
+    /// files without loading them whole. We can't easily build a
+    /// 200MB fixture in unit tests, but we can prove the streaming
+    /// path correctly counts a file whose lines exceed the previous
+    /// implementation's `Vec<&str>` materialisation overhead.
+    #[test]
+    fn streaming_parser_counts_many_lines() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("big.jsonl");
+        {
+            let mut f = fs::File::create(&path).unwrap();
+            // 1000 messages — small enough for the test to be fast,
+            // large enough that any "load whole file" regression
+            // would show up in CI memory profilers.
+            for i in 0..1000 {
+                writeln!(
+                    f,
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "role": if i == 0 { "user" } else { "assistant" },
+                        "content": "...",
+                        "timestamp": format!("2026-05-12T00:00:{:02}Z", (i % 60)),
+                    }))
+                    .unwrap()
+                )
+                .unwrap();
+            }
+        }
+        let meta = read_jsonl_session_meta(&path, Some("/p"), &ScanOptions::default()).unwrap();
+        assert_eq!(meta.message_count, 1000);
     }
 }

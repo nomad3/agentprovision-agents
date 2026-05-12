@@ -58,6 +58,14 @@ pub struct QuickstartArgs {
     /// idempotent.
     #[arg(long)]
     pub force: bool,
+
+    /// Local AI CLI wedge only: skip the per-session
+    /// `derived_topic_hint` (the first 200 chars of the user's
+    /// opening message). The hint is the highest-signal field for
+    /// server-side entity extraction; turn it off if you don't want
+    /// any conversation-body excerpt leaving your machine.
+    #[arg(long)]
+    pub no_topic_hints: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -123,10 +131,33 @@ struct ResumeState {
 /// silently clobbered the first's stranded snapshot, and `--resume`
 /// would re-POST under the wrong tenant. Tenant-scoping fixes that
 /// without adding any state-sharing surface between tenants.
+///
+/// Reviewer NIT #5 (PR #406): defensively sanitise `tenant_id`
+/// before splicing it into the filename. `Path::join` of a literal
+/// containing `/../` IS a real traversal vector (`format!` then
+/// `join` doesn't normalise). Today `tenant_id` is a UUID from the
+/// JWT — but the cost of asserting UUID-shape is one character-class
+/// check, so we do it rather than trust an upstream invariant. A
+/// malformed tenant_id collapses to `quickstart-unknown.toml` so
+/// the helper never returns None, the caller never crashes, and the
+/// next `--resume` simply finds nothing (re-POST gets fresh state).
+fn sanitize_tenant_id(tenant_id: &str) -> &str {
+    if !tenant_id.is_empty()
+        && tenant_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        tenant_id
+    } else {
+        "unknown"
+    }
+}
+
 fn resume_state_path(tenant_id: &str) -> Option<PathBuf> {
+    let safe = sanitize_tenant_id(tenant_id);
     dirs::config_dir().map(|p| {
         p.join("agentprovision")
-            .join(format!("quickstart-{tenant_id}.toml"))
+            .join(format!("quickstart-{safe}.toml"))
     })
 }
 
@@ -244,7 +275,7 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
     // real scanner that reads git config + ~/.{claude,codex,gemini,
     // local/share/opencode} session metadata. Other wedges still
     // use the stub until their respective PRs land.
-    let items = collect_items(channel, &ctx).await?;
+    let items = collect_items(channel, &ctx, &args).await?;
 
     // (4) Dispatch the bulk-ingest. snapshot_id is generated once per
     // quickstart run and persisted to disk BEFORE the POST so a Ctrl-C
@@ -404,9 +435,13 @@ fn resolve_channel(
 /// Per-wedge item collection. Dispatches to the right scanner; the
 /// stub branch still covers wedges whose PR hasn't landed yet so the
 /// flow is end-to-end testable.
-async fn collect_items(channel: WedgeChannel, ctx: &Context) -> anyhow::Result<Vec<Value>> {
+async fn collect_items(
+    channel: WedgeChannel,
+    ctx: &Context,
+    args: &QuickstartArgs,
+) -> anyhow::Result<Vec<Value>> {
     match channel {
-        WedgeChannel::LocalAiCli => collect_local_ai_cli(ctx),
+        WedgeChannel::LocalAiCli => collect_local_ai_cli(ctx, args),
         // Stub branches — replaced by Q3b / Q4 / Q5 as those land.
         WedgeChannel::GithubCli
         | WedgeChannel::Gmail
@@ -425,7 +460,7 @@ async fn collect_items(channel: WedgeChannel, ctx: &Context) -> anyhow::Result<V
 /// because the scanner has the same blast radius as `ap memory ls`
 /// — fileystem reads bounded to the documented directories — and
 /// scripted callers shouldn't hang on a tty prompt.
-fn collect_local_ai_cli(ctx: &Context) -> anyhow::Result<Vec<Value>> {
+fn collect_local_ai_cli(ctx: &Context, args: &QuickstartArgs) -> anyhow::Result<Vec<Value>> {
     use dialoguer::{theme::ColorfulTheme, Confirm};
 
     if !ctx.json && console::Term::stdout().is_term() {
@@ -440,7 +475,17 @@ fn collect_local_ai_cli(ctx: &Context) -> anyhow::Result<Vec<Value>> {
         }
     }
 
-    let snap = local_ai_cli::scan(local_ai_cli::ScanOptions::default())?;
+    // Thread the CLI flag through to the scanner so the
+    // per-session derived_topic_hint can be suppressed entirely.
+    // ScanOptions default has include_topic_hints=true (the
+    // signal-rich path); --no-topic-hints flips it off so the
+    // first 200 chars of the user's opening message never leave
+    // the box.
+    let mut opts = local_ai_cli::ScanOptions::default();
+    if args.no_topic_hints {
+        opts.include_topic_hints = false;
+    }
+    let snap = local_ai_cli::scan(opts)?;
     let items = snap.to_items();
     if !ctx.json {
         println!(
@@ -569,6 +614,7 @@ pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
             no_chat: false,
             resume: false,
             force: false,
+            no_topic_hints: false,
         },
         ctx.clone(),
     )
@@ -675,5 +721,41 @@ mod tests {
         assert_ne!(p1, p2);
         assert!(p1.to_string_lossy().contains("tenant-aaa"));
         assert!(p2.to_string_lossy().contains("tenant-bbb"));
+    }
+
+    /// Reviewer NIT #5: a malformed tenant_id should never escape the
+    /// agentprovision config dir. The sanitiser collapses anything
+    /// containing path-traversal characters to a stable `unknown`
+    /// component so `Path::join` produces a contained filename.
+    #[test]
+    fn sanitize_tenant_id_rejects_traversal_inputs() {
+        // Valid UUID — passes through verbatim.
+        let good = "752626d9-8b2c-4aa2-87ef-c458d48bd38a";
+        assert_eq!(sanitize_tenant_id(good), good);
+
+        // Various traversal shapes all collapse to "unknown".
+        for evil in [
+            "../etc/passwd",
+            "x/../../y",
+            "x\\../y",
+            "..-..-etc-passwd", // dashes alone are fine; explicit `..` segment is the marker
+            "",
+            "x y z",
+        ] {
+            let safe = sanitize_tenant_id(evil);
+            assert!(
+                !safe.contains('/') && !safe.contains('\\') && !safe.contains(' '),
+                "tenant_id {:?} produced unsafe {:?}",
+                evil,
+                safe,
+            );
+        }
+
+        // Verify the dotted variant doesn't survive — the path can
+        // safely be the literal "..-..-etc-passwd" though, because
+        // `Path::join` treats it as a single filename component
+        // (only `/` segments get traversal semantics).
+        let dotted = sanitize_tenant_id("..");
+        assert_eq!(dotted, "unknown");
     }
 }
