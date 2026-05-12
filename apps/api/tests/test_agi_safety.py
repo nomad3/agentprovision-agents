@@ -205,6 +205,138 @@ class TestEnforcement:
         assert result.agent_trust_score == 0.2
         assert result.trust_source == "agent_trust_profile"
 
+    @patch("app.services.safety_enforcement.safety_trust.get_agent_trust_profile")
+    @patch("app.services.safety_enforcement.safety_policies.evaluate_action")
+    def test_observe_only_workflow_channel_agent_action_allows_with_logging(
+        self,
+        mock_evaluate,
+        mock_get_trust,
+    ):
+        """Regression for the orchestration-cascade fix (2026-05-12).
+
+        Before the fix, an observe-only agent dispatched by a dynamic
+        workflow (inbox-monitor / competitor-monitor / autonomous-learning)
+        had its `action_name='agent'` call BLOCKed at high/critical risk.
+        The PermissionError that bubbled from `dynamic_step._call_agent`
+        poisoned the orchestration-worker txn pool, cascading into
+        InFailedSqlTransaction on the NEXT workflow step's memory recall.
+
+        Documented in memory/orchestration_cascade_root_cause.md.
+        Fix: extend the existing workflow-channel carve-out to also
+        cover (action_name='agent' OR 'call_mcp_tool') even at high/critical
+        risk. The evidence pack is still written (ALLOW_WITH_LOGGING),
+        so the rule 'never silently swallow' holds.
+        """
+        mock_evaluate.return_value = safety_policies.SafetyActionEvaluation(
+            action_key="workflow:agent",
+            action_type=ActionType.WORKFLOW_ACTION,
+            action_name="agent",
+            category="workflow",
+            channel="workflow",
+            risk_class=RiskClass.EXTERNAL_WRITE,
+            risk_level=RiskLevel.HIGH,
+            side_effect_level=SideEffectLevel.EXTERNAL_WRITE,
+            reversibility=Reversibility.PARTIAL,
+            default_decision=PolicyDecision.BLOCK,
+            decision=PolicyDecision.BLOCK,
+            decision_source="default",
+            rationale="High-risk workflow agent dispatch",
+            policy_override_id=None,
+        )
+        profile = MagicMock()
+        profile.trust_score = 0.2
+        profile.confidence = 0.9
+        profile.autonomy_tier = AutonomyTier.OBSERVE_ONLY.value
+        mock_get_trust.return_value = profile
+        db = MagicMock()
+        # Mirror the evidence shape `dynamic_step._call_agent` actually
+        # supplies — assumptions + uncertainty_notes + proposed_action +
+        # expected_downside. Without all four, `_evidence_sufficient`
+        # returns False and the post-policy escalation at
+        # `enforce_action` line 316-325 silently kicks ALLOW_WITH_LOGGING
+        # up to REQUIRE_REVIEW. The real production callsite passes
+        # these fields, so the test must too.
+        request = SafetyEnforcementRequest(
+            action_type=ActionType.WORKFLOW_ACTION,
+            action_name="agent",
+            channel="workflow",
+            proposed_action={"agent_slug": "luna", "prompt": "scrape competitor"},
+            assumptions=["This agent step is running inside an automated workflow."],
+            uncertainty_notes=["No inline human confirmation is available."],
+            expected_downside="Workflow agent may trigger downstream tools.",
+            agent_slug="luna",
+        )
+
+        result = safety_enforcement.enforce_action(
+            db,
+            tenant_id=uuid.uuid4(),
+            request=request,
+        )
+
+        # Must NOT be BLOCK — that was the cascade root cause.
+        assert result.decision == PolicyDecision.ALLOW_WITH_LOGGING
+        assert result.autonomy_tier == AutonomyTier.OBSERVE_ONLY
+        # Evidence pack must still be persisted — 'never silently swallow'.
+        assert db.add.called
+        persisted = db.add.call_args.args[0]
+        assert persisted.action_name == "agent"
+        assert persisted.decision == PolicyDecision.ALLOW_WITH_LOGGING.value
+
+    @patch("app.services.safety_enforcement.safety_trust.get_agent_trust_profile")
+    @patch("app.services.safety_enforcement.safety_policies.evaluate_action")
+    def test_observe_only_chat_channel_still_blocks_high_risk_agent(
+        self,
+        mock_evaluate,
+        mock_get_trust,
+    ):
+        """Companion to the workflow-channel carve-out: the chat channel
+        does NOT get the same allowance, because chat can collect inline
+        user confirmation (or refusal). The cascade rationale only
+        applies to channels that can't collect a human ack — `workflow`,
+        `webhook`, `local_agent` (the AUTOMATED_CHANNELS set).
+
+        This test pins that scope so a future generous-carve-out doesn't
+        accidentally widen the workflow exception to user-facing channels.
+        """
+        mock_evaluate.return_value = safety_policies.SafetyActionEvaluation(
+            action_key="workflow:agent",
+            action_type=ActionType.WORKFLOW_ACTION,
+            action_name="agent",
+            category="workflow",
+            channel="chat",
+            risk_class=RiskClass.EXTERNAL_WRITE,
+            risk_level=RiskLevel.HIGH,
+            side_effect_level=SideEffectLevel.EXTERNAL_WRITE,
+            reversibility=Reversibility.PARTIAL,
+            default_decision=PolicyDecision.BLOCK,
+            decision=PolicyDecision.BLOCK,
+            decision_source="default",
+            rationale="High-risk chat-channel agent dispatch",
+            policy_override_id=None,
+        )
+        profile = MagicMock()
+        profile.trust_score = 0.2
+        profile.confidence = 0.9
+        profile.autonomy_tier = AutonomyTier.OBSERVE_ONLY.value
+        mock_get_trust.return_value = profile
+        db = MagicMock()
+        request = SafetyEnforcementRequest(
+            action_type=ActionType.WORKFLOW_ACTION,
+            action_name="agent",
+            channel="chat",
+            proposed_action={"agent_slug": "luna", "prompt": "do thing"},
+            agent_slug="luna",
+        )
+
+        result = safety_enforcement.enforce_action(
+            db,
+            tenant_id=uuid.uuid4(),
+            request=request,
+        )
+
+        # chat is not in AUTOMATED_CHANNELS — the carve-out must not fire.
+        assert result.decision == PolicyDecision.BLOCK
+
 
 class TestTrustScoring:
     """Test trust score computation and autonomy tiers."""

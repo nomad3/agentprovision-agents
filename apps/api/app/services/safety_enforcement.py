@@ -173,6 +173,36 @@ def _apply_agent_autonomy_restrictions(
             result.rationale = f"Background workflow allowed for low/medium risk action."
             return result
 
+        # Workflow-channel platform actions need to land even at high/critical
+        # risk — otherwise the orchestration-cascade poisons the worker txn
+        # pool. The `agent` and `call_mcp_tool` action types are the cost of
+        # running ANY dynamic workflow (inbox-monitor, competitor-monitor,
+        # autonomous-learning); blocking them stops the workflow forever and,
+        # because `dynamic_step.py:_call_agent` raises PermissionError on
+        # BLOCK, the next workflow step's `build_memory_context_with_git`
+        # hits a poisoned txn → cascade. (See
+        # orchestration_cascade_root_cause.md.)
+        #
+        # We don't blanket-allow: this is scoped to (a) the two named action
+        # types that are inherent to workflow execution and (b) the workflow
+        # channel only — so a chat-channel agent action at high risk still
+        # falls through to BLOCK as before. The evidence_pack is still
+        # written via the ALLOW_WITH_LOGGING branch (rule: "never silently
+        # swallow"), so a tenant admin can audit every elevated dispatch
+        # post-hoc via `GET /safety/evidence-packs`.
+        if (
+            request.channel == "workflow"
+            and request.action_name in ("agent", "call_mcp_tool")
+        ):
+            result.decision = PolicyDecision.ALLOW_WITH_LOGGING
+            result.rationale = (
+                f"Workflow-channel platform action '{request.action_name}' "
+                f"(risk={result.risk_level.value}) allowed under observe-only "
+                f"with evidence logging — workflows cannot collect inline "
+                f"confirmation, BLOCK would cascade-poison the worker."
+            )
+            return result
+
         # Allow read-only tools even for observe-only agents — they need to
         # search/read to build trust evidence. Blocking everything creates a
         # chicken-and-egg deadlock where the agent can never promote itself.
