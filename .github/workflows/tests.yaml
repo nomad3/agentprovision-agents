@@ -53,6 +53,15 @@ jobs:
             rust:
               - 'apps/embedding-service/**'
               - 'apps/memory-core/**'
+              # CLI crates were unwatched until 2026-05-12 — Rust
+              # changes to agentprovision-core / agentprovision-cli
+              # showed `rust (cargo test) skipping` and only got
+              # `cargo build`-validated via cli-build-matrix.yaml.
+              # That left a real regression window where serde or
+              # render-logic breakage on either crate could land
+              # without any `cargo test` running in CI.
+              - 'apps/agentprovision-core/**'
+              - 'apps/agentprovision-cli/**'
               - '.github/workflows/tests.yaml'
             luna_client:
               - 'apps/luna-client/**'
@@ -312,7 +321,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        crate: [embedding-service, memory-core]
+        # Each crate is tested in isolation (separate Cargo workspace
+        # entry, separate rust-cache scope). agentprovision-cli depends
+        # on agentprovision-core so testing both catches breakage at
+        # both layers; embedding-service / memory-core are gRPC services
+        # tested for their own logic.
+        crate:
+          - embedding-service
+          - memory-core
+          - agentprovision-core
+          - agentprovision-cli
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -320,6 +338,10 @@ jobs:
         with:
           workspaces: 'apps/${{ matrix.crate }} -> target'
       - name: Install protoc
+        # Only embedding-service / memory-core need protoc (tonic
+        # build scripts compile .proto files). Installing
+        # unconditionally is cheaper than a per-crate `if:` gate and
+        # the CLI crates' build is unaffected by the extra package.
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - name: cargo test
         working-directory: apps/${{ matrix.crate }}
