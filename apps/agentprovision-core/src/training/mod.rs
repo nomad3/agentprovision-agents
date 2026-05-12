@@ -12,6 +12,8 @@
 //! understands (see PR-Q3a-back follow-up for the per-source
 //! extraction adapter).
 
+pub mod github_cli;
 pub mod local_ai_cli;
 
+pub use github_cli::{scan as scan_github_cli, GithubCliSnapshot};
 pub use local_ai_cli::{scan as scan_local_ai_cli, LocalAiCliSnapshot};

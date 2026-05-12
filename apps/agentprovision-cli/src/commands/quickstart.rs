@@ -29,7 +29,7 @@ use serde_json::Value;
 
 use agentprovision_core::error::Error;
 use agentprovision_core::models::{BulkIngestResponse, OnboardingStatus, TrainingRun};
-use agentprovision_core::training::local_ai_cli;
+use agentprovision_core::training::{github_cli, local_ai_cli};
 
 use crate::context::Context;
 
@@ -444,10 +444,13 @@ async fn collect_items(
     args: &QuickstartArgs,
 ) -> anyhow::Result<Vec<Value>> {
     match channel {
+        // Combined resolution: keep Q3a's `args` plumbing for the
+        // local-ai-cli branch (needed for --no-topic-hints) AND add
+        // Q3b's github_cli dispatch.
         WedgeChannel::LocalAiCli => collect_local_ai_cli(ctx, args),
-        // Stub branches — replaced by Q3b / Q4 / Q5 as those land.
-        WedgeChannel::GithubCli
-        | WedgeChannel::Gmail
+        WedgeChannel::GithubCli => collect_github_cli(ctx),
+        // Stub branches — replaced by Q4 / Q5 as those land.
+        WedgeChannel::Gmail
         | WedgeChannel::Calendar
         | WedgeChannel::Slack
         | WedgeChannel::Whatsapp => Ok(vec![serde_json::json!({
@@ -494,6 +497,39 @@ fn collect_local_ai_cli(ctx: &Context, args: &QuickstartArgs) -> anyhow::Result<
         println!(
             "  scanned: {} sessions across Claude / Codex / Gemini / OpenCode",
             snap.total_sessions()
+        );
+    }
+    Ok(items)
+}
+
+/// GitHub-CLI wedge (PR-Q3b). Shells out to `gh api` using the user's
+/// existing `gh auth` session. Same consent pattern as the AI-CLI
+/// wedge: prints what will be read, what will NOT leave the machine
+/// (bodies + the OAuth token), and aborts on decline.
+fn collect_github_cli(ctx: &Context) -> anyhow::Result<Vec<Value>> {
+    use dialoguer::{theme::ColorfulTheme, Confirm};
+
+    if !ctx.json && console::Term::stdout().is_term() {
+        println!("\n{}", github_cli::consent_summary());
+        let ok = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Pull GitHub metadata via your existing `gh auth` session?")
+            .default(true)
+            .interact()
+            .unwrap_or(false);
+        if !ok {
+            anyhow::bail!("GitHub CLI scan declined — rerun and choose another wedge");
+        }
+    }
+
+    let snap = github_cli::scan(github_cli::ScanOptions::default())?;
+    let items = snap.to_items();
+    if !ctx.json {
+        println!(
+            "  scanned: {} repos / {} orgs / {} PRs / {} issues via gh",
+            snap.repos.len(),
+            snap.orgs.len(),
+            snap.prs.len(),
+            snap.issues.len(),
         );
     }
     Ok(items)
