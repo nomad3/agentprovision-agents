@@ -81,7 +81,18 @@ async def extract_and_persist_batch(
     from app.db.safe_ops import safe_rollback
 
     db = SessionLocal()
-    processed = 0
+    # Reviewer (PR #408 finding #3) caught that conflating 'seen' with
+    # 'persisted' regresses toward the success-without-effect anti-
+    # pattern called out in orchestration_cascade_root_cause.md.
+    # Counters keep both numbers honest: `persisted` is what actually
+    # landed in knowledge_entities; `recognised` includes deferred
+    # kinds (github_pr/issue, quickstart-stub) plus persisted; the
+    # difference between (recognised + unknown) and items.len() lets
+    # the workflow surface unknown-kind drift in a single WARN per
+    # batch instead of silently inflating the progress bar.
+    persisted = 0
+    recognised = 0
+    unknown_kinds: Dict[str, int] = {}
     try:
         from app.models.training_run import TrainingRun
         import uuid as _uuid
@@ -93,29 +104,51 @@ async def extract_and_persist_batch(
 
         tenant_uuid = _uuid.UUID(tenant_id)
         for item in items:
+            kind = item.get("kind", "") or "<missing>"
             try:
-                if _persist_item(db, tenant_uuid, item):
-                    processed += 1
+                outcome = _persist_item(db, tenant_uuid, item)
+                if outcome == "persisted":
+                    persisted += 1
+                    recognised += 1
+                elif outcome == "recognised":
+                    recognised += 1
                 else:
-                    # Unknown kind — count as processed (advances the
-                    # progress bar) but skip the persist step. The
-                    # alternative is to fail the whole batch on one
-                    # unknown kind, which is worse UX.
-                    processed += 1
+                    # Genuinely unknown kind — accumulate into the
+                    # per-batch histogram so a single WARN below
+                    # surfaces wire-format drift without flooding logs.
+                    unknown_kinds[kind] = unknown_kinds.get(kind, 0) + 1
             except Exception:
                 safe_rollback(db)
                 activity.logger.exception(
                     "item persist failed (kind=%s) — continuing batch",
-                    item.get("kind"),
+                    kind,
                 )
 
-        run.items_processed = (run.items_processed or 0) + processed
+        if unknown_kinds:
+            # One log line per batch, not per item — keeps log volume
+            # bounded even when a misconfigured wedge ships 10k unknowns.
+            activity.logger.warning(
+                "batch %s: %d unknown-kind items skipped (not persisted): %s",
+                batch_index,
+                sum(unknown_kinds.values()),
+                dict(sorted(unknown_kinds.items())),
+            )
+
+        # `items_processed` reflects RECOGNISED items only — the user's
+        # progress bar shows what the workflow actually saw and could
+        # do something with. Unknown items don't move the bar; they
+        # surface as the per-batch WARN above. If the whole snapshot
+        # turns out to be unknown, items_processed stays 0 and the
+        # caller can present a meaningful 'no items recognised'
+        # outcome instead of '10000/10000 succeeded but graph empty'.
+        run.items_processed = (run.items_processed or 0) + recognised
         db.commit()
 
         activity.heartbeat(
-            f"batch {batch_index} processed: tenant={tenant_id[:8]} +{processed}"
+            f"batch {batch_index}: tenant={tenant_id[:8]} "
+            f"persisted={persisted} recognised={recognised} unknown={sum(unknown_kinds.values())}"
         )
-        return processed
+        return recognised
     except Exception:
         safe_rollback(db)
         activity.logger.exception("extract_and_persist_batch failed")
@@ -124,21 +157,34 @@ async def extract_and_persist_batch(
         db.close()
 
 
-def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
-    """Map one wedge-emitted item onto a knowledge entity. Returns
-    True if the item was a recognised kind (regardless of whether the
-    persist itself succeeded — the caller is responsible for catching
-    persist failures and continuing the batch).
+def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
+    """Map one wedge-emitted item onto a knowledge entity.
+
+    Returns one of three outcome strings so the caller can keep the
+    user-visible counters honest:
+
+        "persisted"   — the item was a recognised kind AND a
+                        knowledge_entities row was created.
+        "recognised"  — the item was a recognised kind but
+                        deliberately not persisted in v1 (github_pr /
+                        github_issue → deferred to Q4-back-2; the
+                        quickstart-stub items that the wedge stubs
+                        emit during not-yet-implemented branches).
+        "unknown"     — neither — counted into the per-batch unknown
+                        histogram so wire-format drift surfaces in
+                        logs instead of silently inflating progress.
 
     Rule table:
-      local_user_identity → Person (category=user)
-      local_ai_session    → Project (category=project) keyed on project_path
-      github_user         → Person (category=user)
-      github_repo         → Project (category=project)
-      github_org          → Organization (category=organization)
-      github_pr           → not persisted as entity in v1 (would be
-                            observation on the parent repo; deferred)
-      github_issue        → same as github_pr; deferred to Q4-back-2.
+      local_user_identity → Person (persisted)
+      local_ai_session    → Project keyed on project_path (persisted
+                            when project_path is non-empty; recognised
+                            otherwise because there's nothing to anchor)
+      github_user         → Person (persisted)
+      github_repo         → Project (persisted)
+      github_org          → Organization (persisted)
+      github_pr           → recognised, not persisted (Q4-back-2)
+      github_issue        → recognised, not persisted (Q4-back-2)
+      quickstart-stub     → recognised, not persisted
     """
     from app.schemas.knowledge_entity import KnowledgeEntityCreate
     from app.services.knowledge import create_entity
@@ -150,6 +196,11 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             entity_type="person",
             category="user",
             name=name,
+            # Bio-only would also work, but local_user_identity items
+            # don't carry a bio — keeping email as description for the
+            # user-anchor entity is informative without doubling up
+            # with the attributes.email field. (github_user has a real
+            # bio; that branch prefers bio.)
             description=item.get("email") or None,
             attributes={
                 "email": item.get("email"),
@@ -157,12 +208,13 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             },
         )
         create_entity(db, ent, tenant_id)
-        return True
+        return "persisted"
 
     if kind == "local_ai_session":
         project_path = item.get("project_path") or ""
         if not project_path:
-            return True  # known kind, just nothing to anchor on
+            # Recognised kind, but nothing to anchor the Project on.
+            return "recognised"
         name = project_path.rstrip("/").split("/")[-1] or project_path
         ent = KnowledgeEntityCreate(
             entity_type="project",
@@ -176,16 +228,19 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             },
         )
         create_entity(db, ent, tenant_id)
-        return True
+        return "persisted"
 
     if kind == "github_user":
         login = item.get("login") or ""
         name = item.get("name") or login or "GitHub user"
+        # Reviewer NIT (PR #408 #8): prefer bio for description and
+        # leave email solely in attributes.email — email-as-description
+        # is odd when bio is the natural one-liner descriptor.
         ent = KnowledgeEntityCreate(
             entity_type="person",
             category="user",
             name=name,
-            description=item.get("bio") or item.get("email"),
+            description=item.get("bio") or None,
             attributes={
                 "github_login": login,
                 "email": item.get("email"),
@@ -195,7 +250,7 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             },
         )
         create_entity(db, ent, tenant_id)
-        return True
+        return "persisted"
 
     if kind == "github_repo":
         name = item.get("name") or item.get("full_name") or "GitHub repo"
@@ -206,6 +261,10 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             description=None,
             source_url=item.get("html_url"),
             attributes={
+                # Note: the Q3b scanner flattens owner to a login
+                # string (`r.get("owner").and_then(|o| o.get("login"))`)
+                # before emitting; do NOT read item["owner"]["login"]
+                # here — it's already a string at this layer.
                 "owner": item.get("owner"),
                 "full_name": item.get("full_name"),
                 "language": item.get("language"),
@@ -214,7 +273,7 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             },
         )
         create_entity(db, ent, tenant_id)
-        return True
+        return "persisted"
 
     if kind == "github_org":
         ent = KnowledgeEntityCreate(
@@ -225,17 +284,18 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> bool:
             attributes={"source": "ap_quickstart_github_cli"},
         )
         create_entity(db, ent, tenant_id)
-        return True
+        return "persisted"
 
     if kind in ("github_pr", "github_issue", "quickstart-stub"):
-        # Recognised kinds — defer persistence. PRs / issues are
-        # better modelled as observations on the parent repo (PR-Q4-
-        # back-2). 'quickstart-stub' lands during stub-wedge runs;
-        # counting them as 'processed' keeps the progress bar
-        # honest without persisting noise.
-        return True
+        # PRs / issues are better modelled as observations on the
+        # parent repo (PR-Q4-back-2). 'quickstart-stub' lands during
+        # stub-wedge runs (Q5 sources before they have real
+        # collectors). Returning "recognised" lets the user-visible
+        # counter reflect that the workflow saw and understood the
+        # item even though nothing landed in the graph.
+        return "recognised"
 
-    return False
+    return "unknown"
 
 
 @activity.defn
