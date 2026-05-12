@@ -323,31 +323,17 @@ mod tests {
         assert_eq!(items[0]["language"], "Rust");
     }
 
-    #[test]
-    fn ensure_gh_authenticated_returns_helpful_error_when_missing() {
-        // When PATH doesn't contain `gh`, the call must error out
-        // with the documented hint string so the CLI can render it.
-        // We approximate by temporarily mutating PATH.
-        let prev_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", "/tmp-nonexistent-dir-for-test");
-        let res = ensure_gh_authenticated();
-        std::env::set_var("PATH", prev_path);
-        // Either spawn-not-found or auth-status-non-zero — both
-        // are valid "needs install/login" hints.
-        match res {
-            Err(Error::Other(msg)) => {
-                let lower = msg.to_lowercase();
-                assert!(
-                    lower.contains("gh")
-                        && (lower.contains("install") || lower.contains("authenticated") || lower.contains("not on path"))
-                );
-            }
-            Ok(()) => {
-                // gh may still be findable through fallback paths on
-                // some hosts; the test is informational rather than
-                // strict in that environment.
-            }
-            Err(other) => panic!("expected Error::Other, got {other:?}"),
-        }
-    }
+    // NB: a previous draft of this module had a
+    // `ensure_gh_authenticated_returns_helpful_error_when_missing`
+    // test that mutated `PATH` to simulate `gh` being absent. Reviewer
+    // (PR #407 finding #5) caught that the env mutation races against
+    // any parallel test that reads PATH or spawns a subprocess —
+    // `cargo test` runs the suite in parallel threads of one process,
+    // so the mutation window leaks. The production code's behaviour
+    // when `gh` is missing is exercised end-to-end by the CLI's
+    // existing acceptance tests (which run `ap quickstart --channel
+    // github_cli` against a controlled `PATH` in a child cargo
+    // invocation, not in-process). Dropping the in-process test is
+    // the lowest-cost fix; alternatives (#[serial], a `gh_path`
+    // parameter) add machinery for marginal coverage.
 }
