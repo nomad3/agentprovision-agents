@@ -255,8 +255,11 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
       github_user         → Person (persisted)
       github_repo         → Project (persisted)
       github_org          → Organization (persisted)
-      github_pr           → recognised, not persisted (Q4-back-2)
-      github_issue        → recognised, not persisted (Q4-back-2)
+      github_pr           → Observation on parent Project (recognised
+                            when parent repo missing — orphan
+                            observations would poison recall)
+      github_issue        → Observation on parent Project (same
+                            parent-missing rule as github_pr)
       quickstart-stub     → recognised, not persisted
     """
     from app.schemas.knowledge_entity import KnowledgeEntityCreate
@@ -399,13 +402,95 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
         create_entity(db, ent, tenant_id)
         return "persisted"
 
-    if kind in ("github_pr", "github_issue", "quickstart-stub"):
-        # PRs / issues are better modelled as observations on the
-        # parent repo (PR-Q4-back-2). 'quickstart-stub' lands during
-        # stub-wedge runs (Q5 sources before they have real
-        # collectors). Returning "recognised" lets the user-visible
-        # counter reflect that the workflow saw and understood the
-        # item even though nothing landed in the graph.
+    if kind in ("github_pr", "github_issue"):
+        # PR-Q3a-back-2: turn each PR/issue into a free-text
+        # observation on the parent Project entity (the github_repo
+        # we persisted in the same snapshot, dedup'd on `full_name`).
+        # We deliberately don't create a new entity per PR/issue —
+        # repos have hundreds of these and one-entity-per-PR would
+        # drown the recall ranker. The observation is auto-embedded
+        # via embedding_service so semantic search over "what was
+        # that PR about closing the cascade" still finds it.
+        repo_full_name = item.get("repository")
+        if not repo_full_name or not isinstance(repo_full_name, str):
+            # The Q3b scanner ALWAYS sets `repository`; a missing
+            # value here is wire-format drift. Don't silently inflate
+            # the recognised counter — bucket it as unknown so the
+            # per-batch WARN surfaces the schema break.
+            return "unknown"
+
+        parent_id = _existing_entity_id(
+            db,
+            tenant_id,
+            "project",
+            attr_key="full_name",
+            attr_value=repo_full_name,
+        )
+        if parent_id is None:
+            # The parent repo wasn't persisted in this snapshot — the
+            # user has gh access to a PR/issue on a repo we don't
+            # track. Could be a public review they commented on or a
+            # cross-org collaboration. Skip without poisoning recall:
+            # orphan observations with no entity_id are recall noise.
+            # Reported as "recognised" so the user-visible progress bar
+            # stays honest.
+            return "recognised"
+
+        # Render a short, search-friendly observation. Title + state
+        # is the highest-signal pair; url goes in `source_ref` so the
+        # recall response can deep-link without bloating the text.
+        title = (item.get("title") or "").strip()
+        state = (item.get("state") or "").strip().lower()
+        url = item.get("url") or ""
+
+        # Reviewer I1 (2026-05-12): empty title AND empty state would
+        # produce a bare "PR" / "Issue" string that auto-embeds to a
+        # near-stop-word vector. Every untitled-stateless item from
+        # the tenant would then recall-match every other one. The
+        # Q3b scanner contract requires `title` (gh ALWAYS returns
+        # one) so a missing pair is wire-format drift — route it
+        # through the per-batch WARN histogram instead of poisoning
+        # recall with low-signal observations.
+        if not title and not state:
+            return "unknown"
+
+        prefix = "PR" if kind == "github_pr" else "Issue"
+        text_parts = [f"{prefix}: {title}" if title else prefix]
+        if state:
+            text_parts.append(f"({state})")
+        observation_text = " ".join(text_parts)
+
+        # TODO(Q3a-back-3): observations are append-only, so re-runs
+        # of the wedge create one observation per snapshot per PR.
+        # Either dedup on (entity_id, source_ref) here or bake the
+        # snapshot date into the text so recall can disambiguate.
+        # Bounded for now (snapshot = recent activity, not history),
+        # but a heavy user can accumulate noise over months.
+        from app.services.knowledge import create_observation
+
+        create_observation(
+            db,
+            tenant_id=tenant_id,
+            observation_text=observation_text,
+            observation_type="fact",
+            source_type="github",
+            source_platform="github",
+            source_channel="ap_quickstart_github_cli",
+            source_ref=url or None,
+            entity_id=parent_id,
+            # The Q3b scanner has no review/approval signal, so we
+            # don't infer sentiment. Leaving it None lets future
+            # extractors (review-comment-aware) layer on top without
+            # contradicting an early guess.
+        )
+        return "persisted"
+
+    if kind == "quickstart-stub":
+        # Stub items land during Q5 server-side bootstrappers that
+        # haven't been built yet (Gmail / Calendar / Slack / WhatsApp
+        # web wedges). Recognised-but-not-persisted lets the user-
+        # visible progress counter reflect that the workflow saw and
+        # understood the item even though there's nothing to anchor.
         return "recognised"
 
     return "unknown"
