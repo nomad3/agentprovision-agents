@@ -118,19 +118,27 @@ struct ResumeState {
     training_run_id: String,
 }
 
-fn resume_state_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("agentprovision").join("quickstart.toml"))
+/// Per-tenant resume-state path. Reviewer I-3: keying the file
+/// globally meant a second `ap login` against a different tenant
+/// silently clobbered the first's stranded snapshot, and `--resume`
+/// would re-POST under the wrong tenant. Tenant-scoping fixes that
+/// without adding any state-sharing surface between tenants.
+fn resume_state_path(tenant_id: &str) -> Option<PathBuf> {
+    dirs::config_dir().map(|p| {
+        p.join("agentprovision")
+            .join(format!("quickstart-{tenant_id}.toml"))
+    })
 }
 
-fn load_resume_state() -> Option<ResumeState> {
-    let path = resume_state_path()?;
+fn load_resume_state(tenant_id: &str) -> Option<ResumeState> {
+    let path = resume_state_path(tenant_id)?;
     let s = std::fs::read_to_string(&path).ok()?;
     toml::from_str(&s).ok()
 }
 
-fn save_resume_state(state: &ResumeState) -> Result<(), std::io::Error> {
+fn save_resume_state(tenant_id: &str, state: &ResumeState) -> Result<(), std::io::Error> {
     // best-effort — we never want a write failure to crash quickstart
-    if let Some(path) = resume_state_path() {
+    if let Some(path) = resume_state_path(tenant_id) {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -140,11 +148,11 @@ fn save_resume_state(state: &ResumeState) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-fn clear_resume_state() {
+fn clear_resume_state(tenant_id: &str) {
     // Best-effort cleanup. We don't propagate errors — a leftover file
     // is harmless (the next `--resume` will re-POST the same snapshot
     // and the server's idempotency check makes that a no-op).
-    if let Some(path) = resume_state_path() {
+    if let Some(path) = resume_state_path(tenant_id) {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -153,9 +161,35 @@ fn clear_resume_state() {
 /// dialoguer Select. We use the server's recommended channel if it
 /// matches a known wedge; otherwise default to local AI CLI (the dev
 /// wedge — by far the lowest friction).
+/// Cross-map between the server's `OnboardingStatus.recommended_channel`
+/// vocabulary (9 values, including AI-CLI sub-kinds) and the CLI's
+/// wedge enum (6 values). Reviewer B-1 caught this: the previous
+/// `WedgeChannel::from_wire` only recognised the 6 `Source` enum
+/// values, so the five AI-CLI recommendations (`claude_code`, `codex`,
+/// `gemini_cli`, `copilot_cli`, `opencode`) silently returned `None`
+/// and the picker fell back to index 0 — accidentally-correct because
+/// `LocalAiCli` happens to be index 0, but a future option reorder
+/// would silently invert the recommendation.
+fn recommended_to_wedge(rec: &str) -> Option<WedgeChannel> {
+    match rec {
+        // The AI-CLI sub-kinds all bucket into the single LocalAiCli
+        // wedge (the scanner reads metadata from each runtime present
+        // on disk; the user doesn't pick by runtime).
+        "claude_code" | "codex" | "gemini_cli" | "copilot_cli" | "opencode" => {
+            Some(WedgeChannel::LocalAiCli)
+        }
+        "github_cli" => Some(WedgeChannel::GithubCli),
+        "gmail" => Some(WedgeChannel::Gmail),
+        "calendar" => Some(WedgeChannel::Calendar),
+        "slack" => Some(WedgeChannel::Slack),
+        "whatsapp" => Some(WedgeChannel::Whatsapp),
+        _ => None,
+    }
+}
+
 fn picker_default_index(status: &OnboardingStatus, options: &[WedgeChannel]) -> usize {
     if let Some(rec) = status.recommended_channel.as_deref() {
-        if let Some(matched) = WedgeChannel::from_wire(rec) {
+        if let Some(matched) = recommended_to_wedge(rec) {
             if let Some(i) = options.iter().position(|c| c.as_wire() == matched.as_wire()) {
                 return i;
             }
@@ -170,14 +204,22 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
         anyhow::bail!("not logged in — run `ap login` first");
     }
 
+    // Resolve the tenant_id once up front. Reviewer I-3: resume state
+    // is keyed by tenant_id so a user with multiple tenants doesn't
+    // overwrite one tenant's stranded snapshot when running quickstart
+    // against another. JWT carries it; we trust `current_user()`.
+    let me = ctx.client.current_user().await?;
+    let tenant_id = me
+        .tenant_id
+        .ok_or_else(|| anyhow::anyhow!("user has no tenant_id — server contract violation"))?
+        .to_string();
+
     // (1) Onboarding-status check. Drives the auto-trigger contract:
     // if already onboarded and `--force` wasn't passed, we exit 0
     // without prompting so `ap login` post-success hooks stay quiet.
-    let status: OnboardingStatus = ctx
-        .client
-        .get_onboarding_status()
-        .await
-        .map_err(map_api_error)?;
+    // Plain `?` here keeps the typed Error chain (B-2 / I-4) so the
+    // caller can downcast on Error::Api { status, .. }.
+    let status: OnboardingStatus = ctx.client.get_onboarding_status().await?;
 
     if status.onboarded && !args.force {
         crate::output::emit(
@@ -196,7 +238,7 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
 
     // (2) Channel pick — explicit `--channel` wins, then resume state,
     // then interactive picker biased toward `status.recommended_channel`.
-    let (channel, resume_existing) = resolve_channel(&args, &status)?;
+    let (channel, resume_existing) = resolve_channel(&args, &status, &tenant_id)?;
 
     // (3) Items collection. PR-Q3a wires the Local-AI-CLI wedge to a
     // real scanner that reads git config + ~/.{claude,codex,gemini,
@@ -205,35 +247,58 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
     let items = collect_items(channel, &ctx).await?;
 
     // (4) Dispatch the bulk-ingest. snapshot_id is generated once per
-    // quickstart run and persisted to disk so `--resume` re-POSTs the
-    // same UUID — the server's `(tenant_id, snapshot_id)` unique index
-    // ensures we never spawn a parallel workflow.
+    // quickstart run and persisted to disk BEFORE the POST so a Ctrl-C
+    // between request and response still leaves a recoverable state.
+    // The server's `(tenant_id, snapshot_id)` unique index ensures we
+    // never spawn a parallel workflow on retry; `--resume` simply
+    // re-POSTs the same UUID and gets `deduplicated=true` back.
+    // Reviewer NIT #6: write BEFORE POST so the recovery story is
+    // 'rerun --resume', not 'rm the file by hand'.
     let snapshot_id = if let Some(rs) = resume_existing.as_ref() {
         rs.snapshot_id.clone()
     } else {
         uuid::Uuid::new_v4().to_string()
     };
+    let _ = save_resume_state(
+        &tenant_id,
+        &ResumeState {
+            snapshot_id: snapshot_id.clone(),
+            source: channel.as_wire().to_string(),
+            // Empty until we get the response back; --resume will
+            // re-POST with the same snapshot_id and refresh this.
+            training_run_id: resume_existing
+                .as_ref()
+                .map(|r| r.training_run_id.clone())
+                .unwrap_or_default(),
+        },
+    );
 
     let resp: BulkIngestResponse = ctx
         .client
         .bulk_ingest_training(channel.as_wire(), &items, &snapshot_id)
-        .await
-        .map_err(map_api_error)?;
+        .await?;
 
-    // Persist resume state immediately so a Ctrl-C right after the POST
-    // doesn't leave a stranded server-side row the user can't recover.
-    let _ = save_resume_state(&ResumeState {
-        snapshot_id: snapshot_id.clone(),
-        source: channel.as_wire().to_string(),
-        training_run_id: resp.run.id.to_string(),
-    });
+    // Refresh the resume state with the now-known training_run_id so
+    // status polling and downstream `--resume` retries can short-circuit.
+    let _ = save_resume_state(
+        &tenant_id,
+        &ResumeState {
+            snapshot_id: snapshot_id.clone(),
+            source: channel.as_wire().to_string(),
+            training_run_id: resp.run.id.to_string(),
+        },
+    );
 
     if !ctx.json {
+        // Truncated run-id render: UUID round-trip guarantees ≥36 chars
+        // so the slice is safe (NIT #11 — was guarded with `.min(len)`
+        // belt-and-suspenders; UUID type makes that dead code).
+        let run_id_short = &resp.run.id.to_string()[..8];
         if resp.deduplicated {
             println!(
                 "{} resumed existing training run {} ({} status: {})",
                 style("⟳").yellow().bold(),
-                style(&resp.run.id.to_string()[..8]).dim(),
+                style(run_id_short).dim(),
                 style(channel.label()).bold(),
                 resp.run.status,
             );
@@ -257,11 +322,8 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
     }
 
     // (6) Mark onboarding complete + clear resume state.
-    ctx.client
-        .complete_onboarding("cli")
-        .await
-        .map_err(map_api_error)?;
-    clear_resume_state();
+    ctx.client.complete_onboarding("cli").await?;
+    clear_resume_state(&tenant_id);
 
     if !ctx.json {
         println!(
@@ -299,14 +361,16 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
 fn resolve_channel(
     args: &QuickstartArgs,
     status: &OnboardingStatus,
+    tenant_id: &str,
 ) -> anyhow::Result<(WedgeChannel, Option<ResumeState>)> {
     if args.resume {
-        if let Some(state) = load_resume_state() {
+        if let Some(state) = load_resume_state(tenant_id) {
             let ch = WedgeChannel::from_wire(&state.source).ok_or_else(|| {
                 anyhow::anyhow!(
                     "resume state has unknown source `{}` — delete \
-                     ~/.config/agentprovision/quickstart.toml and retry",
-                    state.source
+                     ~/.config/agentprovision/quickstart-{}.toml and retry",
+                    state.source,
+                    tenant_id
                 )
             })?;
             return Ok((ch, Some(state)));
@@ -376,7 +440,7 @@ fn collect_local_ai_cli(ctx: &Context) -> anyhow::Result<Vec<Value>> {
         }
     }
 
-    let snap = local_ai_cli::scan(local_ai_cli::ScanOptions::default()).map_err(map_api_error)?;
+    let snap = local_ai_cli::scan(local_ai_cli::ScanOptions::default())?;
     let items = snap.to_items();
     if !ctx.json {
         println!(
@@ -412,11 +476,7 @@ async fn poll_until_terminal(ctx: &Context, run_id: &str) -> anyhow::Result<Trai
     let start = std::time::Instant::now();
     let mut last: TrainingRun;
     loop {
-        last = ctx
-            .client
-            .get_training_run(run_id)
-            .await
-            .map_err(map_api_error)?;
+        last = ctx.client.get_training_run(run_id).await?;
         if let Some(pb) = pb.as_ref() {
             // Workflow may not have set items_total yet on the very
             // first poll; guard against 0-length progress bars.
@@ -448,27 +508,33 @@ async fn poll_until_terminal(ctx: &Context, run_id: &str) -> anyhow::Result<Trai
     Ok(last)
 }
 
-fn map_api_error(e: Error) -> anyhow::Error {
-    // The core Error type already carries the API status + body for
-    // `Error::Api`; we just lift it into anyhow so the dispatcher's
-    // single failure path works for every subcommand. Worth keeping
-    // separate from a generic `e.into()` so a future surface (JSON
-    // error envelope, etc.) has one well-known choke point.
-    anyhow::anyhow!(e.to_string())
-}
-
 /// Helper used by the `ap login` post-success hook to auto-fire
 /// quickstart for un-onboarded tenants without forcing the user to
 /// type `ap quickstart`. Caller is responsible for not calling this
 /// when stdin is non-interactive (e.g. piped) since the picker uses
 /// `dialoguer::Select` which requires a tty.
+///
+/// Error semantics (reviewer B-2 fix): 404 from the onboarding-status
+/// probe is treated as 'server is older than the CLI' — silent skip.
+/// Any other API error (401, 5xx, transport) is **logged as a warning
+/// to stderr** so a real outage isn't hidden behind the silent path.
+/// We still return `Ok(())` so the parent `ap login` succeeds; the
+/// user can rerun `ap quickstart` explicitly to retry.
 pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
     let status = match ctx.client.get_onboarding_status().await {
         Ok(s) => s,
-        // Endpoint unreachable / unauthorized — don't surface as a
-        // post-login error. The user already authenticated; the
-        // missing onboarding signal is informational. Silent skip.
-        Err(_) => return Ok(()),
+        // 404 = endpoint missing on older API server. The only
+        // legitimate reason to silently skip. Anything else means the
+        // probe touched a real server and got rejected — surface it.
+        Err(Error::Api { status: 404, .. }) => return Ok(()),
+        Err(e) => {
+            crate::output::warn(format!(
+                "onboarding-status probe failed ({}); skipping auto-trigger. \
+                 Run `ap quickstart` to retry.",
+                e
+            ));
+            return Ok(());
+        }
     };
     if status.onboarded || status.deferred {
         return Ok(());
@@ -503,4 +569,107 @@ pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
         ctx.clone(),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reviewer NIT #12: prove the wire round-trip stays intact across
+    /// future enum additions. If a new variant is added without a
+    /// matching from_wire arm, this fails immediately.
+    #[test]
+    fn wedge_channel_wire_round_trip() {
+        for ch in [
+            WedgeChannel::LocalAiCli,
+            WedgeChannel::GithubCli,
+            WedgeChannel::Gmail,
+            WedgeChannel::Calendar,
+            WedgeChannel::Slack,
+            WedgeChannel::Whatsapp,
+        ] {
+            let wire = ch.as_wire();
+            let back = WedgeChannel::from_wire(wire).unwrap_or_else(|| {
+                panic!("from_wire returned None for self-emitted {wire:?}")
+            });
+            assert_eq!(back.as_wire(), wire);
+        }
+    }
+
+    /// Reviewer B-1: server emits AI-CLI sub-kinds that the CLI
+    /// flattens into LocalAiCli. Without this mapping the picker
+    /// silently fell back to index 0 — accidentally correct, but
+    /// brittle. Lock the contract here.
+    #[test]
+    fn recommended_to_wedge_maps_ai_cli_subkinds_to_local_ai_cli() {
+        for rec in ["claude_code", "codex", "gemini_cli", "copilot_cli", "opencode"] {
+            assert_eq!(
+                recommended_to_wedge(rec).map(|w| w.as_wire()),
+                Some("local_ai_cli"),
+                "expected {rec} → local_ai_cli"
+            );
+        }
+        assert_eq!(
+            recommended_to_wedge("gmail").map(|w| w.as_wire()),
+            Some("gmail")
+        );
+        assert_eq!(
+            recommended_to_wedge("github_cli").map(|w| w.as_wire()),
+            Some("github_cli")
+        );
+        assert!(recommended_to_wedge("flarp").is_none());
+    }
+
+    /// `picker_default_index` selects the LocalAiCli row when the
+    /// server recommends any AI-CLI sub-kind. This exact test would
+    /// have FAILED before the B-1 fix (the previous code returned 0
+    /// only because LocalAiCli happened to be in slot 0).
+    #[test]
+    fn picker_default_index_honours_ai_cli_recommendation() {
+        let options = vec![
+            // Intentionally NOT in the natural order — proves the
+            // logic doesn't rely on LocalAiCli being slot 0.
+            WedgeChannel::Gmail,
+            WedgeChannel::GithubCli,
+            WedgeChannel::LocalAiCli,
+            WedgeChannel::Slack,
+        ];
+        let status = OnboardingStatus {
+            onboarded: false,
+            deferred: false,
+            onboarded_at: None,
+            onboarding_deferred_at: None,
+            onboarding_source: None,
+            recommended_channel: Some("claude_code".into()),
+        };
+        assert_eq!(picker_default_index(&status, &options), 2);
+    }
+
+    /// Unknown recommendation falls back to slot 0 (the safest
+    /// default — won't crash; user can override).
+    #[test]
+    fn picker_default_index_falls_back_on_unknown_recommendation() {
+        let options = vec![WedgeChannel::LocalAiCli, WedgeChannel::GithubCli];
+        let status = OnboardingStatus {
+            onboarded: false,
+            deferred: false,
+            onboarded_at: None,
+            onboarding_deferred_at: None,
+            onboarding_source: None,
+            recommended_channel: Some("not-a-real-channel".into()),
+        };
+        assert_eq!(picker_default_index(&status, &options), 0);
+    }
+
+    /// Tenant-scoped resume path includes the tenant_id in the
+    /// filename — reviewer I-3. A second tenant's run can't clobber
+    /// the first's resume state.
+    #[test]
+    fn resume_state_path_is_tenant_scoped() {
+        let p1 = resume_state_path("tenant-aaa").unwrap();
+        let p2 = resume_state_path("tenant-bbb").unwrap();
+        assert_ne!(p1, p2);
+        assert!(p1.to_string_lossy().contains("tenant-aaa"));
+        assert!(p2.to_string_lossy().contains("tenant-bbb"));
+    }
 }

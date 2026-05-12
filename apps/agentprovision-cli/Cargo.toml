@@ -24,10 +24,13 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "tim
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 console = "0.15"
-dialoguer = { version = "0.11", default-features = false, features = ["password", "completion"] }
+dialoguer = { version = "0.11", default-features = false, features = ["password"] }
 # `ap quickstart` deps:
 #   - uuid for client-side snapshot_id generation (idempotency key)
-#   - toml for ~/.config/agentprovision/quickstart.toml resume state
+#   - toml for resume-state persistence keyed by tenant_id
+# (Note: dialoguer's Confirm + Select are unconditionally re-exported
+# in 0.11 — no feature flag required for them, contra an earlier
+# Cargo.toml comment caught in the PR-Q2 review.)
 uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
 indicatif = "0.17"
