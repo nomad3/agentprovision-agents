@@ -221,7 +221,10 @@ fn recommended_to_wedge(rec: &str) -> Option<WedgeChannel> {
 fn picker_default_index(status: &OnboardingStatus, options: &[WedgeChannel]) -> usize {
     if let Some(rec) = status.recommended_channel.as_deref() {
         if let Some(matched) = recommended_to_wedge(rec) {
-            if let Some(i) = options.iter().position(|c| c.as_wire() == matched.as_wire()) {
+            if let Some(i) = options
+                .iter()
+                .position(|c| c.as_wire() == matched.as_wire())
+            {
                 return i;
             }
         }
@@ -639,9 +642,8 @@ mod tests {
             WedgeChannel::Whatsapp,
         ] {
             let wire = ch.as_wire();
-            let back = WedgeChannel::from_wire(wire).unwrap_or_else(|| {
-                panic!("from_wire returned None for self-emitted {wire:?}")
-            });
+            let back = WedgeChannel::from_wire(wire)
+                .unwrap_or_else(|| panic!("from_wire returned None for self-emitted {wire:?}"));
             assert_eq!(back.as_wire(), wire);
         }
     }
@@ -652,7 +654,13 @@ mod tests {
     /// brittle. Lock the contract here.
     #[test]
     fn recommended_to_wedge_maps_ai_cli_subkinds_to_local_ai_cli() {
-        for rec in ["claude_code", "codex", "gemini_cli", "copilot_cli", "opencode"] {
+        for rec in [
+            "claude_code",
+            "codex",
+            "gemini_cli",
+            "copilot_cli",
+            "opencode",
+        ] {
             assert_eq!(
                 recommended_to_wedge(rec).map(|w| w.as_wire()),
                 Some("local_ai_cli"),
