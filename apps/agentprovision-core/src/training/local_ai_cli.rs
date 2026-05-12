@@ -317,7 +317,11 @@ fn scan_opencode_sessions(home: &Path, opts: &ScanOptions) -> Vec<SessionMeta> {
     // session-export JSON files (`opencode export <sessionID>`)
     // under `<storage>/exports/`. Most users won't have these, which
     // is fine — OpenCode coverage is opportunistic.
-    let exports = home.join(".local").join("share").join("opencode").join("exports");
+    let exports = home
+        .join(".local")
+        .join("share")
+        .join("opencode")
+        .join("exports");
     if !exports.is_dir() {
         return Vec::new();
     }
@@ -388,7 +392,10 @@ fn decode_claude_project_dir_name(dir: &Path) -> Option<String> {
         // Replace `-` with `/` only if the result looks like an
         // absolute path. Otherwise return the raw name (a future
         // encoding change shouldn't crash the scan).
-        let decoded: String = name.chars().map(|c| if c == '-' { '/' } else { c }).collect();
+        let decoded: String = name
+            .chars()
+            .map(|c| if c == '-' { '/' } else { c })
+            .collect();
         if decoded.starts_with('/') {
             return Some(decoded);
         }
@@ -432,7 +439,11 @@ fn read_jsonl_session_meta(
     // Synthesise a fake `lines` vec for the rest of the function so
     // the downstream first/last extraction logic stays identical.
     let lines: Vec<&str> = std::iter::once(first_line.as_str())
-        .chain(last_nonempty_line.as_deref().filter(|s| *s != first_line.as_str()))
+        .chain(
+            last_nonempty_line
+                .as_deref()
+                .filter(|s| *s != first_line.as_str()),
+        )
         .collect();
 
     let (mut started_at, mut last_message_at, mut topic_hint) = (None, None, None);
@@ -494,16 +505,19 @@ fn extract_user_message_preview(v: &Value) -> Option<String> {
                 c.as_str().map(str::to_string)
             } else if c.is_array() {
                 c.as_array().and_then(|arr| {
-                    arr.iter().find_map(|x| {
-                        x.get("text").and_then(|t| t.as_str()).map(str::to_string)
-                    })
+                    arr.iter()
+                        .find_map(|x| x.get("text").and_then(|t| t.as_str()).map(str::to_string))
                 })
             } else {
                 None
             }
         })
         .or_else(|| v.get("text").and_then(|t| t.as_str()).map(str::to_string))
-        .or_else(|| v.get("message").and_then(|m| m.as_str()).map(str::to_string))?;
+        .or_else(|| {
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })?;
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
@@ -570,8 +584,14 @@ mod tests {
         assert_eq!(meta.message_count, 3);
         assert_eq!(meta.project_path.as_deref(), Some("/repo"));
         assert_eq!(meta.started_at.as_deref(), Some("2026-05-12T00:00:00Z"));
-        assert_eq!(meta.last_message_at.as_deref(), Some("2026-05-12T00:02:00Z"));
-        assert_eq!(meta.derived_topic_hint.as_deref(), Some("please fix the build"));
+        assert_eq!(
+            meta.last_message_at.as_deref(),
+            Some("2026-05-12T00:02:00Z")
+        );
+        assert_eq!(
+            meta.derived_topic_hint.as_deref(),
+            Some("please fix the build")
+        );
     }
 
     #[test]
