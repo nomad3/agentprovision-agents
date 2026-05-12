@@ -58,7 +58,15 @@ class ChatMessage(Base):
     # Response metadata
     reasoning = Column(String, nullable=True)  # Chain of thought explanation
     confidence = Column(Float, nullable=True)  # 0.0-1.0 confidence score
-    tokens_used = Column(Integer, nullable=True)  # Token count for this message
+    tokens_used = Column(Integer, nullable=True)  # Total tokens (input + output) — kept for back-compat
+    # Cost/token split — migration 129 (2026-05-12). NULL semantics:
+    # "not measured" (older rows, agents that don't emit a usage
+    # struct, local CLIs that don't compute cost). MUST be rendered
+    # as `—`, not 0 — they mean different things.
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Float, nullable=True)  # USD; stored as NUMERIC(12,6) on the column
+    model = Column(String(64), nullable=True)  # Model id (e.g. "claude-3-5-sonnet-20241022")
 
     # Relationships
     session = relationship("ChatSession", back_populates="messages")

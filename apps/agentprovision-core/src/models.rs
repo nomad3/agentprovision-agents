@@ -82,13 +82,24 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(default)]
     pub created_at: Option<DateTime<Utc>>,
-    /// Per-message token count. NULL when the server didn't measure
-    /// (older messages, agents that don't emit a usage struct). The
-    /// CLI must render absence as `—`, NOT 0 — they mean different
-    /// things. Exposed via
+    /// Per-message token TOTAL (input + output). NULL when the server
+    /// didn't measure. The CLI must render absence as `—`, NOT 0 —
+    /// they mean different things. Exposed via
     /// `apps/api/app/schemas/chat.py::ChatMessage.tokens_used`.
     #[serde(default)]
     pub tokens_used: Option<i32>,
+    /// Cost/token split — added by migration 129. Same NULL
+    /// semantics as `tokens_used`: absence ≠ 0. Local CLIs (OpenCode
+    /// + gemma4) leave `cost_usd` NULL even when token counts are
+    /// populated because they don't compute cost.
+    #[serde(default)]
+    pub input_tokens: Option<i32>,
+    #[serde(default)]
+    pub output_tokens: Option<i32>,
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// Request body for `POST /api/v1/chat/sessions/{id}/messages`.
