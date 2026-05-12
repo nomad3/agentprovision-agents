@@ -260,6 +260,16 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
                             observations would poison recall)
       github_issue        → Observation on parent Project (same
                             parent-missing rule as github_pr)
+      gmail_message_summary → Person entity for sender (dedup'd on
+                              email) + Observation `Email: <subject>`
+                              on that person; subject-less messages
+                              still create the Person row
+                              (recognised when from_email missing)
+      calendar_event_summary → Concept entity for meeting (dedup'd
+                               on summary+start_iso) plus Person
+                               entities for non-organizer attendees
+                               (recognised when summary or start_iso
+                               missing — can't dedup safely)
       quickstart-stub     → recognised, not persisted
     """
     from app.schemas.knowledge_entity import KnowledgeEntityCreate
@@ -485,12 +495,141 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
         )
         return "persisted"
 
+    if kind == "gmail_message_summary":
+        # PR-Q4b: each recent inbox message becomes a Person entity
+        # for the sender (dedup'd on email) plus an observation on
+        # that person ("Email: <subject>" — the human-readable
+        # signal pgvector can recall against). The subject is the
+        # highest-value bit; body bytes are deliberately not fetched
+        # by the bootstrapper (metadata-only format) because
+        # observations should encode WHO emailed WHAT, not full
+        # threads.
+        from_email = (item.get("from_email") or "").strip().lower()
+        if not from_email:
+            # No address → can't dedup; bucket as unknown so the
+            # per-batch WARN histogram surfaces the wire-format drift.
+            return "unknown"
+
+        # Get-or-create the Person.
+        existing_pid = _existing_entity_id(
+            db, tenant_id, "person", attr_key="email", attr_value=from_email
+        )
+        if existing_pid is not None:
+            person_id = existing_pid
+        else:
+            display_name = (item.get("from_name") or "").strip() or from_email
+            ent = KnowledgeEntityCreate(
+                entity_type="person",
+                category="contact",
+                name=display_name,
+                description=from_email,
+                attributes={
+                    "email": from_email,
+                    "source": "ap_quickstart_gmail",
+                },
+            )
+            new_person = create_entity(db, ent, tenant_id)
+            person_id = new_person.id
+
+        # Attach the subject as an observation. Skip when subject is
+        # empty (would auto-embed to "Email:" alone — same low-signal
+        # recall-poisoning case as the github_pr empty-title rule).
+        subject = (item.get("subject") or "").strip()
+        if not subject or subject == "(no subject)":
+            return "persisted"  # person row counts even without a subject
+
+        from app.services.knowledge import create_observation
+
+        create_observation(
+            db,
+            tenant_id=tenant_id,
+            observation_text=f"Email: {subject}",
+            observation_type="fact",
+            source_type="gmail",
+            source_platform="gmail",
+            source_channel="ap_quickstart_gmail",
+            entity_id=person_id,
+        )
+        return "persisted"
+
+    if kind == "calendar_event_summary":
+        # PR-Q4b: each upcoming event becomes a Concept entity for
+        # the meeting (dedup'd on summary + start_iso) so recurring
+        # standups don't fan out into N separate rows. Attendees on
+        # the event get Person entities (dedup'd on email). The
+        # location/time live as attributes on the Concept.
+        summary = (item.get("summary") or "").strip()
+        start_iso = (item.get("start_iso") or "").strip()
+        if not summary or summary == "(no title)" or not start_iso:
+            # Need both for the dedup key — without either, the event
+            # is mostly recall noise. Don't bucket as unknown
+            # (calendar events without a title are legitimate); treat
+            # as recognised-but-not-persisted.
+            return "recognised"
+
+        # Dedup the event itself on (summary, start_iso). Use start_iso
+        # as the attribute key since `summary` collisions are common
+        # (weekly meetings all named "Standup") but (summary,
+        # start_iso) is unique.
+        meeting_attr_value = f"{summary}|{start_iso}"
+        if _existing_entity_id(
+            db, tenant_id, "concept",
+            attr_key="meeting_key", attr_value=meeting_attr_value,
+        ):
+            return "persisted"
+
+        attendees = item.get("attendee_emails") or []
+        if not isinstance(attendees, list):
+            attendees = []
+        ent = KnowledgeEntityCreate(
+            entity_type="concept",
+            category="meeting",
+            name=summary,
+            description=item.get("location") or None,
+            attributes={
+                "meeting_key": meeting_attr_value,
+                "start_iso": start_iso,
+                "end_iso": item.get("end_iso") or None,
+                "location": item.get("location") or None,
+                "attendee_count": len(attendees),
+                "source": "ap_quickstart_calendar",
+            },
+        )
+        create_entity(db, ent, tenant_id)
+
+        # Also persist attendees as Person entities (dedup on email).
+        # Skipping the organizer specifically — they're typically the
+        # user themselves and we don't want to seed a self-Person row.
+        organizer = (item.get("organizer_email") or "").strip().lower()
+        for raw_email in attendees:
+            email = (raw_email or "").strip().lower()
+            if not email or email == organizer:
+                continue
+            if _existing_entity_id(
+                db, tenant_id, "person", attr_key="email", attr_value=email
+            ):
+                continue
+            attendee_ent = KnowledgeEntityCreate(
+                entity_type="person",
+                category="contact",
+                name=email,  # display name not available from attendee list
+                description=email,
+                attributes={
+                    "email": email,
+                    "source": "ap_quickstart_calendar",
+                },
+            )
+            create_entity(db, attendee_ent, tenant_id)
+        return "persisted"
+
     if kind == "quickstart-stub":
         # Stub items land during Q5 server-side bootstrappers that
-        # haven't been built yet (Gmail / Calendar / Slack / WhatsApp
-        # web wedges). Recognised-but-not-persisted lets the user-
-        # visible progress counter reflect that the workflow saw and
-        # understood the item even though there's nothing to anchor.
+        # haven't been built yet (Slack / WhatsApp web wedges) AND
+        # as the empty-bootstrap-result fallback for Q4b (Gmail /
+        # Calendar without OAuth, or returning an empty fetch).
+        # Recognised-but-not-persisted lets the user-visible progress
+        # counter reflect that the workflow saw and understood the
+        # item even though there's nothing to anchor.
         return "recognised"
 
     return "unknown"

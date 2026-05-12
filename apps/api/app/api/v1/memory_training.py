@@ -117,6 +117,53 @@ async def bulk_ingest(
             deduplicated=True,
         )
 
+    # PR-Q4b: server-side bootstrappers for Gmail/Calendar.
+    #
+    # The web wedges for gmail/calendar can't read the user's
+    # filesystem the way the CLI wedges can — the SPA POSTs a single
+    # stub item and trusts the server to fetch real data via the
+    # tenant's OAuth token. Detect that shape here (source matches
+    # AND items is empty OR is a single quickstart-stub) and replace
+    # items[] with the bootstrapped fetch BEFORE creating the run
+    # row, so `items_total` reflects the real count.
+    items_for_run: list = list(body.items)
+    if body.source in ("gmail", "calendar"):
+        is_stub_only = (
+            len(items_for_run) == 0
+            or (
+                len(items_for_run) == 1
+                and items_for_run[0].get("kind") == "quickstart-stub"
+            )
+        )
+        if is_stub_only:
+            from app.services.quickstart_bootstrappers import (
+                bootstrap_calendar_items,
+                bootstrap_gmail_items,
+            )
+            if body.source == "gmail":
+                items_for_run = bootstrap_gmail_items(db, str(current_user.tenant_id))
+            else:
+                items_for_run = bootstrap_calendar_items(db, str(current_user.tenant_id))
+            logger.info(
+                "training bulk-ingest bootstrapped %d items from %s for tenant=%s",
+                len(items_for_run),
+                body.source,
+                str(current_user.tenant_id)[:8],
+            )
+            # Empty bootstrap (no OAuth token, API error, empty inbox)
+            # → leave the stub item in place so the run still completes
+            # with a "no items recognised" outcome instead of being an
+            # empty workflow that fails the `succeeded > 0` terminal
+            # check.
+            if not items_for_run:
+                items_for_run = [
+                    {
+                        "kind": "quickstart-stub",
+                        "channel": body.source,
+                        "note": f"server bootstrap returned 0 items for {body.source}",
+                    }
+                ]
+
     # Insert the row first so the workflow has something to write
     # progress against. `items_total` is set up front from the payload
     # so the SSE stream can render an accurate progress bar without
@@ -126,7 +173,7 @@ async def bulk_ingest(
         source=body.source,
         snapshot_id=body.snapshot_id,
         status="pending",
-        items_total=len(body.items),
+        items_total=len(items_for_run),
         items_processed=0,
     )
     db.add(run)
@@ -155,7 +202,7 @@ async def bulk_ingest(
                 tenant_id=str(current_user.tenant_id),
                 source=body.source,
                 snapshot_id=str(body.snapshot_id),
-                items=body.items,
+                items=items_for_run,
             ),
             id=wf_id,
             task_queue="agentprovision-orchestration",

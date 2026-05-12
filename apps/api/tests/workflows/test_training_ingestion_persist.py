@@ -378,6 +378,218 @@ def test_github_pr_with_non_string_repository_is_unknown():
     assert captured == []
 
 
+# ── gmail_message_summary (PR-Q4b) ───────────────────────────────────
+
+
+def test_gmail_message_summary_creates_person_and_observation():
+    """Recent inbox sender lands as Person entity + observation."""
+    item = {
+        "kind": "gmail_message_summary",
+        "subject": "Q4 planning",
+        "from_name": "Alice",
+        "from_email": "alice@example.com",
+        "date_iso": "Mon, 12 May 2026 13:00:00 +0000",
+        "labels": ["INBOX", "UNREAD"],
+    }
+    # Two captures: create_entity for the Person, create_observation
+    # for the subject. existing_id=None (first time seeing this sender).
+    # `create_entity` returns the persisted KnowledgeEntity (NOT the
+    # KnowledgeEntityCreate input) — mock it as a SimpleNamespace with
+    # an `id` attribute so the caller can read `new_person.id`.
+    entity_captured: list = []
+    obs_captured: list = []
+
+    def _cap_entity(_db, ent, _tenant):
+        entity_captured.append(ent)
+        return SimpleNamespace(id="person-uuid")
+
+    def _cap_obs(_db, **kwargs):
+        obs_captured.append(kwargs)
+
+    with patch(
+        "app.workflows.training_ingestion._existing_entity_id",
+        return_value=None,
+    ), patch(
+        "app.services.knowledge.create_entity",
+        new=_cap_entity,
+    ), patch(
+        "app.services.knowledge.create_observation",
+        new=_cap_obs,
+    ):
+        outcome = _persist_item(_mock_db(), MagicMock(), item)
+    assert outcome == "persisted"
+    assert len(entity_captured) == 1
+    assert entity_captured[0].entity_type == "person"
+    assert entity_captured[0].name == "Alice"
+    assert entity_captured[0].attributes["email"] == "alice@example.com"
+    assert len(obs_captured) == 1
+    assert obs_captured[0]["observation_text"] == "Email: Q4 planning"
+    assert obs_captured[0]["entity_id"] == "person-uuid"
+    assert obs_captured[0]["source_channel"] == "ap_quickstart_gmail"
+
+
+def test_gmail_message_summary_dedups_on_email():
+    """Second message from the same sender reuses the existing
+    Person row — no new entity, but still creates the observation."""
+    item = {
+        "kind": "gmail_message_summary",
+        "subject": "Follow-up",
+        "from_name": "Alice",
+        "from_email": "alice@example.com",
+    }
+    obs_captured: list = []
+
+    def _cap_obs(_db, **kwargs):
+        obs_captured.append(kwargs)
+
+    with patch(
+        "app.workflows.training_ingestion._existing_entity_id",
+        return_value="existing-person-uuid",
+    ), patch(
+        "app.services.knowledge.create_observation",
+        new=_cap_obs,
+    ):
+        outcome = _persist_item(_mock_db(), MagicMock(), item)
+    assert outcome == "persisted"
+    assert len(obs_captured) == 1
+    assert obs_captured[0]["entity_id"] == "existing-person-uuid"
+
+
+def test_gmail_message_summary_missing_email_is_unknown():
+    """Empty from_email can't dedup the Person row — surface as
+    wire-format drift via the per-batch WARN histogram."""
+    item = {"kind": "gmail_message_summary", "subject": "x", "from_email": ""}
+    outcome, captured = _run_with_observation(item)
+    assert outcome == "unknown"
+    assert captured == []
+
+
+def test_gmail_message_summary_no_subject_still_persists_person():
+    """A sender with no subject line still seeds the Person row —
+    just skips the observation. Persisting the Person is the
+    higher-value signal for the chat agent."""
+    item = {
+        "kind": "gmail_message_summary",
+        "subject": "",
+        "from_email": "bob@example.com",
+    }
+    entity_captured: list = []
+    obs_captured: list = []
+
+    def _cap_entity(_db, ent, _tenant):
+        entity_captured.append(ent)
+        return SimpleNamespace(id="bob-uuid")
+
+    def _cap_obs(_db, **kwargs):
+        obs_captured.append(kwargs)
+
+    with patch(
+        "app.workflows.training_ingestion._existing_entity_id",
+        return_value=None,
+    ), patch(
+        "app.services.knowledge.create_entity",
+        new=_cap_entity,
+    ), patch(
+        "app.services.knowledge.create_observation",
+        new=_cap_obs,
+    ):
+        outcome = _persist_item(_mock_db(), MagicMock(), item)
+    assert outcome == "persisted"
+    assert len(entity_captured) == 1
+    assert obs_captured == []  # subject was empty, no observation
+
+
+# ── calendar_event_summary (PR-Q4b) ──────────────────────────────────
+
+
+def test_calendar_event_summary_creates_concept_and_attendees():
+    """Upcoming event lands as Concept (meeting) + Person rows for
+    attendees, skipping the organizer to avoid self-Person seeding."""
+    item = {
+        "kind": "calendar_event_summary",
+        "summary": "Sprint Review",
+        "start_iso": "2026-05-15T15:00:00Z",
+        "end_iso": "2026-05-15T16:00:00Z",
+        "location": "Zoom",
+        "attendee_emails": [
+            "alice@example.com",
+            "bob@example.com",
+            "self@example.com",
+        ],
+        "organizer_email": "self@example.com",
+    }
+    entity_captured: list = []
+
+    def _cap_entity(_db, ent, _tenant):
+        entity_captured.append(ent)
+
+    # _existing_entity_id returns None for all lookups (first time
+    # seeing everything).
+    with patch(
+        "app.workflows.training_ingestion._existing_entity_id",
+        return_value=None,
+    ), patch(
+        "app.services.knowledge.create_entity",
+        new=_cap_entity,
+    ):
+        outcome = _persist_item(_mock_db(), MagicMock(), item)
+    assert outcome == "persisted"
+    # 1 concept (the meeting) + 2 attendees (alice, bob — self skipped)
+    assert len(entity_captured) == 3
+    concept = entity_captured[0]
+    assert concept.entity_type == "concept"
+    assert concept.category == "meeting"
+    assert concept.name == "Sprint Review"
+    assert concept.attributes["start_iso"] == "2026-05-15T15:00:00Z"
+    assert concept.attributes["attendee_count"] == 3  # includes self
+    # Attendees are Person rows.
+    attendee_emails = [e.attributes["email"] for e in entity_captured[1:]]
+    assert "alice@example.com" in attendee_emails
+    assert "bob@example.com" in attendee_emails
+    assert "self@example.com" not in attendee_emails
+
+
+def test_calendar_event_summary_dedups_on_meeting_key():
+    """Same (summary, start_iso) on a re-run is a no-op — recurring
+    standups don't fan out."""
+    item = {
+        "kind": "calendar_event_summary",
+        "summary": "Daily Standup",
+        "start_iso": "2026-05-13T09:30:00Z",
+        "attendee_emails": [],
+        "organizer_email": "self@example.com",
+    }
+    entity_captured: list = []
+
+    def _cap_entity(_db, ent, _tenant):
+        entity_captured.append(ent)
+
+    with patch(
+        "app.workflows.training_ingestion._existing_entity_id",
+        return_value="existing-meeting-uuid",
+    ), patch(
+        "app.services.knowledge.create_entity",
+        new=_cap_entity,
+    ):
+        outcome = _persist_item(_mock_db(), MagicMock(), item)
+    assert outcome == "persisted"
+    assert entity_captured == []  # nothing new written
+
+
+def test_calendar_event_summary_no_title_is_recognised_not_persisted():
+    """Empty summary OR empty start_iso can't form the dedup key —
+    treat as recognised, not unknown (untitled events are legitimate
+    real-world data, just not anchorable)."""
+    item = {
+        "kind": "calendar_event_summary",
+        "summary": "",
+        "start_iso": "2026-05-15T15:00:00Z",
+    }
+    outcome, captured = _run(item)
+    assert outcome == "recognised"
+    assert captured == []
+
+
 # ── unknown kinds ────────────────────────────────────────────────────
 
 
