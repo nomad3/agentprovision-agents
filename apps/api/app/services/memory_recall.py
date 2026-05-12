@@ -110,6 +110,14 @@ def _build_anticipatory_context(
             ]
     except Exception:
         logger.debug("Failed to fetch upcoming events for anticipatory context", exc_info=True)
+        # ORIGIN of the cascade: prior to this rollback, a failure here
+        # (e.g. a NULL-handling issue or transient deadlock) left psycopg2
+        # in 'current transaction is aborted' state. build_memory_context
+        # then called search_entities_semantic on the same session and
+        # got InFailedSqlTransaction, which became the visible cascade
+        # symptom across every workflow run. Rolling back here keeps the
+        # caller's session usable. Sister fix to PR #397.
+        safe_rollback(db)
 
     anticipatory_context: Dict[str, Any] = {"time_context": time_context}
     if upcoming_events_list:
