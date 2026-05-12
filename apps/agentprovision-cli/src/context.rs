@@ -55,6 +55,12 @@ impl TokenStoreKind {
     }
 }
 
+// Clone is required so the `ap login` post-success hook can call
+// `quickstart::maybe_auto_trigger(&ctx)` without surrendering the
+// outer context — the helper hands a fresh `Context` to `run()`
+// which takes it by value. Every field is cheaply Clone (Arc / String
+// / `#[derive(Clone)]` types), so the derive is a no-op at runtime.
+#[derive(Clone)]
 pub struct Context {
     // `config` + `config_path` + `save_config` are used by PR-C's `config`
     // subcommand; pre-loaded here so subcommands don't each re-parse the

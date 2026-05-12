@@ -301,6 +301,59 @@ pub struct IntegrationStatus {
     pub icon: Option<String>,
 }
 
+/// Onboarding state for the caller's tenant. Drives `ap quickstart`
+/// auto-trigger after a successful `ap login`. Schema mirrors the
+/// server-side `OnboardingStatus` model in `app/api/v1/onboarding.py`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OnboardingStatus {
+    pub onboarded: bool,
+    pub deferred: bool,
+    #[serde(default)]
+    pub onboarded_at: Option<String>,
+    #[serde(default)]
+    pub onboarding_deferred_at: Option<String>,
+    #[serde(default)]
+    pub onboarding_source: Option<String>,
+    #[serde(default)]
+    pub recommended_channel: Option<String>,
+}
+
+/// One row from the `training_runs` table — the user-visible state of
+/// a `POST /memory/training/bulk-ingest` dispatch.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrainingRun {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub source: String,
+    pub snapshot_id: Uuid,
+    pub status: String, // "pending" | "running" | "complete" | "failed"
+    pub items_total: i64,
+    pub items_processed: i64,
+    #[serde(default)]
+    pub progress_fraction: Option<f64>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    // Timestamps are naive ISO strings on the wire — same defensive
+    // shape as Agent/Workflow runtime fields (servers don't always
+    // emit timezone suffixes and chrono::DateTime<Utc> chokes on naive).
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+}
+
+/// `POST /memory/training/bulk-ingest` response wrapper.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkIngestResponse {
+    pub run: TrainingRun,
+    pub estimated_seconds: i64,
+    pub deduplicated: bool,
+}
+
 /// Device-flow login response. Mirrors GitHub's device-flow shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceCodeResponse {

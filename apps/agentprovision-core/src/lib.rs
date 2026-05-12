@@ -24,6 +24,7 @@ pub mod events;
 pub mod mcp;
 pub mod models;
 pub mod runtime;
+pub mod training;
 
 pub use client::ApiClient;
 pub use error::{Error, Result};

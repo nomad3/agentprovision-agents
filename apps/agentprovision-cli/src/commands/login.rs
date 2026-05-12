@@ -72,6 +72,16 @@ pub async fn run(args: LoginArgs, ctx: Context) -> anyhow::Result<()> {
         ));
         output::info(format!("Token saved to {}.", ctx.token_store_kind.human()));
     }
+
+    // PR-Q2: auto-trigger the quickstart flow on first login for an
+    // un-onboarded tenant. Silent no-op when the tenant is already
+    // onboarded / has deferred / when stdin is non-tty (CI). Failure
+    // here never propagates — login succeeded, the onboarding-status
+    // probe is informational. JSON mode also suppresses the prompt
+    // so scripted callers don't get a Confirm hang.
+    if !ctx.json {
+        let _ = crate::commands::quickstart::maybe_auto_trigger(&ctx).await;
+    }
     Ok(())
 }
 

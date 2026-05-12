@@ -3,8 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, chat, completions, integration, login, logout, memory, session, skill, status, upgrade,
-    workflow,
+    agent, chat, completions, integration, login, logout, memory, quickstart, session, skill,
+    status, upgrade, workflow,
 };
 use crate::context::Context;
 
@@ -87,6 +87,11 @@ pub enum Command {
     #[command(subcommand)]
     Memory(memory::MemoryCommand),
 
+    /// Guided initial-training flow. Auto-fires the first time you
+    /// `ap login` against a fresh tenant; can be re-run explicitly to
+    /// re-train (with `--force`) or to opt back in after Skip.
+    Quickstart(quickstart::QuickstartArgs),
+
     /// Emit shell completion script (bash / zsh / fish / powershell / elvish).
     Completions(completions::CompletionsArgs),
 }
@@ -113,6 +118,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Integration(cmd) => integration::dispatch(cmd, ctx).await,
         Command::Skill(cmd) => skill::dispatch(cmd, ctx).await,
         Command::Memory(cmd) => memory::dispatch(cmd, ctx).await,
+        Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
     }
 }
