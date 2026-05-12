@@ -129,13 +129,32 @@ def get_entities(
     status: str = None,
     task_id: uuid.UUID = None,
     category: str = None,
+    exclude_status: str = None,
 ) -> List[KnowledgeEntity]:
-    """List entities with optional filters."""
+    """List entities with optional filters.
+
+    ``exclude_status`` excludes rows whose status equals the given value
+    (NULL stays included — historical rows without a status set should
+    not be hidden). Useful for the "active competitors" list shape
+    where the caller wants everything that isn't archived. Mutually
+    exclusive with ``status``: if both are passed, ``status`` wins
+    (inclusion filter is more specific than an exclusion).
+    """
     query = db.query(KnowledgeEntity).filter(KnowledgeEntity.tenant_id == tenant_id)
     if entity_type:
         query = query.filter(KnowledgeEntity.entity_type == entity_type)
     if status:
         query = query.filter(KnowledgeEntity.status == status)
+    elif exclude_status:
+        # Push to SQL — doing this in Python after LIMIT silently
+        # truncates the result set (a tenant with 99 archived + 1
+        # active gets `[]` when limit=100). Caught by reviewer I1
+        # on PR #417 (2026-05-12). Use IS DISTINCT FROM so NULL
+        # rows aren't accidentally excluded — `status != 'archived'`
+        # in SQL drops NULLs because three-valued logic.
+        query = query.filter(
+            KnowledgeEntity.status.is_distinct_from(exclude_status)
+        )
     if task_id:
         query = query.filter(KnowledgeEntity.collection_task_id == task_id)
     if category:

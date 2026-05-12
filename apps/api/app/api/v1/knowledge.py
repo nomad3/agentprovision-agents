@@ -157,28 +157,26 @@ def bulk_create_entities(
     return service.bulk_create_entities(db, bulk_in.entities, current_user.tenant_id)
 
 
-@router.get("/entities/{entity_id}", response_model=KnowledgeEntity)
-def get_entity(
-    entity_id: uuid.UUID,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Get entity by ID."""
-    entity = service.get_entity(db, entity_id, current_user.tenant_id)
-    if not entity:
-        raise HTTPException(status_code=404, detail="Entity not found")
-    return entity
-
-
 # ── internal getters/updaters ────────────────────────────────────────
-# Used by MCP-server tools (sales.qualify_lead, etc.) that need to read
-# or mutate entities outside a user-Bearer context. The MCP server
-# passes X-Internal-Key + tenant_id; we mount these under the resource
-# path (not /api/v1/internal/*) because the MCP tool URLs were already
-# written that way before the surface existed — adding them here means
-# the long-broken qualify_lead flow starts working without touching
-# every caller. Cloudflared blocks /api/v1/*/internal($|/) from the
-# public internet so this is safe to expose at the resource path.
+# Used by MCP-server tools (sales.qualify_lead, competitor.*, etc.)
+# that need to read or mutate entities outside a user-Bearer context.
+# The MCP server passes X-Internal-Key + tenant_id; we mount these
+# under the resource path (not /api/v1/internal/*) because the MCP
+# tool URLs were already written that way before the surface existed
+# — adding them here means the long-broken flows start working
+# without touching every caller. Cloudflared blocks
+# /api/v1/*/internal($|/) from the public internet so this is safe
+# to expose at the resource path.
+#
+# ROUTE ORDER MATTERS: the static-prefix internal routes
+# (`/entities/internal`, `/entities/internal/search`) MUST register
+# BEFORE the parameterized `/entities/{entity_id}` route below — same
+# precedent as `/entities/search` at line 65. FastAPI/Starlette
+# matches in registration order and the UUID path-converter on
+# `{entity_id}` rejects the string "internal" with 422 before the
+# router falls through to the next route, so a wrong order silently
+# breaks the very bug this section exists to fix (caught by reviewer
+# afb7dccb on PR #417, 2026-05-12).
 
 def _verify_internal_key_kg(
     x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
@@ -207,32 +205,27 @@ def list_entities_internal(
     calling this for months and hitting 404 — every poll cycle
     spammed the api logs with HTTPStatusError tracebacks.
 
-    ``exclude_archived=true`` is sugar for ``status != 'archived'``.
-    It's a separate boolean (not a magic status value) because the
-    common case for the competitor list is "everything that isn't
-    archived" — making callers pass ``status='draft|verified|enriched|actioned'``
-    via a multi-value query string would be hostile UX for the
-    intended consumer. Mutually exclusive with an explicit ``status``
-    filter: if both are given, the explicit one wins.
+    ``exclude_archived=true`` is sugar for ``status != 'archived'``,
+    implemented via the service's ``exclude_status`` arg so the
+    filter happens in SQL before LIMIT (a tenant with 99 archived
+    rows + 1 active row gets the 1 row, not `[]` — reviewer I1).
+    Mutually exclusive with an explicit ``status`` filter: if both
+    are passed, ``status`` wins (the inclusion filter is more
+    specific).
     """
+    # Defensive limit cap — caller is trusted (X-Internal-Key) but
+    # `?limit=999999` should not be able to pull the entire tenant.
+    safe_limit = max(1, min(limit, 500))
     if status:
-        results = service.get_entities(
-            db, tenant_id, entity_type, skip=0, limit=limit,
+        return service.get_entities(
+            db, tenant_id, entity_type, skip=0, limit=safe_limit,
             status=status, category=category,
         )
-    else:
-        # No explicit status: pull everything, then drop archived
-        # in Python if exclude_archived=true. Doing it in Python
-        # rather than chaining `query.filter(status != 'archived')`
-        # keeps the service signature unchanged — there's no SQL-
-        # level NULL-vs-'archived' edge case to worry about.
-        results = service.get_entities(
-            db, tenant_id, entity_type, skip=0, limit=limit,
-            category=category,
-        )
-        if exclude_archived:
-            results = [e for e in results if (e.status or "") != "archived"]
-    return results
+    return service.get_entities(
+        db, tenant_id, entity_type, skip=0, limit=safe_limit,
+        category=category,
+        exclude_status="archived" if exclude_archived else None,
+    )
 
 
 @router.post("/entities/internal", response_model=KnowledgeEntity, status_code=201)
@@ -251,6 +244,9 @@ def create_entity_internal(
     Validates tenant_id, strips it from the payload, then routes the
     rest through the normal Pydantic validator. Same error shapes as
     the existing internal endpoints (422 on bad UUID / bad body).
+    Unknown keys in the payload are dropped silently (Pydantic v2
+    default ``extra='ignore'`` on KnowledgeEntityCreate); the
+    contract is open by design — see reviewer N1 on PR #417.
     """
     tenant_id_raw = payload.get("tenant_id")
     if not tenant_id_raw:
@@ -286,9 +282,23 @@ def search_entities_internal(
     those two tools were the primary source of the 2026-05-12 traceback
     spam (`competitor.py:271` and `:207`).
     """
+    safe_limit = max(1, min(limit, 500))
     return service.search_entities(
-        db, tenant_id, q, entity_type, category=category, limit=limit,
+        db, tenant_id, q, entity_type, category=category, limit=safe_limit,
     )
+
+
+@router.get("/entities/{entity_id}", response_model=KnowledgeEntity)
+def get_entity(
+    entity_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Get entity by ID."""
+    entity = service.get_entity(db, entity_id, current_user.tenant_id)
+    if not entity:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return entity
 
 
 @router.get("/entities/{entity_id}/internal", response_model=KnowledgeEntity)
