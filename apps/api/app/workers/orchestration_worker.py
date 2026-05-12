@@ -19,6 +19,11 @@ from app.workflows.idle_episode_scan import IdleEpisodeScanWorkflow
 from app.workflows.teams_monitor import TeamsMonitorWorkflow
 from app.workflows.backfill_embeddings import BackfillEmbeddingsWorkflow
 from app.workflows.coalition_workflow import CoalitionWorkflow
+from app.workflows.training_ingestion import (
+    TrainingIngestionWorkflow,
+    extract_and_persist_batch as training_extract_and_persist_batch,
+    finalize_training_run,
+)
 from app.workflows.activities.dynamic_step import execute_dynamic_step, finalize_workflow_run
 from app.workflows.activities.task_execution import (
     dispatch_task,
@@ -224,6 +229,7 @@ async def run_orchestration_worker():
             CoalitionWorkflow,
             AgentPerformanceRollupWorkflow,
             TeamsMonitorWorkflow,
+            TrainingIngestionWorkflow,
         ],
         activities=[
             dispatch_task,
@@ -319,6 +325,9 @@ async def run_orchestration_worker():
             # Dynamic workflow step executor
             execute_dynamic_step,
             finalize_workflow_run,
+            # Initial-training pipeline (ap quickstart / web onboarding)
+            training_extract_and_persist_batch,
+            finalize_training_run,
             # Morning briefing / Session Journal activities (Gap 1: Continuity)
             synthesize_morning_briefing,
             create_daily_journal_entry,

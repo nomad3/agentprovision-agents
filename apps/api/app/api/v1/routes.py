@@ -80,6 +80,7 @@ from app.api.v1 import (
     internal_embed,
     agent_tokens,
     onboarding,
+    memory_training,
 )
 
 _logger = logging.getLogger(__name__)
@@ -205,6 +206,10 @@ router.include_router(agent_tokens.router, tags=["agent-tokens"])
 # PR-Q0 — tenant onboarding state. Powers ap-quickstart and the web
 # /onboarding/* route guard's auto-trigger on first login.
 router.include_router(onboarding.router, tags=["onboarding"])
+# PR-Q1 — initial-training bulk-ingest endpoint + TrainingIngestionWorkflow
+# dispatch. Hot path that ap quickstart hits after the wedge picker
+# completes (POST /memory/training/bulk-ingest with the source items).
+router.include_router(memory_training.router, tags=["memory-training"])
 # Internal embedding endpoint — replaces sentence-transformers in apps/mcp-server.
 router.include_router(
     internal_embed.router,
