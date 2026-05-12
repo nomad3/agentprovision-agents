@@ -1318,16 +1318,51 @@ def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: s
 
 
 def _codex_mcp_config_lines(mcp_config_json: str) -> list[str]:
-    """Convert the shared MCP JSON config into Codex config.toml entries."""
+    """Convert the shared MCP JSON config into Codex config.toml entries.
+
+    User-reported bug (2026-05-12): Codex couldn't access most MCP
+    tools while Gemini could. Root cause: this function hardcoded
+    `transport = "streamable_http"` regardless of what the source
+    config said. The shared MCP config (built by
+    `cli_session_manager._build_mcp_config()`) emits
+    `"type": "sse"` because mcp-tools / FastMCP only serves the SSE
+    transport (`apps/mcp-server/src/mcp_serve.py:18` runs
+    `mcp.run(transport="sse")`). Codex spoke streamable_http to an
+    SSE-only server → handshake failed silently → ~zero tools
+    discovered. Gemini's `_prepare_gemini_home` (~line 1474) just
+    pass-through the `mcpServers` dict including the `type: "sse"`
+    key, which Gemini honours — that's why Gemini worked but Codex
+    didn't on the SAME tenant config.
+
+    Fix: honour the source config's transport hint. Map the
+    .claude.json-style `type` field to Codex's `transport` toml
+    value. Falls back to `"sse"` because that's what the current
+    in-cluster mcp-tools serves (and matches the value
+    `_build_mcp_config` writes today). Per-server entries that
+    explicitly request `streamable_http` in the source config still
+    get it — keeps us forward-compatible if FastMCP grows
+    streamable-http support OR if a tenant adds an external MCP
+    server that speaks it.
+    """
     data = json.loads(mcp_config_json)
     servers = data.get("mcpServers") or {}
     lines: list[str] = []
     for server_name, config in servers.items():
         if not isinstance(config, dict):
             continue
+        # Map .claude.json `type` field → Codex `transport`. Accept
+        # the existing Claude vocabulary (`sse` / `http` /
+        # `streamable_http`) plus a passthrough for anything else.
+        raw_type = (config.get("type") or "sse").lower()
+        if raw_type in ("sse", "http-sse"):
+            transport = "sse"
+        elif raw_type in ("http", "streamable_http", "streamable-http"):
+            transport = "streamable_http"
+        else:
+            transport = raw_type  # forward-compat: trust the source
         lines.append("")
         lines.append(f"[mcp_servers.{server_name}]")
-        lines.append('transport = "streamable_http"')
+        lines.append(f'transport = "{_toml_escape(transport)}"')
         if config.get("url"):
             lines.append(f'url = "{_toml_escape(str(config["url"]))}"')
         headers = config.get("headers") or {}

@@ -147,7 +147,12 @@ class TestCodexMcpConfigLines:
         text = "\n".join(lines)
         assert "[mcp_servers.agentprovision]" in text
         assert "[mcp_servers.github]" in text
-        assert 'transport = "streamable_http"' in text
+        # Default transport is SSE — see the fix in
+        # _codex_mcp_config_lines for the bug history. Previously
+        # this hardcoded streamable_http which mcp-tools / FastMCP
+        # doesn't speak, causing tools to be silently undiscoverable
+        # from Codex while Gemini worked on the same config.
+        assert 'transport = "sse"' in text
         # Headers from the fixture should be carried as an inline table.
         assert '"X-Tenant-Id" = "abc"' in text
 
@@ -160,6 +165,38 @@ class TestCodexMcpConfigLines:
         text = "\n".join(wf._codex_mcp_config_lines(cfg))
         assert "[mcp_servers.a]" in text
         assert "http_headers" not in text
+
+    def test_honours_explicit_sse_type(self):
+        """The shared MCP config emits `"type": "sse"` (see
+        cli_session_manager._build_mcp_config). Codex must read it
+        and emit transport="sse" — not the previous hardcoded
+        streamable_http."""
+        cfg = json.dumps({
+            "mcpServers": {"agentprovision": {"type": "sse", "url": "http://mcp:8086/sse"}}
+        })
+        text = "\n".join(wf._codex_mcp_config_lines(cfg))
+        assert 'transport = "sse"' in text
+        assert 'transport = "streamable_http"' not in text
+
+    def test_honours_explicit_streamable_http_type(self):
+        """A future tenant could ship an external MCP server that
+        actually speaks streamable_http. The mapping must forward
+        the choice through rather than always coercing to SSE."""
+        cfg = json.dumps({
+            "mcpServers": {"external": {"type": "streamable_http", "url": "http://external"}}
+        })
+        text = "\n".join(wf._codex_mcp_config_lines(cfg))
+        assert 'transport = "streamable_http"' in text
+
+    def test_unknown_type_passes_through(self):
+        """Forward-compat: a future MCP transport keyword shouldn't
+        get silently rewritten — we trust the source config and let
+        Codex decide whether it can speak it."""
+        cfg = json.dumps({
+            "mcpServers": {"future": {"type": "websocket", "url": "ws://x"}}
+        })
+        text = "\n".join(wf._codex_mcp_config_lines(cfg))
+        assert 'transport = "websocket"' in text
 
 
 # ── _extract_codex_last_message / _extract_codex_metadata ────────────────
