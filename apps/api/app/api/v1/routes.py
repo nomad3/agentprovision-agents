@@ -81,6 +81,7 @@ from app.api.v1 import (
     agent_tokens,
     onboarding,
     memory_training,
+    mcp_public,
 )
 
 _logger = logging.getLogger(__name__)
@@ -210,6 +211,13 @@ router.include_router(onboarding.router, tags=["onboarding"])
 # dispatch. Hot path that ap quickstart hits after the wedge picker
 # completes (POST /memory/training/bulk-ingest with the source items).
 router.include_router(memory_training.router, tags=["memory-training"])
+# Public MCP gateway (Phase 1 of #175) — JWT-auth wrapper that
+# forwards SSE + JSON-RPC POSTs to the in-cluster mcp-tools server,
+# so external MCP clients (Claude.ai, custom integrations) can
+# connect to a tenant's tool surface without holding the shared
+# X-Internal-Key. Mounted under `/mcp` (NOT `/internal`) so
+# cloudflared lets the traffic through to /api/v1/mcp/*.
+router.include_router(mcp_public.router, prefix="/mcp", tags=["mcp-public"])
 # Internal embedding endpoint — replaces sentence-transformers in apps/mcp-server.
 router.include_router(
     internal_embed.router,
