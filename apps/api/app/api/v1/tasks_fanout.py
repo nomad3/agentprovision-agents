@@ -52,9 +52,10 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections import defaultdict
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.deps import get_current_user
@@ -66,7 +67,7 @@ router = APIRouter()
 # ── Request / response schemas ─────────────────────────────────────────
 
 
-class _RunEstimate(BaseModel):
+class RunEstimate(BaseModel):
     estimated_duration_seconds: int
     estimated_cost_usd: float
     confidence: str
@@ -158,7 +159,7 @@ class RunFanoutResponse(BaseModel):
     task_id: str
     status: str
     children: List[RunChildDispatch] = Field(default_factory=list)
-    estimate: Optional[_RunEstimate] = None
+    estimate: Optional[RunEstimate] = None
 
 
 class TaskStatusResponse(BaseModel):
@@ -186,6 +187,13 @@ class TaskStatusResponse(BaseModel):
 # Round-1 N2: constants are public-by-convention (uppercase, no
 # underscore prefix) matching scoring_rubrics.py / auto_quality_scorer.py.
 _TASKS: dict[str, dict] = {}
+
+# Round-2 N2-1: maintain an O(1) tenant-count alongside _TASKS so the
+# cap check at dispatch is constant-time instead of O(n). Keys are
+# tenant_id strings; values are the live record count for that tenant.
+# Every mutation that touches `tenant_id` on a record (insert, evict,
+# cancel) must update this map in lock-step.
+_TENANT_COUNTS: dict[str, int] = defaultdict(int)
 
 QUEUED_SECS = 2.0
 RUNNING_SECS_TOTAL = 8.0
@@ -219,26 +227,41 @@ def _mint_task_id() -> str:
     return f"t_{uuid.uuid4().hex[:16]}"
 
 
+def _evict_record(task_id: str) -> None:
+    """Pop a record and decrement the tenant counter in lock-step.
+    All eviction paths (`_sweep_expired_tasks`, `cancel_task`,
+    child-clean-on-cancel) go through here so the counter never drifts."""
+    rec = _TASKS.pop(task_id, None)
+    if rec is not None:
+        tid = rec.get("tenant_id")
+        if tid and _TENANT_COUNTS.get(tid, 0) > 0:
+            _TENANT_COUNTS[tid] -= 1
+            if _TENANT_COUNTS[tid] == 0:
+                # Defensive: prevent the defaultdict from growing
+                # unboundedly with stale tenant keys at 0.
+                del _TENANT_COUNTS[tid]
+
+
 def _sweep_expired_tasks() -> int:
     """Round-1 H1: opportunistic TTL sweep. Called inline at every
     dispatch — no background thread, no event-loop fight. Returns the
     number of records evicted (for tests / log lines)."""
     now = time.monotonic()
     expired = [
-        tid for tid, rec in _TASKS.items()
+        tid
+        for tid, rec in _TASKS.items()
         if now - rec["created_at"] >= TASK_TTL_SECONDS
     ]
     for tid in expired:
-        _TASKS.pop(tid, None)
+        _evict_record(tid)
     return len(expired)
 
 
 def _count_tenant_tasks(tenant_id: str) -> int:
-    """Round-1 H1: per-tenant active record count for the cap check.
-    Children are counted in their own right (each child is a record we
-    bill against the tenant). Cheap O(n) scan — n is bounded by the
-    cap itself so this never gets pathological."""
-    return sum(1 for rec in _TASKS.values() if rec["tenant_id"] == tenant_id)
+    """Round-1 H1 + round-2 N2-1: per-tenant active record count.
+    O(1) via the `_TENANT_COUNTS` mirror map maintained on every
+    insert / evict / cancel."""
+    return _TENANT_COUNTS.get(tenant_id, 0)
 
 
 # ── Routes ────────────────────────────────────────────────────────────
@@ -252,6 +275,7 @@ def _count_tenant_tasks(tenant_id: str) -> int:
 def run_fanout(
     body: RunFanoutRequest,
     current_user: User = Depends(get_current_user),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
 ) -> RunFanoutResponse:
     """Dispatch endpoint hit by `ap run`.
 
@@ -273,6 +297,23 @@ def run_fanout(
     # Tenant identity is JWT-bound. Round-1 B1: we deliberately do not
     # accept a body field for this; it is the JWT's tenant or nothing.
     tenant_id = str(current_user.tenant_id)
+
+    # Round-2 M2-1: codify the JWT-only contract. If a client sends
+    # `X-Tenant-Id`, it MUST equal the JWT-bound tenant. The CLI's
+    # `ApiClient` currently attaches this header on every request from
+    # `config.toml`; mismatches mean the local config has drifted
+    # from the active session (e.g. login against a new tenant
+    # without `ap config clean`). Reject with 400 so the user fixes
+    # it instead of silently relying on JWT-wins-by-precedence.
+    if x_tenant_id and x_tenant_id.strip() != tenant_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-Tenant-Id header does not match the JWT tenant. "
+                "Re-login against the intended tenant or clear the "
+                "stale tenant_id from your CLI config."
+            ),
+        )
 
     # Belt-and-suspenders mutual-exclusion check. The model_validator
     # on RunFanoutRequest catches this before we reach here for direct
@@ -305,6 +346,7 @@ def run_fanout(
         ]
 
     now = time.monotonic()
+    _TENANT_COUNTS[tenant_id] += n_new
     _TASKS[parent_id] = {
         "prompt": body.prompt,
         "providers": list(body.providers),
@@ -345,7 +387,7 @@ def run_fanout(
     # Cheap estimate. Real implementation pulls from
     # `rl_experience_service.estimate_for_state` once that lands.
     n_providers = max(len(body.fanout) or len(body.providers) or 1, 1)
-    estimate = _RunEstimate(
+    estimate = RunEstimate(
         estimated_duration_seconds=8,
         estimated_cost_usd=round(0.12 * n_providers, 4),
         confidence="low",  # prototype — no historical data yet
@@ -449,14 +491,33 @@ def cancel_task(
     `RequestCancelWorkflowExecution` to Temporal.
 
     Round-1 B1: tenant isolation enforced before the drop so a caller
-    in tenant A cannot delete tenant B's record by guessing its id."""
+    in tenant A cannot delete tenant B's record by guessing its id.
+
+    Round-2 M2-2: when cancelling a **child** task, also remove the
+    child from its parent's `children` list so subsequent
+    `GET /<parent>/status` doesn't keep computing the child's
+    synthetic lifecycle from wall-clock forever."""
 
     record = _TASKS.get(task_id)
     if not record or record["tenant_id"] != str(current_user.tenant_id):
         raise HTTPException(status_code=404, detail=f"task {task_id} not found")
-    # Drop the record. If this was a parent, also drop its children
-    # (preserves the cap-counter invariant — orphan child records
-    # would otherwise count against the tenant forever).
+
+    parent_id = record.get("parent_id")
+    if parent_id:
+        # This is a child being cancelled directly. Surgical removal
+        # from the parent's children list so /status no longer reports
+        # it. Round-2 M2-2.
+        parent = _TASKS.get(parent_id)
+        if parent is not None:
+            parent["children"] = [
+                c for c in parent.get("children", []) if c["task_id"] != task_id
+            ]
+        _evict_record(task_id)
+        return
+
+    # Parent (or single-provider task): drop its own children first,
+    # then itself. Preserves the cap-counter invariant — orphan child
+    # records would otherwise count against the tenant forever.
     for child in record.get("children", []):
-        _TASKS.pop(child["task_id"], None)
-    _TASKS.pop(task_id, None)
+        _evict_record(child["task_id"])
+    _evict_record(task_id)
