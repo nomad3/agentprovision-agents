@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::{
     agent, cancel, chat, coalition, completions, integration, login, logout, memory, quickstart,
-    recall, run, session, skill, status, upgrade, watch, workflow,
+    recall, run, session, sessions, skill, status, upgrade, watch, workflow,
 };
 use crate::context::Context;
 
@@ -95,6 +95,12 @@ pub enum Command {
     #[command(subcommand)]
     Session(session::SessionCommand),
 
+    /// Manage long-lived authentication sessions (the refresh tokens
+    /// minted by `alpha login`). One row per logged-in device.
+    /// Note: plural — distinct from `alpha session` which lists chat
+    /// sessions.
+    Sessions(sessions::SessionsArgs),
+
     /// Inspect integration connection status for the current tenant.
     #[command(subcommand)]
     Integration(integration::IntegrationCommand),
@@ -156,6 +162,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Agent(cmd) => agent::dispatch(cmd, ctx).await,
         Command::Workflow(cmd) => workflow::dispatch(cmd, ctx).await,
         Command::Session(cmd) => session::dispatch(cmd, ctx).await,
+        Command::Sessions(a) => sessions::run(a, ctx).await,
         Command::Integration(cmd) => integration::dispatch(cmd, ctx).await,
         Command::Skill(cmd) => skill::dispatch(cmd, ctx).await,
         Command::Memory(cmd) => memory::dispatch(cmd, ctx).await,

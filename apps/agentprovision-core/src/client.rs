@@ -22,6 +22,12 @@ use crate::models::{
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
 
+/// Return shape from [`ApiClient::maybe_refresh_and_retry`].
+enum MaybeRetried {
+    Replied(Response),
+    FreshFailure(Error),
+}
+
 /// Render a bounded preview of a response body for error messages. Returns
 /// the body as UTF-8 if it decodes; otherwise shows a hex fingerprint of
 /// the first 32 bytes so callers can distinguish 'truncated JSON' from
@@ -53,12 +59,24 @@ fn preview_body(bytes: &[u8]) -> String {
     }
 }
 
+/// Hook invoked after a successful refresh-token rotation so the CLI
+/// can persist the new (access, refresh) pair into its keychain entry.
+/// Wired by the CLI's startup code; `()` when running headless / in
+/// tests where we don't care about persistence.
+pub type RefreshPersistFn = dyn Fn(&str, &str) + Send + Sync;
+
 #[derive(Clone)]
 pub struct ApiClient {
     inner: Client,
     base: Url,
     token: Arc<Mutex<Option<String>>>,
     tenant_id: Arc<Mutex<Option<String>>>,
+    /// Long-lived opaque exchange credential, set after login. None
+    /// until the CLI's startup wires it in via [`set_refresh_token`].
+    refresh_token: Arc<Mutex<Option<String>>>,
+    /// Callback fired after a successful auto-refresh. The pair is
+    /// `(new_access_token, new_refresh_token)`. Defaults to None.
+    refresh_persist: Arc<Mutex<Option<Arc<RefreshPersistFn>>>>,
 }
 
 impl ApiClient {
@@ -76,6 +94,8 @@ impl ApiClient {
             base,
             token: Arc::new(Mutex::new(None)),
             tenant_id: Arc::new(Mutex::new(None)),
+            refresh_token: Arc::new(Mutex::new(None)),
+            refresh_persist: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -90,6 +110,27 @@ impl ApiClient {
 
     pub fn token(&self) -> Option<String> {
         self.token.lock().expect("token lock").clone()
+    }
+
+    /// Stash the long-lived refresh credential so auto-refresh kicks
+    /// in on the next 401. None disables the middleware (any failed
+    /// 401 surfaces as `Error::Unauthorized` like the legacy path).
+    pub fn set_refresh_token(&self, token: Option<String>) {
+        *self.refresh_token.lock().expect("refresh token lock") = token;
+    }
+
+    pub fn refresh_token(&self) -> Option<String> {
+        self.refresh_token
+            .lock()
+            .expect("refresh token lock")
+            .clone()
+    }
+
+    /// Register a persistence callback fired after each successful
+    /// auto-refresh. Wires the keychain update without coupling
+    /// `agentprovision-core` to `keyring` directly.
+    pub fn set_refresh_persist(&self, cb: Option<Arc<RefreshPersistFn>>) {
+        *self.refresh_persist.lock().expect("persist lock") = cb;
     }
 
     pub fn set_tenant_id(&self, tenant_id: Option<String>) {
@@ -163,8 +204,23 @@ impl ApiClient {
 
     /// Send a request and decode the JSON response body, mapping non-2xx into
     /// `Error::Api` with the response body included for debugging.
+    ///
+    /// **Auto-refresh:** if the response is 401 and we hold a refresh
+    /// token, the middleware exchanges it for fresh credentials via
+    /// `/auth/token/refresh`, updates `self.token`, fires the persist
+    /// callback, and retries the original request **exactly once**.
+    /// The retry uses `try_clone()` so non-cloneable bodies (streams)
+    /// still fall through to the original `Error::Unauthorized` path.
     pub async fn send_json<T: DeserializeOwned>(&self, req: RequestBuilder) -> Result<T> {
+        // Clone the request before the first send so we can retry. If
+        // the body is non-cloneable (multipart streams, etc.) the
+        // clone returns None and we skip the auto-refresh path.
+        let clone = req.try_clone();
         let resp = req.send().await?;
+        let resp = match self.maybe_refresh_and_retry(resp, clone).await? {
+            MaybeRetried::Replied(r) => r,
+            MaybeRetried::FreshFailure(e) => return Err(e),
+        };
         let resp = self.check_status(resp).await?;
         let bytes = resp.bytes().await?;
         if bytes.is_empty() {
@@ -200,9 +256,97 @@ impl ApiClient {
     }
 
     pub async fn send_no_body(&self, req: RequestBuilder) -> Result<()> {
+        let clone = req.try_clone();
         let resp = req.send().await?;
+        let resp = match self.maybe_refresh_and_retry(resp, clone).await? {
+            MaybeRetried::Replied(r) => r,
+            MaybeRetried::FreshFailure(e) => return Err(e),
+        };
         let _ = self.check_status(resp).await?;
         Ok(())
+    }
+
+    /// Auto-refresh seam. On 401 with a refresh_token configured,
+    /// exchange it for a fresh access token and retry the cloned
+    /// request once. Returns:
+    ///   * `MaybeRetried::Replied(resp)` — the retried (or original)
+    ///     response, ready for status / body decoding.
+    ///   * `MaybeRetried::FreshFailure(e)` — refresh attempt itself
+    ///     failed cleanly (network, JSON shape). Caller propagates.
+    async fn maybe_refresh_and_retry(
+        &self,
+        resp: Response,
+        retry_req: Option<RequestBuilder>,
+    ) -> Result<MaybeRetried> {
+        if resp.status() != StatusCode::UNAUTHORIZED {
+            return Ok(MaybeRetried::Replied(resp));
+        }
+        let Some(retry_req) = retry_req else {
+            // Body wasn't cloneable; fall back to original 401.
+            return Ok(MaybeRetried::Replied(resp));
+        };
+        let Some(refresh_secret) = self.refresh_token() else {
+            // No refresh credential; legacy behavior.
+            return Ok(MaybeRetried::Replied(resp));
+        };
+        // Drain the original 401 body to free the connection.
+        let _ = resp.bytes().await;
+
+        // Exchange. If the exchange itself returns non-2xx we propagate
+        // the underlying error (e.g. "refresh_token revoked" on
+        // reuse-detected chains).
+        let pair = match self.exchange_refresh(&refresh_secret).await {
+            Ok(p) => p,
+            Err(Error::Unauthorized) | Err(Error::Api { status: 401, .. }) => {
+                // Refresh credential itself is no longer valid; drop
+                // it so subsequent calls don't loop.
+                self.set_refresh_token(None);
+                self.set_token(None);
+                return Ok(MaybeRetried::FreshFailure(Error::Unauthorized));
+            }
+            Err(e) => return Ok(MaybeRetried::FreshFailure(e)),
+        };
+        // Persist the new pair + retry with the new bearer.
+        self.set_token(Some(pair.access_token.clone()));
+        if let Some(new_refresh) = pair.refresh_token.as_deref() {
+            self.set_refresh_token(Some(new_refresh.to_string()));
+        }
+        if let Some(cb) = self.refresh_persist.lock().expect("persist lock").clone() {
+            let rt = pair.refresh_token.clone().unwrap_or_default();
+            cb(&pair.access_token, &rt);
+        }
+        // Rebuild auth headers on the retry — try_clone() copies the
+        // original headers including the *stale* Authorization. Drop
+        // it so the new one set via `request()` takes effect.
+        let retry_req = retry_req.header(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {}", pair.access_token))
+                .map_err(|e| Error::other(format!("invalid bearer header: {e}")))?,
+        );
+        let retried = retry_req.send().await?;
+        Ok(MaybeRetried::Replied(retried))
+    }
+
+    /// `POST /api/v1/auth/token/refresh` — exchange the long-lived
+    /// refresh credential for a fresh (access, refresh) pair. Called
+    /// by the auto-refresh middleware; CLIs can call it directly too.
+    pub async fn exchange_refresh(&self, refresh_token: &str) -> Result<Token> {
+        #[derive(Serialize)]
+        struct Body<'a> {
+            refresh_token: &'a str,
+        }
+        // Build the request manually so we don't attach the (stale)
+        // Authorization header — the refresh endpoint is unauth'd by
+        // design.
+        let url = self.build_url("/api/v1/auth/token/refresh")?;
+        let req = self
+            .inner
+            .post(url)
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(&Body { refresh_token });
+        let resp = req.send().await?;
+        let resp = self.check_status(resp).await?;
+        Ok(resp.json::<Token>().await?)
     }
 
     pub async fn check_status(&self, resp: Response) -> Result<Response> {

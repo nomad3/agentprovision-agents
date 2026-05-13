@@ -20,16 +20,41 @@ use crate::error::{Error, Result};
 use crate::models::{DeviceCodeResponse, Token};
 
 /// Trait for pluggable secure-token storage.
+///
+/// The three required methods cover the short-lived **access token**
+/// (a JWT bearer). The three optional methods cover the long-lived
+/// **refresh token** added in PR `feat(auth): long-lived CLI sessions`.
+/// The defaults are no-ops so out-of-tree stores compile without
+/// changes; in-tree stores override them to actually persist.
+///
+/// Splitting the two surfaces keeps the keychain item shape simple
+/// (one secret per entry, no JSON wrapping) and lets the access token
+/// rotate at a different cadence than the refresh credential.
 pub trait TokenStore: Send + Sync {
     fn load(&self) -> Result<Option<String>>;
     fn save(&self, token: &str) -> Result<()>;
     fn clear(&self) -> Result<()>;
+
+    /// Load the long-lived refresh token, if one was previously saved.
+    fn load_refresh(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+    /// Persist a refresh token for the next process invocation.
+    fn save_refresh(&self, _token: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Drop the saved refresh token (e.g. on `alpha logout` or on
+    /// reuse-detected 401 from /auth/token/refresh).
+    fn clear_refresh(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// In-memory token store. Useful for tests and short-lived processes.
 #[derive(Default, Debug)]
 pub struct MemoryTokenStore {
     inner: std::sync::Mutex<Option<String>>,
+    refresh: std::sync::Mutex<Option<String>>,
 }
 
 impl TokenStore for MemoryTokenStore {
@@ -42,6 +67,18 @@ impl TokenStore for MemoryTokenStore {
     }
     fn clear(&self) -> Result<()> {
         *self.inner.lock().unwrap() = None;
+        *self.refresh.lock().unwrap() = None;
+        Ok(())
+    }
+    fn load_refresh(&self) -> Result<Option<String>> {
+        Ok(self.refresh.lock().unwrap().clone())
+    }
+    fn save_refresh(&self, token: &str) -> Result<()> {
+        *self.refresh.lock().unwrap() = Some(token.to_string());
+        Ok(())
+    }
+    fn clear_refresh(&self) -> Result<()> {
+        *self.refresh.lock().unwrap() = None;
         Ok(())
     }
 }
@@ -63,11 +100,21 @@ impl FileTokenStore {
     pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
         Self { path: path.into() }
     }
-}
 
-impl TokenStore for FileTokenStore {
-    fn load(&self) -> Result<Option<String>> {
-        match std::fs::read_to_string(&self.path) {
+    /// Refresh-token side-car path: same basename + `.refresh` suffix
+    /// in the same dir. Keeps the two secrets in lockstep ACL-wise
+    /// and lets `--token-file <path>` (which has historically meant
+    /// "the access token") survive without changing callers.
+    fn refresh_path(&self) -> std::path::PathBuf {
+        let mut p = self.path.clone();
+        let mut name = p.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+        name.push(".refresh");
+        p.set_file_name(name);
+        p
+    }
+
+    fn read_text(path: &std::path::Path) -> Result<Option<String>> {
+        match std::fs::read_to_string(path) {
             Ok(s) => {
                 let trimmed = s.trim();
                 if trimmed.is_empty() {
@@ -79,12 +126,13 @@ impl TokenStore for FileTokenStore {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(Error::other(format!(
                 "failed to read token file {}: {e}",
-                self.path.display()
+                path.display()
             ))),
         }
     }
-    fn save(&self, token: &str) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
+
+    fn write_secret(path: &std::path::Path, value: &str) -> Result<()> {
+        if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 Error::other(format!(
                     "failed to create token-file parent {}: {e}",
@@ -92,8 +140,6 @@ impl TokenStore for FileTokenStore {
                 ))
             })?;
         }
-        // Best-effort: chmod 0600 on Unix. On Windows the file inherits
-        // the per-user ACL of %USERPROFILE% which is already private.
         #[cfg(unix)]
         {
             use std::io::Write as _;
@@ -103,40 +149,67 @@ impl TokenStore for FileTokenStore {
                 .write(true)
                 .truncate(true)
                 .mode(0o600)
-                .open(&self.path)
+                .open(path)
                 .map_err(|e| {
                     Error::other(format!(
                         "failed to open token file {} for write: {e}",
-                        self.path.display()
+                        path.display()
                     ))
                 })?;
-            f.write_all(token.as_bytes()).map_err(|e| {
+            f.write_all(value.as_bytes()).map_err(|e| {
                 Error::other(format!(
                     "failed to write token file {}: {e}",
-                    self.path.display()
+                    path.display()
                 ))
             })?;
         }
         #[cfg(not(unix))]
         {
-            std::fs::write(&self.path, token).map_err(|e| {
+            std::fs::write(path, value).map_err(|e| {
                 Error::other(format!(
                     "failed to write token file {}: {e}",
-                    self.path.display()
+                    path.display()
                 ))
             })?;
         }
         Ok(())
     }
-    fn clear(&self) -> Result<()> {
-        match std::fs::remove_file(&self.path) {
+
+    fn remove_quiet(path: &std::path::Path) -> Result<()> {
+        match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(Error::other(format!(
                 "failed to remove token file {}: {e}",
-                self.path.display()
+                path.display()
             ))),
         }
+    }
+}
+
+impl TokenStore for FileTokenStore {
+    fn load(&self) -> Result<Option<String>> {
+        Self::read_text(&self.path)
+    }
+    fn save(&self, token: &str) -> Result<()> {
+        // Best-effort: chmod 0600 on Unix. On Windows the file inherits
+        // the per-user ACL of %USERPROFILE% which is already private.
+        Self::write_secret(&self.path, token)
+    }
+    fn clear(&self) -> Result<()> {
+        Self::remove_quiet(&self.path)?;
+        // Also drop the refresh side-car so `alpha logout` cleans
+        // both halves of the credential pair.
+        Self::remove_quiet(&self.refresh_path())
+    }
+    fn load_refresh(&self) -> Result<Option<String>> {
+        Self::read_text(&self.refresh_path())
+    }
+    fn save_refresh(&self, token: &str) -> Result<()> {
+        Self::write_secret(&self.refresh_path(), token)
+    }
+    fn clear_refresh(&self) -> Result<()> {
+        Self::remove_quiet(&self.refresh_path())
     }
 }
 
@@ -169,6 +242,15 @@ impl KeyringTokenStore {
     fn entry(&self) -> Result<keyring::Entry> {
         Ok(keyring::Entry::new(&self.service, &self.account)?)
     }
+    /// Parallel keychain entry holding the long-lived refresh token.
+    /// Same service, account suffixed with `-refresh` so a casual
+    /// keychain inspector can tell them apart at a glance.
+    fn refresh_entry(&self) -> Result<keyring::Entry> {
+        Ok(keyring::Entry::new(
+            &self.service,
+            &format!("{}-refresh", self.account),
+        )?)
+    }
 }
 
 #[cfg(feature = "keyring")]
@@ -184,7 +266,30 @@ impl TokenStore for KeyringTokenStore {
         Ok(self.entry()?.set_password(token)?)
     }
     fn clear(&self) -> Result<()> {
+        // Drop both halves on logout. Ignore NoEntry for each
+        // independently — they may not be in sync (e.g. legacy
+        // installs that never had a refresh token).
         match self.entry()?.delete_password() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(e) => return Err(Error::Keyring(e)),
+        }
+        match self.refresh_entry()?.delete_password() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(Error::Keyring(e)),
+        }
+    }
+    fn load_refresh(&self) -> Result<Option<String>> {
+        match self.refresh_entry()?.get_password() {
+            Ok(p) => Ok(Some(p)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(Error::Keyring(e)),
+        }
+    }
+    fn save_refresh(&self, token: &str) -> Result<()> {
+        Ok(self.refresh_entry()?.set_password(token)?)
+    }
+    fn clear_refresh(&self) -> Result<()> {
+        match self.refresh_entry()?.delete_password() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(Error::Keyring(e)),
         }

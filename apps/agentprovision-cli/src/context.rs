@@ -123,6 +123,31 @@ impl Context {
         if let Some(token) = token_store.load()? {
             client.set_token(Some(token));
         }
+        // Wire the auto-refresh middleware. If a refresh_token exists
+        // in the store the client uses it on 401 to swap in a fresh
+        // access token transparently — no re-login prompt for the
+        // duration of REFRESH_TOKEN_EXPIRE_DAYS (server-side default
+        // 30 days). Persist callback writes the new pair back so the
+        // next process invocation picks them up.
+        if let Some(refresh) = token_store.load_refresh()? {
+            client.set_refresh_token(Some(refresh));
+            let store_for_cb: Arc<dyn TokenStore> = Arc::clone(&token_store);
+            client.set_refresh_persist(Some(Arc::new(move |access, refresh| {
+                // Best-effort: a write failure isn't fatal — the
+                // in-memory client already has the new tokens for
+                // this process's lifetime. We just log via stderr
+                // so users with -v get a hint if the keychain is
+                // locked or otherwise wedged.
+                if let Err(e) = store_for_cb.save(access) {
+                    log::warn!("auto-refresh: failed to persist access token: {e}");
+                }
+                if !refresh.is_empty() {
+                    if let Err(e) = store_for_cb.save_refresh(refresh) {
+                        log::warn!("auto-refresh: failed to persist refresh token: {e}");
+                    }
+                }
+            })));
+        }
         if let Some(t) = cfg.tenant_id.clone() {
             client.set_tenant_id(Some(t));
         }
