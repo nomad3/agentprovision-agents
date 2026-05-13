@@ -458,7 +458,7 @@ Each CLI platform uses subscription-based OAuth — zero API credits:
 ## Quick Start
 
 ```bash
-git clone https://github.com/nomad3/servicetsunami-agents.git
+git clone https://github.com/nomad3/agentprovision-agents.git
 cd servicetsunami-agents
 
 # 1. Configure secrets (all three are required — no defaults)

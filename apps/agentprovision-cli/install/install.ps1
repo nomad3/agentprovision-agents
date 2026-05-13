@@ -26,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repo = "nomad3/servicetsunami-agents"
+$Repo = "nomad3/agentprovision-agents"
 if (-not $Version) { $Version = "latest" }
 
 function Say { param($msg) if (-not $Quiet) { Write-Host $msg } }

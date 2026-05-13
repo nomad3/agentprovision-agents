@@ -3,7 +3,7 @@
 **Date:** 2026-04-13  
 **Author:** Simon Aguilera  
 **Status:** Verified ✓  
-**PR:** [#140 fix/coalition-a2a-sync-activity](https://github.com/nomad3/servicetsunami-agents/pull/140)
+**PR:** [#140 fix/coalition-a2a-sync-activity](https://github.com/nomad3/agentprovision-agents/pull/140)
 
 ---
 

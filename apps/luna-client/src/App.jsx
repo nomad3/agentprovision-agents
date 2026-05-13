@@ -126,7 +126,7 @@ function useUpdateBanner() {
     }
     // Fallback: signing not configured, or install_update threw.
     window.open(
-      'https://github.com/nomad3/servicetsunami-agents/releases/latest',
+      'https://github.com/nomad3/agentprovision-agents/releases/latest',
       '_blank',
     );
   }, []);
