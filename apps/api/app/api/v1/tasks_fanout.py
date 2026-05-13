@@ -264,6 +264,14 @@ def _count_tenant_tasks(tenant_id: str) -> int:
     return _TENANT_COUNTS.get(tenant_id, 0)
 
 
+def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
+    """Round-3 N3-1: O(n) recount of records for a tenant by walking
+    `_TASKS`. This is the slow ground-truth that `_TENANT_COUNTS`
+    mirrors. Used **only** in tests to assert the counter never
+    drifts from the dict. Do NOT call from request paths."""
+    return sum(1 for rec in _TASKS.values() if rec["tenant_id"] == tenant_id)
+
+
 # ── Routes ────────────────────────────────────────────────────────────
 
 
@@ -305,7 +313,12 @@ def run_fanout(
     # from the active session (e.g. login against a new tenant
     # without `ap config clean`). Reject with 400 so the user fixes
     # it instead of silently relying on JWT-wins-by-precedence.
-    if x_tenant_id and x_tenant_id.strip() != tenant_id:
+    # Round-3 L3-2: treat a whitespace-only header as not-set (matches
+    # the empty-string behavior FastAPI already gives us for blank
+    # values). Avoids a confusing 400 on a hand-edited config that
+    # happens to leave an indented blank line.
+    _header_tenant = (x_tenant_id or "").strip()
+    if _header_tenant and _header_tenant != tenant_id:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -345,8 +358,13 @@ def run_fanout(
             RunChildDispatch(task_id=_mint_task_id(), provider=p) for p in body.fanout
         ]
 
+    # Round-3 M3-1: write records FIRST, then increment the counter,
+    # so a partial-write exception cannot leave _TENANT_COUNTS inflated
+    # (no decrement-on-error gymnastics needed). The cap-check above
+    # already gates against running over capacity; uvicorn is
+    # single-threaded so we don't race ourselves between the check
+    # and the increment.
     now = time.monotonic()
-    _TENANT_COUNTS[tenant_id] += n_new
     _TASKS[parent_id] = {
         "prompt": body.prompt,
         "providers": list(body.providers),
@@ -383,6 +401,8 @@ def run_fanout(
             "fanout": [],
             "merge": body.merge,
         }
+    # All writes complete — now increment the counter in lock-step.
+    _TENANT_COUNTS[tenant_id] += n_new
 
     # Cheap estimate. Real implementation pulls from
     # `rl_experience_service.estimate_for_state` once that lands.

@@ -244,6 +244,64 @@ def test_x_tenant_id_matching_is_accepted():
     assert resp.status_code == 200, resp.text
 
 
+def test_x_tenant_id_whitespace_only_is_treated_as_not_set():
+    """Round-3 L3-2: a header of pure whitespace ("   ") should be
+    treated as not-set (same as missing), not a mismatch. A
+    hand-edited config might leave a blank value; that shouldn't
+    produce a confusing 400."""
+
+    user = _user()
+    client = _make_client(user)
+    resp = client.post(
+        "/api/v1/tasks-fanout/run",
+        json={"prompt": "x"},
+        headers={"X-Tenant-Id": "   "},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+def test_tenant_counts_invariant_after_dispatch_cancel_sweep(monkeypatch):
+    """Round-3 N3-1: assert `_TENANT_COUNTS` matches the slow recount
+    of `_TASKS` through a full dispatch + cancel + TTL-sweep cycle.
+    Locks down the lock-step invariant against future bypass."""
+
+    user = _user()
+    tenant_id = str(user.tenant_id)
+    client = _make_client(user)
+
+    # Dispatch: parent + 2 children = 3 records.
+    resp = client.post(
+        "/api/v1/tasks-fanout/run",
+        json={"prompt": "x", "fanout": ["claude", "codex"]},
+    )
+    assert resp.status_code == 200
+    parent_id = resp.json()["task_id"]
+    child_id = resp.json()["children"][0]["task_id"]
+
+    # Counter == 3, recount == 3.
+    assert tf._TENANT_COUNTS[tenant_id] == 3
+    assert tf._recount_tenant_tasks_from_records(tenant_id) == 3
+    assert tf._TENANT_COUNTS[tenant_id] == tf._recount_tenant_tasks_from_records(
+        tenant_id
+    )
+
+    # Cancel one child: counter drops by 1, recount drops by 1.
+    resp = client.post(f"/api/v1/tasks-fanout/{child_id}/cancel")
+    assert resp.status_code == 204
+    assert tf._TENANT_COUNTS[tenant_id] == 2
+    assert tf._recount_tenant_tasks_from_records(tenant_id) == 2
+
+    # TTL sweep: expire all remaining records. Counter must zero out
+    # and remove the tenant key entirely.
+    now = time.monotonic()
+    for rec in tf._TASKS.values():
+        rec["created_at"] = now - (tf.TASK_TTL_SECONDS + 1.0)
+    evicted = tf._sweep_expired_tasks()
+    assert evicted == 2
+    assert tf._recount_tenant_tasks_from_records(tenant_id) == 0
+    assert tenant_id not in tf._TENANT_COUNTS  # zero-count key was pruned
+
+
 # ── Additional defense-in-depth: model_validator (M4) regression ─────
 
 
