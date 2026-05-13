@@ -129,10 +129,22 @@ function App() {
           <LunaPresenceProvider>
             <ToastProvider>
               <Routes>
-                <Route path="/" element={<LandingPage />} />
-                {/* Dedicated CLI landing — alpha.agentprovision.com
-                    points the SPA at this route. Reuses LandingNav +
-                    LandingFooter + CTASection. */}
+                {/* Root: alpha.agentprovision.com renders the CLI
+                    landing; agentprovision.com renders the main one.
+                    Hostname-sniff so the same SPA bundle handles both
+                    apex domains without a separate build. */}
+                <Route
+                  path="/"
+                  element={
+                    typeof window !== 'undefined' &&
+                    window.location.hostname.startsWith('alpha.')
+                      ? <AlphaLandingPage />
+                      : <LandingPage />
+                  }
+                />
+                {/* /alpha is also reachable directly (e.g. for staging
+                    or share-links). Idempotent with the hostname-
+                    sniffed root above. */}
                 <Route path="/alpha" element={<AlphaLandingPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/auth/login" element={<LoginPage />} />

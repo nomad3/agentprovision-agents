@@ -42,6 +42,15 @@ ingress:
   - hostname: luna.agentprovision.com
     service: http://luna-client:80
 
+  # alpha CLI landing — dedicated subdomain pointing the SPA at the
+  # /alpha route. React Router resolves it client-side; the catch-all
+  # on the SPA's nginx layer serves index.html for unknown paths so
+  # a direct hit to https://alpha.agentprovision.com/ still renders.
+  # Add a path rewrite if we ever want the subdomain root to land on
+  # /alpha without a redirect — for now the SPA's root handles it.
+  - hostname: alpha.agentprovision.com
+    service: http://web:80
+
   # Web SPA
   - hostname: agentprovision.com
     service: http://web:80
