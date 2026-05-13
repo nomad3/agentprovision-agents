@@ -52,9 +52,27 @@ def _user(tenant_id: Optional[str] = None) -> User:
 def _make_client(user: User) -> TestClient:
     """Build a TestClient with `get_current_user` overridden to `user`.
     The `tasks_fanout` router is mounted at `/api/v1/tasks-fanout` to
-    match production routing."""
+    match production routing.
+
+    #190: the route now also depends on `get_db` (for the cost
+    estimator). Override with a MagicMock that terminates ANY query
+    chain at `.all()` returning an empty list. Round-1 review M4:
+    chain-shape-agnostic (loops over method names instead of hard-
+    coding a specific .filter().filter().filter() depth)."""
+    from unittest.mock import MagicMock
+
+    def _stub_db():
+        m = MagicMock()
+        chain = MagicMock()
+        chain.all.return_value = []
+        for method in ("join", "filter", "order_by", "limit"):
+            getattr(chain, method).return_value = chain
+        m.query.return_value = chain
+        yield m
+
     app = FastAPI()
     app.dependency_overrides[deps.get_current_user] = lambda: user
+    app.dependency_overrides[deps.get_db] = _stub_db
     app.include_router(tf.router, prefix="/api/v1/tasks-fanout")
     return TestClient(app, raise_server_exceptions=False)
 

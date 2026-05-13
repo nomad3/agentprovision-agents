@@ -57,10 +57,12 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_db
 from app.core.config import settings
 from app.models.user import User
+from app.services.cost_estimator import estimate_fanout_cost
 
 router = APIRouter()
 
@@ -409,6 +411,7 @@ def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
 async def run_fanout(
     body: RunFanoutRequest,
     current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
 ) -> RunFanoutResponse:
     """Dispatch endpoint hit by `ap run`.
@@ -548,12 +551,16 @@ async def run_fanout(
                 "agent_id": body.agent_id,
                 "session_id": body.session_id,
             }
-        # Cheap estimate — RL retrieval comes in a follow-up PR.
-        n_providers = max(len(body.fanout), 1)
+        # #190: real estimate from chat_messages history (cost_usd
+        # field from #174). Falls back to the static placeholder when
+        # the tenant has zero history for the requested providers.
+        ce = estimate_fanout_cost(
+            db, tenant_id=current_user.tenant_id, providers=body.fanout
+        )
         estimate = RunEstimate(
-            estimated_duration_seconds=30,  # real workflow; longer than the 8s stub
-            estimated_cost_usd=round(0.12 * n_providers, 4),
-            confidence="low",
+            estimated_duration_seconds=ce.estimated_duration_seconds,
+            estimated_cost_usd=ce.estimated_cost_usd,
+            confidence=ce.confidence,
         )
         # Round-1 review N2: do NOT mint synthetic `<wf_id>#child-<p>`
         # task IDs — those are never resolvable via /status. Surface an
@@ -619,13 +626,18 @@ async def run_fanout(
     # All writes complete — now increment the counter in lock-step.
     _TENANT_COUNTS[tenant_id] += n_new
 
-    # Cheap estimate. Real implementation pulls from
-    # `rl_experience_service.estimate_for_state` once that lands.
-    n_providers = max(len(body.fanout) or len(body.providers) or 1, 1)
+    # #190: real estimate from chat_messages history. Same helper as
+    # the real-dispatch branch above; uses fanout list when present,
+    # else providers chain (also a list of provider names), else a
+    # single-slot fallback.
+    estimate_providers = body.fanout or body.providers or []
+    ce = estimate_fanout_cost(
+        db, tenant_id=current_user.tenant_id, providers=estimate_providers
+    )
     estimate = RunEstimate(
-        estimated_duration_seconds=8,
-        estimated_cost_usd=round(0.12 * n_providers, 4),
-        confidence="low",  # prototype — no historical data yet
+        estimated_duration_seconds=ce.estimated_duration_seconds,
+        estimated_cost_usd=ce.estimated_cost_usd,
+        confidence=ce.confidence,
     )
 
     return RunFanoutResponse(
