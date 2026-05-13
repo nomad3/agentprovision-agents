@@ -66,7 +66,7 @@ A read-only Explore agent classified every legacy doc in `docs/`:
 
 ## Branch + workflow
 
-- Worktree: `../servicetsunami-agents-docs-refresh`
+- Worktree: `../agentprovision-agents-docs-refresh`
 - Branch: `docs/refresh-2026-05-03`
 - PR assigned to `nomade`, no AI co-author tags, no commits to main.
 

@@ -28,7 +28,7 @@
 
 set -eu
 
-REPO="nomad3/servicetsunami-agents"
+REPO="nomad3/agentprovision-agents"
 INSTALL_DIR="$HOME/.local/bin"
 MAN_DIR="$HOME/.local/share/man/man1"
 ADD_TO_PATH=0

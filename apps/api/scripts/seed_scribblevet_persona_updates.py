@@ -15,12 +15,12 @@ Agent" in any tenant.
 
 Run inside the api container:
 
-    docker exec servicetsunami-agents-api-1 \
+    docker exec agentprovision-agents-api-1 \
         python /app/scripts/seed_scribblevet_persona_updates.py
 
 Or limit to a single tenant:
 
-    docker exec servicetsunami-agents-api-1 \
+    docker exec agentprovision-agents-api-1 \
         python /app/scripts/seed_scribblevet_persona_updates.py \
         --tenant 7f632730-1a38-41f1-9f99-508d696dbcf1
 

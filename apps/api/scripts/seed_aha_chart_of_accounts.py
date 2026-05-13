@@ -7,7 +7,7 @@ the existing `AHA Chart of Accounts` reference entity, embeds each leaf
 for semantic search, and creates `belongs_to` relations.
 
 Usage (from repo root, inside the api container):
-    docker exec servicetsunami-agents-api-1 \\
+    docker exec agentprovision-agents-api-1 \\
         python /app/scripts/seed_aha_chart_of_accounts.py \\
         --tenant 7f632730-1a38-41f1-9f99-508d696dbcf1
 

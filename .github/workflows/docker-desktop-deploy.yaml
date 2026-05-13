@@ -37,7 +37,7 @@ jobs:
       - name: Pre-checkout — release bind-mounts
         shell: bash
         run: |
-          SRC="$HOME/Documents/GitHub/servicetsunami-agents"
+          SRC="$HOME/Documents/GitHub/agentprovision-agents"
           if [ -f "$SRC/docker-compose.yml" ]; then
             (cd "$SRC" && docker compose stop api orchestration-worker code-worker 2>&1 | tail -5) || true
           fi
@@ -83,7 +83,7 @@ jobs:
           # The .env files are gitignored but persist on the self-hosted runner's
           # main working copy. Symlink them into the checkout so docker compose
           # can read them.
-          SRC="$HOME/Documents/GitHub/servicetsunami-agents"
+          SRC="$HOME/Documents/GitHub/agentprovision-agents"
           for envfile in apps/api/.env .env; do
             if [ -f "$SRC/$envfile" ] && [ ! -f "$envfile" ]; then
               ln -sf "$SRC/$envfile" "$envfile"
@@ -156,7 +156,7 @@ jobs:
           # script honours this env var and so does the readiness
           # probe below. Override at workflow-dispatch time if the
           # compose project ever gets renamed.
-          DB_CONTAINER: servicetsunami-agents-db-1
+          DB_CONTAINER: agentprovision-agents-db-1
         run: |
           # The db needs a few seconds after `up -d` even when the
           # container was already running, because compose may have
