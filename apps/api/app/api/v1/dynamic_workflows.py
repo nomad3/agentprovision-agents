@@ -710,6 +710,36 @@ def browse_templates(
     return q.order_by(DynamicWorkflow.installs.desc()).all()
 
 
+@router.get("/{workflow_id}/preview")
+def preview_workflow(
+    workflow_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
+):
+    """Validate a workflow's definition without executing it.
+
+    Returns `{steps_planned, integrations_required, validation_errors,
+    step_count}` — same shape as `validate_workflow_definition()`. Used
+    by `alpha recipes describe` to surface required integrations without
+    needing to install the template first. Open to:
+    * the caller's own tenant workflows (custom + installed copies)
+    * public templates (native + community)
+    Returns 404 otherwise. PR #447 review IMPORTANT I2.
+    """
+    from app.services.dynamic_workflows import validate_workflow_definition
+
+    wf = db.query(DynamicWorkflow).filter(
+        DynamicWorkflow.id == workflow_id,
+        or_(
+            DynamicWorkflow.tenant_id == current_user.tenant_id,
+            DynamicWorkflow.public == True,
+        ),
+    ).first()
+    if not wf:
+        raise HTTPException(status_code=404, detail="workflow not found")
+    return validate_workflow_definition(wf.definition or {})
+
+
 @router.post("/templates/{template_id}/install", response_model=DynamicWorkflowInDB)
 def install_template(
     template_id: uuid.UUID,

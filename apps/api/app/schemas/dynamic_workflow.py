@@ -102,12 +102,25 @@ class DynamicWorkflowInDB(BaseModel):
     last_run_at: Optional[datetime] = None
     avg_duration_ms: Optional[int] = None
     success_rate: Optional[float] = None
+    # Template-specific counters. `installs` is the social-proof number
+    # rendered by `alpha recipes ls`. `source_template_id` is the
+    # forward pointer from a tenant-installed workflow back to the
+    # template it was forked from — used by `alpha recipes run` to
+    # dedupe (don't re-install if the tenant already has a copy).
+    # PR #447 review IMPORTANT I1 + I3.
+    installs: int = 0
+    source_template_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     @field_validator("run_count", mode="before")
     @classmethod
     def _coerce_run_count(cls, v):
+        return 0 if v is None else v
+
+    @field_validator("installs", mode="before")
+    @classmethod
+    def _coerce_installs(cls, v):
         return 0 if v is None else v
 
     class Config:
