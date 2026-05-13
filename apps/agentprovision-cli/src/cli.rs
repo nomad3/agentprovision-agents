@@ -3,8 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, chat, completions, integration, login, logout, memory, quickstart, session, skill,
-    status, upgrade, workflow,
+    agent, chat, completions, integration, login, logout, memory, quickstart, run, session, skill,
+    status, upgrade, watch, workflow,
 };
 use crate::context::Context;
 
@@ -60,6 +60,19 @@ pub enum Command {
     #[command(subcommand)]
     Chat(ChatCommand),
 
+    /// Dispatch a durable task. Supports multi-provider fanout
+    /// (`--fanout claude,codex,gemini --merge council`), fallback
+    /// chains (`--providers claude,codex,opencode`), and background
+    /// execution (`--background` + later `ap watch <id>`).
+    ///
+    /// Phase 1 prototype — see
+    /// docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md.
+    Run(run::RunArgs),
+
+    /// Tail an in-flight task's status from any machine. Pairs with
+    /// `ap run --background` for fire-and-forget then later resume.
+    Watch(watch::WatchArgs),
+
     /// Self-update the `ap` binary from GitHub Releases.
     Upgrade(upgrade::UpgradeArgs),
 
@@ -111,6 +124,8 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Status(a) => status::run(ctx, a.runtimes).await,
         Command::Chat(ChatCommand::Send(a)) => chat::send(a, ctx).await,
         Command::Chat(ChatCommand::Repl(a)) => chat::repl(a, ctx).await,
+        Command::Run(a) => run::run(a, ctx).await,
+        Command::Watch(a) => watch::run(a, ctx).await,
         Command::Upgrade(a) => upgrade::run(a, ctx).await,
         Command::Agent(cmd) => agent::dispatch(cmd, ctx).await,
         Command::Workflow(cmd) => workflow::dispatch(cmd, ctx).await,
