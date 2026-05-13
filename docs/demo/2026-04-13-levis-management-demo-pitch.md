@@ -206,4 +206,4 @@ A: The RL routing layer falls back to Claude or Codex. The coalition continues. 
 
 *Contact: Simon Aguilera — saguilera1608@gmail.com*  
 *Platform: agentprovision.com*  
-*Repository: github.com/nomad3/servicetsunami-agents*
+*Repository: github.com/nomad3/agentprovision-agents*

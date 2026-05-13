@@ -1,7 +1,7 @@
 //! `alpha upgrade` — self-update from GitHub Releases.
 //!
 //! Replaces the curl|sh re-run path. Resolves the latest release tag from
-//! github.com/nomad3/servicetsunami-agents, downloads the matching
+//! github.com/nomad3/agentprovision-agents, downloads the matching
 //! `alpha-{triple}.zip` asset, verifies it against the release's
 //! `SHA256SUMS` manifest (same manifest install.sh consumes — PR-D-3), and
 //! swaps the binary in place via the `self_update` crate.

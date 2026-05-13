@@ -16,10 +16,10 @@ if [ -d /workspace/.git ]; then
     else
         echo "[code-worker] Removing corrupted repo..."
         rm -rf /workspace/.git /workspace/*
-        git clone --branch "${GIT_BRANCH:-main}" "https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git" /workspace
+        git clone --branch "${GIT_BRANCH:-main}" "https://${GITHUB_TOKEN}@github.com/nomad3/agentprovision-agents.git" /workspace
     fi
 else
-    git clone --branch "${GIT_BRANCH:-main}" "https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git" /workspace
+    git clone --branch "${GIT_BRANCH:-main}" "https://${GITHUB_TOKEN}@github.com/nomad3/agentprovision-agents.git" /workspace
 fi
 
 # Configure git identity for commits

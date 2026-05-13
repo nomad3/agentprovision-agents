@@ -24,7 +24,7 @@ Thanks for working on AgentProvision. This file is the short version of the rule
 The primary local runtime is **docker-compose**.
 
 ```bash
-git clone https://github.com/nomad3/servicetsunami-agents.git
+git clone https://github.com/nomad3/agentprovision-agents.git
 cd servicetsunami-agents
 
 # 1. Configure secrets — all three are REQUIRED, no defaults
