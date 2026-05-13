@@ -445,8 +445,13 @@ after is depth.
    cancel too?
    *Recommend:* yes, propagate cancel; document `--no-cascade-cancel` as opt-out.
 3. **CLI streaming protocol** — SSE over HTTPS via Cloudflare tunnel hits
-   the 524 timeout (task #161). The async chat-result pattern there should
-   be the backbone; `ap watch` ultimately polls + Server-Sent-Event hybrid.
+   the 524 timeout known from chat (the same constraint `cli_session_manager`
+   and `docs/plans/2026-05-09-resilient-cli-orchestrator-design.md` already
+   discuss). The async chat-result pattern from that work should be the
+   backbone; `ap watch` ultimately polls + Server-Sent-Event hybrid.
+   *(Note: this references the AgentProvision design history, not a
+   numbered GitHub issue — the original draft used a local task-list
+   ID that collides with an unrelated GitHub PR number.)*
 4. **Tenant context switching** — `ap --tenant prod run …` requires the
    user to have a token for that tenant. Need `ap tenants list` + `ap tenant use`
    ergonomics. *Not blocking Phase 1.*
@@ -459,7 +464,8 @@ after is depth.
 
 - [ ] Each command has a real backend route or a labeled gap.
 - [ ] No design item depends on unbuilt platform features.
-- [ ] Effort estimates sum to ≈6 calendar weeks for one engineer.
+- [ ] Effort estimates sum to ≈6 calendar weeks for Phases 1–3, plus
+      Phase 4 (cost surfaces) in week 7+. Total: ≈7 weeks for one engineer.
 - [ ] Headline demo is reproducible end-to-end after Phase 1.
 
 ## Companion work
