@@ -1822,29 +1822,81 @@ class FanoutChatCliWorkflow:
                 )
 
         if input.merge == "first-wins":
-            # Round-1 review H2: real cancel-the-rest. Wrap each child in
-            # an asyncio.Task, wait for the first to complete, cancel the
-            # rest. Cancelled children show up in the result with
-            # success=False, error="cancelled-by-first-wins" so the
-            # operator can audit billing — they were not billed for
-            # those after cancel propagates to the leaf CLI subprocess.
-            tasks = [
-                asyncio.ensure_future(_child(p)) for p in input.providers
-            ]
-            done, pending = await wait(tasks, return_when=FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
-            # Collect what we have: completed first, then a placeholder
-            # for each cancelled task.
-            children: List[FanoutChildResult] = []
-            for t in done:
-                children.append(t.result())
-            # Map cancelled tasks back to their provider for the result.
-            # This is order-preserving against `input.providers` so the
-            # parent's children list mirrors the dispatch order.
-            done_providers = {c.provider for c in children}
+            # Round-2 H2 hardening: use `start_child_workflow` returning
+            # `ChildWorkflowHandle` objects so cancellation propagates
+            # to the REMOTE workflow execution. The previous
+            # `execute_child_workflow` + `asyncio.ensure_future`
+            # approach only cancelled the local awaiter — the child
+            # workflows kept running and billing through their full
+            # `execution_timeout`. With handles, `await handle.cancel()`
+            # signals the running child workflow to stop.
+            handles = []
             for p in input.providers:
-                if p not in done_providers:
+                child_input = ChatCliInput(
+                    platform=p,
+                    message=input.prompt,
+                    tenant_id=input.tenant_id,
+                    instruction_md_content=input.instruction_md_content,
+                    mcp_config=input.mcp_config,
+                    session_id=input.session_id or "",
+                    model=input.model,
+                    allowed_tools=input.allowed_tools,
+                )
+                h = await workflow.start_child_workflow(
+                    ChatCliWorkflow.run,
+                    child_input,
+                    task_queue="agentprovision-code",
+                    execution_timeout=timedelta(minutes=180),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
+                )
+                handles.append((p, h))
+
+            # Wrap each handle in a Task so wait() can pick the
+            # first-completed one. handle is awaitable for its result.
+            tasks_by_provider = {
+                p: asyncio.create_task(h) for p, h in handles
+            }
+            done, pending = await wait(
+                tasks_by_provider.values(), return_when=FIRST_COMPLETED
+            )
+
+            # Cancel pending REMOTE children via their handles. This is
+            # best-effort — Temporal queues a cancellation signal that
+            # the child workflow must observe at its next decision task.
+            pending_providers = []
+            for p, t in tasks_by_provider.items():
+                if t in pending:
+                    pending_providers.append(p)
+                    # Lookup the original handle to call cancel on it.
+                    h = next(h for prov, h in handles if prov == p)
+                    try:
+                        await h.cancel()
+                    except Exception:  # noqa: BLE001
+                        pass  # best-effort
+
+            children: List[FanoutChildResult] = []
+            for p, t in tasks_by_provider.items():
+                if t in done:
+                    try:
+                        child_result: ChatCliResult = t.result()
+                        children.append(
+                            FanoutChildResult(
+                                provider=p,
+                                response_text=child_result.response_text,
+                                success=child_result.success,
+                                error=child_result.error,
+                            )
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        children.append(
+                            FanoutChildResult(
+                                provider=p,
+                                response_text="",
+                                success=False,
+                                error=str(exc),
+                            )
+                        )
+                else:
                     children.append(
                         FanoutChildResult(
                             provider=p,

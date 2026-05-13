@@ -319,14 +319,42 @@ async def _dispatch_fanout_workflow(
     }
 
 
+def _extract_tenant_from_workflow_id(task_id: str) -> Optional[str]:
+    """Round-2 H3 hardening: parse the tenant UUID out of a workflow_id
+    of shape `fanout-<tenant_uuid>-<uuid4>`. Returns the inner UUID
+    string or None if the shape doesn't match.
+
+    This is the durable tenant-isolation gate. Memo cross-check was
+    considered but the temporalio SDK's memo serialization (Payload
+    proto vs decoded dict) is version-dependent (B2-1 round-2 finding).
+    The workflow_id template is API-internal, single-producer, and
+    deterministic — parse it instead."""
+    if not task_id.startswith("fanout-"):
+        return None
+    tail = task_id[len("fanout-"):]
+    # UUID is 36 chars with 4 hyphens (8-4-4-4-12). Split on the
+    # next hyphen *after* the UUID to recover the tenant.
+    # Pattern: <8>-<4>-<4>-<4>-<12>-<dispatch_uuid>
+    parts = tail.split("-")
+    if len(parts) < 6:
+        return None
+    candidate = "-".join(parts[:5])  # canonical UUID form
+    try:
+        uuid.UUID(candidate)
+    except (ValueError, AttributeError):
+        return None
+    return candidate
+
+
 async def _describe_fanout_workflow(task_id: str, *, expected_tenant_id: str) -> Dict[str, Any]:
     """Look up a real-dispatch task's status via Temporal. Returns
     a dict shaped to merge with the prototype's status response.
 
-    Round-1 review H3: cross-checks the workflow memo's `tenant_id`
-    field against `expected_tenant_id` (caller's JWT tenant). Raises
-    `PermissionError` on mismatch — defense-in-depth against a future
-    workflow_id template change that could break the prefix-only check.
+    Round-2 H3 hardening: tenant isolation is enforced by parsing
+    the workflow_id (deterministic, API-minted template) instead of
+    reading the memo (whose serialization is SDK-version dependent —
+    see round-2 B2-1). The parsed tenant must exactly match the
+    caller's JWT tenant; mismatch → PermissionError → route 404.
 
     Maps Temporal workflow status to the CLI's vocabulary:
       RUNNING / CONTINUED_AS_NEW → 'running'
@@ -334,14 +362,15 @@ async def _describe_fanout_workflow(task_id: str, *, expected_tenant_id: str) ->
       FAILED / TERMINATED        → 'failed'
       CANCELED                   → 'cancelled'
       TIMED_OUT                  → 'failed' (with error)"""
+    parsed_tenant = _extract_tenant_from_workflow_id(task_id)
+    if parsed_tenant != expected_tenant_id:
+        raise PermissionError(
+            "workflow_id tenant prefix does not match caller's JWT tenant"
+        )
+
     from app.services import workflows as wf_service
 
     desc = await wf_service.describe_workflow(workflow_id=task_id)
-    memo_tenant = (desc.get("memo") or {}).get("tenant_id")
-    if memo_tenant and memo_tenant != expected_tenant_id:
-        raise PermissionError(
-            "workflow memo tenant_id does not match caller's JWT tenant"
-        )
     status_map = {
         "RUNNING": "running",
         "CONTINUED_AS_NEW": "running",
@@ -466,15 +495,30 @@ async def run_fanout(
             agent_id=body.agent_id,
             session_id=body.session_id,
         )
-        # Bill the parent against the cap. Real children counts come in
-        # the follow-up PR that resolves Temporal child workflow IDs.
-        # For now we count just the parent (round-1 review B2 floor).
-        _TENANT_COUNTS[tenant_id] += 1
+        # Round-2 M2-3: bill `n_new` (parent + fanout-count) symmetrically
+        # with the stub path. Pre-check already used n_new (line above);
+        # billing matches so a future flag-flip doesn't change effective
+        # tenant ceiling.
+        _TENANT_COUNTS[tenant_id] += n_new
+        # Round-2 L2-1: populate the stub-shape fields with empty
+        # placeholders so a flag-flip back to USE_REAL_FANOUT_WORKFLOW
+        # =False while real-path records are still warm doesn't 500 on
+        # `record["prompt"]` KeyError. The stub branch of /status uses
+        # `record.get("fanout")` then falls through to `record["prompt"]`
+        # — empty placeholders make that path's else-clause render a
+        # benign placeholder result instead of crashing.
         _TASKS[dispatch["task_id"]] = {
             "tenant_id": tenant_id,
             "created_at": time.monotonic(),
             "children": [],
             "real_temporal": True,
+            "prompt": body.prompt,
+            "providers": [],
+            "fanout": list(body.fanout),
+            "merge": body.merge,
+            "user_id": str(current_user.id),
+            "agent_id": body.agent_id,
+            "session_id": body.session_id,
         }
         # Cheap estimate — RL retrieval comes in a follow-up PR.
         n_providers = max(len(body.fanout), 1)
@@ -661,8 +705,12 @@ async def task_status(
         for c in record["children"]
     ]
 
-    result: Optional[str] = None
-    error: Optional[str] = None
+    # Round-2 M2-1: result/error already declared above the branches
+    # (round-1 L3 fix). Reset them here for the stub path's lifecycle
+    # computation — early-return on real-path means these only see
+    # the stub side.
+    result = None
+    error = None
     if status == "completed":
         # Synthetic result body that demonstrates the council-merge
         # demo from the design doc. Real impl reads from
@@ -731,19 +779,23 @@ async def cancel_task(
         prefix = f"fanout-{tenant_str}-"
         if not task_id.startswith(prefix):
             raise HTTPException(status_code=404, detail=f"task {task_id} not found")
-        # Round-1 review H1: use the public `cancel_workflow` helper
-        # instead of reaching into `_get_temporal_client`.
-        from app.services import workflows as wf_service
 
+        # Round-2 M2-2: separate the tenant-mismatch case (PermissionError)
+        # from the operational-failure case (Temporal unreachable). Both
+        # return 404 (no existence oracle) but with distinguishable detail.
         try:
-            # Cross-check memo before cancel, same defense-in-depth as
-            # /status (round-1 review H3).
             await _describe_fanout_workflow(task_id, expected_tenant_id=tenant_str)
-        except (PermissionError, Exception) as exc:  # noqa: BLE001
+        except PermissionError:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        except Exception as exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=404,
-                detail=f"task {task_id} not found ({type(exc).__name__})",
+                detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
             )
+
+        # Round-1 H1: public cancel_workflow helper, no private SDK reach.
+        from app.services import workflows as wf_service
+
         try:
             await wf_service.cancel_workflow(task_id)
         except Exception as exc:  # noqa: BLE001
@@ -752,8 +804,9 @@ async def cancel_task(
                 detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
             )
         # Decrement the cap counter for the real-dispatch parent record.
-        if task_id in _TASKS:
-            _evict_record(task_id)
+        # `_evict_record` is idempotent (no-op if key absent), so no
+        # outer guard needed (M2-2 follow-up).
+        _evict_record(task_id)
         return
 
     record = _TASKS.get(task_id)
