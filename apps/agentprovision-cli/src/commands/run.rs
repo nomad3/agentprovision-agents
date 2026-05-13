@@ -25,16 +25,23 @@
 
 use clap::Args;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::fmt;
+use std::time::{Duration, Instant};
 
+use crate::commands::watch::poll_until_terminal;
 use crate::context::Context;
 
 /// `MergeMode` is the backend-visible discriminator for how to combine
 /// fanout child outputs. `council` is the council-of-reviewers pattern
 /// (consensus + disagreement summary), `first-wins` returns the first
 /// completed child and cancels the rest, `all` returns every child
-/// verbatim under a `children` array. Clap maps these to lowercased
-/// `kebab-case` on the wire so the CLI stays human-friendly.
+/// verbatim under a `children` array.
+///
+/// Round-1 N1: both `serde(rename_all = "kebab-case")` and
+/// `clap(rename_all = "kebab-case")` are required because clap's
+/// default variant naming is `snake_case` (`first_wins`) and serde's
+/// default is also `snake_case`. The wire (and CLI flag) form is
+/// `first-wins` — both adapters need the override.
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]
@@ -50,17 +57,44 @@ impl Default for MergeMode {
     }
 }
 
+impl fmt::Display for MergeMode {
+    /// Round-1 M5: render to kebab-case (the wire / CLI flag form)
+    /// instead of Rust Debug variant names. Used in
+    /// `print_dispatch_banner` so the banner shows `council` /
+    /// `first-wins` / `all` consistently with the `--merge` flag.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            MergeMode::Council => "council",
+            MergeMode::FirstWins => "first-wins",
+            MergeMode::All => "all",
+        };
+        f.write_str(s)
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// The prompt / task description to dispatch.
     #[arg(value_name = "PROMPT")]
     pub prompt: String,
 
-    /// Bind the task to a specific agent (UUID). Defaults to the tenant's
-    /// `code-agent` if available, otherwise the tenant default.
+    /// Bind the task to a specific agent (UUID). Defaults to the
+    /// tenant's `code-agent` if available, otherwise the tenant default.
     #[arg(long)]
     pub agent: Option<String>,
 
+    /// Bind the task to an existing chat session (UUID). Otherwise a
+    /// fresh session is created and tied to `--agent`.
+    #[arg(long)]
+    pub session: Option<String>,
+
+    // Round-1 B1: the `--tenant` flag was removed before initial ship.
+    // Tenant identity is JWT-bound (the same posture as `--tenant` in
+    // cli.rs was removed earlier for the same reason — see
+    // `cli.rs:23-29` rationale). Shipping a body field that the
+    // backend honored would allow an authenticated user in tenant A
+    // to plant tasks under tenant B's `tenant_id`. The override will
+    // return alongside `ap tenant use` (design open question #4).
     /// Comma-separated **fallback** chain. If the first provider fails
     /// with a quota / auth error, the next is tried. Mutually exclusive
     /// with `--fanout` (use `--fanout` for parallel dispatch).
@@ -90,27 +124,26 @@ pub struct RunArgs {
     #[arg(long, short = 'b')]
     pub background: bool,
 
-    /// Bind the task to an existing chat session (UUID). Otherwise a
-    /// fresh session is created and tied to `--agent`.
-    #[arg(long)]
-    pub session: Option<String>,
-
-    /// Tenant override (advanced). Defaults to the JWT's tenant claim.
-    #[arg(long)]
-    pub tenant: Option<String>,
+    /// Maximum number of seconds to tail the task in the foreground
+    /// before exiting (the task itself continues running; resume with
+    /// `ap watch <task_id>`). Default 1800s (30 min). Round-1 H4 cap.
+    #[arg(long, default_value_t = 1800)]
+    pub timeout: u64,
 }
 
 /// Request payload for `POST /api/v1/tasks-fanout/run`.
 ///
-/// Kept in this file (not core/) because it is prototype-scope; the
-/// public stable shape lives in `agentprovision-core::tasks` once Phase 1
-/// stabilizes.
+/// Round-1 B1: no `tenant_id` field. Tenant is JWT-bound on the
+/// server. This struct is in-file (not in core/) because it is
+/// prototype-scope; the public stable shape moves to
+/// `agentprovision-core::tasks` once Phase 1 stabilizes.
 #[derive(Debug, Serialize)]
 struct RunRequest<'a> {
     prompt: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     agent_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<&'a str>,
-    tenant_id: Option<&'a str>,
     /// Fallback chain. Empty when `fanout` is set.
     providers: &'a [String],
     /// Parallel-dispatch list. Empty when `providers` is set or neither
@@ -125,18 +158,22 @@ struct RunResponse {
     /// Children spawned (only populated when `fanout` was non-empty).
     /// Each entry has a `task_id` and the `provider` it was dispatched to.
     #[serde(default)]
-    children: Vec<RunChild>,
+    children: Vec<RunChildDispatch>,
     /// Initial status reported by the workflow engine (e.g. "queued",
     /// "running"). Always non-empty.
     status: String,
     /// Best-effort cost / latency estimate when the backend has enough
     /// signal from past similar tasks (RL retrieval over state_text
     /// embeddings). May be `None` for novel prompts.
+    ///
+    /// Round-1 M1: `#[serde(default)]` so a backend that omits this
+    /// field on novel prompts does not blow up deserialization.
+    #[serde(default)]
     estimate: Option<RunEstimate>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct RunChild {
+struct RunChildDispatch {
     task_id: String,
     provider: String,
 }
@@ -149,21 +186,18 @@ struct RunEstimate {
 }
 
 pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
-    // Validate flag combinations beyond what clap's conflicts_with
+    // Validate flag combinations beyond what clap's `conflicts_with`
     // already enforces. `--merge` only matters with `--fanout`; warn
-    // the user if they passed `--merge` alone so it doesn't silently
-    // do nothing.
+    // the user if they passed a non-default merge alone so it doesn't
+    // silently do nothing.
     if !matches!(args.merge, MergeMode::Council) && args.fanout.is_empty() {
-        eprintln!(
-            "[ap] warning: --merge is only meaningful with --fanout; ignoring."
-        );
+        eprintln!("[ap] warning: --merge is only meaningful with --fanout; ignoring.");
     }
 
     let payload = RunRequest {
         prompt: &args.prompt,
         agent_id: args.agent.as_deref(),
         session_id: args.session.as_deref(),
-        tenant_id: args.tenant.as_deref(),
         providers: &args.providers,
         fanout: &args.fanout,
         merge: args.merge.clone(),
@@ -193,8 +227,17 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Foreground: tail the task event stream until completion.
-    tail_task_events(&ctx, &response.task_id).await
+    // Foreground: tail the task event stream until completion or the
+    // user-supplied timeout (round-1 H4). The poll helper is shared
+    // with `ap watch` (round-1 L1).
+    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    poll_until_terminal(
+        &ctx,
+        &response.task_id,
+        Some(deadline),
+        Duration::from_millis(1500),
+    )
+    .await
 }
 
 fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
@@ -212,7 +255,8 @@ fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
         for c in &children {
             println!("       • {c}");
         }
-        println!("[ap] merge mode: {:?}", args.merge);
+        // Round-1 M5: kebab-case via Display, not Debug `{:?}`.
+        println!("[ap] merge mode: {}", args.merge);
     } else if !args.providers.is_empty() {
         println!(
             "[ap] dispatched task {task_id} with fallback chain: {}",
@@ -232,41 +276,11 @@ fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
     if args.background {
         println!("[ap] close this terminal any time — resume with: ap watch {task_id}");
     } else {
-        println!("[ap] tailing events… (Ctrl-C detaches; task continues running)");
+        println!(
+            "[ap] tailing events for up to {}s… (Ctrl-C detaches; task continues running)",
+            args.timeout
+        );
     }
-}
-
-/// Tail the task's event stream until terminal status. Prototype uses
-/// a simple GET-polling loop against `/tasks-fanout/{id}/status` every
-/// 1500ms; the real implementation will consume the existing SSE
-/// `/tasks/{id}/events/stream` endpoint shared with chat sessions.
-async fn tail_task_events(ctx: &Context, task_id: &str) -> anyhow::Result<()> {
-    let path = format!("/api/v1/tasks-fanout/{task_id}/status");
-    let mut last_status: Option<String> = None;
-    loop {
-        let status: TaskStatus = ctx.client.get_json(&path).await?;
-        if last_status.as_deref() != Some(&status.status) {
-            println!("[ap] {} — {}", task_id, status.status);
-            last_status = Some(status.status.clone());
-        }
-        if matches!(
-            status.status.as_str(),
-            "completed" | "failed" | "cancelled"
-        ) {
-            if let Some(result) = status.result {
-                println!("\n{}", result);
-            }
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct TaskStatus {
-    status: String,
-    #[serde(default)]
-    result: Option<String>,
 }
 
 #[cfg(test)]
@@ -299,6 +313,8 @@ mod tests {
         assert!(a.fanout.is_empty());
         assert!(!a.background);
         assert!(matches!(a.merge, MergeMode::Council));
+        // Default timeout (round-1 H4).
+        assert_eq!(a.timeout, 1800);
     }
 
     #[test]
@@ -336,5 +352,32 @@ mod tests {
         // Serde tag rename verifies the JSON shape the backend expects.
         let json = serde_json::to_string(&MergeMode::FirstWins).unwrap();
         assert_eq!(json, "\"first-wins\"");
+    }
+
+    #[test]
+    fn merge_mode_display_matches_wire() {
+        // Round-1 M5: Display should emit kebab-case to match the
+        // serde + clap form so the banner stays consistent.
+        assert_eq!(format!("{}", MergeMode::Council), "council");
+        assert_eq!(format!("{}", MergeMode::FirstWins), "first-wins");
+        assert_eq!(format!("{}", MergeMode::All), "all");
+    }
+
+    #[test]
+    fn parses_custom_timeout() {
+        // Round-1 H4: --timeout overrides the 30m default.
+        let a = parse(&["test", "run", "x", "--timeout", "600"]);
+        assert_eq!(a.timeout, 600);
+    }
+
+    #[test]
+    fn no_tenant_flag_exists() {
+        // Round-1 B1: --tenant must NOT be accepted by clap.
+        // Acceptance would allow tenant-spoofing via the request body.
+        let res = TestCli::try_parse_from(["test", "run", "x", "--tenant", "t_x"]);
+        assert!(
+            res.is_err(),
+            "--tenant must be rejected at parse time (round-1 B1)"
+        );
     }
 }
