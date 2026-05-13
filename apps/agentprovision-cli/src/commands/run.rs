@@ -275,6 +275,11 @@ fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
 
     if args.background {
         println!("[ap] close this terminal any time — resume with: ap watch {task_id}");
+    } else if args.timeout == 0 {
+        // Round-3 L3-1: `--timeout 0` is the "no ceiling" sentinel
+        // (round-2 L2-2). Don't print "for up to 0s" which sounds
+        // like immediate-exit.
+        println!("[ap] tailing events with no ceiling… (Ctrl-C detaches; task continues running)");
     } else {
         println!(
             "[ap] tailing events for up to {}s… (Ctrl-C detaches; task continues running)",
