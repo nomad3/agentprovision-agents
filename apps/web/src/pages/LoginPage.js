@@ -69,6 +69,16 @@ const LoginPage = () => {
             <Button variant="primary" type="submit" className="w-100 mb-2" disabled={loading}>
               {loading ? t('login.loggingIn') : t('login.submit')}
             </Button>
+            {/* Password recovery — the /reset-password page + backend
+                flow has been live since the 2026-04-18 security
+                hardening (SHA-256 token hashes, hmac.compare_digest
+                verification, slowapi 3/hr rate-limit on the recovery
+                endpoint) but the login screen had no link to it. */}
+            <div className="text-center mt-2">
+              <Link to="/reset-password" className="small text-muted">
+                {t('login.forgotPasswordLink')}
+              </Link>
+            </div>
             <div className="text-center mt-3">
               {t('login.noAccount')} <Link to="/register">{t('login.registerLink')}</Link>
             </div>
