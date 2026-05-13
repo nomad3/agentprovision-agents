@@ -11,6 +11,7 @@
   <a href="#"><img src="https://img.shields.io/badge/RL-auto%20scoring-orange?style=flat-square" alt="RL"></a>
   <a href="#"><img src="https://img.shields.io/badge/tunnel-Cloudflare-4285F4?style=flat-square" alt="Cloudflare"></a>
   <a href="#"><img src="https://img.shields.io/badge/Luna_Client-Tauri%202.0-24C8DB?style=flat-square" alt="Luna Client"></a>
+  <a href="docs/cli/README.md"><img src="https://img.shields.io/badge/alpha_CLI-terminal_client-2ecc71?style=flat-square" alt="alpha CLI"></a>
 </p>
 
 <p align="center">
@@ -60,6 +61,43 @@ VITE_API_BASE_URL=http://localhost:8000 cargo tauri build --target aarch64-apple
 # Dev mode (hot reload)
 VITE_API_BASE_URL=http://localhost:8000 cargo tauri dev
 ```
+
+---
+
+## `alpha` — Terminal AI Client
+
+`alpha` is the terminal-native counterpart to Luna. Same FastAPI backend, same agents, same skills — but scriptable (`--json`), CI-friendly (`--no-stream`), with OS-keychain token storage and a 30-minute JWT. Cross-platform (macOS arm64/x86_64, Linux x86_64, Windows x86_64). Auto-updates via `alpha upgrade`. Source under [`apps/agentprovision-cli`](apps/agentprovision-cli/) and [`apps/agentprovision-core`](apps/agentprovision-core/).
+
+```bash
+# Install (macOS / Linux)
+curl -fsSL https://agentprovision.com/install.sh | sh
+# Install (Windows PowerShell)
+iwr https://agentprovision.com/install.ps1 | iex
+
+alpha login                                          # password flow, token in keychain
+alpha status --runtimes                              # auth + preflight all local CLI runtimes
+alpha chat send "what shipped this week?"            # streaming reply, like Claude Code
+alpha workflow run incident_investigation --json     # dispatch a dynamic workflow
+```
+
+| Command surface | Status |
+|------|--------|
+| `alpha login` / `logout` / `status` (`--runtimes`) | Shipped |
+| `alpha chat send` / `repl` (streaming + REPL) | Shipped |
+| `alpha agent` (list, get, create, promote, rollback) | Shipped |
+| `alpha workflow` (list templates, run, status) | Shipped |
+| `alpha session` (list, show, resume) | Shipped |
+| `alpha memory` (search, recall, record) | Shipped |
+| `alpha skill` (list, run, install) | Shipped |
+| `alpha integration` (list, connect, status) | Shipped |
+| `alpha upgrade` / `completions` / `quickstart` | Shipped |
+| `alpha run` / `watch` / `cancel` — durable runs, terminal-close-safe | **Planned** ([roadmap](docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md)) |
+| `alpha run --fanout` — multi-provider parallel + consensus | **Planned** |
+| Cost attribution, per-tenant RBAC, audit-log surfacing | **Planned** |
+
+`alpha` is not competing with `claude` / `codex` / `gemini` / `gh copilot` — it orchestrates them. The differentiation roadmap ([`docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`](docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md)) lays out eight CLI surfaces no leaf CLI offers: durable runs, fanout/consensus, cost attribution, team RBAC, A2A coalitions, memory-aware sessions, governance policies, RL-routed model selection.
+
+Full reference: [`docs/cli/README.md`](docs/cli/README.md).
 
 ---
 
@@ -458,8 +496,8 @@ Each CLI platform uses subscription-based OAuth — zero API credits:
 ## Quick Start
 
 ```bash
-git clone https://github.com/nomad3/servicetsunami-agents.git
-cd servicetsunami-agents
+git clone https://github.com/nomad3/agentprovision-agents.git
+cd agentprovision-agents
 
 # 1. Configure secrets (all three are required — no defaults)
 cp apps/api/.env.example apps/api/.env
@@ -490,9 +528,10 @@ docker compose up -d --force-recreate api code-worker orchestration-worker mcp-t
 ```
 
 ### Connect Your Agent
+0. **Terminal (`alpha`)**: `curl -fsSL https://agentprovision.com/install.sh | sh && alpha login && alpha quickstart`
 1. **Claude Code**: Integrations -> Claude Code -> run `claude setup-token` -> paste token
 2. **Gemini CLI**: Integrations -> Connect Gemini CLI -> follow link -> paste code
-3. Chat via web, WhatsApp, or Luna desktop — Luna responds via your subscription
+3. Chat via web, WhatsApp, Luna desktop, or `alpha chat repl` — every channel hits the same agents
 4. Every response auto-scored and logged for RL improvement
 
 ## Luna OS Roadmap
@@ -526,6 +565,7 @@ FastAPI · React 18 · Tauri 2.0 (Rust) · Three.js + Framer Motion · PostgreSQ
 | [`docs/plans/`](docs/plans/) | Design docs and implementation plans (per feature, dated) |
 | [`docs/report/`](docs/report/) | Security audits, pentest verifications, system health reports |
 | [`docs/KUBERNETES_DEPLOYMENT.md`](docs/KUBERNETES_DEPLOYMENT.md) | Full K8s deployment runbook |
+| [`docs/cli/README.md`](docs/cli/README.md) | `alpha` CLI reference — login, chat, workflow, memory, skill, integration |
 
 **Recent highlights:**
 - [`docs/changelog/2026-04-19-to-2026-05-03.md`](docs/changelog/2026-04-19-to-2026-05-03.md) — most recent fortnight (Skills v2, External Agents v2, Teams, Copilot CLI runtime, latency)
@@ -537,7 +577,9 @@ FastAPI · React 18 · Tauri 2.0 (Rust) · Three.js + Framer Motion · PostgreSQ
 - [`docs/plans/2026-04-18-agent-lifecycle-management-platform-plan.md`](docs/plans/2026-04-18-agent-lifecycle-management-platform-plan.md) — ALM design
 - [`docs/plans/2026-04-12-a2a-collaboration-demo-design.md`](docs/plans/2026-04-12-a2a-collaboration-demo-design.md) — A2A coalitions
 - [`docs/report/2026-04-18-pentest-verification.md`](docs/report/2026-04-18-pentest-verification.md) — black-hat verification of the security hardening
+- [`docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`](docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md) — eight CLI differentiators planned for `alpha`
+- [`docs/plans/2026-05-11-ap-cli-multi-runtime-dispatch-plan.md`](docs/plans/2026-05-11-ap-cli-multi-runtime-dispatch-plan.md) — multi-runtime dispatch for `alpha`
 
 ---
 
-*Built with Claude Code CLI . Codex CLI . Gemini CLI . MCP . Temporal . Ollama . pgvector . Neonize . Cloudflare . FastAPI . React . Tauri*
+*Built with Claude Code CLI . Codex CLI . Gemini CLI . MCP . Temporal . Ollama . pgvector . Neonize . Cloudflare . FastAPI . React . Tauri . alpha CLI*
