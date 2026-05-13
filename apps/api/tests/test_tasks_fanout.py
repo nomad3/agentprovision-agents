@@ -320,6 +320,86 @@ def test_providers_and_fanout_together_returns_422():
     assert "mutually exclusive" in str(body).lower()
 
 
+# ── #177 Phase 1 ship: USE_REAL_FANOUT_WORKFLOW flag ──────────────────
+
+
+def test_real_fanout_flag_off_uses_stub(monkeypatch):
+    """Default flag (False) keeps the in-memory stub path; task_id
+    is prefixed `t_` (16-hex stub id), not `fanout-...`."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", False)
+
+    user = _user()
+    client = _make_client(user)
+    resp = client.post(
+        "/api/v1/tasks-fanout/run",
+        json={"prompt": "stub path", "fanout": ["claude", "codex"]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["task_id"].startswith("t_")
+
+
+def test_real_fanout_flag_on_dispatches_workflow(monkeypatch):
+    """Flag=True + fanout: route bypasses the stub and dispatches a
+    real Temporal workflow. We monkeypatch `_dispatch_fanout_workflow`
+    so the test does not need a live Temporal server."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    fake_dispatched = {}
+
+    async def fake_dispatch(*, prompt, tenant_id, providers, merge, agent_id, session_id):
+        fake_dispatched.update(
+            prompt=prompt,
+            tenant_id=tenant_id,
+            providers=providers,
+            merge=merge,
+        )
+        wf_id = f"fanout-{tenant_id}-fake-uuid"
+        return {"task_id": wf_id, "run_id": "fake-run-id"}
+
+    monkeypatch.setattr(tf, "_dispatch_fanout_workflow", fake_dispatch)
+
+    user = _user()
+    client = _make_client(user)
+    resp = client.post(
+        "/api/v1/tasks-fanout/run",
+        json={
+            "prompt": "real workflow path",
+            "fanout": ["claude", "codex", "gemini"],
+            "merge": "council",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Real-dispatch task_id has the `fanout-` prefix shape.
+    assert body["task_id"].startswith("fanout-"), body
+    # Children have the per-provider deterministic shape.
+    provider_set = {c["provider"] for c in body["children"]}
+    assert provider_set == {"claude", "codex", "gemini"}
+    # The dispatch helper was called with the body's params verbatim.
+    assert fake_dispatched["merge"] == "council"
+    assert fake_dispatched["providers"] == ["claude", "codex", "gemini"]
+
+
+def test_real_fanout_flag_on_without_fanout_still_uses_stub(monkeypatch):
+    """Flag=True is a no-op when the request has no fanout — single
+    or fallback-chain dispatches stay on the in-memory stub until the
+    real workflow learns to handle them too."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    user = _user()
+    client = _make_client(user)
+    resp = client.post(
+        "/api/v1/tasks-fanout/run",
+        json={"prompt": "no fanout", "providers": ["claude", "codex"]},
+    )
+    assert resp.status_code == 200, resp.text
+    # Stub path mints `t_<hex>` task IDs.
+    assert resp.json()["task_id"].startswith("t_")
+
+
 def test_cancelling_child_removes_it_from_parent_status():
     """Round-2 M2-2: cancelling a child task surgically removes it
     from the parent's children list so /status no longer reports

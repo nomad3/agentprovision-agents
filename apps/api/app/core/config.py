@@ -88,6 +88,15 @@ class Settings(BaseSettings):
     USE_MEMORY_V2: bool = True
     USE_MEMORY_V2_TENANT_ALLOWLIST: list[str] = []
 
+    # CLI Phase 1 ship (#177): when True, `/api/v1/tasks-fanout/run`
+    # dispatches a real `FanoutChatCliWorkflow` to Temporal on the
+    # `agentprovision-code` queue instead of the in-memory prototype
+    # stub. Default False so the stub remains the demo-safe path; set
+    # to True in apps/api/.env (or Helm values) once code-worker has
+    # the FanoutChatCliWorkflow registered (worker.py line ~40).
+    # Rollback is one env-var flip — the stub stays as the fallback.
+    USE_REAL_FANOUT_WORKFLOW: bool = False
+
     class Config:
         env_file = ".env"
         extra = "ignore"

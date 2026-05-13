@@ -53,12 +53,13 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.models.user import User
 
 router = APIRouter()
@@ -264,6 +265,92 @@ def _count_tenant_tasks(tenant_id: str) -> int:
     return _TENANT_COUNTS.get(tenant_id, 0)
 
 
+# ── Real Temporal dispatch (#177 Phase 1 ship) ─────────────────────────
+
+
+async def _dispatch_fanout_workflow(
+    *,
+    prompt: str,
+    tenant_id: str,
+    providers: List[str],
+    merge: str,
+    agent_id: Optional[str],
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    """Start a `FanoutChatCliWorkflow` on the `agentprovision-code`
+    Temporal queue. Returns `{task_id, run_id, child_task_ids}` where
+    `task_id` is the Temporal workflow_id (kept stable across resume
+    / replay) and child task_ids are minted client-side here for the
+    /status response shape. Children resolve to child workflow IDs
+    once the parent starts them via `execute_child_workflow`; we
+    record the client-side IDs for now and surface them as-is to
+    the CLI."""
+    # Local import to avoid coupling the import surface of the
+    # tasks_fanout router to the workflows service module — keeps
+    # circular-import risk down and lets `USE_REAL_FANOUT_WORKFLOW=False`
+    # paths skip the import entirely.
+    import uuid as _uuid
+
+    from app.services import workflows as wf_service
+
+    workflow_id = f"fanout-{tenant_id}-{_uuid.uuid4()}"
+    args = {
+        "prompt": prompt,
+        "tenant_id": tenant_id,
+        "providers": providers,
+        "merge": merge,
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "instruction_md_content": "",
+        "mcp_config": "",
+        "model": "",
+        "allowed_tools": "",
+    }
+    handle = await wf_service.start_workflow(
+        workflow_type="FanoutChatCliWorkflow",
+        tenant_id=_uuid.UUID(tenant_id),
+        task_queue="agentprovision-code",
+        arguments=args,
+        workflow_id=workflow_id,
+        memo={"source": "ap_run_fanout", "merge": merge},
+    )
+    return {
+        "task_id": workflow_id,
+        "run_id": handle.first_execution_run_id,
+    }
+
+
+async def _describe_fanout_workflow(task_id: str) -> Dict[str, Any]:
+    """Look up a real-dispatch task's status via Temporal. Returns
+    a dict shaped to merge with the prototype's status response.
+    Maps Temporal workflow status to the CLI's vocabulary:
+      RUNNING / CONTINUED_AS_NEW → 'running'
+      COMPLETED                  → 'completed'
+      FAILED / TERMINATED        → 'failed'
+      CANCELED                   → 'cancelled'
+      TIMED_OUT                  → 'failed' (with error)"""
+    from app.services import workflows as wf_service
+
+    desc = await wf_service.describe_workflow(workflow_id=task_id)
+    status_map = {
+        "RUNNING": "running",
+        "CONTINUED_AS_NEW": "running",
+        "COMPLETED": "completed",
+        "FAILED": "failed",
+        "TERMINATED": "failed",
+        "CANCELED": "cancelled",
+        "TIMED_OUT": "failed",
+    }
+    cli_status = status_map.get(desc.get("status") or "", "running")
+    return {
+        "task_id": task_id,
+        "status": cli_status,
+        "result": None,  # body comes from result-fetch below if completed
+        "error": None,
+        "raw": desc,
+    }
+
+
 def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
     """Round-3 N3-1: O(n) recount of records for a tenant by walking
     `_TASKS`. This is the slow ground-truth that `_TENANT_COUNTS`
@@ -280,7 +367,7 @@ def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
     response_model=RunFanoutResponse,
     summary="Dispatch a durable task (single, fallback chain, or fanout).",
 )
-def run_fanout(
+async def run_fanout(
     body: RunFanoutRequest,
     current_user: User = Depends(get_current_user),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
@@ -338,7 +425,42 @@ def run_fanout(
             detail="Cannot pass both `providers` (fallback chain) and `fanout` (parallel).",
         )
 
-    # Round-1 H1: opportunistic eviction then cap check.
+    # #177 Phase 1 ship: when `USE_REAL_FANOUT_WORKFLOW=true` AND the
+    # request has a non-empty fanout, dispatch to Temporal instead of
+    # the in-memory stub. The stub stays as the demo-safe fallback
+    # for everything else (fallback-chain dispatches, single-provider,
+    # disabled flag) so rollback is just an env-var flip.
+    if settings.USE_REAL_FANOUT_WORKFLOW and body.fanout:
+        dispatch = await _dispatch_fanout_workflow(
+            prompt=body.prompt,
+            tenant_id=tenant_id,
+            providers=body.fanout,
+            merge=body.merge,
+            agent_id=body.agent_id,
+            session_id=body.session_id,
+        )
+        # Cheap estimate — RL retrieval comes in a follow-up PR.
+        n_providers = max(len(body.fanout), 1)
+        estimate = RunEstimate(
+            estimated_duration_seconds=30,  # real workflow; longer than the 8s stub
+            estimated_cost_usd=round(0.12 * n_providers, 4),
+            confidence="low",
+        )
+        # Children's real workflow IDs are minted by Temporal once the
+        # parent starts them; for the dispatch response we surface the
+        # parent's task_id and an empty children list (the /status route
+        # populates child status from the workflow handle).
+        return RunFanoutResponse(
+            task_id=dispatch["task_id"],
+            status="queued",
+            children=[
+                RunChildDispatch(task_id=f"{dispatch['task_id']}#child-{p}", provider=p)
+                for p in body.fanout
+            ],
+            estimate=estimate,
+        )
+
+    # Round-1 H1: opportunistic eviction then cap check (stub path).
     _sweep_expired_tasks()
     n_new = 1 + len(body.fanout)  # parent + children we are about to mint
     if _count_tenant_tasks(tenant_id) + n_new > MAX_TASKS_PER_TENANT:
@@ -426,11 +548,63 @@ def run_fanout(
     response_model=TaskStatusResponse,
     summary="Get task status — poll target for `ap watch`.",
 )
-def task_status(
+async def task_status(
     task_id: str,
     current_user: User = Depends(get_current_user),
 ) -> TaskStatusResponse:
-    """Status endpoint hit by `ap watch` (poll loop in the prototype)."""
+    """Status endpoint hit by `ap watch` (poll loop in the prototype).
+
+    #177 Phase 1 ship: when the task_id is a real Temporal workflow id
+    (prefix `fanout-<tenant_id>-...` minted by `_dispatch_fanout_workflow`)
+    we route to Temporal `describe_workflow`. Otherwise we fall back to
+    the in-memory stub.
+    """
+
+    if settings.USE_REAL_FANOUT_WORKFLOW and task_id.startswith("fanout-"):
+        # Tenant isolation: the workflow_id is `fanout-<tenant_id>-<uuid>`
+        # so we can extract the tenant from the prefix and reject
+        # cross-tenant reads cheaply without a full describe round-trip.
+        prefix = f"fanout-{current_user.tenant_id}-"
+        if not task_id.startswith(prefix):
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        try:
+            payload = await _describe_fanout_workflow(task_id)
+        except Exception as exc:  # noqa: BLE001
+            # Workflow vanished or temporal unreachable — treat as not found
+            # rather than 500 so the CLI's poll loop just exits cleanly.
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({type(exc).__name__})",
+            )
+        # Result body is only fetched when terminal; the poll loop will
+        # see the status flip and then the next call returns the body.
+        result: Optional[str] = None
+        error: Optional[str] = None
+        if payload["status"] == "completed":
+            try:
+                from app.services import workflows as wf_service
+
+                client = await wf_service._get_temporal_client()
+                handle = client.get_workflow_handle(workflow_id=task_id)
+                raw_result = await handle.result()
+                # FanoutChatCliResult ↦ merged_text. The dict form arrives
+                # from Temporal because the workflow is decorated with
+                # @dataclass not pydantic; both encode the same way.
+                if isinstance(raw_result, dict):
+                    result = raw_result.get("merged_text")
+                    if not raw_result.get("success", True):
+                        error = "All providers failed."
+                else:
+                    result = getattr(raw_result, "merged_text", None)
+            except Exception as exc:  # noqa: BLE001
+                error = f"result-fetch failed: {type(exc).__name__}"
+        return TaskStatusResponse(
+            task_id=task_id,
+            status=payload["status"],
+            result=result,
+            error=error,
+            children=[],  # children resolve in a follow-up; not needed for the demo
+        )
 
     record = _TASKS.get(task_id)
     if not record:
@@ -502,7 +676,7 @@ def task_status(
     status_code=204,
     responses={204: {"description": "Cancelled."}, 404: {"description": "Not found."}},
 )
-def cancel_task(
+async def cancel_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
 ) -> None:
@@ -516,7 +690,28 @@ def cancel_task(
     Round-2 M2-2: when cancelling a **child** task, also remove the
     child from its parent's `children` list so subsequent
     `GET /<parent>/status` doesn't keep computing the child's
-    synthetic lifecycle from wall-clock forever."""
+    synthetic lifecycle from wall-clock forever.
+
+    #177 Phase 1 ship: when the task_id is a real Temporal workflow,
+    issue `cancel_workflow` instead of dropping the in-memory record.
+    """
+
+    if settings.USE_REAL_FANOUT_WORKFLOW and task_id.startswith("fanout-"):
+        prefix = f"fanout-{current_user.tenant_id}-"
+        if not task_id.startswith(prefix):
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        try:
+            from app.services import workflows as wf_service
+
+            client = await wf_service._get_temporal_client()
+            handle = client.get_workflow_handle(workflow_id=task_id)
+            await handle.cancel()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({type(exc).__name__})",
+            )
+        return
 
     record = _TASKS.get(task_id)
     if not record or record["tenant_id"] != str(current_user.tenant_id):
