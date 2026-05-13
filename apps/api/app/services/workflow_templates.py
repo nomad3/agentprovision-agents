@@ -2114,6 +2114,51 @@ NATIVE_TEMPLATES = [
             ],
         },
     },
+    # ── Goal — structured autonomous task contract ──
+    # Competitive parity with Anthropic's /goal prompt template (landed
+    # 2026-05-13). Surfaces a 5-slot contract (outcome / success criteria
+    # / operating rules / quality bar / deliverable) so an autonomous run
+    # has a clear acceptance test rather than drifting on vibes.
+    # The whole recipe is one agent step whose system prompt is the
+    # filled contract — the agent then decides which tools to call and
+    # when to declare done. Tools are unrestricted: an autonomous goal
+    # may need anything the tenant has integrated.
+    {
+        "name": "Goal",
+        "description": "Structured autonomous task with success criteria, operating rules, quality bar, and a defined final deliverable. Best for serious migrations, refactors, and shipping work — anywhere you want the agent to know when it is done.",
+        "tier": "native",
+        "public": True,
+        "tags": ["goal", "autonomous", "structured", "delivery"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "deliver",
+                    "type": "agent",
+                    "agent": "luna",
+                    "prompt": (
+                        "## Goal\n"
+                        "{{input.outcome}}\n\n"
+                        "## Success criteria\n"
+                        "{{input.success_criteria}}\n\n"
+                        "## Operating rules\n"
+                        "{{input.operating_rules}}\n\n"
+                        "## Quality bar\n"
+                        "{{input.quality_bar}}\n\n"
+                        "## Final deliverable\n"
+                        "{{input.deliverable}}\n\n"
+                        "You must satisfy every success criterion before declaring done. "
+                        "Follow the operating rules without exception. If a criterion "
+                        "becomes impossible, STOP and emit a needs_input event with the "
+                        "reason — do not silently relax it. Report progress as you go; "
+                        "the final message must state which criteria are met and link "
+                        "to the deliverable."
+                    ),
+                    "output": "result",
+                },
+            ],
+        },
+    },
 ]
 
 

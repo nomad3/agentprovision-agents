@@ -3,7 +3,7 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, cancel, chat, coalition, completions, integration, login, logout, memory, policy,
+    agent, cancel, chat, coalition, completions, goal, integration, login, logout, memory, policy,
     quickstart, recall, recipes, remember, run, session, sessions, skill, status, upgrade, usage,
     watch, workflow,
 };
@@ -153,6 +153,13 @@ pub enum Command {
     #[command(subcommand)]
     Recipes(recipes::RecipesCommand),
 
+    /// Dispatch a structured autonomous task — outcome + success
+    /// criteria + operating rules + quality bar + deliverable. Sugar
+    /// over the native `Goal` recipe (`alpha recipes run goal`).
+    /// Interactive when called with no flags; non-interactive when
+    /// any slot is provided.
+    Goal(goal::GoalArgs),
+
     /// Per-provider tokens + cost rollup for the caller's tenant.
     /// Phase 4 of the CLI roadmap (#181). See `alpha costs` for the
     /// daily breakdown.
@@ -203,6 +210,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Policy(cmd) => policy::run(policy::PolicyArgs { command: cmd }, ctx).await,
         Command::Coalition(cmd) => coalition::dispatch(cmd, ctx).await,
         Command::Recipes(cmd) => recipes::run(recipes::RecipesArgs { command: cmd }, ctx).await,
+        Command::Goal(a) => goal::run(a, ctx).await,
         Command::Usage(a) => usage::usage(a, ctx).await,
         Command::Costs(a) => usage::costs(a, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
