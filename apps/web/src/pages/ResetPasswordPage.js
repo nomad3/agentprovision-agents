@@ -3,6 +3,7 @@ import { Alert, Button, Card, Container, Form } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
 import authService from '../services/auth';
+import BrandMark from '../components/BrandMark';
 
 /**
  * Two-step password recovery.
@@ -120,11 +121,7 @@ const ResetPasswordPage = () => {
       <Card style={{ width: '400px' }} className="shadow-lg p-4">
         <Card.Body>
           <div className="text-center mb-4">
-            <img
-              src={`${process.env.PUBLIC_URL}/assets/brand/ap-logo-dark.png`}
-              alt="agentprovision.com"
-              style={{ width: 120, marginBottom: 16 }}
-            />
+            <div style={{ marginBottom: 16 }}><BrandMark /></div>
             <h2>{t('reset.title')}</h2>
           </div>
 
