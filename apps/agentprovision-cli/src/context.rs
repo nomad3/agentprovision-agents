@@ -12,6 +12,23 @@ use agentprovision_core::config::{self, Config};
 
 use crate::cli::Cli;
 
+/// Derive a human-readable origin label for `X-AP-Device-Label`:
+///   `alpha CLI on <hostname> (<os> <arch>)`
+/// On hosts where the system hostname isn't resolvable (rare), fall
+/// back to "unknown-host" rather than failing the request. The
+/// server caps the field at 255 chars; we stay well under that.
+fn device_label() -> String {
+    let host = hostname::get()
+        .ok()
+        .and_then(|os| os.into_string().ok())
+        .unwrap_or_else(|| "unknown-host".into());
+    format!(
+        "alpha CLI on {host} ({} {})",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    )
+}
+
 const KEYRING_SERVICE: &str = "agentprovision";
 
 /// Probe the keychain backend with a non-mutating `load()`. macOS pops a
@@ -123,6 +140,10 @@ impl Context {
         if let Some(token) = token_store.load()? {
             client.set_token(Some(token));
         }
+        // Set the device label for the X-AP-Device-Label header so
+        // `alpha sessions list` shows useful per-device rows instead
+        // of generic User-Agent strings. PR #442 review finding I-1.
+        client.set_device_label(Some(device_label()));
         // Wire the auto-refresh middleware. If a refresh_token exists
         // in the store the client uses it on 401 to swap in a fresh
         // access token transparently — no re-login prompt for the
@@ -132,17 +153,16 @@ impl Context {
         if let Some(refresh) = token_store.load_refresh()? {
             client.set_refresh_token(Some(refresh));
             let store_for_cb: Arc<dyn TokenStore> = Arc::clone(&token_store);
+            // I-7: callback now takes Option<&str> for refresh.
+            // None means the server's reuse-detection grace pathway
+            // returned a fresh access token without a new refresh
+            // credential (B-1 race); keep the existing one in place.
             client.set_refresh_persist(Some(Arc::new(move |access, refresh| {
-                // Best-effort: a write failure isn't fatal — the
-                // in-memory client already has the new tokens for
-                // this process's lifetime. We just log via stderr
-                // so users with -v get a hint if the keychain is
-                // locked or otherwise wedged.
                 if let Err(e) = store_for_cb.save(access) {
                     log::warn!("auto-refresh: failed to persist access token: {e}");
                 }
-                if !refresh.is_empty() {
-                    if let Err(e) = store_for_cb.save_refresh(refresh) {
+                if let Some(rt) = refresh {
+                    if let Err(e) = store_for_cb.save_refresh(rt) {
                         log::warn!("auto-refresh: failed to persist refresh token: {e}");
                     }
                 }

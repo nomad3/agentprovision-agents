@@ -22,9 +22,12 @@ pub struct Token {
     pub refresh_token: Option<String>,
     /// Seconds until `access_token` expires. Used by the auto-refresh
     /// middleware to skip pre-emptive refresh until ~5min before expiry.
-    /// Null on older deployments.
+    /// Null on older deployments. Typed `i64` (not `u64`) so a server
+    /// misconfiguration that yields a negative value still deserialises;
+    /// callers should treat anything ≤0 as "already expired, refresh
+    /// immediately". Review finding I-5 on PR #442.
     #[serde(default)]
-    pub expires_in: Option<u64>,
+    pub expires_in: Option<i64>,
 }
 
 // PR #332 review Critical #1 fix: never let the bearer token print
@@ -418,7 +421,7 @@ mod tests {
             access_token: "very-secret-bearer-1234567890".into(),
             token_type: "bearer".into(),
             refresh_token: Some("rt-very-secret".into()),
-            expires_in: Some(86_400),
+            expires_in: Some(86_400i64),
         };
         let dbg = format!("{t:?}");
         assert!(

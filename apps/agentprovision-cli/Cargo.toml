@@ -45,6 +45,9 @@ url = "2"
 webbrowser = "1"
 dirs = "5"
 crossterm = "0.27"
+# X-AP-Device-Label resolution for `alpha sessions list` UX
+# (PR #442 review I-1). Tiny dep (<200 LOC); no transitive bloat.
+hostname = "0.4"
 # `alpha upgrade` self-update path. PR-D-4.
 # Features: rustls (no openssl, matches reqwest config across the workspace),
 # archive-zip (we ship .zip on every target — PR-D-2 review fix), and

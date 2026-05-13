@@ -9,8 +9,10 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::error::{Error, Result};
@@ -60,23 +62,35 @@ fn preview_body(bytes: &[u8]) -> String {
 }
 
 /// Hook invoked after a successful refresh-token rotation so the CLI
-/// can persist the new (access, refresh) pair into its keychain entry.
-/// Wired by the CLI's startup code; `()` when running headless / in
-/// tests where we don't care about persistence.
-pub type RefreshPersistFn = dyn Fn(&str, &str) + Send + Sync;
+/// can persist the new credentials into its keychain entry. The second
+/// argument is `None` when the server's reuse-detection grace pathway
+/// returned a fresh access_token but no new refresh token (B-1 race);
+/// the CLI then keeps the existing refresh token in place.
+pub type RefreshPersistFn = dyn Fn(&str, Option<&str>) + Send + Sync;
 
 #[derive(Clone)]
 pub struct ApiClient {
     inner: Client,
     base: Url,
-    token: Arc<Mutex<Option<String>>>,
-    tenant_id: Arc<Mutex<Option<String>>>,
+    token: Arc<StdMutex<Option<String>>>,
+    tenant_id: Arc<StdMutex<Option<String>>>,
     /// Long-lived opaque exchange credential, set after login. None
     /// until the CLI's startup wires it in via [`set_refresh_token`].
-    refresh_token: Arc<Mutex<Option<String>>>,
-    /// Callback fired after a successful auto-refresh. The pair is
-    /// `(new_access_token, new_refresh_token)`. Defaults to None.
-    refresh_persist: Arc<Mutex<Option<Arc<RefreshPersistFn>>>>,
+    refresh_token: Arc<StdMutex<Option<String>>>,
+    /// Callback fired after a successful auto-refresh. Defaults to None.
+    refresh_persist: Arc<StdMutex<Option<Arc<RefreshPersistFn>>>>,
+    /// Serializes concurrent auto-refresh attempts within this
+    /// process. Without this, two parallel requests both hitting 401
+    /// after expiry both call /auth/token/refresh, the server rotates
+    /// one and triggers reuse-detection on the second — wiping the
+    /// chain mid-session. Review finding B-1 on PR #442.
+    refresh_lock: Arc<AsyncMutex<()>>,
+    /// Optional device label sent on every request as the
+    /// `X-AP-Device-Label` header. The server records this on the
+    /// refresh_tokens row so `alpha sessions list` can show
+    /// "alpha CLI on simon-laptop (darwin aarch64)" instead of the
+    /// generic User-Agent. Review finding I-1.
+    device_label: Arc<StdMutex<Option<String>>>,
 }
 
 impl ApiClient {
@@ -92,11 +106,21 @@ impl ApiClient {
         Ok(Self {
             inner,
             base,
-            token: Arc::new(Mutex::new(None)),
-            tenant_id: Arc::new(Mutex::new(None)),
-            refresh_token: Arc::new(Mutex::new(None)),
-            refresh_persist: Arc::new(Mutex::new(None)),
+            token: Arc::new(StdMutex::new(None)),
+            tenant_id: Arc::new(StdMutex::new(None)),
+            refresh_token: Arc::new(StdMutex::new(None)),
+            refresh_persist: Arc::new(StdMutex::new(None)),
+            refresh_lock: Arc::new(AsyncMutex::new(())),
+            device_label: Arc::new(StdMutex::new(None)),
         })
+    }
+
+    /// Set the human-readable device label sent as `X-AP-Device-Label`
+    /// on every request. The CLI computes this from hostname + OS at
+    /// startup; callers without a meaningful label can leave it None
+    /// and the server falls back to the User-Agent.
+    pub fn set_device_label(&self, label: Option<String>) {
+        *self.device_label.lock().expect("device label lock") = label;
     }
 
     pub fn with_token(self, token: impl Into<String>) -> Self {
@@ -173,6 +197,14 @@ impl ApiClient {
                 headers.insert("X-Tenant-Id", val);
             }
         }
+        // X-AP-Device-Label: human-readable origin recorded on the
+        // refresh_tokens row server-side for `alpha sessions list` UX.
+        // Review finding I-1 on PR #442.
+        if let Some(label) = self.device_label.lock().expect("device label lock").clone() {
+            if let Ok(val) = HeaderValue::from_str(&label) {
+                headers.insert("X-AP-Device-Label", val);
+            }
+        }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers
     }
@@ -200,6 +232,16 @@ impl ApiClient {
     ) -> Result<T> {
         let req = self.request(Method::POST, path)?.json(body);
         self.send_json(req).await
+    }
+
+    /// POST with a JSON body, expecting no JSON response (204 No Content
+    /// or empty 200). Used for revoke-style endpoints that don't have
+    /// a response shape to decode. Reviewer IMPORTANT-3 on PR #445:
+    /// avoids the brittle "got empty body" string-match the previous
+    /// logout.rs needed.
+    pub async fn post_no_body_json<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let req = self.request(Method::POST, path)?.json(body);
+        self.send_no_body(req).await
     }
 
     /// Send a request and decode the JSON response body, mapping non-2xx into
@@ -292,35 +334,76 @@ impl ApiClient {
         // Drain the original 401 body to free the connection.
         let _ = resp.bytes().await;
 
-        // Exchange. If the exchange itself returns non-2xx we propagate
-        // the underlying error (e.g. "refresh_token revoked" on
-        // reuse-detected chains).
-        let pair = match self.exchange_refresh(&refresh_secret).await {
-            Ok(p) => p,
-            Err(Error::Unauthorized) | Err(Error::Api { status: 401, .. }) => {
-                // Refresh credential itself is no longer valid; drop
-                // it so subsequent calls don't loop.
-                self.set_refresh_token(None);
-                self.set_token(None);
-                return Ok(MaybeRetried::FreshFailure(Error::Unauthorized));
+        // B-1: serialize concurrent refresh attempts. Without this,
+        // `alpha chat` + `alpha watch` both hitting 401 in the same
+        // window both call /auth/token/refresh, one rotates the row,
+        // the other triggers reuse-detection on the server and the
+        // entire chain burns. Inside the lock we re-check whether
+        // someone else already refreshed; if the in-memory token
+        // changed since we entered, just retry with the new bearer.
+        let _refresh_guard = self.refresh_lock.lock().await;
+
+        // Race detection: if the refresh secret we captured before
+        // taking the lock isn't the one currently in memory, another
+        // caller rotated under us — use their freshly-minted access
+        // token instead of re-exchanging. Reviewer IMPORTANT-1 on
+        // PR #445: previous heuristic included a noise-bit
+        // `bearer_was_stale` that hid the real invariant.
+        let in_memory_refresh = self.refresh_token();
+        let already_rotated = in_memory_refresh.is_some()
+            && in_memory_refresh.as_deref() != Some(refresh_secret.as_str());
+        let pair_access_token: String;
+        if already_rotated {
+            // Someone else just rotated. Use the freshest in-memory
+            // access token without hitting the server. The freshly
+            // rotated refresh token is already in `self.refresh_token`
+            // (set by the winning racer), and the keychain was
+            // already updated via their persist callback, so we don't
+            // re-fire ours.
+            pair_access_token = self
+                .token()
+                .ok_or_else(|| Error::other("racing refresh left empty token"))?;
+        } else {
+            // Exchange. If the exchange itself returns 401 the
+            // refresh credential is dead — clear in-memory state so
+            // we don't loop. I-6: a 400 means the secret is malformed
+            // (empty / corrupted); same recovery, otherwise we'd
+            // loop forever pinging /auth/token/refresh with a string
+            // the server can't parse.
+            let pair = match self.exchange_refresh(&refresh_secret).await {
+                Ok(p) => p,
+                Err(Error::Unauthorized)
+                | Err(Error::Api { status: 401, .. })
+                | Err(Error::Api { status: 400, .. }) => {
+                    self.set_refresh_token(None);
+                    self.set_token(None);
+                    return Ok(MaybeRetried::FreshFailure(Error::Unauthorized));
+                }
+                Err(e) => return Ok(MaybeRetried::FreshFailure(e)),
+            };
+            pair_access_token = pair.access_token.clone();
+            let pair_refresh_token = pair.refresh_token.clone();
+            // Persist the new pair under the lock so concurrent
+            // callers see the same state.
+            self.set_token(Some(pair_access_token.clone()));
+            if let Some(new_refresh) = pair_refresh_token.as_deref() {
+                self.set_refresh_token(Some(new_refresh.to_string()));
             }
-            Err(e) => return Ok(MaybeRetried::FreshFailure(e)),
-        };
-        // Persist the new pair + retry with the new bearer.
-        self.set_token(Some(pair.access_token.clone()));
-        if let Some(new_refresh) = pair.refresh_token.as_deref() {
-            self.set_refresh_token(Some(new_refresh.to_string()));
-        }
-        if let Some(cb) = self.refresh_persist.lock().expect("persist lock").clone() {
-            let rt = pair.refresh_token.clone().unwrap_or_default();
-            cb(&pair.access_token, &rt);
+            if let Some(cb) = self.refresh_persist.lock().expect("persist lock").clone() {
+                // I-7: pass the new refresh token as Option<&str> so
+                // the callback can decide whether to overwrite (Some)
+                // or leave the existing one (None — happens when the
+                // server's grace-window pathway returns a new access
+                // token but no new refresh credential, B-1).
+                cb(&pair_access_token, pair_refresh_token.as_deref());
+            }
         }
         // Rebuild auth headers on the retry — try_clone() copies the
         // original headers including the *stale* Authorization. Drop
-        // it so the new one set via `request()` takes effect.
+        // it so the new one takes effect.
         let retry_req = retry_req.header(
             AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", pair.access_token))
+            HeaderValue::from_str(&format!("Bearer {}", pair_access_token))
                 .map_err(|e| Error::other(format!("invalid bearer header: {e}")))?,
         );
         let retried = retry_req.send().await?;
