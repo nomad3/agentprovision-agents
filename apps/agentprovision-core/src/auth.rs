@@ -249,6 +249,12 @@ pub async fn poll_device_token(client: &ApiClient, device_code: &str) -> Result<
             return Ok(DevicePollOutcome::Approved(Token {
                 access_token: at,
                 token_type: body.token_type.unwrap_or_else(|| "bearer".into()),
+                // Device-flow doesn't currently mint refresh tokens
+                // (the device-token endpoint hasn't been updated yet —
+                // see follow-up). Newer flows go through /auth/login
+                // which DOES return refresh_token.
+                refresh_token: None,
+                expires_in: None,
             }));
         }
         return Err(Error::other("device-token success without access_token"));

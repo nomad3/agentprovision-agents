@@ -3,6 +3,7 @@
 # which fails if relationship() targets aren't in the registry yet.
 from .tenant import Tenant
 from .user import User
+from .refresh_token import RefreshToken
 from .agent import Agent
 from .agent_group import AgentGroup
 from .agent_memory import AgentMemory
