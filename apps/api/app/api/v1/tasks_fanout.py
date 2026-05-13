@@ -53,12 +53,13 @@ from __future__ import annotations
 import time
 import uuid
 from collections import defaultdict
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.models.user import User
 
 router = APIRouter()
@@ -264,6 +265,131 @@ def _count_tenant_tasks(tenant_id: str) -> int:
     return _TENANT_COUNTS.get(tenant_id, 0)
 
 
+# ── Real Temporal dispatch (#177 Phase 1 ship) ─────────────────────────
+
+
+async def _dispatch_fanout_workflow(
+    *,
+    prompt: str,
+    tenant_id: str,
+    providers: List[str],
+    merge: str,
+    agent_id: Optional[str],
+    session_id: Optional[str],
+) -> Dict[str, Any]:
+    """Start a `FanoutChatCliWorkflow` on the `agentprovision-code`
+    Temporal queue. Returns `{task_id, run_id}` where `task_id` is
+    the Temporal workflow_id (kept stable across resume / replay).
+
+    Local import of `workflows` service avoids circular-import risk
+    and lets `USE_REAL_FANOUT_WORKFLOW=False` paths skip it entirely.
+    """
+    # Round-1 review N1: use the module-level `uuid` import directly;
+    # no need for a local rename that shadows it.
+    from app.services import workflows as wf_service
+
+    workflow_id = f"fanout-{tenant_id}-{uuid.uuid4()}"
+    args = {
+        "prompt": prompt,
+        "tenant_id": tenant_id,
+        "providers": providers,
+        "merge": merge,
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "instruction_md_content": "",
+        "mcp_config": "",
+        "model": "",
+        "allowed_tools": "",
+    }
+    handle = await wf_service.start_workflow(
+        workflow_type="FanoutChatCliWorkflow",
+        tenant_id=uuid.UUID(tenant_id),
+        task_queue="agentprovision-code",
+        arguments=args,
+        workflow_id=workflow_id,
+        # Round-1 review H3: memo carries tenant_id for the defense-in-
+        # depth cross-check on /status reads. The prefix check on
+        # workflow_id remains the cheap pre-filter; memo is the durable
+        # gate that survives any future workflow_id template change.
+        memo={"source": "ap_run_fanout", "merge": merge, "tenant_id": tenant_id},
+    )
+    return {
+        "task_id": workflow_id,
+        "run_id": handle.first_execution_run_id,
+    }
+
+
+def _extract_tenant_from_workflow_id(task_id: str) -> Optional[str]:
+    """Round-2 H3 hardening: parse the tenant UUID out of a workflow_id
+    of shape `fanout-<tenant_uuid>-<uuid4>`. Returns the inner UUID
+    string or None if the shape doesn't match.
+
+    This is the durable tenant-isolation gate. Memo cross-check was
+    considered but the temporalio SDK's memo serialization (Payload
+    proto vs decoded dict) is version-dependent (B2-1 round-2 finding).
+    The workflow_id template is API-internal, single-producer, and
+    deterministic — parse it instead."""
+    if not task_id.startswith("fanout-"):
+        return None
+    tail = task_id[len("fanout-"):]
+    # UUID is 36 chars with 4 hyphens (8-4-4-4-12). Split on the
+    # next hyphen *after* the UUID to recover the tenant.
+    # Pattern: <8>-<4>-<4>-<4>-<12>-<dispatch_uuid>
+    parts = tail.split("-")
+    if len(parts) < 6:
+        return None
+    candidate = "-".join(parts[:5])  # canonical UUID form
+    try:
+        uuid.UUID(candidate)
+    except (ValueError, AttributeError):
+        return None
+    return candidate
+
+
+async def _describe_fanout_workflow(task_id: str, *, expected_tenant_id: str) -> Dict[str, Any]:
+    """Look up a real-dispatch task's status via Temporal. Returns
+    a dict shaped to merge with the prototype's status response.
+
+    Round-2 H3 hardening: tenant isolation is enforced by parsing
+    the workflow_id (deterministic, API-minted template) instead of
+    reading the memo (whose serialization is SDK-version dependent —
+    see round-2 B2-1). The parsed tenant must exactly match the
+    caller's JWT tenant; mismatch → PermissionError → route 404.
+
+    Maps Temporal workflow status to the CLI's vocabulary:
+      RUNNING / CONTINUED_AS_NEW → 'running'
+      COMPLETED                  → 'completed'
+      FAILED / TERMINATED        → 'failed'
+      CANCELED                   → 'cancelled'
+      TIMED_OUT                  → 'failed' (with error)"""
+    parsed_tenant = _extract_tenant_from_workflow_id(task_id)
+    if parsed_tenant != expected_tenant_id:
+        raise PermissionError(
+            "workflow_id tenant prefix does not match caller's JWT tenant"
+        )
+
+    from app.services import workflows as wf_service
+
+    desc = await wf_service.describe_workflow(workflow_id=task_id)
+    status_map = {
+        "RUNNING": "running",
+        "CONTINUED_AS_NEW": "running",
+        "COMPLETED": "completed",
+        "FAILED": "failed",
+        "TERMINATED": "failed",
+        "CANCELED": "cancelled",
+        "TIMED_OUT": "failed",
+    }
+    cli_status = status_map.get(desc.get("status") or "", "running")
+    return {
+        "task_id": task_id,
+        "status": cli_status,
+        "result": None,  # body comes from result-fetch below if completed
+        "error": None,
+        "raw": desc,
+    }
+
+
 def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
     """Round-3 N3-1: O(n) recount of records for a tenant by walking
     `_TASKS`. This is the slow ground-truth that `_TENANT_COUNTS`
@@ -280,7 +406,7 @@ def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
     response_model=RunFanoutResponse,
     summary="Dispatch a durable task (single, fallback chain, or fanout).",
 )
-def run_fanout(
+async def run_fanout(
     body: RunFanoutRequest,
     current_user: User = Depends(get_current_user),
     x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
@@ -338,7 +464,11 @@ def run_fanout(
             detail="Cannot pass both `providers` (fallback chain) and `fanout` (parallel).",
         )
 
-    # Round-1 H1: opportunistic eviction then cap check.
+    # Round-1 review B2: opportunistic eviction + cap check BEFORE the
+    # dispatch-path branch. Previously only the stub path enforced the
+    # cap; the real-dispatch path could OOM Temporal by unlimited
+    # workflow creation. Now both paths bill against the same per-
+    # tenant ceiling.
     _sweep_expired_tasks()
     n_new = 1 + len(body.fanout)  # parent + children we are about to mint
     if _count_tenant_tasks(tenant_id) + n_new > MAX_TASKS_PER_TENANT:
@@ -349,6 +479,91 @@ def run_fanout(
                 f"(max {MAX_TASKS_PER_TENANT}). Wait for some to complete or "
                 f"call POST /{{task_id}}/cancel."
             ),
+        )
+
+    # #177 Phase 1 ship: when `USE_REAL_FANOUT_WORKFLOW=true` AND the
+    # request has a non-empty fanout, dispatch to Temporal instead of
+    # the in-memory stub. The stub stays as the demo-safe fallback
+    # for everything else (fallback-chain dispatches, single-provider,
+    # disabled flag) so rollback is just an env-var flip.
+    if settings.USE_REAL_FANOUT_WORKFLOW and body.fanout:
+        dispatch = await _dispatch_fanout_workflow(
+            prompt=body.prompt,
+            tenant_id=tenant_id,
+            providers=body.fanout,
+            merge=body.merge,
+            agent_id=body.agent_id,
+            session_id=body.session_id,
+        )
+        # Round-3 H3-1: store stub-shape records for parent + each
+        # child so `_evict_record` (decrement-by-1-per-pop) keeps
+        # `_TENANT_COUNTS` in lock-step with the n_new billed at
+        # dispatch. Otherwise the counter would drift up monotonically
+        # by `len(fanout)` per evicted real-path record.
+        #
+        # Round-2 L2-1: parent record populates the stub-shape fields
+        # (prompt, fanout, merge, etc.) so a flag-flip back to
+        # USE_REAL_FANOUT_WORKFLOW=False while records are warm
+        # doesn't 500 on `record["prompt"]` KeyError.
+        _TENANT_COUNTS[tenant_id] += n_new
+        now_mono = time.monotonic()
+        parent_record_id = dispatch["task_id"]
+        # Mirror child IDs into _TASKS so the cap counter has a record
+        # to decrement on eviction. These IDs are synthetic — they are
+        # NOT resolvable through /status (the route only accepts the
+        # real workflow_id for the parent). They exist purely for
+        # cap-accounting parity with the stub path.
+        child_record_ids = [
+            f"{parent_record_id}#child-{i}" for i in range(len(body.fanout))
+        ]
+        _TASKS[parent_record_id] = {
+            "tenant_id": tenant_id,
+            "created_at": now_mono,
+            "children": [
+                {"task_id": cid, "provider": p, "created_at": now_mono}
+                for cid, p in zip(child_record_ids, body.fanout)
+            ],
+            "real_temporal": True,
+            "prompt": body.prompt,
+            "providers": [],
+            "fanout": list(body.fanout),
+            "merge": body.merge,
+            "user_id": str(current_user.id),
+            "agent_id": body.agent_id,
+            "session_id": body.session_id,
+        }
+        for cid, p in zip(child_record_ids, body.fanout):
+            _TASKS[cid] = {
+                "tenant_id": tenant_id,
+                "created_at": now_mono,
+                "parent_id": parent_record_id,
+                "provider": p,
+                "real_temporal": True,
+                "children": [],
+                "prompt": body.prompt,
+                "providers": [],
+                "fanout": [],
+                "merge": body.merge,
+                "user_id": str(current_user.id),
+                "agent_id": body.agent_id,
+                "session_id": body.session_id,
+            }
+        # Cheap estimate — RL retrieval comes in a follow-up PR.
+        n_providers = max(len(body.fanout), 1)
+        estimate = RunEstimate(
+            estimated_duration_seconds=30,  # real workflow; longer than the 8s stub
+            estimated_cost_usd=round(0.12 * n_providers, 4),
+            confidence="low",
+        )
+        # Round-1 review N2: do NOT mint synthetic `<wf_id>#child-<p>`
+        # task IDs — those are never resolvable via /status. Surface an
+        # empty children list; the /status response populates children
+        # from the real Temporal child workflow handles in the follow-up.
+        return RunFanoutResponse(
+            task_id=dispatch["task_id"],
+            status="queued",
+            children=[],
+            estimate=estimate,
         )
 
     parent_id = _mint_task_id()
@@ -426,11 +641,72 @@ def run_fanout(
     response_model=TaskStatusResponse,
     summary="Get task status — poll target for `ap watch`.",
 )
-def task_status(
+async def task_status(
     task_id: str,
     current_user: User = Depends(get_current_user),
 ) -> TaskStatusResponse:
-    """Status endpoint hit by `ap watch` (poll loop in the prototype)."""
+    """Status endpoint hit by `ap watch` (poll loop in the prototype).
+
+    #177 Phase 1 ship: when the task_id is a real Temporal workflow id
+    (prefix `fanout-<tenant_id>-...` minted by `_dispatch_fanout_workflow`)
+    we route to Temporal `describe_workflow`. Otherwise we fall back to
+    the in-memory stub.
+    """
+
+    # Round-1 review L3: declare result/error once above the branches.
+    result: Optional[str] = None
+    error: Optional[str] = None
+    tenant_str = str(current_user.tenant_id)
+
+    if settings.USE_REAL_FANOUT_WORKFLOW and task_id.startswith("fanout-"):
+        # Tenant isolation pre-filter via workflow_id prefix. The
+        # durable gate is the memo cross-check inside
+        # `_describe_fanout_workflow` (round-1 review H3).
+        prefix = f"fanout-{tenant_str}-"
+        if not task_id.startswith(prefix):
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        try:
+            payload = await _describe_fanout_workflow(
+                task_id, expected_tenant_id=tenant_str
+            )
+        except PermissionError:
+            # Memo cross-check failed — defense-in-depth tenant gate.
+            # Return 404 (not 403) to avoid the existence oracle.
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        except Exception as exc:  # noqa: BLE001
+            # Workflow vanished or temporal unreachable — treat as not
+            # found rather than 500 so the CLI poll loop exits cleanly.
+            # Round-1 review L2: include exception message (truncated)
+            # so debugging doesn't lose the cause chain.
+            err_msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({err_msg})",
+            )
+
+        if payload["status"] == "completed":
+            # Round-1 review H1: use the public `fetch_workflow_result`
+            # helper instead of reaching into `_get_temporal_client`.
+            from app.services import workflows as wf_service
+
+            try:
+                raw_result = await wf_service.fetch_workflow_result(task_id)
+                if isinstance(raw_result, dict):
+                    result = raw_result.get("merged_text")
+                    if not raw_result.get("success", True):
+                        error = "All providers failed."
+                else:
+                    result = getattr(raw_result, "merged_text", None)
+            except Exception as exc:  # noqa: BLE001
+                # Round-1 review L2: surface exception message + class.
+                error = f"result-fetch failed: {type(exc).__name__}: {str(exc)[:200]}"
+        return TaskStatusResponse(
+            task_id=task_id,
+            status=payload["status"],
+            result=result,
+            error=error,
+            children=[],  # children resolve in a follow-up; not needed for the demo
+        )
 
     record = _TASKS.get(task_id)
     if not record:
@@ -457,8 +733,12 @@ def task_status(
         for c in record["children"]
     ]
 
-    result: Optional[str] = None
-    error: Optional[str] = None
+    # Round-2 M2-1: result/error already declared above the branches
+    # (round-1 L3 fix). Reset them here for the stub path's lifecycle
+    # computation — early-return on real-path means these only see
+    # the stub side.
+    result = None
+    error = None
     if status == "completed":
         # Synthetic result body that demonstrates the council-merge
         # demo from the design doc. Real impl reads from
@@ -502,7 +782,7 @@ def task_status(
     status_code=204,
     responses={204: {"description": "Cancelled."}, 404: {"description": "Not found."}},
 )
-def cancel_task(
+async def cancel_task(
     task_id: str,
     current_user: User = Depends(get_current_user),
 ) -> None:
@@ -516,7 +796,50 @@ def cancel_task(
     Round-2 M2-2: when cancelling a **child** task, also remove the
     child from its parent's `children` list so subsequent
     `GET /<parent>/status` doesn't keep computing the child's
-    synthetic lifecycle from wall-clock forever."""
+    synthetic lifecycle from wall-clock forever.
+
+    #177 Phase 1 ship: when the task_id is a real Temporal workflow,
+    issue `cancel_workflow` instead of dropping the in-memory record.
+    """
+
+    if settings.USE_REAL_FANOUT_WORKFLOW and task_id.startswith("fanout-"):
+        tenant_str = str(current_user.tenant_id)
+        prefix = f"fanout-{tenant_str}-"
+        if not task_id.startswith(prefix):
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+
+        # Round-2 M2-2: separate the tenant-mismatch case (PermissionError)
+        # from the operational-failure case (Temporal unreachable). Both
+        # return 404 (no existence oracle) but with distinguishable detail.
+        try:
+            await _describe_fanout_workflow(task_id, expected_tenant_id=tenant_str)
+        except PermissionError:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
+            )
+
+        # Round-1 H1: public cancel_workflow helper, no private SDK reach.
+        from app.services import workflows as wf_service
+
+        try:
+            await wf_service.cancel_workflow(task_id)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
+            )
+        # Round-3 H3-1: evict the parent record AND its mirrored child
+        # records so `_TENANT_COUNTS` decrements symmetrically with the
+        # +n_new billed at dispatch. `_evict_record` is idempotent.
+        parent_record = _TASKS.get(task_id)
+        if parent_record:
+            for child in parent_record.get("children", []):
+                _evict_record(child["task_id"])
+        _evict_record(task_id)
+        return
 
     record = _TASKS.get(task_id)
     if not record or record["tenant_id"] != str(current_user.tenant_id):

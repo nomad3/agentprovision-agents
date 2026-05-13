@@ -66,6 +66,10 @@ configMap:
     USE_RUST_EMBEDDING: "true"
     USE_RUST_MEMORY: "false"
     MEMORY_DUAL_READ: "true"
+    # CLI Phase 1 ship (#177): set to "true" once code-worker has
+    # FanoutChatCliWorkflow registered. Default "false" keeps the
+    # in-memory stub as the demo path; rollback is a flip back.
+    USE_REAL_FANOUT_WORKFLOW: "false"
     EMBEDDING_SERVICE_URL: "embedding-service:50051"
     MEMORY_CORE_URL: "memory-core:50052"
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"

@@ -17,6 +17,7 @@ from workflows import (
     ChatCliWorkflow, execute_chat_cli,
     ProviderReviewWorkflow, review_with_claude, review_with_codex,
     review_with_local_gemma, finalize_provider_council,
+    FanoutChatCliWorkflow,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -37,7 +38,12 @@ async def main():
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[CodeTaskWorkflow, ChatCliWorkflow, ProviderReviewWorkflow],
+        workflows=[
+            CodeTaskWorkflow,
+            ChatCliWorkflow,
+            ProviderReviewWorkflow,
+            FanoutChatCliWorkflow,  # #177 Phase 1 ship — parallel fanout
+        ],
         activities=[
             execute_code_task, execute_chat_cli,
             review_with_claude, review_with_codex,
