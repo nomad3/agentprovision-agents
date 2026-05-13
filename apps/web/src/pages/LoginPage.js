@@ -3,6 +3,7 @@ import { Alert, Button, Card, Container, Form } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
+import BrandMark from '../components/BrandMark';
 
 const LoginPage = () => {
   const { t } = useTranslation('auth');
@@ -39,7 +40,7 @@ const LoginPage = () => {
       <Card style={{ width: '400px' }} className="shadow-lg p-4">
         <Card.Body>
           <div className="text-center mb-4">
-            <img src={`${process.env.PUBLIC_URL}/assets/brand/ap-logo-dark.png`} alt="agentprovision.com" style={{ width: 120, marginBottom: 16 }} />
+            <div style={{ marginBottom: 16 }}><BrandMark /></div>
             <h2>{t('login.title')}</h2>
           </div>
           {error && <Alert variant="danger">{error}</Alert>}
