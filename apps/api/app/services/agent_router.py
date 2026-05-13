@@ -456,7 +456,7 @@ def dispatch_coalition(
     chat_session_id: str,
     task_description: str,
     pattern: Optional[str] = None,
-    role_overrides: Optional[dict] = None,
+    role_overrides: Optional[Dict[str, str]] = None,
 ) -> None:
     """Fire-and-forget CoalitionWorkflow dispatch.
 

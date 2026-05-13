@@ -1,21 +1,23 @@
-//! `ap coalition` — dispatch and inspect multi-agent coalitions.
+//! `alpha coalition` — dispatch and inspect multi-agent coalitions.
 //!
 //! Phase 3 of the CLI differentiation roadmap (#180) — see
 //! `docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md` §5.
 //!
 //! Subcommands:
-//!   ap coalition list                 GET  /api/v1/collaborations
-//!   ap coalition run "<task>"         POST /api/v1/collaborations/trigger
+//!   alpha coalition list                 GET  /api/v1/collaborations
+//!   alpha coalition run "<task>"         POST /api/v1/collaborations/trigger
 //!
 //! Backend reference:
 //!   - `CoalitionWorkflow` on `agentprovision-orchestration` queue
 //!     (shipped 2026-04-12).
 //!   - `Blackboard` model + entries; events fan out via Redis pub/sub
 //!     and the existing `/collaborations/{id}/stream` SSE endpoint.
-//!   - Patterns: `incident_investigation`, `deal_brief`,
-//!     `cardiology_case_review`.
+//!   - Patterns (per `CollaborationPattern` enum in
+//!     `app/schemas/collaboration.py`): `propose_critique_revise`,
+//!     `plan_verify`, `research_synthesize`, `debate_resolve`,
+//!     `incident_investigation`.
 //!
-//! `ap coalition watch` is deliberately not in this PR — the watch
+//! `alpha coalition watch` is deliberately not in this PR — the watch
 //! flow requires consuming the SSE stream and resolving the
 //! collaboration_id from the chat-session event feed. Deferred to a
 //! follow-up that reuses the SSE infrastructure shipped in #438.
@@ -34,7 +36,7 @@ pub enum CoalitionCommand {
     /// Dispatch a multi-agent coalition. Creates a fresh chat
     /// session under the hood, then triggers a CoalitionWorkflow
     /// against it. Returns the chat_session_id; follow via the
-    /// existing web UI or (eventually) `ap coalition watch`.
+    /// existing web UI or (eventually) `alpha coalition watch`.
     Run(RunArgs),
 }
 
@@ -48,15 +50,15 @@ pub struct ListArgs {
 #[derive(Debug, Args)]
 pub struct RunArgs {
     /// Free-form task description. The router uses this to pick the
-    /// appropriate coalition pattern (incident_investigation,
-    /// deal_brief, cardiology_case_review). Pass concrete keywords:
-    /// "P1 incident on orders-api", "Levi MDM outage", etc.
+    /// appropriate coalition pattern when `--pattern` is not given.
+    /// Pass concrete keywords: "P1 incident on orders-api",
+    /// "Levi MDM outage", etc.
     #[arg(value_name = "TASK", value_parser = non_blank_task)]
     pub task: String,
 
     /// Override pattern explicitly instead of letting the router
-    /// pick. One of: incident_investigation | deal_brief |
-    /// cardiology_case_review.
+    /// pick. One of: propose_critique_revise | plan_verify |
+    /// research_synthesize | debate_resolve | incident_investigation.
     #[arg(long)]
     pub pattern: Option<String>,
 
@@ -83,8 +85,6 @@ struct CollaborationSession {
     status: Option<String>,
     #[serde(default)]
     current_phase: Option<String>,
-    #[serde(default)]
-    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -114,7 +114,7 @@ async fn list(args: ListArgs, ctx: Context) -> anyhow::Result<()> {
     let sessions: Vec<CollaborationSession> = match ctx.client.send_json(req).await {
         Ok(s) => s,
         Err(Error::Unauthorized) => {
-            anyhow::bail!("not logged in — run `ap login` first")
+            anyhow::bail!("not logged in — run `alpha login` first")
         }
         Err(e) => return Err(e.into()),
     };
@@ -124,37 +124,27 @@ async fn list(args: ListArgs, ctx: Context) -> anyhow::Result<()> {
         return Ok(());
     }
     if sessions.is_empty() {
-        println!("[ap] no coalition sessions yet for this tenant");
+        println!("[alpha] no coalition sessions yet for this tenant");
         return Ok(());
     }
-    println!(
-        "[ap] {} coalition session(s):",
-        sessions.len()
-    );
+    println!("[alpha] {} coalition session(s):", sessions.len());
     let width = sessions.len().to_string().len().max(2);
     for (i, s) in sessions.iter().enumerate() {
         let pattern = s.pattern.as_deref().unwrap_or("(unknown)");
         let status = s.status.as_deref().unwrap_or("?");
         let phase = s.current_phase.as_deref().unwrap_or("");
-        let title = s.title.as_deref().unwrap_or("");
         let phase_suffix = if phase.is_empty() {
             String::new()
         } else {
             format!(" / {phase}")
         };
-        let title_suffix = if title.is_empty() {
-            String::new()
-        } else {
-            format!("  {title}")
-        };
         println!(
-            "{:width$}. {} [{}{}] {}{}",
+            "{:width$}. {} [{}{}] {}",
             i + 1,
             s.id,
             status,
             phase_suffix,
             pattern,
-            title_suffix,
             width = width,
         );
     }
@@ -172,7 +162,7 @@ async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
             let session = ctx
                 .client
                 .create_chat_session(
-                    Some(&format!("ap coalition: {}", truncate(&args.task, 60))),
+                    Some(&format!("alpha coalition: {}", truncate(&args.task, 60))),
                     None,
                 )
                 .await?;
@@ -195,7 +185,7 @@ async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
     let resp: TriggerResponse = match ctx.client.send_json(req).await {
         Ok(r) => r,
         Err(Error::Unauthorized) => {
-            anyhow::bail!("not logged in — run `ap login` first")
+            anyhow::bail!("not logged in — run `alpha login` first")
         }
         Err(e) => return Err(e.into()),
     };
@@ -204,27 +194,37 @@ async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&resp)?);
         return Ok(());
     }
-    println!("[ap] coalition dispatched");
+    println!("[alpha] coalition dispatched");
     println!("       chat_session_id: {}", resp.chat_session_id);
     println!("       task: {}", resp.task_description);
     if let Some(msg) = resp.message {
         println!("       note: {msg}");
     }
+    // Honor --server: the web follow URL must match the same backend
+    // the CLI is talking to, not a hardcoded prod host.
+    let base = ctx.server.trim_end_matches('/');
     println!(
-        "       follow via web: https://agentprovision.com/chat/{}",
-        resp.chat_session_id
+        "       follow via web: {}/chat/{}",
+        base, resp.chat_session_id
     );
     Ok(())
 }
 
-fn truncate(s: &str, max: usize) -> String {
+/// Trim `s` and clamp its visible length to at most `keep` characters.
+/// When the trimmed input is longer than `keep`, the result is
+/// `(keep-1)` characters followed by a single `…` ellipsis, so the
+/// total visible length never exceeds `keep`.
+fn truncate(s: &str, keep: usize) -> String {
     let s = s.trim();
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let truncated: String = s.chars().take(max).collect();
-        format!("{truncated}…")
+    let count = s.chars().count();
+    if count <= keep {
+        return s.to_string();
     }
+    if keep == 0 {
+        return String::new();
+    }
+    let truncated: String = s.chars().take(keep.saturating_sub(1)).collect();
+    format!("{truncated}…")
 }
 
 #[cfg(test)]
@@ -254,8 +254,7 @@ mod tests {
 
     #[test]
     fn parses_list_custom_limit() {
-        let cli =
-            TestCli::try_parse_from(["t", "coalition", "list", "--limit", "5"]).unwrap();
+        let cli = TestCli::try_parse_from(["t", "coalition", "list", "--limit", "5"]).unwrap();
         let TestCmd::Coalition(CoalitionCommand::List(a)) = cli.cmd else {
             panic!()
         };
@@ -264,13 +263,8 @@ mod tests {
 
     #[test]
     fn parses_run_basic() {
-        let cli = TestCli::try_parse_from([
-            "t",
-            "coalition",
-            "run",
-            "P1 incident on orders-api",
-        ])
-        .unwrap();
+        let cli = TestCli::try_parse_from(["t", "coalition", "run", "P1 incident on orders-api"])
+            .unwrap();
         let TestCmd::Coalition(CoalitionCommand::Run(a)) = cli.cmd else {
             panic!()
         };
@@ -301,20 +295,23 @@ mod tests {
 
     #[test]
     fn empty_task_rejected() {
-        assert!(
-            TestCli::try_parse_from(["t", "coalition", "run", ""]).is_err()
-        );
-        assert!(
-            TestCli::try_parse_from(["t", "coalition", "run", "  "]).is_err()
-        );
+        assert!(TestCli::try_parse_from(["t", "coalition", "run", ""]).is_err());
+        assert!(TestCli::try_parse_from(["t", "coalition", "run", "  "]).is_err());
     }
 
     #[test]
     fn truncate_helper() {
         assert_eq!(truncate("short", 10), "short");
         assert_eq!(truncate("exactly-ten", 11), "exactly-ten");
-        assert_eq!(truncate("longer-than-cap", 5), "longe…");
+        // `keep` is now an honest upper bound on visible length: the
+        // ellipsis replaces the last char rather than adding to the
+        // length. "longer-than-cap" → keep=5 yields 4 chars + "…" = 5.
+        let out = truncate("longer-than-cap", 5);
+        assert_eq!(out.chars().count(), 5);
+        assert_eq!(out, "long…");
         // Whitespace trimmed.
         assert_eq!(truncate("  padded  ", 10), "padded");
+        // Degenerate keep=0 returns empty.
+        assert_eq!(truncate("anything", 0), "");
     }
 }

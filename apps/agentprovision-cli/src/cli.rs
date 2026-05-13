@@ -118,10 +118,10 @@ pub enum Command {
     Recall(recall::RecallArgs),
 
     /// Dispatch and inspect multi-agent coalitions (incident
-    /// investigations, deal briefs, cardiology case reviews). Backed
-    /// by the existing CoalitionWorkflow on agentprovision-
-    /// orchestration queue + Blackboard pub/sub. Phase 3 of the CLI
-    /// roadmap (#180).
+    /// investigations, plan/verify, research/synthesize, debate/
+    /// resolve, propose/critique/revise). Backed by the existing
+    /// CoalitionWorkflow on agentprovision-orchestration queue +
+    /// Blackboard pub/sub. Phase 3 of the CLI roadmap (#180).
     #[command(subcommand)]
     Coalition(coalition::CoalitionCommand),
 

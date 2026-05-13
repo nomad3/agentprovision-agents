@@ -36,6 +36,10 @@ def _required_roles_for_pattern(pattern: str) -> list:
         "research_synthesize": ["researcher", "synthesizer", "verifier"],
         "plan_verify": ["planner", "verifier"],
         "propose_critique_revise": ["planner", "critic", "verifier"],
+        # debate_resolve uses planner+critic across propose/debate, then a
+        # synthesizer for resolve. Mirrors PHASE_REQUIRED_ROLES in
+        # `app/schemas/collaboration.py`.
+        "debate_resolve": ["planner", "critic", "synthesizer"],
     }
     return roles_map.get(pattern, ["planner", "critic", "verifier"])
 
@@ -121,14 +125,48 @@ Write your {phase} contribution below. Be thorough and structured.
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def select_coalition_template(tenant_id: str, chat_session_id: str, task_description: str) -> dict:
-    """Select optimal coalition template and resolve roles from the session's Agent."""
+async def select_coalition_template(
+    tenant_id: str,
+    chat_session_id: str,
+    task_description: str,
+    explicit_pattern: Optional[str] = None,
+    role_overrides: Optional[dict] = None,
+) -> dict:
+    """Select optimal coalition template and resolve roles from the session's Agent.
+
+    Round-2 review B1 (#440): when `explicit_pattern` is supplied
+    (from `alpha coalition run --pattern X` → /collaborations/trigger →
+    dispatch_coalition → CoalitionWorkflow), skip the keyword router so
+    the caller's choice actually wins. `role_overrides` is a
+    `role → agent_slug` dict that layers on top of the auto-resolved
+    `role_agent_map`. Both fields stay Optional — when None the
+    activity preserves its prior auto-routing behaviour.
+    """
     from app.models.agent import Agent
 
     db = SessionLocal()
     try:
-        task_lower = task_description.lower()
-        pattern = _infer_pattern(task_lower)
+        # Honor explicit pattern when supplied + valid; otherwise fall back
+        # to the keyword-based inference. We accept any value in
+        # PATTERN_PHASES so callers can pin to any shipped pattern.
+        valid_pattern = None
+        if explicit_pattern:
+            try:
+                valid_pattern = CollaborationPattern(explicit_pattern).value
+            except ValueError:
+                # Defensive: route validates upfront, but if someone
+                # bypasses the API and feeds garbage to the workflow we
+                # fall back to inference rather than crash.
+                logger.warning(
+                    "select_coalition_template: invalid explicit_pattern=%r; falling back to inference",
+                    explicit_pattern,
+                )
+                valid_pattern = None
+
+        if valid_pattern:
+            pattern = valid_pattern
+        else:
+            pattern = _infer_pattern(task_description.lower())
         required_roles = _required_roles_for_pattern(pattern)
 
         def _slug(name): return name.lower().replace(" ", "-")
@@ -144,6 +182,14 @@ async def select_coalition_template(tenant_id: str, chat_session_id: str, task_d
             if not match and agents:
                 match = agents[0]
             role_agent_map[role] = _slug(match.name) if match else role
+
+        # Layer caller-supplied role overrides on top. Only known roles
+        # for the active pattern are honored — unknown keys are ignored
+        # so a stale CLI flag can't smuggle in random roles.
+        if role_overrides:
+            for role, slug in role_overrides.items():
+                if role in role_agent_map and isinstance(slug, str) and slug:
+                    role_agent_map[role] = slug
 
         return {
             "template_id": None,
