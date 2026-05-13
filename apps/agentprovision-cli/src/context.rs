@@ -55,7 +55,7 @@ impl TokenStoreKind {
     }
 }
 
-// Clone is required so the `ap login` post-success hook can call
+// Clone is required so the `alpha login` post-success hook can call
 // `quickstart::maybe_auto_trigger(&ctx)` without surrendering the
 // outer context — the helper hands a fresh `Context` to `run()`
 // which takes it by value. Every field is cheaply Clone (Arc / String

@@ -1,4 +1,4 @@
-# install.ps1 — PowerShell installer for the `ap` CLI (AgentProvision) on Windows.
+# install.ps1 — PowerShell installer for the `alpha` CLI (AgentProvision) on Windows.
 #
 # Usage:
 #   iwr -useb https://agentprovision.com/install.ps1 | iex
@@ -11,11 +11,11 @@
 #   2. Detects arch (AMD64 → x86_64-pc-windows-msvc; ARM64 deferred to PR-D-1.5).
 #   3. Resolves a concrete version (latest stable, or AGENTPROVISION_VERSION).
 #   4. Downloads the matching .zip release archive + verifies SHA256.
-#   5. Extracts to a temp dir; moves ap.exe → $env:USERPROFILE\.agentprovision\bin.
+#   5. Extracts to a temp dir; moves alpha.exe → $env:USERPROFILE\.agentprovision\bin.
 #   6. Updates User-scope PATH (no UAC, no admin) so new terminals find it.
 #   7. Cleans up.
 #
-# Idempotent: re-running upgrades cleanly. Use `ap upgrade` instead once
+# Idempotent: re-running upgrades cleanly. Use `alpha upgrade` instead once
 # you have an install (PR-D-4 — coming soon).
 
 [CmdletBinding()]
@@ -36,7 +36,7 @@ function Fail { param($msg) Write-Error "install.ps1: $msg"; exit 1 }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Fail "do not run elevated. ap installs into `$env:USERPROFILE\.agentprovision\bin (no admin needed)."
+    Fail "do not run elevated. alpha installs into `$env:USERPROFILE\.agentprovision\bin (no admin needed)."
 }
 
 # ── detect arch ───────────────────────────────────────────────────────────
@@ -73,13 +73,13 @@ if ($Version -eq "latest") {
 } else {
     $tag = "cli-v$Version"
 }
-Say "Installing ap $Version ($triple)"
+Say "Installing alpha $Version ($triple)"
 
 # ── download ──────────────────────────────────────────────────────────────
 $tmp = Join-Path $env:TEMP ([System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 try {
-    $archiveName = "ap-$triple.zip"
+    $archiveName = "alpha-$triple.zip"
     $url = "https://github.com/$Repo/releases/download/$tag/$archiveName"
     # PR-D-2 publishes one combined SHA256SUMS manifest per release.
     # Half the HTTP round-trips vs. per-target sidecars + survives renames.
@@ -112,16 +112,16 @@ try {
     $extractDir = Join-Path $tmp "extract"
     Expand-Archive -Path $archivePath -DestinationPath $extractDir -Force
 
-    # Find the ap.exe in the extracted tree.
-    $exe = Get-ChildItem -Path $extractDir -Recurse -Filter "ap.exe" |
+    # Find the alpha.exe in the extracted tree.
+    $exe = Get-ChildItem -Path $extractDir -Recurse -Filter "alpha.exe" |
            Select-Object -First 1
-    if (-not $exe) { Fail "ap.exe not found in archive" }
+    if (-not $exe) { Fail "alpha.exe not found in archive" }
 
     if (-not (Test-Path $InstallDir)) {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     }
-    Copy-Item -Force $exe.FullName (Join-Path $InstallDir "ap.exe")
-    Say "Installed: $InstallDir\ap.exe"
+    Copy-Item -Force $exe.FullName (Join-Path $InstallDir "alpha.exe")
+    Say "Installed: $InstallDir\alpha.exe"
 
     # ── PATH (User scope — no UAC) ────────────────────────────────────────
     $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -135,8 +135,8 @@ try {
     }
 
     Say ""
-    Say "ap $Version ready."
-    Say "Run:    ap login    # to authenticate"
+    Say "alpha $Version ready."
+    Say "Run:    alpha login    # to authenticate"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

@@ -1,4 +1,4 @@
-# `ap` CLI differentiation roadmap
+# `alpha` CLI differentiation roadmap
 
 **Date:** 2026-05-13
 **Author:** Claude (sonnet) at user request
@@ -7,17 +7,17 @@
 
 ## TL;DR
 
-`ap` is not competing with `claude` / `codex` / `gemini` / `gh copilot`. It
+`alpha` is not competing with `claude` / `codex` / `gemini` / `gh copilot`. It
 orchestrates them. The analogy is `kubectl` vs `docker run`: kubectl doesn't
-try to be a better Docker; it makes containers operable at fleet scale. `ap`
+try to be a better Docker; it makes containers operable at fleet scale. `alpha`
 should make Claude Code + Codex + Gemini CLI + Copilot CLI + OpenCode operable
 at *team and tenant scale*.
 
 This doc lays out **eight CLI surfaces** that the leaf CLIs cannot offer —
 each maps to a feature the platform has already shipped — and a four-phase,
-~six-week rollout to make `ap` the agent control plane CLI without peer.
+~six-week rollout to make `alpha` the agent control plane CLI without peer.
 
-The headline single-command demo is the [`ap run --fanout --background`](#1-durable-runs-ap-run--ap-watch--ap-cancel)
+The headline single-command demo is the [`alpha run --fanout --background`](#1-durable-runs-ap-run--ap-watch--ap-cancel)
 flow that lands in Phase 1 and combines durability, multi-provider parallel
 execution, background continuation, and cost attribution into one terminal
 interaction no leaf CLI can replicate.
@@ -35,7 +35,7 @@ CLI) and OpenCode all share five structural limits:
 | **No durable orchestration** | A long-running task is a foreground process — fragile under network drops, sleep, restart |
 | **No memory across sessions** | Each invocation starts amnesic |
 
-`ap` already has the platform plumbing for all five gaps:
+`alpha` already has the platform plumbing for all five gaps:
 
 - **Multi-LLM:** ProviderAdapter pattern with autodetect + quota fallback (#245)
 - **Durability:** Temporal workflows on `agentprovision-code` queue
@@ -48,7 +48,7 @@ CLI) and OpenCode all share five structural limits:
 - **RL learning:** Auto-quality scoring on every response, RL policy updates
 
 What's missing is the CLI surface that exposes those features to a human at a
-terminal. Today `ap` is a basic chat client + login/status/upgrade/quickstart
+terminal. Today `alpha` is a basic chat client + login/status/upgrade/quickstart
 toolbox. This doc fills the gap.
 
 ## The eight differentiators
@@ -56,7 +56,7 @@ toolbox. This doc fills the gap.
 Each section: user story, CLI UX, backend dependencies (what exists vs what
 needs new endpoints), acceptance criteria, effort.
 
-### 1. Durable runs (`ap run`, `ap watch`, `ap cancel`)
+### 1. Durable runs (`alpha run`, `alpha watch`, `alpha cancel`)
 
 **The wedge feature.** Tasks survive terminal close, network drop, even a
 laptop reboot — and resume from any other machine on the same account.
@@ -67,20 +67,20 @@ finish on the desktop after dinner."
 **CLI UX:**
 
 ```
-$ ap run "refactor the auth module to use FastAPI Depends" \
+$ alpha run "refactor the auth module to use FastAPI Depends" \
        --provider best \
        --background
-[ap] task t_a4f3b2 dispatched → claude-code (tenant=integral, agent=code-agent)
-[ap] estimated 8m, $0.42 via Claude Sonnet
-[ap] close this terminal any time — resume with: ap watch t_a4f3b2
+[alpha] task t_a4f3b2 dispatched → claude-code (tenant=integral, agent=code-agent)
+[alpha] estimated 8m, $0.42 via Claude Sonnet
+[alpha] close this terminal any time — resume with: alpha watch t_a4f3b2
 
 # later, from a different host:
-$ ap watch t_a4f3b2
-[ap] t_a4f3b2 — running, 3m elapsed
+$ alpha watch t_a4f3b2
+[alpha] t_a4f3b2 — running, 3m elapsed
 > opened PR #432: refactor(auth): adopt FastAPI Depends pattern
 > committed 4 files (...)
 > [STILL RUNNING] applying tests…
-^C  to detach (task continues), or: ap cancel t_a4f3b2 to stop
+^C  to detach (task continues), or: alpha cancel t_a4f3b2 to stop
 ```
 
 **Backend deps:**
@@ -91,18 +91,18 @@ $ ap watch t_a4f3b2
 | Persistent task ID with status | ✅ `agent_tasks` table + workflow run ID |
 | `GET /api/v1/tasks/{id}` polling | ⚠️ Partial — exists for some flows; needs unification |
 | SSE `/api/v1/tasks/{id}/events/stream` for live tailing | ⚠️ Exists for chat sessions; reuse pattern |
-| Auth attaches to any machine with same JWT | ✅ — JWT in `~/.ap/config.toml` |
+| Auth attaches to any machine with same JWT | ✅ — JWT in `~/.config/agentprovision/config.toml` |
 
 **Acceptance:**
-- `ap run "<prompt>"` returns within 2s with a task ID.
+- `alpha run "<prompt>"` returns within 2s with a task ID.
 - `--background` exits immediately; foreground tails SSE until completion.
-- `ap watch <id>` from a different host shows live event stream.
-- `ap cancel <id>` issues `RequestCancelWorkflowExecution` to Temporal.
+- `alpha watch <id>` from a different host shows live event stream.
+- `alpha cancel <id>` issues `RequestCancelWorkflowExecution` to Temporal.
 
 **Effort:** 1.5 weeks (largely new `commands/run.rs` + `commands/watch.rs` +
 SSE consumer + minor backend SSE alignment).
 
-### 2. Multi-provider fanout (`ap run --fanout`)
+### 2. Multi-provider fanout (`alpha run --fanout`)
 
 **User story:** "I want three different LLMs to review the same PR and merge
 their findings into one report."
@@ -110,22 +110,22 @@ their findings into one report."
 **CLI UX:**
 
 ```
-$ ap run "audit this codebase for unparameterized SQL queries" \
+$ alpha run "audit this codebase for unparameterized SQL queries" \
        --fanout claude,codex,gemini \
        --merge council \
        --background
-[ap] dispatched 3 parallel reviews → t_x91 (parent)
-[ap] children: t_x91a (claude), t_x91b (codex), t_x91c (gemini)
-[ap] meta-adjudicator will merge when last child completes
-[ap] notify when done via Slack? (y/n)
+[alpha] dispatched 3 parallel reviews → t_x91 (parent)
+[alpha] children: t_x91a (claude), t_x91b (codex), t_x91c (gemini)
+[alpha] meta-adjudicator will merge when last child completes
+[alpha] notify when done via Slack? (y/n)
 
-$ ap watch t_x91
-[ap] t_x91 COMPLETE — 7 findings, 2 blockers
-[ap] consensus: all three reviewers converged on:
+$ alpha watch t_x91
+[alpha] t_x91 COMPLETE — 7 findings, 2 blockers
+[alpha] consensus: all three reviewers converged on:
      • app/services/datasets.py:182 — f-string SQL interpolation (BLOCKER)
      • app/api/v1/reports.py:94 — user-supplied ORDER BY (BLOCKER)
-[ap] disagreements: 1 finding flagged only by Gemini (P3)
-[ap] full report: ap show t_x91
+[alpha] disagreements: 1 finding flagged only by Gemini (P3)
+[alpha] full report: alpha show t_x91
 ```
 
 **Backend deps:**
@@ -144,7 +144,7 @@ $ ap watch t_x91
 
 **Effort:** 1 week (new workflow + CLI flag + result-formatting).
 
-### 3. Quota fallback chains (`ap run --providers a,b,c`)
+### 3. Quota fallback chains (`alpha run --providers a,b,c`)
 
 **User story:** "Just complete the task — I don't care which LLM. If Claude
 hits quota, fall over to Codex automatically."
@@ -152,10 +152,10 @@ hits quota, fall over to Codex automatically."
 **CLI UX:**
 
 ```
-$ ap run "scaffold the orders service" --providers claude,codex,opencode
-[ap] claude → quota_exceeded after 12 tool calls
-[ap] failing over to codex…
-[ap] codex completed in 4m12s
+$ alpha run "scaffold the orders service" --providers claude,codex,opencode
+[alpha] claude → quota_exceeded after 12 tool calls
+[alpha] failing over to codex…
+[alpha] codex completed in 4m12s
 ```
 
 **Backend deps:**
@@ -168,11 +168,11 @@ $ ap run "scaffold the orders service" --providers claude,codex,opencode
 
 **Acceptance:**
 - `--providers claude,codex,opencode` overrides tenant-default chain.
-- Each fallback emits an SSE event so `ap watch` shows the cascade.
+- Each fallback emits an SSE event so `alpha watch` shows the cascade.
 
 **Effort:** 2 days (pure CLI plumbing; backend already does it).
 
-### 4. Memory-first primitives (`ap recall`, `ap remember`)
+### 4. Memory-first primitives (`alpha recall`, `alpha remember`)
 
 **User story:** "I want to query everything my team has ever taught the
 agents — code patterns, decisions, runbooks — from the terminal."
@@ -180,7 +180,7 @@ agents — code patterns, decisions, runbooks — from the terminal."
 **CLI UX:**
 
 ```
-$ ap recall "what's our standard FastAPI error handler pattern?"
+$ alpha recall "what's our standard FastAPI error handler pattern?"
 > Pattern (from 4 past chats, entity error_handler_pattern):
 >   We use a custom APIError exception with error_code, http_status,
 >   detail fields. Raised in services, caught by FastAPI exception
@@ -190,9 +190,9 @@ $ ap recall "what's our standard FastAPI error handler pattern?"
 >
 >   Source: chat session s_a92 (2026-04-18, user=simon, agent=code-agent)
 
-$ ap remember "we standardized on httpx for outbound HTTP — never requests"
-[ap] saved as observation against entity http_client_policy (created)
-[ap] embedded for semantic recall
+$ alpha remember "we standardized on httpx for outbound HTTP — never requests"
+[alpha] saved as observation against entity http_client_policy (created)
+[alpha] embedded for semantic recall
 ```
 
 **Backend deps:**
@@ -205,15 +205,15 @@ $ ap remember "we standardized on httpx for outbound HTTP — never requests"
 | CLI subcommand | ❌ thin wrapper around existing endpoints |
 
 **Acceptance:**
-- `ap recall "<query>"` returns top-K observations + related entities with
+- `alpha recall "<query>"` returns top-K observations + related entities with
   source attribution.
-- `ap remember "<fact>"` writes an observation; backfills embedding via
+- `alpha remember "<fact>"` writes an observation; backfills embedding via
   Rust embedding-service.
 - `--entity <id>` and `--scope tenant|user|agent` flags for scoping.
 
 **Effort:** 2 days (wrapper + result formatting).
 
-### 5. Multi-agent coalitions (`ap coalition`)
+### 5. Multi-agent coalitions (`alpha coalition`)
 
 **User story:** "We have a P1 incident — spin up an investigation team
 (commander + forensics + comms drafter + postmortem writer) and stream their
@@ -222,16 +222,16 @@ collaboration live."
 **CLI UX:**
 
 ```
-$ ap coalition incident-investigation --severity P1 --service orders-api
-[ap] dispatched coalition c_x9k2 with 4 agents:
+$ alpha coalition incident-investigation --severity P1 --service orders-api
+[alpha] dispatched coalition c_x9k2 with 4 agents:
        • Incident Commander
        • Forensics Analyst
        • Comms Drafter
        • Postmortem Writer
-[ap] live blackboard: https://agentprovision.com/collab/c_x9k2
-[ap] tail in terminal: ap coalition watch c_x9k2
+[alpha] live blackboard: https://agentprovision.com/collab/c_x9k2
+[alpha] tail in terminal: alpha coalition watch c_x9k2
 
-$ ap coalition watch c_x9k2
+$ alpha coalition watch c_x9k2
 [forensics] checking orders-api logs (last 30m)…
 [forensics] error rate jumped 12x at 14:42 UTC, correlates with deploy v2.31
 [commander] decision: rollback v2.31, notify on-call SRE
@@ -250,14 +250,14 @@ $ ap coalition watch c_x9k2
 | CLI live tail (consume same SSE) | ❌ new |
 
 **Acceptance:**
-- `ap coalition <pattern>` dispatches with optional `--severity`, `--service`,
+- `alpha coalition <pattern>` dispatches with optional `--severity`, `--service`,
   custom blackboard seed.
-- `ap coalition list` shows available patterns.
-- `ap coalition watch <id>` tails the SSE event feed in the terminal.
+- `alpha coalition list` shows available patterns.
+- `alpha coalition watch <id>` tails the SSE event feed in the terminal.
 
 **Effort:** 4 days (CLI + SSE consumer; no new backend).
 
-### 6. Governance & policy gates (`ap run` with policy enforcement, `ap policy`)
+### 6. Governance & policy gates (`alpha run` with policy enforcement, `alpha policy`)
 
 **User story:** "When I ask the agent to do something destructive in
 production, the system should block it pending human approval — not pop
@@ -266,12 +266,12 @@ a confirm prompt that I'll dismiss without reading."
 **CLI UX:**
 
 ```
-$ ap run "drop the staging database" --tenant prod
-[ap] policy: destructive action requires human approval (rule=destructive_action_approval)
-[ap] approval request t_b9 sent to #sre-oncall in Slack
-[ap] waiting… (Ctrl-C to detach; ap watch t_b9 to resume later)
+$ alpha run "drop the staging database" --tenant prod
+[alpha] policy: destructive action requires human approval (rule=destructive_action_approval)
+[alpha] approval request t_b9 sent to #sre-oncall in Slack
+[alpha] waiting… (Ctrl-C to detach; alpha watch t_b9 to resume later)
 
-$ ap policy show code-agent
+$ alpha policy show code-agent
 agent_policies for code-agent (tenant=prod):
   rate_limit:           60/min, 800/hour
   allowed_tools:        sql_query (readonly), knowledge_search, ...
@@ -290,17 +290,17 @@ agent_policies for code-agent (tenant=prod):
 | CLI read of policy | ❌ thin GET wrapper |
 
 **Acceptance:**
-- `ap run` honors policies; blocks with informative message + task ID for
+- `alpha run` honors policies; blocks with informative message + task ID for
   resume.
-- `ap policy show <agent>` prints the active policy (rate limits, allowed
+- `alpha policy show <agent>` prints the active policy (rate limits, allowed
   tools, approval gates, escalation).
-- `ap policy set` is deliberately **not** in v1 (governance changes go
+- `alpha policy set` is deliberately **not** in v1 (governance changes go
   through web UI or API for audit trail).
 
 **Effort:** 3 days (CLI surfaces + plumbing of existing policy enforcement
 through the run pipeline).
 
-### 7. Cost & usage attribution (`ap usage`, `ap costs`)
+### 7. Cost & usage attribution (`alpha usage`, `alpha costs`)
 
 **User story:** "How much did my team spend on AI this month, broken down
 by provider and by agent?"
@@ -308,7 +308,7 @@ by provider and by agent?"
 **CLI UX:**
 
 ```
-$ ap usage --team backend --period mtd
+$ alpha usage --team backend --period mtd
 provider          tokens_in    tokens_out   cost_usd
 ─────────────────────────────────────────────────────
 claude            1.2M         180K         $14.20
@@ -319,7 +319,7 @@ copilot           —            —             subscription
 ─────────────────────────────────────────────────────
 total             8.8M         1.6M         $25.70
 
-$ ap costs --agent code-agent --period 7d
+$ alpha costs --agent code-agent --period 7d
 day        tasks  cost_usd  p95_latency_ms
 2026-05-06    18  $1.24     12,400
 2026-05-07    22  $1.81     11,800
@@ -336,13 +336,13 @@ day        tasks  cost_usd  p95_latency_ms
 | CLI table renderer | ❌ trivial |
 
 **Acceptance:**
-- `ap usage` defaults to current tenant, current month-to-date.
+- `alpha usage` defaults to current tenant, current month-to-date.
 - `--team`, `--agent`, `--provider`, `--period`, `--group-by` flags.
 - `--json` for machine-readable output.
 
 **Effort:** 4 days (1d CLI, 3d backend aggregation endpoints).
 
-### 8. Recipes — Helm charts for AI workflows (`ap recipes`)
+### 8. Recipes — Helm charts for AI workflows (`alpha recipes`)
 
 **User story:** "I want to install + run + schedule pre-built AI workflows
 (daily briefings, competitor watch, code reviews) without writing JSON."
@@ -350,14 +350,14 @@ day        tasks  cost_usd  p95_latency_ms
 **CLI UX:**
 
 ```
-$ ap recipes
+$ alpha recipes
 daily-briefing       Calendar+inbox+monitors → Slack DM
 competitor-watch     Scrape competitors, news, ads → notifications
 cardiac-report       Echo PDF → DACVIM report → Google Doc
 code-review          Multi-LLM PR review with memory
 deal-pipeline        Discover → score → research → outreach → advance → sync
 
-$ ap recipes describe daily-briefing
+$ alpha recipes describe daily-briefing
 daily-briefing (template_id=tpl_db1, native, installs=147)
   Pulls calendar + inbox + monitor alerts each morning, drafts a
   prioritized briefing, sends as DM via Slack.
@@ -365,10 +365,10 @@ daily-briefing (template_id=tpl_db1, native, installs=147)
   Required integrations: google_calendar, gmail, slack
   Optional: custom_prompts/morning_briefing.md
 
-$ ap recipes run daily-briefing --schedule "0 8 * * 1-5"
-[ap] installed recipe daily-briefing → dynamic_workflow w_d1
-[ap] cron schedule active: 0 8 * * 1-5 (weekdays 8am)
-[ap] first run preview: ap recipes run daily-briefing --dry-run
+$ alpha recipes run daily-briefing --schedule "0 8 * * 1-5"
+[alpha] installed recipe daily-briefing → dynamic_workflow w_d1
+[alpha] cron schedule active: 0 8 * * 1-5 (weekdays 8am)
+[alpha] first run preview: alpha recipes run daily-briefing --dry-run
 ```
 
 **Backend deps:**
@@ -382,10 +382,10 @@ $ ap recipes run daily-briefing --schedule "0 8 * * 1-5"
 | `--dry-run` validation | ✅ test-console pattern exists; expose via CLI |
 
 **Acceptance:**
-- `ap recipes` lists native + community recipes.
-- `ap recipes describe <id>` shows required integrations + sample output.
-- `ap recipes run <id>` installs + dispatches (optionally with `--schedule`).
-- `ap recipes uninstall <id>` removes the dynamic workflow.
+- `alpha recipes` lists native + community recipes.
+- `alpha recipes describe <id>` shows required integrations + sample output.
+- `alpha recipes run <id>` installs + dispatches (optionally with `--schedule`).
+- `alpha recipes uninstall <id>` removes the dynamic workflow.
 
 **Effort:** 5 days (CLI + integration awareness check before activation).
 
@@ -396,32 +396,32 @@ progress without waiting for the full eight-command surface.
 
 ### Phase 1 (Weeks 1–2) — The wedge demo
 
-- **Ship:** `ap run`, `ap watch`, `ap cancel`, `ap run --providers`, `ap run --fanout`
+- **Ship:** `alpha run`, `alpha watch`, `alpha cancel`, `alpha run --providers`, `alpha run --fanout`
 - **Backend:** `FanoutChatCliWorkflow` (new), unify task-status endpoint, SSE
   consumer in CLI
-- **Demo:** the headline `ap run --fanout --background` flow
+- **Demo:** the headline `alpha run --fanout --background` flow
 
 This phase alone is **the entire competitive moat** vs leaf CLIs. Everything
 after is depth.
 
 ### Phase 2 (Weeks 3–4) — Memory + governance
 
-- **Ship:** `ap recall`, `ap remember`, `ap policy show`, policy enforcement
-  inside `ap run`
+- **Ship:** `alpha recall`, `alpha remember`, `alpha policy show`, policy enforcement
+  inside `alpha run`
 - **Backend:** None new — wrappers around existing endpoints
 - **Demo:** "I asked the agent to drop the prod DB. It blocked me, asked
   for approval, and gave me a task ID to resume from when approved."
 
 ### Phase 3 (Weeks 5–6) — Coalitions + recipes
 
-- **Ship:** `ap coalition list/run/watch`, `ap recipes list/describe/run/uninstall`
+- **Ship:** `alpha coalition list/run/watch`, `alpha recipes list/describe/run/uninstall`
 - **Backend:** None new — both features fully shipped
 - **Demo:** "We had a P1 incident. One command spun up four collaborating
   agents and streamed their blackboard live."
 
 ### Phase 4 (Week 7+) — Cost surfaces
 
-- **Ship:** `ap usage`, `ap costs`, `ap costs --by team`
+- **Ship:** `alpha usage`, `alpha costs`, `alpha costs --by team`
 - **Backend:** Team-tagged tasks + aggregation endpoints
 - **Demo:** "Here's your team's monthly AI bill, broken down by provider,
   agent, and tenant — pulled from one CLI command."
@@ -430,15 +430,15 @@ after is depth.
 
 | Item | Why |
 |---|---|
-| `ap policy set` | Governance changes go through web UI for audit trail |
-| `ap agent create` interactively | Already exists; web wizard is the canonical creation flow |
-| Voice-driven `ap` | Luna desktop client owns voice; CLI is keyboard-first |
-| `ap recipes publish` (community contribution) | Phase 5 — needs review/moderation pipeline |
+| `alpha policy set` | Governance changes go through web UI for audit trail |
+| `alpha agent create` interactively | Already exists; web wizard is the canonical creation flow |
+| Voice-driven `alpha` | Luna desktop client owns voice; CLI is keyboard-first |
+| `alpha recipes publish` (community contribution) | Phase 5 — needs review/moderation pipeline |
 | Inbox-monitor-style `--watch-folder` polling | Use existing CompetitorMonitorWorkflow + recipe install |
 
 ## Open questions
 
-1. **`ap run` default provider** — auto-detect from tenant, or require explicit?
+1. **`alpha run` default provider** — auto-detect from tenant, or require explicit?
    *Recommend:* auto-detect with `--provider best` as the default; tenant
    admins set `default_cli_platform` in tenant_features.
 2. **Cancellation semantics on fanout** — if I cancel the parent, do children
@@ -449,12 +449,12 @@ after is depth.
    `apps/api/app/services/cli_session_manager.py` and
    `docs/plans/2026-05-09-resilient-cli-orchestrator-design.md`; the
    async chat-result pattern from that work should be the backbone, and
-   `ap watch` ultimately polls + Server-Sent-Event hybrid.
-4. **Tenant context switching** — `ap --tenant prod run …` requires the
-   user to have a token for that tenant. Need `ap tenants list` + `ap tenant use`
+   `alpha watch` ultimately polls + Server-Sent-Event hybrid.
+4. **Tenant context switching** — `alpha --tenant prod run …` requires the
+   user to have a token for that tenant. Need `alpha tenants list` + `alpha tenant use`
    ergonomics. *Not blocking Phase 1.*
 5. **Recipe parameter prompts** — when a recipe needs config (e.g. Slack
-   channel), should `ap recipes run` open an interactive prompt or require
+   channel), should `alpha recipes run` open an interactive prompt or require
    `--param channel=#sre`? *Recommend:* both — interactive by default,
    `--param k=v` for scripting.
 
@@ -468,7 +468,7 @@ after is depth.
 
 ## Companion work
 
-- **Prototype PR** (branched off this design): Phase 1 `ap run --fanout`
+- **Prototype PR** (branched off this design): Phase 1 `alpha run --fanout`
   end-to-end. Lands shortly after this doc.
 - **Memory note**: `feedback_cli_differentiation_eight.md` — pin the
-  positioning frame ("ap is kubectl for agents, not a better claude").
+  positioning frame ("alpha is kubectl for agents, not a better claude").

@@ -47,14 +47,14 @@ Same pattern — needs definition_id, last_run, is_template. Add with serde(defa
 
 | CLI verb | Web equivalent | Backend endpoints used |
 |---|---|---|
-| `ap agent ls / show` | `apps/web/src/pages/AgentsPage.js` | GET /api/v1/agents |
-| `ap agent create` | `apps/web/src/components/wizard/AgentWizard.js` | POST /api/v1/agents (5-step wizard — match field names) |
-| `ap workflow ls / run` | `apps/web/src/pages/WorkflowsPage.js` + `workflows/RunsTab.js` | GET /workflows, POST /dynamic-workflows/{id}/run |
-| `ap workflow tail` | `apps/web/src/components/workflows/RunTreeView.js` | polling today (verify SSE endpoint) |
-| `ap integration ls / show / test` | `apps/web/src/pages/IntegrationsPage.js` + `IntegrationsPanel.js` | GET /integrations/status, /integration-configs |
-| `ap memory recall / observe` | `apps/web/src/pages/MemoryPage.js` | GET /memories/search, POST /memories |
-| `ap skill ls / show / run` | `apps/web/src/pages/SkillsPage.js` | GET /skills/library, POST /skills/library/execute |
-| `ap session ls / resume` | `apps/web/src/pages/ChatPage.js` | GET /chat/sessions |
+| `alpha agent ls / show` | `apps/web/src/pages/AgentsPage.js` | GET /api/v1/agents |
+| `alpha agent create` | `apps/web/src/components/wizard/AgentWizard.js` | POST /api/v1/agents (5-step wizard — match field names) |
+| `alpha workflow ls / run` | `apps/web/src/pages/WorkflowsPage.js` + `workflows/RunsTab.js` | GET /workflows, POST /dynamic-workflows/{id}/run |
+| `alpha workflow tail` | `apps/web/src/components/workflows/RunTreeView.js` | polling today (verify SSE endpoint) |
+| `alpha integration ls / show / test` | `apps/web/src/pages/IntegrationsPage.js` + `IntegrationsPanel.js` | GET /integrations/status, /integration-configs |
+| `alpha memory recall / observe` | `apps/web/src/pages/MemoryPage.js` | GET /memories/search, POST /memories |
+| `alpha skill ls / show / run` | `apps/web/src/pages/SkillsPage.js` | GET /skills/library, POST /skills/library/execute |
+| `alpha session ls / resume` | `apps/web/src/pages/ChatPage.js` | GET /chat/sessions |
 
 Implementation agents MUST read the web equivalent before writing the CLI surface so field names, validation rules, and UX semantics match.
 

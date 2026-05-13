@@ -1,4 +1,4 @@
-//! `ap logout` — clear the keychain entry.
+//! `alpha logout` — clear the keychain entry.
 
 use crate::context::Context;
 use crate::output;

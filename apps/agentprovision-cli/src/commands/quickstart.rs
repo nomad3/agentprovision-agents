@@ -1,6 +1,6 @@
-//! `ap quickstart` — guided initial-training flow.
+//! `alpha quickstart` — guided initial-training flow.
 //!
-//! Fires automatically the first time a user runs `ap login` against an
+//! Fires automatically the first time a user runs `alpha login` against an
 //! un-onboarded tenant; can also be invoked explicitly to re-train or
 //! to opt back in after a Skip. The flow is:
 //!
@@ -15,7 +15,7 @@
 //!
 //! State is persisted to `~/.config/agentprovision/quickstart.toml`
 //! across runs so a network blip mid-training is recoverable via
-//! `ap quickstart --resume`.
+//! `alpha quickstart --resume`.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -54,7 +54,7 @@ pub struct QuickstartArgs {
 
     /// Re-run even when the tenant is already onboarded or has
     /// deferred. Without `--force`, an onboarded tenant just prints
-    /// 'Already onboarded' and exits 0 — keeps `ap login` auto-trigger
+    /// 'Already onboarded' and exits 0 — keeps `alpha login` auto-trigger
     /// idempotent.
     #[arg(long)]
     pub force: bool,
@@ -127,7 +127,7 @@ struct ResumeState {
 }
 
 /// Per-tenant resume-state path. Reviewer I-3: keying the file
-/// globally meant a second `ap login` against a different tenant
+/// globally meant a second `alpha login` against a different tenant
 /// silently clobbered the first's stranded snapshot, and `--resume`
 /// would re-POST under the wrong tenant. Tenant-scoping fixes that
 /// without adding any state-sharing surface between tenants.
@@ -235,7 +235,7 @@ fn picker_default_index(status: &OnboardingStatus, options: &[WedgeChannel]) -> 
 pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
     // Auth gate — same shape as every other subcommand.
     if ctx.client.token().is_none() {
-        anyhow::bail!("not logged in — run `ap login` first");
+        anyhow::bail!("not logged in — run `alpha login` first");
     }
 
     // Resolve the tenant_id once up front. Reviewer I-3: resume state
@@ -250,7 +250,7 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
 
     // (1) Onboarding-status check. Drives the auto-trigger contract:
     // if already onboarded and `--force` wasn't passed, we exit 0
-    // without prompting so `ap login` post-success hooks stay quiet.
+    // without prompting so `alpha login` post-success hooks stay quiet.
     // Plain `?` here keeps the typed Error chain (B-2 / I-4) so the
     // caller can downcast on Error::Api { status, .. }.
     let status: OnboardingStatus = ctx.client.get_onboarding_status().await?;
@@ -263,7 +263,7 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
                 println!(
                     "{} this tenant has already completed onboarding. Use {} to re-run.",
                     style("✓").green().bold(),
-                    style("ap quickstart --force").bold()
+                    style("alpha quickstart --force").bold()
                 );
             },
         );
@@ -368,12 +368,12 @@ pub async fn run(args: QuickstartArgs, ctx: Context) -> anyhow::Result<()> {
     }
 
     // (7) Optional first chat. Skipped on `--no-chat`. The chat itself
-    // is a one-shot send through the existing `ap chat send` path so
+    // is a one-shot send through the existing `alpha chat send` path so
     // we don't duplicate streaming code.
     if !args.no_chat && !ctx.json {
         println!(
             "\nTry asking the agent: {}",
-            style("ap chat send \"what should I work on next?\"").dim()
+            style("alpha chat send \"what should I work on next?\"").dim()
         );
     }
 
@@ -463,7 +463,7 @@ async fn collect_items(
 
 /// Local-AI-CLI wedge (PR-Q3a). Shows the consent summary, prompts
 /// for confirmation, then runs the scanner. JSON mode auto-consents
-/// because the scanner has the same blast radius as `ap memory ls`
+/// because the scanner has the same blast radius as `alpha memory ls`
 /// — fileystem reads bounded to the documented directories — and
 /// scripted callers shouldn't hang on a tty prompt.
 fn collect_local_ai_cli(ctx: &Context, args: &QuickstartArgs) -> anyhow::Result<Vec<Value>> {
@@ -596,9 +596,9 @@ async fn poll_until_terminal(ctx: &Context, run_id: &str) -> anyhow::Result<Trai
     Ok(last)
 }
 
-/// Helper used by the `ap login` post-success hook to auto-fire
+/// Helper used by the `alpha login` post-success hook to auto-fire
 /// quickstart for un-onboarded tenants without forcing the user to
-/// type `ap quickstart`. Caller is responsible for not calling this
+/// type `alpha quickstart`. Caller is responsible for not calling this
 /// when stdin is non-interactive (e.g. piped) since the picker uses
 /// `dialoguer::Select` which requires a tty.
 ///
@@ -606,8 +606,8 @@ async fn poll_until_terminal(ctx: &Context, run_id: &str) -> anyhow::Result<Trai
 /// probe is treated as 'server is older than the CLI' — silent skip.
 /// Any other API error (401, 5xx, transport) is **logged as a warning
 /// to stderr** so a real outage isn't hidden behind the silent path.
-/// We still return `Ok(())` so the parent `ap login` succeeds; the
-/// user can rerun `ap quickstart` explicitly to retry.
+/// We still return `Ok(())` so the parent `alpha login` succeeds; the
+/// user can rerun `alpha quickstart` explicitly to retry.
 pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
     let status = match ctx.client.get_onboarding_status().await {
         Ok(s) => s,
@@ -618,7 +618,7 @@ pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
         Err(e) => {
             crate::output::warn(format!(
                 "onboarding-status probe failed ({}); skipping auto-trigger. \
-                 Run `ap quickstart` to retry.",
+                 Run `alpha quickstart` to retry.",
                 e
             ));
             return Ok(());
@@ -629,7 +629,7 @@ pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
     }
     if !console::Term::stdout().is_term() {
         // Non-tty (CI / pipe) — don't try to render a picker. The user
-        // can run `ap quickstart` explicitly when they're at a terminal.
+        // can run `alpha quickstart` explicitly when they're at a terminal.
         return Ok(());
     }
 
@@ -639,7 +639,7 @@ pub async fn maybe_auto_trigger(ctx: &Context) -> anyhow::Result<()> {
         .interact()
         .unwrap_or(false);
     if !proceed {
-        // User said no — record the defer so the next `ap login`
+        // User said no — record the defer so the next `alpha login`
         // doesn't re-prompt. Best-effort; an HTTP failure here is
         // non-fatal (worst case the user gets the prompt again).
         let _ = ctx.client.defer_onboarding().await;

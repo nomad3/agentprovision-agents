@@ -1,9 +1,9 @@
-//! `ap session` — list and read chat sessions in the current tenant.
+//! `alpha session` — list and read chat sessions in the current tenant.
 //!
 //! Reuses `ApiClient::list_chat_sessions` + `list_chat_messages` (already in
 //! core from PR-A). Matches the surface `apps/web/src/pages/ChatPage.js`
 //! exposes — the left-rail session list plus the message scroll-back. Active
-//! `ap chat send`/`repl` already creates sessions; this PR exposes them.
+//! `alpha chat send`/`repl` already creates sessions; this PR exposes them.
 
 use clap::{Args, Subcommand};
 

@@ -1,4 +1,4 @@
-//! Client-side wedge-source scanners for `ap quickstart`.
+//! Client-side wedge-source scanners for `alpha quickstart`.
 //!
 //! Each submodule owns one wedge channel from the design doc §3 and
 //! exposes a `scan()` function returning a normalized item list ready

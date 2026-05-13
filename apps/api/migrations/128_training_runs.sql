@@ -1,6 +1,6 @@
 -- 128_training_runs.sql
 --
--- Tracks the initial-training pass that `ap quickstart` + the web
+-- Tracks the initial-training pass that `alpha quickstart` + the web
 -- /onboarding/* flow run when a new tenant connects a wedge channel.
 -- Each row represents one bulk ingestion (Local AI CLI / Gmail+Calendar /
 -- Slack / WhatsApp / etc.) of raw items into the knowledge graph.

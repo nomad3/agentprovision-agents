@@ -1,4 +1,4 @@
-//! `ap agent` — list and show agents in the current tenant.
+//! `alpha agent` — list and show agents in the current tenant.
 //!
 //! PR-C-1 first surface. Reuses `ApiClient::list_agents` (already on `core`)
 //! and adds `get_agent(id)` for `show`. Matches the web UX in
@@ -106,7 +106,7 @@ async fn ls(args: LsArgs, ctx: Context) -> anyhow::Result<()> {
 
 async fn show(args: ShowArgs, ctx: Context) -> anyhow::Result<()> {
     // Try as UUID first; fall back to name lookup via list+filter so users
-    // can `ap agent show luna` without remembering the id. This mirrors how
+    // can `alpha agent show luna` without remembering the id. This mirrors how
     // the web AgentsPage links from a name pill to the detail page.
     // Detect UUID without pulling `uuid` as a direct dep — `agentprovision-cli`
     // intentionally treats UUIDs as opaque strings everywhere else.

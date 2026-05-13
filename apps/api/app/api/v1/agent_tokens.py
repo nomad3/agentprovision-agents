@@ -12,7 +12,7 @@ Why we need both:
 * The internal endpoint is used by the code-worker / orchestration-worker
   when they dispatch a CLI runtime as part of a Temporal workflow. The
   worker passes X-Internal-Key — no user context is involved.
-* This endpoint exists so the `ap` CLI can pass the user's Bearer JWT
+* This endpoint exists so the `alpha` CLI can pass the user's Bearer JWT
   and get back an agent-scoped token to inject into a local Claude Code
   / Codex / Gemini / Copilot subprocess. The same agent_policy + scope
   constrains the leaf either way; only the dispatch path differs.

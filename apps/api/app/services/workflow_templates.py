@@ -1978,7 +1978,7 @@ NATIVE_TEMPLATES = [
     #   6. notify (Luna agent step)                — summary back to user
     #
     # Run with:
-    #   ap workflow run "Prospect Auto-Pilot" \
+    #   alpha workflow run "Prospect Auto-Pilot" \
     #     --input '{"vertical":"enterprise old-fashioned consolidated
     #     apparel companies","count":5,"tag":"cli-prospect-auto"}'
     # ──────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 /**
  * Onboarding + training-ingestion API client.
  *
- * Wraps the four endpoints `ap quickstart` calls on the CLI side so
+ * Wraps the four endpoints `alpha quickstart` calls on the CLI side so
  * the React SPA can drive the same flow. See:
  *   - apps/api/app/api/v1/onboarding.py     (status / defer / complete)
  *   - apps/api/app/api/v1/memory_training.py (bulk-ingest + run polling)
@@ -71,7 +71,7 @@ export const WEDGES = [
     sublabel: 'Claude / Codex / Gemini / Copilot session metadata',
     // local_ai_cli wedge is CLI-only — the web flow can't read the
     // user's local filesystem. Disabled in the picker; the
-    // explainer points at `ap quickstart` instead.
+    // explainer points at `alpha quickstart` instead.
     requiresCli: true,
   },
   {

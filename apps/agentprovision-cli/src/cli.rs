@@ -10,10 +10,10 @@ use crate::context::Context;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "ap",
+    name = "alpha",
     version,
     about = "AgentProvision CLI — orchestrator of CLIs.",
-    long_about = "ap — the AgentProvision command-line client. Login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / Copilot) from your terminal.\n\nDocs: https://agentprovision.com/docs/cli"
+    long_about = "alpha — the AgentProvision command-line client. Login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / Copilot) from your terminal.\n\nDocs: https://agentprovision.com/docs/cli"
 )]
 pub struct Cli {
     /// Override the API server URL (defaults to https://agentprovision.com or `server` from config.toml).
@@ -63,14 +63,14 @@ pub enum Command {
     /// Dispatch a durable task. Supports multi-provider fanout
     /// (`--fanout claude,codex,gemini --merge council`), fallback
     /// chains (`--providers claude,codex,opencode`), and background
-    /// execution (`--background` + later `ap watch <id>`).
+    /// execution (`--background` + later `alpha watch <id>`).
     ///
     /// Phase 1 prototype — see
     /// docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md.
     Run(run::RunArgs),
 
     /// Tail an in-flight task's status from any machine. Pairs with
-    /// `ap run --background` for fire-and-forget then later resume.
+    /// `alpha run --background` for fire-and-forget then later resume.
     Watch(watch::WatchArgs),
 
     /// Cancel an in-flight task. For fanout tasks, both the parent
@@ -80,7 +80,7 @@ pub enum Command {
     /// leaf CLI subprocess may take seconds to observe the signal.
     Cancel(cancel::CancelArgs),
 
-    /// Self-update the `ap` binary from GitHub Releases.
+    /// Self-update the `alpha` binary from GitHub Releases.
     Upgrade(upgrade::UpgradeArgs),
 
     /// List and inspect agents in the current tenant.
@@ -110,7 +110,7 @@ pub enum Command {
     /// Unified semantic search across the tenant's memory layer
     /// (entities, observations, episodes, conversation snippets).
     /// The same surface chat agents query before every turn under
-    /// the memory-first design. Distinct from `ap memory search`
+    /// the memory-first design. Distinct from `alpha memory search`
     /// which is scoped to knowledge-graph entities only.
     ///
     /// Phase 2 of the CLI roadmap (#179) — see
@@ -126,7 +126,7 @@ pub enum Command {
     Coalition(coalition::CoalitionCommand),
 
     /// Guided initial-training flow. Auto-fires the first time you
-    /// `ap login` against a fresh tenant; can be re-run explicitly to
+    /// `alpha login` against a fresh tenant; can be re-run explicitly to
     /// re-train (with `--force`) or to opt back in after Skip.
     Quickstart(quickstart::QuickstartArgs),
 

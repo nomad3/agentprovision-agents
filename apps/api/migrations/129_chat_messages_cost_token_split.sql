@@ -2,7 +2,7 @@
 -- Add per-message input/output token split + cost + model columns.
 --
 -- Why: PR #414 surfaced the existing `tokens_used` column (sum of
--- input+output) in the API + ap CLI render. The code-worker callback
+-- input+output) in the API + alpha CLI render. The code-worker callback
 -- already extracts `input_tokens`, `output_tokens`, `total_cost_usd`,
 -- and `model` from CLI events (apps/code-worker/session_manager.py:140
 -- and workflows.py:1402+) but the data was being stored only in the
@@ -15,7 +15,7 @@
 -- Callers MUST render absence as `—`, not 0 — they mean different
 -- things (see chat.py::_extract_tokens_used docstring).
 --
--- Index: per-session sum queries (ap session totals, web ChatPage
+-- Index: per-session sum queries (alpha session totals, web ChatPage
 -- header). Per-tenant cost rollups go through the
 -- agent_performance_snapshots table — no separate index needed.
 

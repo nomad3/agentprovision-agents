@@ -1,4 +1,4 @@
-"""Cost + duration estimator for `ap run` dispatches.
+"""Cost + duration estimator for `alpha run` dispatches.
 
 Replaces the hardcoded `0.12 * n_providers` placeholder in
 `apps/api/app/api/v1/tasks_fanout.py` with a real SQL aggregation

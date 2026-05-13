@@ -1,11 +1,11 @@
 -- 126_tenants_onboarding_state.sql
 --
--- Adds onboarding state to tenants so `ap quickstart` (and the web
+-- Adds onboarding state to tenants so `alpha quickstart` (and the web
 -- onboarding wizard) can auto-trigger on first login. Once a tenant
 -- completes the wedge picker + initial training, `onboarded_at` is
 -- stamped and auto-trigger never fires again. A user who opts to
 -- skip stamps `onboarding_deferred_at`; auto-trigger is suppressed
--- on subsequent logins, but an explicit `ap quickstart` (or
+-- on subsequent logins, but an explicit `alpha quickstart` (or
 -- `--force`) still works.
 --
 -- See: docs/plans/2026-05-11-ap-quickstart-design.md §2.1, §7.0.
@@ -24,8 +24,8 @@ CREATE INDEX IF NOT EXISTS idx_tenants_onboarded
     WHERE onboarded_at IS NULL;
 
 COMMENT ON COLUMN tenants.onboarded_at IS
-    'Timestamp the tenant completed initial wedge-training (ap quickstart or web /onboarding). NULL = un-onboarded; auto-trigger fires.';
+    'Timestamp the tenant completed initial wedge-training (alpha quickstart or web /onboarding). NULL = un-onboarded; auto-trigger fires.';
 COMMENT ON COLUMN tenants.onboarding_deferred_at IS
-    'Timestamp the user pressed Skip during onboarding. Suppresses auto-trigger; explicit ap quickstart still works.';
+    'Timestamp the user pressed Skip during onboarding. Suppresses auto-trigger; explicit alpha quickstart still works.';
 COMMENT ON COLUMN tenants.onboarding_source IS
     'cli | web — which surface initiated the completed onboarding. Audit only; no business logic keys off this.';

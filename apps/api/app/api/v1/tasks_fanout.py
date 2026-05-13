@@ -1,5 +1,5 @@
 """
-Prototype backend for `ap run` + `ap watch`.
+Prototype backend for `alpha run` + `alpha watch`.
 
 Python side of Phase 1 of the CLI differentiation roadmap
 (`docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`).
@@ -39,7 +39,7 @@ code-worker.
 Tenant spoofing protection (round-1 B1):
   - `tenant_id` of every stored task is bound to the JWT — never to
     request-body fields. The CLI's `--tenant` flag is also removed
-    pending the `ap tenant use` ergonomics (design open question #4).
+    pending the `alpha tenant use` ergonomics (design open question #4).
   - `agent_id` and `session_id` in the body are not yet validated for
     tenant-ownership here because the prototype dispatch does not
     consume them downstream. They are stored on the record so the
@@ -134,11 +134,11 @@ class RunChildStatus(BaseModel):
 
 
 class RunFanoutRequest(BaseModel):
-    """Payload from `ap run`.
+    """Payload from `alpha run`.
 
     Tenant binding (round-1 B1): tenant identity is taken from the
     JWT — NOT from this body. We deliberately do NOT carry a
-    `tenant_id` field; any tenant override needs `ap tenant use`
+    `tenant_id` field; any tenant override needs `alpha tenant use`
     semantics (design open question #4) which are out of scope here.
     """
 
@@ -203,7 +203,7 @@ class TaskStatusResponse(BaseModel):
     status: str
     result: Optional[str] = None
     # Round-1 M2: surface failure reason on `failed`/`cancelled` so
-    # the CLI can render something other than "[ap] t_xxx — failed"
+    # the CLI can render something other than "[alpha] t_xxx — failed"
     # with no context. Stays `None` on `completed` / `running` /
     # `queued`. Free-form for the prototype; the real impl returns
     # a structured `{code, message, retryable}` discriminator.
@@ -256,7 +256,7 @@ def _mint_task_id() -> str:
     """Mint a task id.
 
     Round-1 H2: 16 hex chars (64-bit entropy) instead of 8 (32-bit).
-    Still typeable for humans resuming via `ap watch`, but 65K× safer
+    Still typeable for humans resuming via `alpha watch`, but 65K× safer
     against collision in the real impl that replaces this stub
     (which will see thousands of concurrent tasks per tenant per day).
     """
@@ -446,7 +446,7 @@ async def run_fanout(
     current_user: User = Depends(_verify_tenant_header),
     db: Session = Depends(get_db),
 ) -> RunFanoutResponse:
-    """Dispatch endpoint hit by `ap run`.
+    """Dispatch endpoint hit by `alpha run`.
 
     Behavior in the prototype:
       - Mints a parent task_id.
@@ -664,13 +664,13 @@ async def run_fanout(
 @router.get(
     "/{task_id}/status",
     response_model=TaskStatusResponse,
-    summary="Get task status — poll target for `ap watch`.",
+    summary="Get task status — poll target for `alpha watch`.",
 )
 async def task_status(
     task_id: str,
     current_user: User = Depends(_verify_tenant_header),
 ) -> TaskStatusResponse:
-    """Status endpoint hit by `ap watch` (poll loop in the prototype).
+    """Status endpoint hit by `alpha watch` (poll loop in the prototype).
 
     #177 Phase 1 ship: when the task_id is a real Temporal workflow id
     (prefix `fanout-<tenant_id>-...` minted by `_dispatch_fanout_workflow`)
@@ -803,7 +803,7 @@ async def task_status(
 
 @router.post(
     "/{task_id}/cancel",
-    summary="Cancel an in-flight task. (`ap cancel <task_id>`)",
+    summary="Cancel an in-flight task. (`alpha cancel <task_id>`)",
     status_code=204,
     responses={204: {"description": "Cancelled."}, 404: {"description": "Not found."}},
 )
@@ -811,7 +811,7 @@ async def cancel_task(
     task_id: str,
     current_user: User = Depends(_verify_tenant_header),
 ) -> None:
-    """Cancel endpoint for the CLI's eventual `ap cancel`. In the
+    """Cancel endpoint for the CLI's eventual `alpha cancel`. In the
     prototype we just drop the record; real impl issues
     `RequestCancelWorkflowExecution` to Temporal.
 
@@ -891,7 +891,7 @@ async def cancel_task(
     _evict_record(task_id)
 
 
-# ─── #188: SSE event stream for `ap watch` ────────────────────────────
+# ─── #188: SSE event stream for `alpha watch` ────────────────────────────
 
 
 @router.get(
@@ -902,7 +902,7 @@ async def task_events_stream(
     task_id: str,
     current_user: User = Depends(_verify_tenant_header),
 ):
-    """Long-lived SSE stream for `ap watch <task_id>`. Emits
+    """Long-lived SSE stream for `alpha watch <task_id>`. Emits
     `event: status` records on each parent + child status transition;
     terminates on the parent reaching a terminal state.
 

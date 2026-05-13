@@ -28,7 +28,7 @@ const BrandMark = ({ height = 36 }) => {
       viewBox="0 0 320 56"
       style={{ display: 'block', margin: '0 auto', maxWidth: '100%' }}
     >
-      {/* Geometric mark — a stack of three diagonals forming an `ap`
+      {/* Geometric mark — a stack of three diagonals forming an `alpha`
           glyph silhouette. Deliberately abstract; no animal artwork
           to avoid reading as the old wolf logo. Primary brand colour
           uses the same blue we already ship across the dashboard

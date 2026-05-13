@@ -1,4 +1,4 @@
-//! `ap` CLI entry point. Crate name `agentprovision-cli`, binary `ap`.
+//! `alpha` CLI entry point. Crate name `agentprovision-cli`, binary `alpha`.
 //!
 //! Skeleton baseline (PR-B): login / logout / status / chat / chat send.
 //! Subcommand expansion (agent, workflow, integration, ...) lands in PR-C.
@@ -37,7 +37,7 @@ async fn main() {
     if let Err(e) = run(args).await {
         eprintln!("{} {}", console::style("error:").red().bold(), e);
         // I4 from review: when the failure is a 401 from the API, point the
-        // user at `ap login` instead of leaving them to guess. We downcast
+        // user at `alpha login` instead of leaving them to guess. We downcast
         // through anyhow's error chain — both the immediate
         // `Error::Unauthorized` and a 401 returned via `Error::Api` count.
         let auth_failed =
@@ -52,7 +52,7 @@ async fn main() {
             eprintln!(
                 "{} run `{}` to authenticate.",
                 console::style("hint:").yellow().bold(),
-                console::style("ap login").bold()
+                console::style("alpha login").bold()
             );
         }
         std::process::exit(1);

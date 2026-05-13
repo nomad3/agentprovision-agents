@@ -1,4 +1,4 @@
-//! `ap login` — device-flow first, fallback to email/password.
+//! `alpha login` — device-flow first, fallback to email/password.
 
 use clap::Args;
 use dialoguer::Password;

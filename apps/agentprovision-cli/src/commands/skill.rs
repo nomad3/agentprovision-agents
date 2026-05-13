@@ -1,4 +1,4 @@
-//! `ap skill` — browse the file-based skill marketplace.
+//! `alpha skill` — browse the file-based skill marketplace.
 //!
 //! Surfaces `GET /api/v1/skills/library` — the same endpoint the web
 //! SkillsPage uses. Read-only for now; create/execute/import flow lives

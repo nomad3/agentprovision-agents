@@ -190,12 +190,12 @@ def test_hard_exception_skips_without_cooldown(monkeypatch):
     cli_chain = agent_router._resolve_cli_chain(None, uuid.uuid4(), explicit_platform="copilot_cli")
     response_text = None
     attempted = []
-    for ap in cli_chain:
-        attempted.append(ap)
+    for alpha in cli_chain:
+        attempted.append(alpha)
         try:
             response_text, _meta = agent_router.run_agent_session(
                 None, tenant_id=uuid.uuid4(), user_id=uuid.uuid4(),
-                platform=ap, agent_slug="luna", agent_skill_slugs=None,
+                platform=alpha, agent_slug="luna", agent_skill_slugs=None,
                 message="hi", channel="api", sender_phone=None,
                 conversation_summary="",
             )

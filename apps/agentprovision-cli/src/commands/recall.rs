@@ -1,11 +1,11 @@
-//! `ap recall <QUERY>` — unified semantic search across the tenant's
+//! `alpha recall <QUERY>` — unified semantic search across the tenant's
 //! memory layer.
 //!
 //! Phase 2 of the CLI differentiation roadmap (#179) — see
 //! `docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md` §4.
 //!
-//! Distinct from `ap memory search`, which is scoped to the knowledge
-//! graph (entities). `ap recall` hits `/api/v1/memories/search` which
+//! Distinct from `alpha memory search`, which is scoped to the knowledge
+//! graph (entities). `alpha recall` hits `/api/v1/memories/search` which
 //! is the unified semantic search across **all** memory content types
 //! (entities, observations, episodes, conversation snippets,
 //! commitments, goals) — the same surface chat agents query before
@@ -86,7 +86,7 @@ pub async fn run(args: RecallArgs, ctx: Context) -> anyhow::Result<()> {
     match ctx.client.send_json::<RecallResponse>(req).await {
         Ok(resp) => render(&args, &resp, ctx.json),
         Err(Error::Unauthorized) => {
-            anyhow::bail!("not logged in — run `ap login` first")
+            anyhow::bail!("not logged in — run `alpha login` first")
         }
         Err(e) => Err(e.into()),
     }
@@ -98,11 +98,11 @@ fn render(args: &RecallArgs, resp: &RecallResponse, json: bool) -> anyhow::Resul
         return Ok(());
     }
     if resp.results.is_empty() {
-        println!("[ap] no memories matched: \"{}\"", args.query);
+        println!("[alpha] no memories matched: \"{}\"", args.query);
         return Ok(());
     }
     println!(
-        "[ap] {} result(s) for \"{}\":",
+        "[alpha] {} result(s) for \"{}\":",
         resp.results.len(),
         args.query
     );
@@ -123,10 +123,7 @@ fn render(args: &RecallArgs, resp: &RecallResponse, json: bool) -> anyhow::Resul
             .get("content_type")
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        let content = r
-            .get("text_content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let content = r.get("text_content").and_then(|v| v.as_str()).unwrap_or("");
         let similarity = r
             .get("similarity")
             .and_then(|v| v.as_f64())
@@ -186,14 +183,9 @@ mod tests {
 
     #[test]
     fn parses_types_csv() {
-        let cli = TestCli::try_parse_from([
-            "t",
-            "recall",
-            "x",
-            "--types",
-            "entity,observation,episode",
-        ])
-        .unwrap();
+        let cli =
+            TestCli::try_parse_from(["t", "recall", "x", "--types", "entity,observation,episode"])
+                .unwrap();
         let TestCmd::Recall(a) = cli.cmd;
         assert_eq!(
             a.types,

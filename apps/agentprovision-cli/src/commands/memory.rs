@@ -1,4 +1,4 @@
-//! `ap memory` — browse and search the tenant's knowledge graph.
+//! `alpha memory` — browse and search the tenant's knowledge graph.
 //!
 //! Surfaces `/api/v1/knowledge/entities` (list) and
 //! `/api/v1/knowledge/entities/search` (server-side search). Same endpoints
@@ -16,7 +16,7 @@ pub enum MemoryCommand {
     Ls(LsArgs),
     /// Search entities by name (server-side text + embedding).
     Search(SearchArgs),
-    /// Record a new entity in the knowledge graph (`ap memory observe`).
+    /// Record a new entity in the knowledge graph (`alpha memory observe`).
     Observe(ObserveArgs),
 }
 
@@ -67,7 +67,7 @@ pub struct LsArgs {
     #[arg(long, default_value_t = 25)]
     pub limit: u32,
 
-    /// Page offset. Pair with --limit for `ap memory ls --skip 25 --limit 25`
+    /// Page offset. Pair with --limit for `alpha memory ls --skip 25 --limit 25`
     /// to walk a long graph.
     #[arg(long, default_value_t = 0)]
     pub skip: u32,

@@ -1,4 +1,4 @@
-//! `ap workflow` — list / show / run dynamic workflows.
+//! `alpha workflow` — list / show / run dynamic workflows.
 //!
 //! Matches the web `WorkflowsPage` surface (apps/web/src/pages/WorkflowsPage.js
 //! + apps/web/src/components/workflows/DynamicWorkflowsTab.js). Uses the
