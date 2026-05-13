@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod cancel;
 pub mod chat;
 pub mod completions;
 pub mod integration;

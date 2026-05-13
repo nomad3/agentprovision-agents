@@ -3,8 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, chat, completions, integration, login, logout, memory, quickstart, run, session, skill,
-    status, upgrade, watch, workflow,
+    agent, cancel, chat, completions, integration, login, logout, memory, quickstart, run,
+    session, skill, status, upgrade, watch, workflow,
 };
 use crate::context::Context;
 
@@ -73,6 +73,12 @@ pub enum Command {
     /// `ap run --background` for fire-and-forget then later resume.
     Watch(watch::WatchArgs),
 
+    /// Cancel an in-flight task. For fanout tasks, both the parent
+    /// and all child workflows are cancelled. Best-effort under
+    /// Temporal — the leaf CLI subprocess may take seconds to
+    /// observe the cancel signal.
+    Cancel(cancel::CancelArgs),
+
     /// Self-update the `ap` binary from GitHub Releases.
     Upgrade(upgrade::UpgradeArgs),
 
@@ -126,6 +132,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Chat(ChatCommand::Repl(a)) => chat::repl(a, ctx).await,
         Command::Run(a) => run::run(a, ctx).await,
         Command::Watch(a) => watch::run(a, ctx).await,
+        Command::Cancel(a) => cancel::run(a, ctx).await,
         Command::Upgrade(a) => upgrade::run(a, ctx).await,
         Command::Agent(cmd) => agent::dispatch(cmd, ctx).await,
         Command::Workflow(cmd) => workflow::dispatch(cmd, ctx).await,
