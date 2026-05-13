@@ -18,6 +18,7 @@ pub mod session;
 pub mod sessions;
 pub mod skill;
 pub mod status;
+pub mod tasks;
 pub mod upgrade;
 pub mod usage;
 pub mod watch;

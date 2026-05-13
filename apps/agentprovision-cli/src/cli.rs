@@ -4,8 +4,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::{
     agent, cancel, chat, coalition, completions, goal, integration, login, logout, memory, policy,
-    quickstart, recall, recipes, remember, run, session, sessions, skill, status, upgrade, usage,
-    watch, workflow,
+    quickstart, recall, recipes, remember, run, session, sessions, skill, status, tasks, upgrade,
+    usage, watch, workflow,
 };
 use crate::context::Context;
 
@@ -160,6 +160,13 @@ pub enum Command {
     /// any slot is provided.
     Goal(goal::GoalArgs),
 
+    /// Cross-machine task dashboard — working + recently-completed
+    /// workflow runs for the caller's tenant. `alpha tasks attach
+    /// <id>` streams a live task; `alpha tasks cancel <id>` stops
+    /// one. v1 surfaces working + completed; needs-input is deferred
+    /// to a follow-up (see the agent-view design doc).
+    Tasks(tasks::TasksArgs),
+
     /// Per-provider tokens + cost rollup for the caller's tenant.
     /// Phase 4 of the CLI roadmap (#181). See `alpha costs` for the
     /// daily breakdown.
@@ -211,6 +218,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Coalition(cmd) => coalition::dispatch(cmd, ctx).await,
         Command::Recipes(cmd) => recipes::run(recipes::RecipesArgs { command: cmd }, ctx).await,
         Command::Goal(a) => goal::run(a, ctx).await,
+        Command::Tasks(a) => tasks::run(a, ctx).await,
         Command::Usage(a) => usage::usage(a, ctx).await,
         Command::Costs(a) => usage::costs(a, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
