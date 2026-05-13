@@ -23,6 +23,8 @@ from app.api.v1 import (
     chat,
     internal,
     memories,
+    memory_remember,
+    agent_policies,
     knowledge,
     llm,
     branding,
@@ -137,6 +139,14 @@ router.include_router(dataset_groups.router, prefix="/dataset-groups", tags=["da
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(internal.router, prefix="/internal", tags=["internal"])
 router.include_router(memories.router, prefix="/memories", tags=["memories"])
+# `alpha remember` (Phase 2 of the CLI roadmap, #179) — free-form
+# fact ingestion via knowledge.create_observation.
+router.include_router(memory_remember.router, prefix="/memory", tags=["memory"])
+# `alpha policy show` (Phase 2 of the CLI roadmap, #179) — read-only
+# inspection of agent_policies. Mounted after agents.router; verified
+# no `/{agent_id}/policies` route exists there, so registration order
+# is moot. Kept here for OpenAPI tag grouping.
+router.include_router(agent_policies.router, prefix="/agents", tags=["agents"])
 router.include_router(knowledge.router, prefix="/knowledge", tags=["knowledge"])
 router.include_router(llm.router, prefix="/llm", tags=["llm"])
 router.include_router(branding.router, prefix="/branding", tags=["branding"])

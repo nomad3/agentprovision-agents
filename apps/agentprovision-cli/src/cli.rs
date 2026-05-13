@@ -3,8 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, cancel, chat, coalition, completions, integration, login, logout, memory, quickstart,
-    recall, run, session, sessions, skill, status, upgrade, watch, workflow,
+    agent, cancel, chat, coalition, completions, integration, login, logout, memory, policy,
+    quickstart, recall, remember, run, session, sessions, skill, status, upgrade, watch, workflow,
 };
 use crate::context::Context;
 
@@ -123,6 +123,19 @@ pub enum Command {
     /// docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md.
     Recall(recall::RecallArgs),
 
+    /// Write a free-form fact into the tenant's memory layer. The
+    /// fact is embedded for semantic recall and recorded as an
+    /// observation (optionally attached to an entity via `--entity`).
+    /// Phase 2 (#179) companion to `alpha recall`.
+    Remember(remember::RememberArgs),
+
+    /// Inspect agent governance policies (rate limits, allowed tools,
+    /// approval gates, escalation chains). Read-only — policy
+    /// mutation goes through the web UI for audit trail. Phase 2
+    /// (#179) of the CLI roadmap.
+    #[command(subcommand)]
+    Policy(policy::PolicyCommand),
+
     /// Dispatch and inspect multi-agent coalitions (incident
     /// investigations, plan/verify, research/synthesize, debate/
     /// resolve, propose/critique/revise). Backed by the existing
@@ -167,6 +180,8 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Skill(cmd) => skill::dispatch(cmd, ctx).await,
         Command::Memory(cmd) => memory::dispatch(cmd, ctx).await,
         Command::Recall(a) => recall::run(a, ctx).await,
+        Command::Remember(a) => remember::run(a, ctx).await,
+        Command::Policy(cmd) => policy::run(policy::PolicyArgs { command: cmd }, ctx).await,
         Command::Coalition(cmd) => coalition::dispatch(cmd, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
