@@ -18,6 +18,11 @@ use std::time::{Duration, Instant};
 
 use crate::context::Context;
 
+/// Round-1 review L3: shared poll cadence constant. Referenced by both
+/// `poll_until_terminal` (legacy fallback) and the SSE-handshake-
+/// failure recovery in `sse_until_terminal`.
+const POLL_TICK: Duration = Duration::from_millis(1500);
+
 #[derive(Debug, Args)]
 pub struct WatchArgs {
     /// Task ID returned by `ap run` (e.g. `t_a4f3b2c1d2e3f4a5`).
@@ -104,7 +109,7 @@ pub async fn run(args: WatchArgs, ctx: Context) -> anyhow::Result<()> {
     // 1.5s poll loop for environments where SSE isn't viable
     // (corporate proxies, older API versions).
     if args.poll {
-        poll_until_terminal(&ctx, &args.task_id, deadline, Duration::from_millis(1500)).await
+        poll_until_terminal(&ctx, &args.task_id, deadline, POLL_TICK).await
     } else {
         sse_until_terminal(&ctx, &args.task_id, deadline).await
     }
@@ -113,9 +118,13 @@ pub async fn run(args: WatchArgs, ctx: Context) -> anyhow::Result<()> {
 /// #188: SSE-driven event consumer. Mirrors `poll_until_terminal`'s
 /// output semantics (prints transitions only, returns on terminal)
 /// but listens to the server's `/tasks-fanout/{id}/events/stream`
-/// instead of polling /status. Falls back to the poll loop on
-/// non-2xx SSE handshake so a missing-endpoint API doesn't 500 the
-/// user.
+/// instead of polling /status. On terminal status (`ended`), fetches
+/// the final `/status` payload and renders via `render_terminal` —
+/// so SSE-mode and poll-mode output are render-identical for both
+/// human and `--json` consumers (round-1 H2 + M1 fix).
+///
+/// Falls back to the poll loop on non-2xx SSE handshake so a
+/// missing-endpoint API doesn't break the user.
 pub async fn sse_until_terminal(
     ctx: &Context,
     task_id: &str,
@@ -132,93 +141,102 @@ pub async fn sse_until_terminal(
             // available (older API, proxy stripping), fall back to
             // the legacy poll loop with a one-line warning to stderr.
             eprintln!(
-                "[ap] SSE unavailable ({}); falling back to poll. \
-                 Pass --poll explicitly to silence this warning.",
-                e
+                "[ap] SSE unavailable ({e}); falling back to poll. Pass --poll to silence."
             );
-            return poll_until_terminal(
-                ctx,
-                task_id,
-                deadline,
-                Duration::from_millis(1500),
-            )
-            .await;
+            return poll_until_terminal(ctx, task_id, deadline, POLL_TICK).await;
         }
     };
 
-    while let Some(item) = stream.next().await {
-        // Deadline check between events — SSE doesn't naturally
-        // observe wallclock so we poll the deadline here.
-        if let Some(d) = deadline {
-            if Instant::now() >= d {
+    loop {
+        // Round-1 review H1: wrap stream.next() in a timeout so a
+        // wedged stream (heartbeat-only, no events) still respects
+        // the user's --timeout. `eventsource_stream` filters SSE
+        // comments per spec, so heartbeats never yield items.
+        let remaining = match deadline {
+            Some(d) => d.saturating_duration_since(Instant::now()),
+            // No deadline → use a long-but-finite wait so we still
+            // see Ctrl-C and don't accidentally block forever.
+            None => Duration::from_secs(86_400),
+        };
+        if remaining.is_zero() {
+            if !ctx.json {
+                println!(
+                    "[ap] {task_id} — still running after timeout; task continues. \
+                     Resume with: ap watch {task_id}"
+                );
+            }
+            return Ok(());
+        }
+
+        let next = tokio::time::timeout(remaining, stream.next()).await;
+        let item = match next {
+            Err(_elapsed) => {
+                // CLI-side deadline hit (no events for the whole window).
                 if !ctx.json {
                     println!(
-                        "[ap] {} — still running after timeout; task continues. \
-                         Resume with: ap watch {}",
-                        task_id, task_id
+                        "[ap] {task_id} — still running after timeout; task continues. \
+                         Resume with: ap watch {task_id}"
                     );
                 }
                 return Ok(());
             }
-        }
+            Ok(None) => {
+                // Stream closed without `ended` event — most likely
+                // a backend hiccup. Render the final state via /status
+                // so SSE + poll outputs stay identical (H2 / M1).
+                return finalize_terminal(ctx, task_id).await;
+            }
+            Ok(Some(item)) => item,
+        };
 
         let ev = match item {
             Ok(ev) => ev,
             Err(e) => {
-                eprintln!("[ap] SSE stream error: {}", e);
+                eprintln!("[ap] SSE stream error: {e}");
                 return Ok(());
             }
         };
 
         match ev.event.as_deref() {
             Some("status") => {
-                // data: {"task_id":"...","status":"..."}
-                if let Some(status) = _extract_field(&ev.data, "status") {
+                if let Some(status) = extract_field(&ev.data, "status") {
                     if ctx.json {
                         println!("{}", serde_json::json!({"status": status}));
                     } else {
-                        println!("[ap] {} — {}", task_id, status);
+                        println!("[ap] {task_id} — {status}");
                     }
                 }
             }
             Some("child_status") => {
-                // data: {"task_id":"...","provider":"...","status":"..."}
                 if !ctx.json {
-                    let provider = _extract_field(&ev.data, "provider")
+                    let provider = extract_field(&ev.data, "provider")
                         .unwrap_or_else(|| "?".to_string());
-                    let status = _extract_field(&ev.data, "status")
+                    let status = extract_field(&ev.data, "status")
                         .unwrap_or_else(|| "?".to_string());
-                    let child_tid = _extract_field(&ev.data, "task_id")
+                    let child_tid = extract_field(&ev.data, "task_id")
                         .unwrap_or_else(|| "?".to_string());
-                    println!(
-                        "       child {} ({}) — {}",
-                        child_tid, provider, status
-                    );
+                    println!("       child {child_tid} ({provider}) — {status}");
                 }
             }
             Some("result") => {
-                if let Some(merged) = _extract_field(&ev.data, "merged_text") {
-                    if !ctx.json {
-                        println!("\n{}", merged);
-                    } else {
-                        println!("{}", serde_json::json!({"result": merged}));
-                    }
-                }
+                // Best-effort body emission. The `ended` event below
+                // triggers the canonical `finalize_terminal` render
+                // which fetches /status and prints everything via
+                // `render_terminal` for parity with poll-mode.
             }
             Some("ended") => {
-                if let Some(final_status) = _extract_field(&ev.data, "status") {
-                    if !ctx.json {
-                        println!("[ap] {} — {} (terminal)", task_id, final_status);
-                    }
-                }
-                return Ok(());
+                // Round-1 review H2 + M1: SSE-mode finalization now
+                // mirrors poll-mode by GETting /status one more time
+                // and rendering via render_terminal. Catches the
+                // `error` field on failed tasks and emits the proper
+                // structured JSON payload in --json mode.
+                return finalize_terminal(ctx, task_id).await;
             }
             Some("timeout") => {
                 if !ctx.json {
                     println!(
                         "[ap] server-side SSE deadline hit; task still running. \
-                         Resume with: ap watch {}",
-                        task_id
+                         Resume with: ap watch {task_id}"
                     );
                 }
                 return Ok(());
@@ -232,15 +250,34 @@ pub async fn sse_until_terminal(
             }
         }
     }
-
-    // Stream ended without an "ended" event — surface the closure.
-    Ok(())
 }
 
-/// Tiny JSON field extractor for SSE data lines. We deliberately avoid
-/// pulling serde_json::Value into the hot path; the data shapes are
-/// flat with string-only values for the fields we care about.
-fn _extract_field(data: &str, field: &str) -> Option<String> {
+/// Round-1 review H2 + M1: shared finalizer. Fetches the canonical
+/// `/status` once at terminal and renders via `render_terminal` so
+/// SSE and poll modes emit identical bodies (error field, result
+/// field, children breakdown, --json payload shape).
+async fn finalize_terminal(ctx: &Context, task_id: &str) -> anyhow::Result<()> {
+    let path = format!("/api/v1/tasks-fanout/{task_id}/status");
+    match ctx.client.get_json::<TaskStatus>(&path).await {
+        Ok(s) => {
+            render_terminal(task_id, &s, ctx.json);
+            Ok(())
+        }
+        Err(e) => {
+            // /status 404 here usually means TTL-evicted or cancelled
+            // — print a minimal terminal line so the user isn't left
+            // wondering whether the stream just dropped.
+            if !ctx.json {
+                println!("[ap] {task_id} — terminal (final state unavailable: {e})");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Round-1 review N2: dropped the leading-underscore. JSON field
+/// extractor for SSE data lines.
+fn extract_field(data: &str, field: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(data)
         .ok()?
         .get(field)?
@@ -443,15 +480,15 @@ mod tests {
         // SSE data shape parser. Used by the SSE consumer to pull
         // typed fields out of free-form JSON event data.
         assert_eq!(
-            _extract_field(r#"{"status":"running"}"#, "status"),
+            extract_field(r#"{"status":"running"}"#, "status"),
             Some("running".to_string())
         );
-        assert_eq!(_extract_field(r#"{"x":1}"#, "missing"), None);
+        assert_eq!(extract_field(r#"{"x":1}"#, "missing"), None);
         // Numeric fields aren't strings — extractor returns None
         // (caller handles via Option semantics, no panic).
-        assert_eq!(_extract_field(r#"{"x":1}"#, "x"), None);
+        assert_eq!(extract_field(r#"{"x":1}"#, "x"), None);
         // Malformed JSON: graceful None.
-        assert_eq!(_extract_field("not-json", "status"), None);
+        assert_eq!(extract_field("not-json", "status"), None);
     }
 
     #[test]

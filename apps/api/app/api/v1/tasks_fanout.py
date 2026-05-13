@@ -71,6 +71,35 @@ from app.services.cost_estimator import estimate_fanout_cost
 router = APIRouter()
 
 
+def _verify_tenant_header(
+    current_user: User = Depends(get_current_user),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
+) -> User:
+    """Round-1 review M5: shared sub-dependency that codifies the
+    `X-Tenant-Id-must-match-JWT-when-present` contract across every
+    route on this router. Previously only `/run` enforced it; the
+    other routes silently let a stale header slip through. Now
+    every route gets the same gate.
+
+    Round-3 L3-2 (#435) leniency on whitespace-only headers is
+    preserved — pure-whitespace == "no header" == accept.
+
+    Returns `current_user` so route handlers can chain it directly:
+      `current_user: User = Depends(_verify_tenant_header)`
+    """
+    _header_tenant = (x_tenant_id or "").strip()
+    if _header_tenant and _header_tenant != str(current_user.tenant_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-Tenant-Id header does not match the JWT tenant. "
+                "Re-login against the intended tenant or clear the "
+                "stale tenant_id from your CLI config."
+            ),
+        )
+    return current_user
+
+
 # ── Request / response schemas ─────────────────────────────────────────
 
 
@@ -414,9 +443,8 @@ def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
 )
 async def run_fanout(
     body: RunFanoutRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
     db: Session = Depends(get_db),
-    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
 ) -> RunFanoutResponse:
     """Dispatch endpoint hit by `ap run`.
 
@@ -437,29 +465,10 @@ async def run_fanout(
 
     # Tenant identity is JWT-bound. Round-1 B1: we deliberately do not
     # accept a body field for this; it is the JWT's tenant or nothing.
+    # Round-1 review M5 (#188): X-Tenant-Id mismatch check has been
+    # lifted into `_verify_tenant_header` so /status, /cancel, and
+    # /events/stream get the same gate.
     tenant_id = str(current_user.tenant_id)
-
-    # Round-2 M2-1: codify the JWT-only contract. If a client sends
-    # `X-Tenant-Id`, it MUST equal the JWT-bound tenant. The CLI's
-    # `ApiClient` currently attaches this header on every request from
-    # `config.toml`; mismatches mean the local config has drifted
-    # from the active session (e.g. login against a new tenant
-    # without `ap config clean`). Reject with 400 so the user fixes
-    # it instead of silently relying on JWT-wins-by-precedence.
-    # Round-3 L3-2: treat a whitespace-only header as not-set (matches
-    # the empty-string behavior FastAPI already gives us for blank
-    # values). Avoids a confusing 400 on a hand-edited config that
-    # happens to leave an indented blank line.
-    _header_tenant = (x_tenant_id or "").strip()
-    if _header_tenant and _header_tenant != tenant_id:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "X-Tenant-Id header does not match the JWT tenant. "
-                "Re-login against the intended tenant or clear the "
-                "stale tenant_id from your CLI config."
-            ),
-        )
 
     # Belt-and-suspenders mutual-exclusion check. The model_validator
     # on RunFanoutRequest catches this before we reach here for direct
@@ -659,7 +668,7 @@ async def run_fanout(
 )
 async def task_status(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
 ) -> TaskStatusResponse:
     """Status endpoint hit by `ap watch` (poll loop in the prototype).
 
@@ -800,7 +809,7 @@ async def task_status(
 )
 async def cancel_task(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
 ) -> None:
     """Cancel endpoint for the CLI's eventual `ap cancel`. In the
     prototype we just drop the record; real impl issues
@@ -891,7 +900,7 @@ async def cancel_task(
 )
 async def task_events_stream(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
 ):
     """Long-lived SSE stream for `ap watch <task_id>`. Emits
     `event: status` records on each parent + child status transition;
@@ -958,12 +967,31 @@ async def task_events_stream(
                         task_id, expected_tenant_id=tenant_str
                     )
                     status = payload["status"]
+                    # Round-1 review M3: emit real-path child status by
+                    # reading the mirrored child records stored at
+                    # dispatch (the round-3 H3-1 fix in #435 already
+                    # wrote these into `_TASKS`). They use the same
+                    # _derive_status timer as stub-path; a follow-up
+                    # PR replaces this with real Temporal child handle
+                    # state once the FanoutChatCliWorkflow exposes it.
+                    parent_record = _TASKS.get(task_id)
                     child_payload: list[dict] = []
+                    if parent_record is not None:
+                        for c in parent_record.get("children", []):
+                            child_payload.append({
+                                "task_id": c["task_id"],
+                                "provider": c["provider"],
+                                "status": _derive_status(c["created_at"]),
+                            })
                 else:
                     record = _TASKS.get(task_id)
                     if not record:
                         # TTL-evicted or cancelled — terminate cleanly.
-                        yield "event: ended\ndata: {\"status\": \"gone\"}\n\n"
+                        # Round-1 review L5: emit `cancelled` (a known
+                        # terminal status) instead of `gone` so
+                        # downstream tooling (jq filters, render code)
+                        # doesn't see an out-of-vocab status string.
+                        yield 'event: ended\ndata: {"status": "cancelled"}\n\n'
                         return
                     status = _derive_status(record["created_at"])
                     child_payload = [
@@ -997,17 +1025,39 @@ async def task_events_stream(
                     last_child_status[c["task_id"]] = c["status"]
 
             if status in ("completed", "failed", "cancelled"):
-                # Fetch the final result for completed parents (real
-                # path only — stub /status already inlines it).
-                if is_real and status == "completed":
+                # Round-1 review M2: emit `result` event for stub-path
+                # completions too. The CLI's finalize_terminal then
+                # GETs /status to pick up the canonical body — both
+                # paths render identically.
+                if status == "completed":
                     try:
-                        from app.services import workflows as wf_service
+                        if is_real:
+                            from app.services import workflows as wf_service
 
-                        raw = await wf_service.fetch_workflow_result(task_id)
-                        merged = (
-                            raw.get("merged_text") if isinstance(raw, dict)
-                            else getattr(raw, "merged_text", None)
-                        )
+                            raw = await wf_service.fetch_workflow_result(task_id)
+                            merged = (
+                                raw.get("merged_text") if isinstance(raw, dict)
+                                else getattr(raw, "merged_text", None)
+                            )
+                        else:
+                            # Stub-path: reconstruct the synthetic body
+                            # the same way `/status` does inline.
+                            r = _TASKS.get(task_id) or {}
+                            if r.get("fanout"):
+                                providers = ", ".join(r["fanout"])
+                                merged = (
+                                    f"[demo result] Fanout over [{providers}] merged via "
+                                    f"`{r.get('merge', 'council')}`.\n\n"
+                                    f"Consensus: all reviewers converged on the prompt:\n"
+                                    f"  > {r.get('prompt', '')}\n\n"
+                                    f"This is a Phase-1-prototype synthetic response."
+                                )
+                            else:
+                                merged = (
+                                    f"[demo result] Completed.\n\n"
+                                    f"Prompt: {r.get('prompt', '')}\n\n"
+                                    f"This is a Phase-1-prototype synthetic response."
+                                )
                         if merged:
                             yield (
                                 f"event: result\ndata: "
@@ -1015,7 +1065,7 @@ async def task_events_stream(
                             )
                     except Exception:  # noqa: BLE001
                         pass  # best-effort; result is also available via /status
-                yield "event: ended\ndata: {\"status\": \"" + status + "\"}\n\n"
+                yield 'event: ended\ndata: ' + _json.dumps({"status": status}) + '\n\n'
                 return
 
             # Heartbeat every 15s to keep the connection alive through
