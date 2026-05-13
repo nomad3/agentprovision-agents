@@ -170,7 +170,7 @@ def test_complete_stamps_onboarded_at_and_source():
 
 
 def test_complete_recompletion_preserves_onboarded_at_but_updates_source():
-    """If the user runs `ap quickstart --force` (or the web flow
+    """If the user runs `alpha quickstart --force` (or the web flow
     re-completes), preserve the original onboarded_at timestamp for
     audit clarity but update onboarding_source to the latest
     surface that completed."""

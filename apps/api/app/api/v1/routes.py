@@ -207,14 +207,14 @@ router.include_router(
     prefix="/internal", tags=["internal"],
 )
 # PR-E — user-scoped agent-token mint (no /internal prefix, Bearer-auth).
-# This is the public-internet-reachable sibling that powers `ap claude-code`,
-# `ap codex`, etc. — multi-runtime dispatch from the user's terminal.
+# This is the public-internet-reachable sibling that powers `alpha claude-code`,
+# `alpha codex`, etc. — multi-runtime dispatch from the user's terminal.
 router.include_router(agent_tokens.router, tags=["agent-tokens"])
 # PR-Q0 — tenant onboarding state. Powers ap-quickstart and the web
 # /onboarding/* route guard's auto-trigger on first login.
 router.include_router(onboarding.router, tags=["onboarding"])
 # PR-Q1 — initial-training bulk-ingest endpoint + TrainingIngestionWorkflow
-# dispatch. Hot path that ap quickstart hits after the wedge picker
+# dispatch. Hot path that alpha quickstart hits after the wedge picker
 # completes (POST /memory/training/bulk-ingest with the source items).
 router.include_router(memory_training.router, tags=["memory-training"])
 # Public MCP gateway (Phase 1 of #175) — JWT-auth wrapper that

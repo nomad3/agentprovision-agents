@@ -1,6 +1,6 @@
 #!/bin/sh
 # shellcheck shell=sh
-# install.sh — POSIX installer for the `ap` CLI (AgentProvision).
+# install.sh — POSIX installer for the `alpha` CLI (AgentProvision).
 #
 # Usage (typical):
 #   curl -fsSL https://agentprovision.com/install.sh | sh
@@ -18,12 +18,12 @@
 #      via the static musl binary, windows users use install.ps1 instead).
 #   3. Resolves a concrete version (latest stable, or AGENTPROVISION_VERSION).
 #   4. Downloads the matching release archive + verifies SHA256.
-#   5. Extracts to a temp dir; moves `ap` → ~/.local/bin/ap.
-#   6. Drops the man page at ~/.local/share/man/man1/ap.1.
+#   5. Extracts to a temp dir; moves `alpha` → ~/.local/bin/alpha.
+#   6. Drops the man page at ~/.local/share/man/man1/alpha.1.
 #   7. Prints PATH-export instructions if ~/.local/bin isn't already on PATH.
 #   8. Cleans up.
 #
-# Idempotent: re-running upgrades cleanly. Use `ap upgrade` instead once
+# Idempotent: re-running upgrades cleanly. Use `alpha upgrade` instead once
 # you have an install (PR-D-4 — coming soon).
 
 set -eu
@@ -56,7 +56,7 @@ err() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 
 # ── refuse sudo ────────────────────────────────────────────────────────────
 if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
-    err "do not run with sudo. ap installs into \$HOME/.local/bin (no admin needed). If you need a system-wide install, set --prefix /usr/local explicitly and run as that user."
+    err "do not run with sudo. alpha installs into \$HOME/.local/bin (no admin needed). If you need a system-wide install, set --prefix /usr/local explicitly and run as that user."
 fi
 
 # ── detect OS + arch ───────────────────────────────────────────────────────
@@ -123,13 +123,13 @@ if [ "$VERSION" = "latest" ]; then
 else
     TAG="cli-v$VERSION"
 fi
-say "Installing ap $VERSION ($TRIPLE)"
+say "Installing alpha $VERSION ($TRIPLE)"
 
 # ── download ──────────────────────────────────────────────────────────────
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-ARCHIVE="ap-${TRIPLE}.${ARCHIVE_EXT}"
+ARCHIVE="alpha-${TRIPLE}.${ARCHIVE_EXT}"
 URL="https://github.com/$REPO/releases/download/$TAG/$ARCHIVE"
 # PR-D-2 publishes one combined SHA256SUMS manifest per release (one
 # line per archive). Half the HTTP round-trips vs. per-target sidecars,
@@ -164,22 +164,22 @@ case "$ARCHIVE_EXT" in
     tar.gz) tar -xzf "$TMP/$ARCHIVE" -C "$TMP/extract" ;;
 esac
 
-# The archive contains a single directory `ap-<triple>/`.
-SRC_DIR="$TMP/extract/ap-${TRIPLE}"
+# The archive contains a single directory `alpha-<triple>/`.
+SRC_DIR="$TMP/extract/alpha-${TRIPLE}"
 if [ ! -d "$SRC_DIR" ]; then
-    # Fallback: find the `ap` binary anywhere in the extracted tree.
-    SRC_DIR=$(find "$TMP/extract" -maxdepth 2 -name ap -type f -print -quit | xargs -n1 dirname 2>/dev/null || echo "$TMP/extract")
+    # Fallback: find the `alpha` binary anywhere in the extracted tree.
+    SRC_DIR=$(find "$TMP/extract" -maxdepth 2 -name alpha -type f -print -quit | xargs -n1 dirname 2>/dev/null || echo "$TMP/extract")
 fi
 
 mkdir -p "$INSTALL_DIR"
-mv -f "$SRC_DIR/ap" "$INSTALL_DIR/ap"
-chmod +x "$INSTALL_DIR/ap"
-say "Installed: $INSTALL_DIR/ap"
+mv -f "$SRC_DIR/alpha" "$INSTALL_DIR/alpha"
+chmod +x "$INSTALL_DIR/alpha"
+say "Installed: $INSTALL_DIR/alpha"
 
-if [ -f "$SRC_DIR/ap.1" ]; then
+if [ -f "$SRC_DIR/alpha.1" ]; then
     mkdir -p "$MAN_DIR"
-    cp -f "$SRC_DIR/ap.1" "$MAN_DIR/ap.1"
-    say "Installed man page: $MAN_DIR/ap.1"
+    cp -f "$SRC_DIR/alpha.1" "$MAN_DIR/alpha.1"
+    say "Installed man page: $MAN_DIR/alpha.1"
 fi
 
 # ── PATH check ────────────────────────────────────────────────────────────
@@ -205,5 +205,5 @@ esac
 
 # ── done ──────────────────────────────────────────────────────────────────
 say ""
-say "ap $VERSION ready."
-say "Run:    ap login    # to authenticate"
+say "alpha $VERSION ready."
+say "Run:    alpha login    # to authenticate"

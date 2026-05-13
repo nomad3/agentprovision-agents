@@ -7,13 +7,13 @@ description = "Single-binary CLI for the AgentProvision platform — login, chat
 license = "MIT"
 repository = "https://github.com/nomad3/agentprovision-agents"
 authors = ["AgentProvision"]
-# Binary is `ap` (short, gh-style). Crate name stays agentprovision-cli for
+# Binary is `alpha` (short, gh-style). Crate name stays agentprovision-cli for
 # crates.io / cargo install — `cargo install agentprovision-cli` installs
-# the `ap` binary onto PATH.
-default-run = "ap"
+# the `alpha` binary onto PATH.
+default-run = "alpha"
 
 [[bin]]
-name = "ap"
+name = "alpha"
 path = "src/main.rs"
 
 [dependencies]
@@ -25,7 +25,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 console = "0.15"
 dialoguer = { version = "0.11", default-features = false, features = ["password"] }
-# `ap quickstart` deps:
+# `alpha quickstart` deps:
 #   - uuid for client-side snapshot_id generation (idempotency key)
 #   - toml for resume-state persistence keyed by tenant_id
 # (Note: dialoguer's Confirm + Select are unconditionally re-exported
@@ -45,11 +45,11 @@ url = "2"
 webbrowser = "1"
 dirs = "5"
 crossterm = "0.27"
-# `ap upgrade` self-update path. PR-D-4.
+# `alpha upgrade` self-update path. PR-D-4.
 # Features: rustls (no openssl, matches reqwest config across the workspace),
 # archive-zip (we ship .zip on every target — PR-D-2 review fix), and
 # compression-zip-deflate (zip's internal per-entry compression — without
-# this the extractor errors on the deflate-stored `ap` binary inside the
+# this the extractor errors on the deflate-stored `alpha` binary inside the
 # archive). The task brief asked for `compression-flate2`, but that toggles
 # gzip support and force-pulls `archive-tar`; the correct knob for zip-only
 # is `compression-zip-deflate`.

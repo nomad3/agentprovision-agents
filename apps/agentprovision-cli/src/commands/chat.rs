@@ -1,4 +1,4 @@
-//! `ap chat send` (one-shot) and `ap chat repl`.
+//! `alpha chat send` (one-shot) and `alpha chat repl`.
 //!
 //! Streaming chat replies render through `termimad` so code blocks, headers,
 //! and lists land nicely in the terminal. With `--no-stream` we POST the

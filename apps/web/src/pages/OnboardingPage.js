@@ -1,7 +1,7 @@
 /**
  * /onboarding — guided initial-training wizard for new tenants.
  *
- * Mirrors the CLI `ap quickstart` flow (apps/agentprovision-cli/src/
+ * Mirrors the CLI `alpha quickstart` flow (apps/agentprovision-cli/src/
  * commands/quickstart.rs) as React screens so a user signing up via
  * the web hits the same memory-seeding contract.
  *
@@ -281,8 +281,8 @@ const ChannelStage = ({ onPick, onBack }) => (
     </div>
     <p className="small text-muted">
       The two CLI-only wedges need a terminal. Run{' '}
-      <code>ap quickstart --channel local_ai_cli</code> or{' '}
-      <code>ap quickstart --channel github_cli</code> if you'd rather seed
+      <code>alpha quickstart --channel local_ai_cli</code> or{' '}
+      <code>alpha quickstart --channel github_cli</code> if you'd rather seed
       from local tooling.
     </p>
     <div className="d-flex justify-content-start">
@@ -333,7 +333,7 @@ const DoneStage = ({ wedge, training, navigate }) => {
         <p className="text-muted">
           We marked your tenant as onboarded so you won't see this wizard
           again. To actually seed your agent's memory, either run{' '}
-          <code>ap quickstart</code> from your terminal or connect one of
+          <code>alpha quickstart</code> from your terminal or connect one of
           the OAuth sources (Gmail / Slack) once their server-side
           bootstrappers ship — tracked as PR-Q4b.
         </p>

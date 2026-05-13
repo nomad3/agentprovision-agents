@@ -20,11 +20,11 @@ class Tenant(Base):
         nullable=True
     )
 
-    # Onboarding state (migration 126). Drives `ap quickstart` /
+    # Onboarding state (migration 126). Drives `alpha quickstart` /
     # `/onboarding` auto-trigger on first authenticated contact. NULL
     # `onboarded_at` means un-onboarded — auto-trigger fires. NULL
     # `onboarding_deferred_at` means user has not pressed Skip; once
-    # set, auto-trigger is suppressed but explicit `ap quickstart`
+    # set, auto-trigger is suppressed but explicit `alpha quickstart`
     # still works. See docs/plans/2026-05-11-ap-quickstart-design.md.
     onboarded_at = Column(DateTime, nullable=True)
     onboarding_deferred_at = Column(DateTime, nullable=True)

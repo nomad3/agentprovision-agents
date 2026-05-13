@@ -5,7 +5,7 @@
 //! status updates).
 //!
 //! Also exposes `tail_task_events` (#188) — same protocol against the
-//! task-fanout SSE endpoint, used by `ap watch` to replace the 1.5s
+//! task-fanout SSE endpoint, used by `alpha watch` to replace the 1.5s
 //! poll loop.
 
 use eventsource_stream::Eventsource;
@@ -51,7 +51,7 @@ pub async fn tail_session_events(
 }
 
 
-// ─── #188: tail_task_events for `ap watch` ────────────────────────────
+// ─── #188: tail_task_events for `alpha watch` ────────────────────────────
 
 
 /// One event in the task-fanout SSE stream. The `event` field is one of:
@@ -73,7 +73,7 @@ pub struct TaskEvent {
 }
 
 /// Tail `/api/v1/tasks-fanout/{task_id}/events/stream`. Pairs with
-/// `ap watch <task_id>` (#188) — replaces the 1.5s poll loop with
+/// `alpha watch <task_id>` (#188) — replaces the 1.5s poll loop with
 /// SSE so the client doesn't hammer /status. Server-side polls
 /// Temporal (or the in-memory stub) and emits transitions only.
 pub async fn tail_task_events(

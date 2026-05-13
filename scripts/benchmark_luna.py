@@ -305,16 +305,16 @@ def _write_markdown(path: str, run: BenchmarkRun, summary: dict) -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--base-url", default=os.environ.get("BENCH_BASE_URL", "http://localhost:8000"))
-    ap.add_argument("--email", default=os.environ.get("BENCH_EMAIL", "test@example.com"))
-    ap.add_argument("--password", default=os.environ.get("BENCH_PASSWORD", "password"))
-    ap.add_argument("--token", default=os.environ.get("BENCH_TOKEN"),
+    alpha = argparse.ArgumentParser()
+    alpha.add_argument("--base-url", default=os.environ.get("BENCH_BASE_URL", "http://localhost:8000"))
+    alpha.add_argument("--email", default=os.environ.get("BENCH_EMAIL", "test@example.com"))
+    alpha.add_argument("--password", default=os.environ.get("BENCH_PASSWORD", "password"))
+    alpha.add_argument("--token", default=os.environ.get("BENCH_TOKEN"),
                     help="Pre-minted JWT — skips login. Use to bench any tenant without sharing the password.")
-    ap.add_argument("--runs", type=int, default=2, help="non-warmup runs per cell")
-    ap.add_argument("--warmup", type=int, default=1)
-    ap.add_argument("--out-prefix", default="benchmarks")
-    args = ap.parse_args()
+    alpha.add_argument("--runs", type=int, default=2, help="non-warmup runs per cell")
+    alpha.add_argument("--warmup", type=int, default=1)
+    alpha.add_argument("--out-prefix", default="benchmarks")
+    args = alpha.parse_args()
 
     base = args.base_url.rstrip("/")
     if args.token:

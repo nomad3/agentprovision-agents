@@ -193,7 +193,7 @@ def test_superuser_in_tenant_returns_200():
 def test_superuser_cross_tenant_returns_404():
     """Review S-2: tenant check fires before superuser check.
 
-    This is the right behaviour — a superuser running `ap claude-code`
+    This is the right behaviour — a superuser running `alpha claude-code`
     against a foreign tenant's agent_id by accident shouldn't mint
     cross-tenant. The X-Internal-Key path is the only way to mint
     across tenants.

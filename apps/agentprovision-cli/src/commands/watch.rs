@@ -1,6 +1,6 @@
-//! `ap watch <task_id>` — resume tailing a durable task from any machine.
+//! `alpha watch <task_id>` — resume tailing a durable task from any machine.
 //!
-//! Companion to `ap run --background`. The same JWT in `~/.ap/config.toml`
+//! Companion to `alpha run --background`. The same JWT in `~/.alpha/config.toml`
 //! authorizes the watch, so a task dispatched on a laptop can be tailed
 //! from a desktop without any handoff dance.
 //!
@@ -9,7 +9,7 @@
 //! `/chat/sessions/{id}/events/stream` route reused for tasks.
 //!
 //! Round-1 L1: the poll loop is exported as `poll_until_terminal` and
-//! reused by `ap run` (foreground mode) so future SSE replacement is
+//! reused by `alpha run` (foreground mode) so future SSE replacement is
 //! a single-site change.
 
 use clap::Args;
@@ -25,14 +25,14 @@ const POLL_TICK: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Args)]
 pub struct WatchArgs {
-    /// Task ID returned by `ap run` (e.g. `t_a4f3b2c1d2e3f4a5`).
+    /// Task ID returned by `alpha run` (e.g. `t_a4f3b2c1d2e3f4a5`).
     #[arg(value_name = "TASK_ID")]
     pub task_id: String,
 
-    /// If the task is already in a terminal state when `ap watch` is
+    /// If the task is already in a terminal state when `alpha watch` is
     /// invoked, print a single-line status and exit instead of
     /// rendering the full final result. Useful for scripted polling
-    /// (`ap watch t_xxx --no-tail-if-done --json`).
+    /// (`alpha watch t_xxx --no-tail-if-done --json`).
     ///
     /// Round-1 H3: previously declared but unused. Now wired.
     #[arg(long)]
@@ -40,7 +40,7 @@ pub struct WatchArgs {
 
     /// Maximum number of seconds to tail before exiting. The task
     /// itself keeps running on the backend — when the deadline hits,
-    /// the CLI prints a "still running; resume with ap watch <id>"
+    /// the CLI prints a "still running; resume with alpha watch <id>"
     /// hint and exits 0. Default 1800s (30 min). Round-2 L2-2: long
     /// migrations (e.g. monorepo refactors) may want `--timeout 7200`
     /// or `--timeout 0` (= no ceiling, runs until terminal).
@@ -59,7 +59,7 @@ pub struct WatchArgs {
 ///
 /// Mirrors `apps/api/app/api/v1/tasks_fanout.py::TaskStatusResponse`.
 /// `error` (round-1 M2) is populated on `failed` / `cancelled` so the
-/// CLI can render something more useful than `[ap] t_xxx — failed`.
+/// CLI can render something more useful than `[alpha] t_xxx — failed`.
 ///
 /// Round-2 L2-1: kept module-private. `poll_until_terminal` exposes
 /// `Result<()>` to callers; nothing outside this module needs the
@@ -89,7 +89,7 @@ pub async fn run(args: WatchArgs, ctx: Context) -> anyhow::Result<()> {
 
     // Snapshot first to handle the already-done case before entering
     // the poll loop (avoids one wasted sleep when the user runs
-    // `ap watch` on a task that finished hours ago).
+    // `alpha watch` on a task that finished hours ago).
     let initial: TaskStatus = ctx.client.get_json(&path).await?;
     if is_terminal(&initial.status) {
         if args.no_tail_if_done {
@@ -141,7 +141,7 @@ pub async fn sse_until_terminal(
             // available (older API, proxy stripping), fall back to
             // the legacy poll loop with a one-line warning to stderr.
             eprintln!(
-                "[ap] SSE unavailable ({e}); falling back to poll. Pass --poll to silence."
+                "[alpha] SSE unavailable ({e}); falling back to poll. Pass --poll to silence."
             );
             return poll_until_terminal(ctx, task_id, deadline, POLL_TICK).await;
         }
@@ -161,8 +161,8 @@ pub async fn sse_until_terminal(
         if remaining.is_zero() {
             if !ctx.json {
                 println!(
-                    "[ap] {task_id} — still running after timeout; task continues. \
-                     Resume with: ap watch {task_id}"
+                    "[alpha] {task_id} — still running after timeout; task continues. \
+                     Resume with: alpha watch {task_id}"
                 );
             }
             return Ok(());
@@ -174,8 +174,8 @@ pub async fn sse_until_terminal(
                 // CLI-side deadline hit (no events for the whole window).
                 if !ctx.json {
                     println!(
-                        "[ap] {task_id} — still running after timeout; task continues. \
-                         Resume with: ap watch {task_id}"
+                        "[alpha] {task_id} — still running after timeout; task continues. \
+                         Resume with: alpha watch {task_id}"
                     );
                 }
                 return Ok(());
@@ -192,7 +192,7 @@ pub async fn sse_until_terminal(
         let ev = match item {
             Ok(ev) => ev,
             Err(e) => {
-                eprintln!("[ap] SSE stream error: {e}");
+                eprintln!("[alpha] SSE stream error: {e}");
                 return Ok(());
             }
         };
@@ -203,7 +203,7 @@ pub async fn sse_until_terminal(
                     if ctx.json {
                         println!("{}", serde_json::json!({"status": status}));
                     } else {
-                        println!("[ap] {task_id} — {status}");
+                        println!("[alpha] {task_id} — {status}");
                     }
                 }
             }
@@ -235,14 +235,14 @@ pub async fn sse_until_terminal(
             Some("timeout") => {
                 if !ctx.json {
                     println!(
-                        "[ap] server-side SSE deadline hit; task still running. \
-                         Resume with: ap watch {task_id}"
+                        "[alpha] server-side SSE deadline hit; task still running. \
+                         Resume with: alpha watch {task_id}"
                     );
                 }
                 return Ok(());
             }
             Some("error") => {
-                eprintln!("[ap] server-side stream error: {}", ev.data);
+                eprintln!("[alpha] server-side stream error: {}", ev.data);
                 return Ok(());
             }
             _ => {
@@ -268,7 +268,7 @@ async fn finalize_terminal(ctx: &Context, task_id: &str) -> anyhow::Result<()> {
             // — print a minimal terminal line so the user isn't left
             // wondering whether the stream just dropped.
             if !ctx.json {
-                println!("[ap] {task_id} — terminal (final state unavailable: {e})");
+                println!("[alpha] {task_id} — terminal (final state unavailable: {e})");
             }
             Ok(())
         }
@@ -285,8 +285,8 @@ fn extract_field(data: &str, field: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Round-1 L1: shared poll loop used by `ap run` (foreground) and
-/// `ap watch`. Prints transitions on the parent status and on every
+/// Round-1 L1: shared poll loop used by `alpha run` (foreground) and
+/// `alpha watch`. Prints transitions on the parent status and on every
 /// child status. Returns Ok(()) on terminal status OR deadline hit.
 ///
 /// `deadline` is the wall-clock cutoff (None = run forever, which we
@@ -311,7 +311,7 @@ pub async fn poll_until_terminal(
             if ctx.json {
                 println!("{}", serde_json::to_string(&s.status)?);
             } else {
-                println!("[ap] {} — {}", task_id, s.status);
+                println!("[alpha] {} — {}", task_id, s.status);
             }
             last_status = Some(s.status.clone());
         }
@@ -348,11 +348,11 @@ pub async fn poll_until_terminal(
             if Instant::now() >= d {
                 // Round-1 H4: hit the safety ceiling. The task continues
                 // running on the backend; the user can resume via
-                // `ap watch <task_id>` later.
+                // `alpha watch <task_id>` later.
                 if !ctx.json {
                     println!(
-                        "[ap] {} — still {} after timeout; task continues. \
-                         Resume with: ap watch {}",
+                        "[alpha] {} — still {} after timeout; task continues. \
+                         Resume with: alpha watch {}",
                         task_id, s.status, task_id
                     );
                 }
@@ -385,11 +385,11 @@ fn render_terminal(task_id: &str, s: &TaskStatus, json: bool) {
         println!("{}", serde_json::to_string_pretty(&payload).unwrap());
         return;
     }
-    println!("[ap] {task_id} — {} (terminal)", s.status);
+    println!("[alpha] {task_id} — {} (terminal)", s.status);
     // Round-1 M2: render `error` before `result` so a failed task
     // shows the reason first.
     if let Some(err) = &s.error {
-        println!("\n[ap] error: {err}");
+        println!("\n[alpha] error: {err}");
     }
     if let Some(result) = &s.result {
         println!("\n{result}");
@@ -412,7 +412,7 @@ fn print_terminal_short(task_id: &str, s: &TaskStatus, json: bool) {
         println!("{}", serde_json::to_string(&payload).unwrap());
         return;
     }
-    println!("[ap] {task_id} — {}", s.status);
+    println!("[alpha] {task_id} — {}", s.status);
     if !s.children.is_empty() {
         let summary: Vec<String> = s
             .children

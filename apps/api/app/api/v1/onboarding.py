@@ -1,8 +1,8 @@
 """Tenant onboarding state endpoints.
 
-Drives the auto-trigger behaviour of `ap quickstart` (CLI) and the web
+Drives the auto-trigger behaviour of `alpha quickstart` (CLI) and the web
 `/onboarding/*` route guard. The CLI calls `GET /onboarding/status`
-right after a successful `ap login`; if `onboarded` is False and
+right after a successful `alpha login`; if `onboarded` is False and
 `deferred` is False, the CLI auto-launches the wedge picker. The web
 SPA does the same check on dashboard mount and redirects to
 `/onboarding/*` until the tenant completes (or skips).
@@ -97,8 +97,8 @@ def get_onboarding_status(
 ) -> OnboardingStatus:
     """Return whether the caller's tenant has completed onboarding.
 
-    The CLI calls this after `ap login` and uses it to decide whether
-    to auto-launch `ap quickstart`. The web SPA calls this on first
+    The CLI calls this after `alpha login` and uses it to decide whether
+    to auto-launch `alpha quickstart`. The web SPA calls this on first
     dashboard mount.
     """
     tenant = _tenant_for(current_user, db)
@@ -128,7 +128,7 @@ def defer_onboarding(
     current_user: User = Depends(deps.get_current_active_user),
 ) -> None:
     """Mark onboarding as 'skipped for now' — suppresses the next
-    auto-trigger but does not block explicit `ap quickstart` or a
+    auto-trigger but does not block explicit `alpha quickstart` or a
     manual visit to `/onboarding`.
 
     Idempotent: setting `onboarding_deferred_at` again just refreshes

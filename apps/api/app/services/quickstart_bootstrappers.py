@@ -1,4 +1,4 @@
-"""Server-side bootstrappers for `ap quickstart` web wedges (PR-Q4b).
+"""Server-side bootstrappers for `alpha quickstart` web wedges (PR-Q4b).
 
 When the web onboarding picks a Gmail or Calendar wedge, the browser
 can't reach the user's filesystem the way the CLI wedges can — it has

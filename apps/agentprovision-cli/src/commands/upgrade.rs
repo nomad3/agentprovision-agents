@@ -1,8 +1,8 @@
-//! `ap upgrade` — self-update from GitHub Releases.
+//! `alpha upgrade` — self-update from GitHub Releases.
 //!
 //! Replaces the curl|sh re-run path. Resolves the latest release tag from
 //! github.com/nomad3/servicetsunami-agents, downloads the matching
-//! `ap-{triple}.zip` asset, verifies it against the release's
+//! `alpha-{triple}.zip` asset, verifies it against the release's
 //! `SHA256SUMS` manifest (same manifest install.sh consumes — PR-D-3), and
 //! swaps the binary in place via the `self_update` crate.
 //!
@@ -31,7 +31,7 @@ use crate::output;
 
 const REPO_OWNER: &str = "nomad3";
 const REPO_NAME: &str = "servicetsunami-agents";
-const BIN_NAME: &str = "ap";
+const BIN_NAME: &str = "alpha";
 /// Tag scheme published by the release workflow. The CLI ships under
 /// `cli-v{semver}` so the monorepo can host releases for several
 /// independently-versioned components on the same default branch.
@@ -137,8 +137,8 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
             );
         } else {
             output::warn(format!(
-                "`ap` is installed under a package manager prefix ({}). \
-                 `ap upgrade` would leave the manager's view inconsistent.",
+                "`alpha` is installed under a package manager prefix ({}). \
+                 `alpha upgrade` would leave the manager's view inconsistent.",
                 current_exe.display()
             ));
             output::info(format!("upgrade with: {hint}"));
@@ -154,7 +154,7 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
         } else {
             "downgrade"
         };
-        let prompt = format!("{direction} ap from v{current} to v{target}?");
+        let prompt = format!("{direction} alpha from v{current} to v{target}?");
         let go = Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt(prompt)
             .default(true)
@@ -166,7 +166,7 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
     }
 
     let triple = detect_target_triple()?;
-    let asset_name = format!("ap-{triple}{}", archive_ext(&triple));
+    let asset_name = format!("alpha-{triple}{}", archive_ext(&triple));
     let tag = format!("{TAG_PREFIX}{target}");
 
     // Pre-flight: fetch the SHA256SUMS manifest so we can verify the new
@@ -187,7 +187,7 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
     let asset_for_blocking = asset_name.clone();
     let tag_for_blocking = tag.clone();
     let current_for_blocking = current_raw.to_string();
-    let bin_path_in_archive = format!("ap-{triple}/ap{}", exe_suffix_for(&triple));
+    let bin_path_in_archive = format!("alpha-{triple}/alpha{}", exe_suffix_for(&triple));
 
     let status = tokio::task::spawn_blocking(move || -> anyhow::Result<self_update::Status> {
         let status = self_update::backends::github::Update::configure()
@@ -199,7 +199,7 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
             // anyway, but being explicit guarantees we never get
             // surprised by a relocated process image.
             .bin_install_path(&install_path_for_blocking)
-            // The archive layout is `ap-<triple>/ap` (mirrors what
+            // The archive layout is `alpha-<triple>/alpha` (mirrors what
             // install.sh extracts). Using the literal triple instead of
             // `{{ target }}` avoids tangling with self_update's
             // template substitution rules.
@@ -245,7 +245,7 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
     // renaming over the old, and rename inherits xattrs from the source
     // file — which itself was extracted from a downloaded .zip and so
     // carries `com.apple.quarantine`. Gatekeeper refuses to launch
-    // quarantined unsigned binaries; strip the attr so the next `ap`
+    // quarantined unsigned binaries; strip the attr so the next `alpha`
     // invocation works without a Finder prompt.
     if cfg!(target_os = "macos") {
         strip_macos_quarantine(&current_exe);
@@ -278,7 +278,7 @@ pub async fn run(args: UpgradeArgs, ctx: Context) -> anyhow::Result<()> {
                 );
             } else {
                 output::ok(format!("upgraded to v{target_str}"));
-                output::info("run `ap --version` to confirm.");
+                output::info("run `alpha --version` to confirm.");
             }
         }
     }
@@ -301,7 +301,7 @@ async fn resolve_latest_version(allow_prerelease: bool) -> anyhow::Result<Versio
     }
 
     let client = reqwest::Client::builder()
-        .user_agent(concat!("ap-cli/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("alpha-cli/", env!("CARGO_PKG_VERSION")))
         .build()?;
 
     // Try /releases/latest first — it's a single round trip and matches
@@ -366,7 +366,7 @@ async fn fetch_expected_sha(tag: &str, asset_name: &str) -> anyhow::Result<Strin
     let url =
         format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{tag}/SHA256SUMS");
     let client = reqwest::Client::builder()
-        .user_agent(concat!("ap-cli/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("alpha-cli/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let body = client
         .get(&url)
@@ -429,7 +429,7 @@ fn exe_suffix_for(triple: &str) -> &'static str {
 
 /// Return a per-package-manager upgrade hint if `exe` lives under a
 /// known managed prefix; otherwise `None`. Path matching is deliberate
-/// substring — `~/.cargo/bin/ap` should match regardless of whose
+/// substring — `~/.cargo/bin/alpha` should match regardless of whose
 /// `$HOME` resolved it.
 fn managed_install_hint(exe: &Path) -> Option<String> {
     let s = exe.to_string_lossy();
@@ -439,7 +439,7 @@ fn managed_install_hint(exe: &Path) -> Option<String> {
     if s.starts_with("/opt/homebrew/") {
         return Some("brew upgrade agentprovision".into());
     }
-    // Homebrew on Intel macOS. /usr/local/bin/ap is the linkfarm symlink;
+    // Homebrew on Intel macOS. /usr/local/bin/alpha is the linkfarm symlink;
     // /usr/local/Cellar/ is the real path.
     if s.starts_with("/usr/local/Cellar/") || s.starts_with("/usr/local/bin/") {
         return Some("brew upgrade agentprovision".into());
@@ -461,7 +461,7 @@ fn managed_install_hint(exe: &Path) -> Option<String> {
 
 /// Strip `com.apple.quarantine` off the freshly-installed binary so
 /// Gatekeeper doesn't refuse to launch it. Errors are swallowed — the
-/// xattr may not be present (e.g. when the user ran `ap upgrade` from
+/// xattr may not be present (e.g. when the user ran `alpha upgrade` from
 /// within an already-quarantine-cleared shell), and `xattr -d` returns
 /// non-zero in that case.
 fn strip_macos_quarantine(bin: &PathBuf) {
@@ -490,34 +490,34 @@ mod tests {
 
     #[test]
     fn brew_apple_silicon_detected() {
-        let hint = managed_install_hint(&PathBuf::from("/opt/homebrew/bin/ap"));
+        let hint = managed_install_hint(&PathBuf::from("/opt/homebrew/bin/alpha"));
         assert!(hint.as_deref().unwrap_or("").contains("brew upgrade"));
     }
 
     #[test]
     fn brew_intel_macos_detected() {
         let hint = managed_install_hint(&PathBuf::from(
-            "/usr/local/Cellar/agentprovision/0.2.0/bin/ap",
+            "/usr/local/Cellar/agentprovision/0.2.0/bin/alpha",
         ));
         assert!(hint.as_deref().unwrap_or("").contains("brew upgrade"));
     }
 
     #[test]
     fn linuxbrew_detected() {
-        let hint = managed_install_hint(&PathBuf::from("/home/linuxbrew/.linuxbrew/bin/ap"));
+        let hint = managed_install_hint(&PathBuf::from("/home/linuxbrew/.linuxbrew/bin/alpha"));
         assert!(hint.as_deref().unwrap_or("").contains("brew upgrade"));
     }
 
     #[test]
     fn cargo_bin_detected() {
-        let hint = managed_install_hint(&PathBuf::from("/Users/alice/.cargo/bin/ap"));
+        let hint = managed_install_hint(&PathBuf::from("/Users/alice/.cargo/bin/alpha"));
         assert!(hint.as_deref().unwrap_or("").contains("cargo install"));
     }
 
     #[test]
     fn local_install_not_detected() {
-        // ~/.local/bin/ap — the install.sh default — is *not* managed.
-        assert!(managed_install_hint(&PathBuf::from("/Users/alice/.local/bin/ap")).is_none());
-        assert!(managed_install_hint(&PathBuf::from("/tmp/ap")).is_none());
+        // ~/.local/bin/alpha — the install.sh default — is *not* managed.
+        assert!(managed_install_hint(&PathBuf::from("/Users/alice/.local/bin/alpha")).is_none());
+        assert!(managed_install_hint(&PathBuf::from("/tmp/alpha")).is_none());
     }
 }

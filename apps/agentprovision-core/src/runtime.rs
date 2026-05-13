@@ -2,8 +2,8 @@
 //! five CLI runtimes the platform orchestrates from the server side
 //! (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI, OpenCode).
 //!
-//! The `ap` CLI uses this module to bring the same orchestration to a
-//! user's local terminal: `ap claude-code "fix X"` resolves an agent,
+//! The `alpha` CLI uses this module to bring the same orchestration to a
+//! user's local terminal: `alpha claude-code "fix X"` resolves an agent,
 //! mints an agent-scoped JWT via the user-scoped mint endpoint, and
 //! spawns the runtime with platform-injected context (memory recall,
 //! persona prompt, hook scripts, MCP config).
@@ -26,7 +26,7 @@ use crate::error::{Error, Result};
 /// the user's local Ollama and needs no cloud subscription, which is why
 /// `cli_platform_resolver.py` slots it last in the quota-fallback chain. The
 /// other four runtimes need either a tenant-stored OAuth token (server
-/// dispatch) or a local credential file (client dispatch via `ap`).
+/// dispatch) or a local credential file (client dispatch via `alpha`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeId {
@@ -102,7 +102,7 @@ impl RuntimeId {
     }
 
     /// All five — useful for `--parallel` fan-out plumbing (Section 9 of
-    /// the plan) and for `ap status` enumeration.
+    /// the plan) and for `alpha status` enumeration.
     pub fn all() -> &'static [RuntimeId] {
         &[
             RuntimeId::ClaudeCode,
@@ -115,7 +115,7 @@ impl RuntimeId {
 }
 
 /// Result of inspecting the local machine for a runtime binary. Designed to
-/// be cheap (one PATH lookup + one `--version`) so `ap status` can render
+/// be cheap (one PATH lookup + one `--version`) so `alpha status` can render
 /// the full matrix in <500ms without a network call.
 #[derive(Debug, Clone, Serialize)]
 pub struct PreflightReport {
@@ -132,7 +132,7 @@ pub struct PreflightReport {
 
 impl PreflightReport {
     /// True iff the binary is installed and resolves to an executable file.
-    /// Local-auth presence is informational; `ap run` can fall back to a
+    /// Local-auth presence is informational; `alpha run` can fall back to a
     /// tenant token even without local creds.
     pub fn is_runnable(&self) -> bool {
         self.binary_path.is_some()
@@ -156,7 +156,7 @@ pub fn preflight(runtime: RuntimeId) -> PreflightReport {
     }
 }
 
-/// Detect every runtime in one shot. Used by `ap status` and by the
+/// Detect every runtime in one shot. Used by `alpha status` and by the
 /// `--parallel` flow's gating loop.
 pub fn preflight_all() -> Vec<PreflightReport> {
     RuntimeId::all().iter().copied().map(preflight).collect()
@@ -166,7 +166,7 @@ fn detect_version(binary: &std::path::Path, runtime: RuntimeId) -> Option<String
     // Each runtime exposes its version through `<bin> --version`; we don't
     // try to parse the output's exact format because the four runtimes
     // disagree on whether they print "v0.37.1" / "0.37.1" / "claude-code
-    // 0.4.0" — the raw string is good enough for `ap status` display and
+    // 0.4.0" — the raw string is good enough for `alpha status` display and
     // for issue reports.
     let _ = runtime; // currently the same flag for all four
     let out = std::process::Command::new(binary)
@@ -178,7 +178,7 @@ fn detect_version(binary: &std::path::Path, runtime: RuntimeId) -> Option<String
     }
     // Multi-line --version output is common (Copilot CLI prints a version
     // line plus an "auto-update available" hint). Keep only the first
-    // non-blank line so `ap status` table stays one row per runtime.
+    // non-blank line so `alpha status` table stays one row per runtime.
     let s = String::from_utf8_lossy(&out.stdout);
     let first = s.lines().find(|l| !l.trim().is_empty())?.trim().to_string();
     if first.is_empty() {
