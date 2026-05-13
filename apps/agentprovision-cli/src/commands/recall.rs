@@ -123,10 +123,7 @@ fn render(args: &RecallArgs, resp: &RecallResponse, json: bool) -> anyhow::Resul
             .get("content_type")
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        let content = r
-            .get("text_content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let content = r.get("text_content").and_then(|v| v.as_str()).unwrap_or("");
         let similarity = r
             .get("similarity")
             .and_then(|v| v.as_f64())
@@ -186,14 +183,9 @@ mod tests {
 
     #[test]
     fn parses_types_csv() {
-        let cli = TestCli::try_parse_from([
-            "t",
-            "recall",
-            "x",
-            "--types",
-            "entity,observation,episode",
-        ])
-        .unwrap();
+        let cli =
+            TestCli::try_parse_from(["t", "recall", "x", "--types", "entity,observation,episode"])
+                .unwrap();
         let TestCmd::Recall(a) = cli.cmd;
         assert_eq!(
             a.types,

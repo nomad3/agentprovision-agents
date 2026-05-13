@@ -103,8 +103,7 @@ pub async fn run(args: WatchArgs, ctx: Context) -> anyhow::Result<()> {
     }
 
     // Round-1 H4 + round-2 L2-2: deadline (None when --timeout 0).
-    let deadline = (args.timeout > 0)
-        .then(|| Instant::now() + Duration::from_secs(args.timeout));
+    let deadline = (args.timeout > 0).then(|| Instant::now() + Duration::from_secs(args.timeout));
     // #188: default to SSE; `--poll` falls back to the legacy
     // 1.5s poll loop for environments where SSE isn't viable
     // (corporate proxies, older API versions).
@@ -209,12 +208,12 @@ pub async fn sse_until_terminal(
             }
             Some("child_status") => {
                 if !ctx.json {
-                    let provider = extract_field(&ev.data, "provider")
-                        .unwrap_or_else(|| "?".to_string());
-                    let status = extract_field(&ev.data, "status")
-                        .unwrap_or_else(|| "?".to_string());
-                    let child_tid = extract_field(&ev.data, "task_id")
-                        .unwrap_or_else(|| "?".to_string());
+                    let provider =
+                        extract_field(&ev.data, "provider").unwrap_or_else(|| "?".to_string());
+                    let status =
+                        extract_field(&ev.data, "status").unwrap_or_else(|| "?".to_string());
+                    let child_tid =
+                        extract_field(&ev.data, "task_id").unwrap_or_else(|| "?".to_string());
                     println!("       child {child_tid} ({provider}) — {status}");
                 }
             }
@@ -323,10 +322,7 @@ pub async fn poll_until_terminal(
                 .map(|(_, st)| st.clone());
             if prev.as_deref() != Some(&c.status) {
                 if !ctx.json {
-                    println!(
-                        "       child {} ({}) — {}",
-                        c.task_id, c.provider, c.status
-                    );
+                    println!("       child {} ({}) — {}", c.task_id, c.provider, c.status);
                 }
                 if let Some(entry) = last_child_states
                     .iter_mut()

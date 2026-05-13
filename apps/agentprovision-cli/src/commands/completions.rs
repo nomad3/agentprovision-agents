@@ -29,7 +29,9 @@ pub async fn run(args: CompletionsArgs, ctx: Context) -> anyhow::Result<()> {
     // Friendly install hint on stderr so it doesn't pollute the script
     // when users pipe stdout to a file.
     let hint = match args.shell {
-        Shell::Bash => "alpha completions bash > /etc/bash_completion.d/alpha   # or ~/.bash_completion",
+        Shell::Bash => {
+            "alpha completions bash > /etc/bash_completion.d/alpha   # or ~/.bash_completion"
+        }
         Shell::Zsh => {
             "alpha completions zsh > \"${fpath[1]}/_ap\"   # then `autoload -U compinit; compinit`"
         }

@@ -235,9 +235,14 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
     // user-supplied timeout (round-1 H4). The poll helper is shared
     // with `alpha watch` (round-1 L1). Round-2 L2-2: `--timeout 0` means
     // "no ceiling — tail until terminal."
-    let deadline = (args.timeout > 0)
-        .then(|| Instant::now() + Duration::from_secs(args.timeout));
-    poll_until_terminal(&ctx, &response.task_id, deadline, Duration::from_millis(1500)).await
+    let deadline = (args.timeout > 0).then(|| Instant::now() + Duration::from_secs(args.timeout));
+    poll_until_terminal(
+        &ctx,
+        &response.task_id,
+        deadline,
+        Duration::from_millis(1500),
+    )
+    .await
 }
 
 fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
@@ -279,7 +284,9 @@ fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
         // Round-3 L3-1: `--timeout 0` is the "no ceiling" sentinel
         // (round-2 L2-2). Don't print "for up to 0s" which sounds
         // like immediate-exit.
-        println!("[alpha] tailing events with no ceiling… (Ctrl-C detaches; task continues running)");
+        println!(
+            "[alpha] tailing events with no ceiling… (Ctrl-C detaches; task continues running)"
+        );
     } else {
         println!(
             "[alpha] tailing events for up to {}s… (Ctrl-C detaches; task continues running)",
@@ -324,7 +331,13 @@ mod tests {
 
     #[test]
     fn parses_providers_fallback_chain() {
-        let a = parse(&["test", "run", "task", "--providers", "claude,codex,opencode"]);
+        let a = parse(&[
+            "test",
+            "run",
+            "task",
+            "--providers",
+            "claude,codex,opencode",
+        ]);
         assert_eq!(a.providers, vec!["claude", "codex", "opencode"]);
         assert!(a.fanout.is_empty());
     }
@@ -332,7 +345,13 @@ mod tests {
     #[test]
     fn parses_fanout_with_merge() {
         let a = parse(&[
-            "test", "run", "audit", "--fanout", "claude,codex,gemini", "--merge", "council",
+            "test",
+            "run",
+            "audit",
+            "--fanout",
+            "claude,codex,gemini",
+            "--merge",
+            "council",
         ]);
         assert_eq!(a.fanout, vec!["claude", "codex", "gemini"]);
         assert!(matches!(a.merge, MergeMode::Council));
@@ -341,9 +360,18 @@ mod tests {
     #[test]
     fn fanout_and_providers_are_mutually_exclusive() {
         let res = TestCli::try_parse_from([
-            "test", "run", "x", "--fanout", "claude", "--providers", "codex",
+            "test",
+            "run",
+            "x",
+            "--fanout",
+            "claude",
+            "--providers",
+            "codex",
         ]);
-        assert!(res.is_err(), "clap should reject --fanout + --providers together");
+        assert!(
+            res.is_err(),
+            "clap should reject --fanout + --providers together"
+        );
     }
 
     #[test]

@@ -50,9 +50,7 @@ pub async fn tail_session_events(
     Ok(stream)
 }
 
-
 // ─── #188: tail_task_events for `alpha watch` ────────────────────────────
-
 
 /// One event in the task-fanout SSE stream. The `event` field is one of:
 ///   - "status"        — parent status change. data = {task_id, status}
@@ -80,8 +78,7 @@ pub async fn tail_task_events(
     client: &ApiClient,
     task_id: &str,
 ) -> Result<impl Stream<Item = Result<TaskEvent>>> {
-    let url =
-        client.build_url(&format!("/api/v1/tasks-fanout/{task_id}/events/stream"))?;
+    let url = client.build_url(&format!("/api/v1/tasks-fanout/{task_id}/events/stream"))?;
     let mut req = client.http().get(url).header("Accept", "text/event-stream");
     if let Some(tok) = client.token() {
         req = req.header("Authorization", format!("Bearer {tok}"));
