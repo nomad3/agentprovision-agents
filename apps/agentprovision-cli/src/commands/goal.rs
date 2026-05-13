@@ -14,6 +14,8 @@
 //!
 //! Roadmap doc: docs/plans/2026-05-13-alpha-agent-view-and-goal-recipes.md
 
+use std::io::IsTerminal;
+
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Input};
 use serde::{Deserialize, Serialize};
@@ -151,10 +153,14 @@ pub async fn run(args: GoalArgs, ctx: Context) -> anyhow::Result<()> {
             ));
         }
         if !resp.validation_errors.is_empty() {
-            output::warn(format!(
-                "validation errors: {}",
+            // I2 (round-1 review): non-zero exit on dry-run validation
+            // errors so CI gates can use `alpha goal --dry-run` as a
+            // real pre-flight check. The recipes.rs sibling still
+            // soft-warns; fix tracked separately.
+            anyhow::bail!(
+                "dry-run validation failed: {}",
                 resp.validation_errors.join("; ")
-            ));
+            );
         }
         return Ok(());
     }
@@ -184,7 +190,26 @@ pub async fn run(args: GoalArgs, ctx: Context) -> anyhow::Result<()> {
 /// non-interactive while still giving a fresh terminal user the guided
 /// flow.
 pub(crate) fn collect_contract(args: &GoalArgs) -> anyhow::Result<serde_json::Value> {
-    let interactive = args.outcome.is_none()
+    collect_contract_with_tty(args, std::io::stdin().is_terminal())
+}
+
+/// Lower-level entry point that accepts an explicit `stdin_is_tty` flag
+/// so tests can exercise both interactive-suppressed and interactive-
+/// allowed paths deterministically. The public `collect_contract`
+/// resolves the flag from the real stdin.
+///
+/// Why the TTY gate: a caller that passes NO flags (e.g. a CI runner
+/// expecting env-driven config) would otherwise hit
+/// `dialoguer::Input::interact_text()` against a non-TTY stdin and
+/// either error confusingly or block (round-1 review I1). When stdin
+/// isn't a TTY we force the non-interactive path; the existing
+/// "outcome required" check then surfaces a clear error.
+pub(crate) fn collect_contract_with_tty(
+    args: &GoalArgs,
+    stdin_is_tty: bool,
+) -> anyhow::Result<serde_json::Value> {
+    let interactive = stdin_is_tty
+        && args.outcome.is_none()
         && args.criteria.is_empty()
         && args.rules.is_empty()
         && args.quality_bar.is_none()
@@ -198,14 +223,21 @@ pub(crate) fn collect_contract(args: &GoalArgs) -> anyhow::Result<serde_json::Va
         None => anyhow::bail!("--outcome (positional) is required when running non-interactively"),
     };
 
+    // BLOCKER B1 fix (round-1 review): non-interactive callers MUST
+    // provide at least one --criterion. The previous default
+    // ("The agent must list its definition-of-done in the final message")
+    // was self-referential — asking the agent to invent its own
+    // acceptance test undercuts the entire point of the Goal recipe,
+    // and contradicts the prompt's "do not silently relax it" clause.
     let criteria: Vec<String> = if !args.criteria.is_empty() {
         args.criteria.clone()
     } else if interactive {
         prompt_multiline("Success criteria? (one per line, blank to end)")?
     } else {
-        // Non-interactive without any --criterion is a soft default —
-        // require the agent to summarise its own definition of done.
-        vec!["The agent must list its definition-of-done in the final message.".into()]
+        anyhow::bail!(
+            "at least one --criterion (-c) is required when running non-interactively; \
+             the Goal recipe needs an external acceptance test to know when the agent is done"
+        );
     };
 
     let rules: Vec<String> = if !args.rules.is_empty() {
@@ -288,15 +320,33 @@ async fn resolve_goal_template(ctx: &Context) -> anyhow::Result<Uuid> {
         .client
         .get_json("/api/v1/dynamic-workflows/templates/browse?tier=native")
         .await?;
-    rows.into_iter()
-        .find(|r| r.name == GOAL_RECIPE_NAME && r.tier.as_deref() == Some("native"))
+    // I3 (round-1 review): seed_native_templates dedupes on (name, tier)
+    // BUT there's no DB unique-constraint, so an operator-error or a
+    // multi-tenant seed race could leave two native Goal rows. `.find()`
+    // would silently pick whichever sorts first — bail loudly instead so
+    // the operator can clean up.
+    let matches: Vec<Uuid> = rows
+        .into_iter()
+        .filter(|r| r.name == GOAL_RECIPE_NAME && r.tier.as_deref() == Some("native"))
         .map(|r| r.id)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "native '{GOAL_RECIPE_NAME}' recipe not seeded on this server — \
-                 ask the operator to restart the API to re-run seed_native_templates"
-            )
-        })
+        .collect();
+    match matches.as_slice() {
+        [] => Err(anyhow::anyhow!(
+            "native '{GOAL_RECIPE_NAME}' recipe not seeded on this server — \
+             ask the operator to restart the API to re-run seed_native_templates"
+        )),
+        [only] => Ok(*only),
+        many => Err(anyhow::anyhow!(
+            "ambiguous native '{GOAL_RECIPE_NAME}' recipe — {} rows match \
+             (ids: {}); ask the operator to deduplicate dynamic_workflows \
+             so only one row survives",
+            many.len(),
+            many.iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 async fn install_or_reuse(ctx: &Context, template_id: Uuid) -> anyhow::Result<Uuid> {
@@ -391,11 +441,11 @@ mod tests {
 
     #[test]
     fn collect_contract_non_interactive_with_flags() {
-        // When the user supplies any flag, we MUST NOT block on stdin —
-        // fall back to documented defaults for missing slots. This is
-        // the contract that lets CI and sub-agent callers run goal
-        // headlessly. (Asserted indirectly: if the function tried to
-        // prompt, the test would hang.)
+        // When the user supplies all required slots, missing optional
+        // slots fall back to documented defaults. This is the contract
+        // that lets CI and sub-agent callers run goal headlessly.
+        // (Asserted indirectly: if the function tried to prompt, the
+        // test would hang.)
         let args = GoalArgs {
             outcome: Some("ship X".into()),
             criteria: vec!["one".into(), "two".into()],
@@ -404,7 +454,8 @@ mod tests {
             deliverable: None,
             dry_run: false,
         };
-        let v = collect_contract(&args).unwrap();
+        // Force non-interactive even on a TTY-equipped test runner.
+        let v = collect_contract_with_tty(&args, /*stdin_is_tty=*/ false).unwrap();
         assert_eq!(v["outcome"], "ship X");
         assert_eq!(v["success_criteria"], "- one\n- two");
         assert_eq!(v["operating_rules"], "(none specified)");
@@ -430,7 +481,46 @@ mod tests {
             deliverable: None,
             dry_run: false,
         };
-        let err = collect_contract(&args).unwrap_err();
+        let err = collect_contract_with_tty(&args, /*stdin_is_tty=*/ false).unwrap_err();
+        assert!(err.to_string().contains("outcome"));
+    }
+
+    #[test]
+    fn collect_contract_non_interactive_without_criterion_errors() {
+        // BLOCKER B1 fix (round-1 review): non-interactive call with an
+        // outcome but no success criteria MUST error. The previous
+        // self-referential default ("agent must list its own
+        // definition-of-done") undermined the recipe's whole point.
+        let args = GoalArgs {
+            outcome: Some("ship the migration".into()),
+            criteria: vec![],
+            rules: vec![],
+            quality_bar: None,
+            deliverable: None,
+            dry_run: false,
+        };
+        let err = collect_contract_with_tty(&args, /*stdin_is_tty=*/ false).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--criterion"),
+            "error should name the missing flag: got {msg:?}"
+        );
+        assert!(
+            msg.contains("acceptance test"),
+            "error should explain why criteria matter: got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn collect_contract_no_args_no_tty_errors_instead_of_prompting() {
+        // IMPORTANT I1 (round-1 review): a CI runner that invokes
+        // `alpha goal` bare (no flags, no TTY) used to hit
+        // `dialoguer::Input::interact_text()` against a non-TTY stdin
+        // and either error confusingly or block. The TTY gate now
+        // forces the non-interactive path, which surfaces the missing-
+        // outcome error cleanly.
+        let args = GoalArgs::default();
+        let err = collect_contract_with_tty(&args, /*stdin_is_tty=*/ false).unwrap_err();
         assert!(err.to_string().contains("outcome"));
     }
 }
