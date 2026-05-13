@@ -7,6 +7,7 @@ mod cli;
 mod commands;
 mod context;
 mod output;
+mod progress;
 
 use clap::Parser;
 
