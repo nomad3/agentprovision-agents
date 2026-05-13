@@ -52,9 +52,27 @@ def _user(tenant_id: Optional[str] = None) -> User:
 def _make_client(user: User) -> TestClient:
     """Build a TestClient with `get_current_user` overridden to `user`.
     The `tasks_fanout` router is mounted at `/api/v1/tasks-fanout` to
-    match production routing."""
+    match production routing.
+
+    #190: the route now also depends on `get_db` (for the cost
+    estimator). Override with a MagicMock — the estimator falls
+    through to the static placeholder when there's no data, which
+    is what the existing tests assume (none of them seed historical
+    chat_messages)."""
+    from unittest.mock import MagicMock
+
+    # MagicMock returns MagicMock for every attribute / call chain,
+    # so cost_estimator's `db.query(...)...all()` returns a MagicMock
+    # whose iter / len behaviour is "empty list" — close enough; the
+    # estimator's "no rows" branch is what we want here.
+    def _stub_db():
+        m = MagicMock()
+        m.query.return_value.join.return_value.filter.return_value.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        yield m
+
     app = FastAPI()
     app.dependency_overrides[deps.get_current_user] = lambda: user
+    app.dependency_overrides[deps.get_db] = _stub_db
     app.include_router(tf.router, prefix="/api/v1/tasks-fanout")
     return TestClient(app, raise_server_exceptions=False)
 
