@@ -172,12 +172,21 @@ def list_dashboard_tasks(
     tenant_id filter — the model itself has no row-level policy in
     pg, so missing this filter would leak across tenants.
     """
-    now = datetime.now(timezone.utc)
+    # `WorkflowRun.started_at` and `completed_at` are declared as
+    # `Column(DateTime, ...)` (TIMESTAMP WITHOUT TIME ZONE), populated
+    # by naive `datetime.utcnow()`. Comparing tz-aware Python datetimes
+    # against naive columns raises `DatatypeMismatch` on psycopg3 and
+    # silently strips on psycopg2 — a real footgun under driver upgrade
+    # (PR #454 round-2 review I-new-1). Strip tzinfo on the Python side
+    # for query bounds; `_utc_aware` re-attaches UTC on the way out for
+    # the CLI deser path. The proper fix is migrating the columns to
+    # TIMESTAMPTZ — tracked alongside the B1 follow-up.
+    now_naive = datetime.utcnow()
 
     # ── Working: status="running" within this tenant, within the
     # WORKING_FLOOR window so zombie rows from crashed workers don't
     # bloat the dashboard forever (PR #454 review I2).
-    working_floor = now - WORKING_FLOOR
+    working_floor = now_naive - WORKING_FLOOR
     working_rows = (
         db.query(WorkflowRun, DynamicWorkflow.name)
         .join(DynamicWorkflow, WorkflowRun.workflow_id == DynamicWorkflow.id)
@@ -195,7 +204,7 @@ def list_dashboard_tasks(
     # If `completed_at` is NULL (crashed mid-step before writing it),
     # gate on `started_at >= cutoff` instead — without this floor a 6-
     # month-old crash row would still surface (PR #454 review I1).
-    cutoff = now - COMPLETED_LOOKBACK
+    cutoff = now_naive - COMPLETED_LOOKBACK
     completed_rows = (
         db.query(WorkflowRun, DynamicWorkflow.name)
         .join(DynamicWorkflow, WorkflowRun.workflow_id == DynamicWorkflow.id)
