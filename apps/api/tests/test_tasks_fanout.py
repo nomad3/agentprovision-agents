@@ -55,19 +55,19 @@ def _make_client(user: User) -> TestClient:
     match production routing.
 
     #190: the route now also depends on `get_db` (for the cost
-    estimator). Override with a MagicMock — the estimator falls
-    through to the static placeholder when there's no data, which
-    is what the existing tests assume (none of them seed historical
-    chat_messages)."""
+    estimator). Override with a MagicMock that terminates ANY query
+    chain at `.all()` returning an empty list. Round-1 review M4:
+    chain-shape-agnostic (loops over method names instead of hard-
+    coding a specific .filter().filter().filter() depth)."""
     from unittest.mock import MagicMock
 
-    # MagicMock returns MagicMock for every attribute / call chain,
-    # so cost_estimator's `db.query(...)...all()` returns a MagicMock
-    # whose iter / len behaviour is "empty list" — close enough; the
-    # estimator's "no rows" branch is what we want here.
     def _stub_db():
         m = MagicMock()
-        m.query.return_value.join.return_value.filter.return_value.filter.return_value.filter.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
+        chain = MagicMock()
+        chain.all.return_value = []
+        for method in ("join", "filter", "order_by", "limit"):
+            getattr(chain, method).return_value = chain
+        m.query.return_value = chain
         yield m
 
     app = FastAPI()

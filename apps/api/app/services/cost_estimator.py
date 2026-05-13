@@ -26,12 +26,16 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Iterable, Optional
+from typing import Literal, Sequence
 
-from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.chat import ChatMessage, ChatSession
+
+# Round-1 review L4: type the confidence literal so call-site typos
+# fail at type-check time. Wire shape remains plain string.
+Confidence = Literal["low", "medium", "high"]
 
 
 # Static fallback. Matches the prior placeholder in tasks_fanout.py.
@@ -64,14 +68,14 @@ class CostEstimate:
 
     estimated_cost_usd: float
     estimated_duration_seconds: int
-    confidence: str  # "low" | "medium" | "high"
+    confidence: Confidence
 
 
 def estimate_fanout_cost(
     db: Session,
     *,
     tenant_id: uuid.UUID,
-    providers: Iterable[str],
+    providers: Sequence[str],
     sample_limit: int = 50,
 ) -> CostEstimate:
     """Estimate the total cost + duration of dispatching to N providers
@@ -81,20 +85,25 @@ def estimate_fanout_cost(
       db: SQLAlchemy session.
       tenant_id: Tenant whose history we read. Caller passes the JWT-
         bound value; we do not accept untrusted input.
-      providers: Iterable of provider identifiers ("claude", "codex",
+      providers: List of provider identifiers ("claude", "codex",
         "gemini", ...). Order does not matter. Empty list → falls
         back to placeholder for a single-provider dispatch.
+
+        Round-1 review H1: providers NOT in `_PROVIDER_MODEL_PREFIXES`
+        are skipped (treated as zero-history). Previously the code
+        fell back to `provider + "-"` which would let a caller pass
+        `["%"]` and ilike-match every assistant message in the tenant
+        — non-injecting but estimate-poisoning and DB-cost-burning.
       sample_limit: Per-provider history cap. Cheap default keeps the
         query under a few KB even for active tenants.
 
     Returns:
       CostEstimate with `confidence` reflecting how much historical
-      data backed the number ("low" = none, "medium" = ≥1 sample on
-      any provider, "high" = ≥5 samples on every provider).
+      data backed the number. See `_HIGH_CONFIDENCE_SAMPLES` /
+      `_MEDIUM_CONFIDENCE_SAMPLES` for the thresholds.
     """
 
     provider_list = [p.strip() for p in providers if p and p.strip()]
-    n = max(len(provider_list), 1)
 
     if not provider_list:
         return CostEstimate(
@@ -108,25 +117,40 @@ def estimate_fanout_cost(
     sample_counts: list[int] = []
 
     for provider in provider_list:
-        prefixes = _PROVIDER_MODEL_PREFIXES.get(provider, [provider + "-"])
-        per_provider_cost, per_provider_duration, samples = _aggregate_for_provider(
-            db,
-            tenant_id=tenant_id,
-            prefixes=prefixes,
-            sample_limit=sample_limit,
-        )
-        if samples == 0:
-            # Fall back to the per-provider placeholder for this slot;
-            # tally as a zero-sample contribution so confidence drops.
+        # Round-1 review H1: drop unknown providers instead of
+        # ilike-matching a user-controlled fallback prefix.
+        prefixes = _PROVIDER_MODEL_PREFIXES.get(provider)
+        if prefixes is None:
             per_provider_cost = _FALLBACK_COST_PER_PROVIDER_USD
             per_provider_duration = _FALLBACK_DURATION_SECONDS
-        total_cost += per_provider_cost
+            samples = 0
+        else:
+            per_provider_cost, per_provider_duration, samples = _aggregate_for_provider(
+                db,
+                tenant_id=tenant_id,
+                prefixes=prefixes,
+                sample_limit=sample_limit,
+            )
+            if samples == 0:
+                # Fall back to the per-provider placeholder for this
+                # slot; tally as a zero-sample contribution so
+                # confidence drops to low.
+                per_provider_cost = _FALLBACK_COST_PER_PROVIDER_USD
+                per_provider_duration = _FALLBACK_DURATION_SECONDS
+        # Round-1 review H2: round per-provider cost to the column's
+        # stored precision (NUMERIC(12,6)) before accumulating, so
+        # dev (sqlite float) and prod (Postgres Decimal) agree to the
+        # rendered display precision.
+        total_cost += round(per_provider_cost, 6)
         max_duration = max(max_duration, per_provider_duration)
         sample_counts.append(samples)
 
-    # Confidence ladder.
+    # Confidence ladder. Round-1 review M1: "high" requires EVERY
+    # provider to have ≥_HIGH_CONFIDENCE_SAMPLES. A 5-of-6 mix is
+    # deliberately "medium" — one new provider is still enough
+    # uncertainty to demote the headline number.
     if all(c >= _HIGH_CONFIDENCE_SAMPLES for c in sample_counts):
-        confidence = "high"
+        confidence: Confidence = "high"
     elif any(c >= _MEDIUM_CONFIDENCE_SAMPLES for c in sample_counts):
         confidence = "medium"
     else:
@@ -156,9 +180,7 @@ def _aggregate_for_provider(
     the static 30s placeholder for tenants with history. The
     follow-up RL retrieval will replace this with measured elapsed."""
 
-    # Build the model-prefix OR clause via ilike.
-    from sqlalchemy import or_
-
+    # Round-1 review L2: `or_` is imported at the top of the module.
     prefix_clauses = [ChatMessage.model.ilike(f"{p}%") for p in prefixes]
 
     # Limit-then-aggregate via a subquery so we cap the number of rows
@@ -183,7 +205,9 @@ def _aggregate_for_provider(
         return (0.0, 0, 0)
 
     costs = [float(r.cost_usd) for r in rows if r.cost_usd is not None]
-    tokens = [int(r.tokens_used) for r in rows if r.tokens_used]
+    # Round-1 review M2: `is not None` (not truthy) — tokens_used == 0
+    # is a legitimate measurement, distinct from "not measured".
+    tokens = [int(r.tokens_used) for r in rows if r.tokens_used is not None]
 
     if not costs:
         return (0.0, 0, 0)
