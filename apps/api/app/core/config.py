@@ -24,6 +24,24 @@ class Settings(BaseSettings):
     # window. 30 days matches GitHub CLI / Cloud SDK gcloud; raise to
     # 60–90 if support tickets show people logging in monthly.
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+    # When True, /auth/login and /auth/token/refresh trust the
+    # `CF-Connecting-IP` / `X-Forwarded-For` / `X-Real-IP` headers and
+    # record the first hop on the refresh_tokens row. When False
+    # (the local-dev default), we fall back to request.client.host so
+    # an attacker can't spoof their audit-row IP by setting the header
+    # themselves on a direct-to-uvicorn call. Helm prod values must
+    # set this True since Cloudflare tunnel + nginx are always in the
+    # path there. PR #442 review finding I-2.
+    TRUSTED_FORWARD_HEADERS: bool = False
+    # Grace window (seconds) after a refresh_token rotation where a
+    # replay of the just-rotated row returns the cached child instead
+    # of triggering reuse-detection chain-burn. Defends against the
+    # legitimate-concurrent-CLI race where `alpha chat` and `alpha
+    # watch` both hit 401 at the same second and both try to exchange
+    # the same refresh credential. PR #442 review finding B-1.
+    # Set to 0 to disable the grace window (recommended only if you
+    # have an external lock).
+    REFRESH_REUSE_GRACE_SECONDS: int = 30
     DATABASE_URL: str = "postgresql://postgres:postgres@db:5432/agentprovision"
     # Default storage path: /app/storage in container (set by IN_DOCKER=1 in
     # Dockerfile), ./storage for local dev. Helm/compose should set

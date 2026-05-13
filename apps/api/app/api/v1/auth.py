@@ -5,6 +5,7 @@ import json
 import secrets
 import logging
 import time
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -29,11 +30,34 @@ logger = logging.getLogger(__name__)
 
 _PASSWORD_RESET_MESSAGE = "Password reset instructions sent if email is registered"
 
-# Cap the refresh chain. Even with /auth/refresh, the *original* iat travels
-# with every refreshed token, so a stolen token at hour 0 can be refreshed
-# at most until hour `MAX_TOKEN_CHAIN_AGE_SECONDS / 3600`. After that the
-# user must re-authenticate. 7 days = weekly forced re-auth.
+# Legacy JWT-refresh chain cap (the bearer-required `/auth/refresh`
+# endpoint below). With the original-iat preserved across refreshes, a
+# stolen token at hour 0 can extend at most until
+# `MAX_TOKEN_CHAIN_AGE_SECONDS / 3600` hours later. After that the user
+# re-authenticates. 7 days = weekly forced re-auth for the legacy path.
+#
+# NOTE: the **opaque-credential** `/auth/token/refresh` path added in
+# the long-lived-sessions PR is bounded by `settings.REFRESH_TOKEN_EXPIRE_DAYS`
+# instead (default 30 days); this constant does NOT apply to that path.
 MAX_TOKEN_CHAIN_AGE_SECONDS = 7 * 24 * 60 * 60
+
+# Cap traversal in `refresh_token_service.revoke_chain_from` to prevent
+# write-amplification DoS if a malicious actor with a stolen token replays
+# against a very long chain. Pairs with the rate limiter on
+# `/auth/token/refresh` below.
+MAX_REFRESH_CHAIN_TRAVERSAL = 1000
+
+
+# Centralized constants for `refresh_tokens.revoked_reason`. Mirrors the
+# enum-by-string used in the service module — keeps grep working and
+# stops a future typo from creating an out-of-vocabulary state. Also
+# referenced from `tests/services/test_refresh_tokens.py`.
+class RevokeReason:
+    ROTATED = "rotated"
+    USER_REVOKED = "user_revoked"
+    REUSE_DETECTED = "reuse_detected"
+    LOGOUT = "logout"
+    ADMIN_REVOKED = "admin_revoked"
 
 
 _REFRESH_HINT_DEVICE_LABEL = "X-AP-Device-Label"  # opt-in header for CLI/SDK clients
@@ -54,13 +78,23 @@ def _device_label_from(request: Request) -> str | None:
 
 
 def _client_ip(request: Request) -> str | None:
-    """Cloudflare tunnel + uvicorn behind nginx layer in front; honour
-    common forwarded-for headers but ignore garbage."""
-    for hdr in ("cf-connecting-ip", "x-forwarded-for", "x-real-ip"):
-        val = request.headers.get(hdr)
-        if val:
-            # X-Forwarded-For is comma-separated; first hop is the client.
-            return val.split(",", 1)[0].strip()
+    """Resolve the caller's IP for the refresh-token audit row.
+
+    Cloudflare tunnel + uvicorn behind nginx in production make
+    `request.client.host` always the proxy, so we have to peek at
+    forwarding headers. **But** any client can set those headers when
+    the API is reachable directly (local dev, mesh-internal calls).
+    Trusting them unconditionally lets an attacker spoof their
+    audit-row IP at will. So we only honour forwarding headers when
+    `settings.TRUSTED_FORWARD_HEADERS=True` (helm prod values set this;
+    docker-compose local dev does not).
+    """
+    if settings.TRUSTED_FORWARD_HEADERS:
+        for hdr in ("cf-connecting-ip", "x-forwarded-for", "x-real-ip"):
+            val = request.headers.get(hdr)
+            if val:
+                # X-Forwarded-For is comma-separated; first hop is the client.
+                return val.split(",", 1)[0].strip()
     if request.client is None:
         return None
     return request.client.host
@@ -206,8 +240,6 @@ def exchange_refresh_token(
 
     # Step 1: look up by hash. We deliberately do NOT use find_active here
     # — we need to see revoked rows to detect replay.
-    import hashlib  # local import to keep top-of-file noise tight
-
     hashed = hashlib.sha256(secret.encode("utf-8")).hexdigest()
     row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashed).first()
     if row is None:
@@ -223,9 +255,64 @@ def exchange_refresh_token(
     # attacker, so we kill the entire chain and force re-auth on the
     # next attempt.
     if row.revoked_at is not None:
-        if row.revoked_reason == "rotated":
+        if row.revoked_reason == RevokeReason.ROTATED:
+            # B-1 grace window: if the row was rotated very recently,
+            # this is most likely a concurrent-CLI race (alpha chat +
+            # alpha watch both hit 401 at the same second). Replay
+            # the cached child instead of burning the chain.
+            grace = settings.REFRESH_REUSE_GRACE_SECONDS
+            within_grace = (
+                grace > 0
+                and (datetime.utcnow() - row.revoked_at).total_seconds() <= grace
+            )
+            if within_grace:
+                child = refresh_token_service.find_rotated_child(db, parent=row)
+                if child is not None:
+                    # Return the SAME access token shape the rotation
+                    # would have produced for the racing caller. We
+                    # can't replay the original access_token (we
+                    # didn't persist it), so mint a fresh one with the
+                    # same claims and return the still-active child
+                    # refresh secret — but the secret is hashed in DB,
+                    # not retrievable. That's a deliberate scope cut:
+                    # the grace window lets the racing call SUCCEED
+                    # with a fresh access_token, but the caller MUST
+                    # re-fetch the refresh token via /auth/login if
+                    # the access token expires a second time within
+                    # grace. In practice the grace window is 30s, so
+                    # this is fine.
+                    user = child.user
+                    access_token_expires = timedelta(
+                        minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
+                    )
+                    claims = {"user_id": str(user.id)}
+                    if user.tenant_id:
+                        claims["tenant_id"] = str(user.tenant_id)
+                    access_token = security.create_access_token(
+                        user.email,
+                        expires_delta=access_token_expires,
+                        additional_claims=claims,
+                    )
+                    logger.info(
+                        "refresh_token replay within grace window for user_id=%s — "
+                        "returning fresh access_token with no new refresh credential",
+                        row.user_id,
+                    )
+                    return {
+                        "access_token": access_token,
+                        "token_type": "bearer",
+                        # No refresh_token: the caller already has the
+                        # newly-rotated one from the winning racer.
+                        "refresh_token": None,
+                        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                    }
+            # Outside the grace window OR no child found: this is
+            # genuine reuse. Burn the chain.
             burned = refresh_token_service.revoke_chain_from(
-                db, leaf=row, reason="reuse_detected"
+                db,
+                leaf=row,
+                reason=RevokeReason.REUSE_DETECTED,
+                max_rows=MAX_REFRESH_CHAIN_TRAVERSAL,
             )
             db.commit()
             logger.warning(
@@ -303,7 +390,7 @@ def list_active_sessions(
 
 @router.delete("/sessions/{session_id}", status_code=204)
 def revoke_session(
-    session_id: str,
+    session_id: uuid.UUID,
     db: Session = Depends(deps.get_db),
     current_user=Depends(deps.get_current_active_user),
 ):
@@ -313,6 +400,10 @@ def revoke_session(
     Cross-user revoke is intentionally not supported here; admins
     revoking another user's sessions go through the admin surface
     (TODO; see `app/api/v1/admin/auth.py`).
+
+    `session_id` is typed `uuid.UUID` so FastAPI returns 422 (not 500)
+    on a malformed value before the query layer ever sees it — review
+    finding B-2 on PR #442.
     """
     row = (
         db.query(RefreshToken)
@@ -321,7 +412,44 @@ def revoke_session(
     )
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
-    refresh_token_service.revoke_one(db, row=row, reason="user_revoked")
+    refresh_token_service.revoke_one(db, row=row, reason=RevokeReason.USER_REVOKED)
+    db.commit()
+    return None
+
+
+@router.post("/token/revoke", status_code=204)
+@limiter.limit("30/minute")
+def revoke_refresh_token_by_secret(
+    request: Request,
+    payload: token_schema.RefreshTokenRequest,
+    db: Session = Depends(deps.get_db),
+):
+    """Server-side revocation by **opaque refresh-token secret**.
+
+    Counterpart to `/auth/token/refresh`: same shape, opposite verb.
+    The CLI's `alpha logout` POSTs the locally-stored refresh_token
+    here BEFORE wiping the keychain, so a stolen credential can't
+    keep auto-refreshing for the full 30-day window. RFC 7009 shape.
+
+    Idempotent: a token that's already revoked, expired, or unknown
+    still 204s. Defends against logout-flow flakiness; aggregated
+    revocation goes through `DELETE /auth/sessions/{id}` instead.
+
+    Review finding B-3 on PR #442.
+    """
+    secret = (payload.refresh_token or "").strip()
+    if not secret:
+        # Unlike /auth/token/refresh where the empty body is a 400,
+        # here we no-op — logout should never fail user-visibly on a
+        # malformed local credential. The local keychain wipe in the
+        # CLI is still the authoritative end state.
+        return None
+
+    hashed = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashed).first()
+    if row is None:
+        return None
+    refresh_token_service.revoke_one(db, row=row, reason=RevokeReason.LOGOUT)
     db.commit()
     return None
 

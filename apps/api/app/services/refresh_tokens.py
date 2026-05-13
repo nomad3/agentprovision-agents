@@ -14,6 +14,7 @@ RFC 6749bis and used by Auth0, Okta, Cognito, et al.
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
@@ -23,6 +24,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 
 def _hash_secret(secret: str) -> str:
@@ -72,53 +75,83 @@ def issue_refresh_token(
     return secret, row
 
 
-def find_active(db: Session, *, secret: str) -> Optional[RefreshToken]:
-    """Look up a refresh token by its plaintext secret. Returns None if
-    not found, revoked, or expired. Callers MUST check `is_active()`
-    themselves if they want to distinguish 'expired vs revoked vs missing'.
-    """
-    hashed = _hash_secret(secret)
-    row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashed).first()
-    if row is None:
-        return None
-    if not row.is_active():
-        return None
-    return row
-
-
 def revoke_chain_from(
     db: Session,
     *,
     leaf: RefreshToken,
     reason: str,
+    max_rows: int = 1000,
 ) -> int:
     """Walk `leaf` → parent → parent → … and revoke every still-live
-    link. Used on reuse detection: if a presented token was already
-    rotated (revoked_reason='rotated' on the row we found by hash),
-    we don't know which link in the chain leaked, so we kill the whole
-    family. Returns the number of rows revoked."""
+    link, then walk forward to revoke descendants too. Used on reuse
+    detection: if a presented token was already rotated
+    (`revoked_reason='rotated'` on the row we found by hash), we don't
+    know which link in the chain leaked, so we kill the whole family.
+
+    Returns the number of rows revoked. Stops walking after `max_rows`
+    to bound write-amplification on long chains; if the cap fires we
+    log at WARNING since it means a really old account is being
+    revoked. Review finding I-3 on PR #442.
+    """
     now = datetime.utcnow()
     count = 0
+    capped = False
+
+    def revoke(node: RefreshToken) -> bool:
+        """Returns True if we should keep walking (i.e. not capped)."""
+        nonlocal count, capped
+        if node.revoked_at is None:
+            node.revoked_at = now
+            node.revoked_reason = reason
+            count += 1
+            if count >= max_rows:
+                capped = True
+                return False
+        return True
+
+    # Up-walk: leaf → parent → ... → root.
     node: Optional[RefreshToken] = leaf
-    while node is not None:
-        if node.revoked_at is None:
-            node.revoked_at = now
-            node.revoked_reason = reason
-            count += 1
+    while node is not None and not capped:
+        if not revoke(node):
+            break
         node = node.parent
-    # Also revoke any not-yet-revoked descendants of leaf (children
-    # already rotated past it). The relationship backref `children`
-    # populated on the model gives us O(branching factor) per node.
+    # Down-walk: leaf → children → grand-children → ...
     stack = list(leaf.children)
-    while stack:
-        node = stack.pop()
-        if node.revoked_at is None:
-            node.revoked_at = now
-            node.revoked_reason = reason
-            count += 1
-        stack.extend(node.children)
+    while stack and not capped:
+        n = stack.pop()
+        if not revoke(n):
+            break
+        stack.extend(n.children)
+
     db.flush()
+    if capped:
+        logger.warning(
+            "revoke_chain_from hit traversal cap (%d rows) for user_id=%s leaf=%s — "
+            "chain may still have live links",
+            max_rows,
+            leaf.user_id,
+            leaf.id,
+        )
     return count
+
+
+def find_rotated_child(
+    db: Session, *, parent: RefreshToken
+) -> Optional[RefreshToken]:
+    """Return the still-active child that replaced `parent` during
+    rotation, if any. Used by the grace-window pathway in
+    `/auth/token/refresh` to replay the cached child instead of
+    triggering reuse-detection on a legitimate-concurrent-CLI race.
+
+    Defensive: a parent can have multiple children only if rotation
+    forked (a bug we want to never happen post-B-1 mutex fix); we
+    return the most recent unrevoked one to give the legitimate caller
+    the freshest credential. None when no child is active.
+    """
+    candidates = [c for c in parent.children if c.revoked_at is None]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c.created_at)
 
 
 def rotate(
@@ -151,6 +184,15 @@ def rotate(
     presented.revoked_reason = "rotated"
     presented.last_used_at = now
     db.flush()
+    # Forensic breadcrumb so incident review can reconstruct who
+    # rotated when. Pairs with the WARNING line in the reuse-detection
+    # path above. Review finding N-7.
+    logger.info(
+        "refresh_token rotated for user_id=%s old=%s new=%s",
+        presented.user_id,
+        presented.id,
+        new_row.id,
+    )
     return new_secret, new_row
 
 
