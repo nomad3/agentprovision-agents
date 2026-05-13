@@ -7,6 +7,7 @@ pub mod login;
 pub mod logout;
 pub mod memory;
 pub mod quickstart;
+pub mod recall;
 pub mod run;
 pub mod session;
 pub mod skill;
