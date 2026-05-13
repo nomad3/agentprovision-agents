@@ -445,13 +445,11 @@ after is depth.
    cancel too?
    *Recommend:* yes, propagate cancel; document `--no-cascade-cancel` as opt-out.
 3. **CLI streaming protocol** — SSE over HTTPS via Cloudflare tunnel hits
-   the 524 timeout known from chat (the same constraint `cli_session_manager`
-   and `docs/plans/2026-05-09-resilient-cli-orchestrator-design.md` already
-   discuss). The async chat-result pattern from that work should be the
-   backbone; `ap watch` ultimately polls + Server-Sent-Event hybrid.
-   *(Note: this references the AgentProvision design history, not a
-   numbered GitHub issue — the original draft used a local task-list
-   ID that collides with an unrelated GitHub PR number.)*
+   the 524 timeout known from chat. The same constraint is discussed in
+   `apps/api/app/services/cli_session_manager.py` and
+   `docs/plans/2026-05-09-resilient-cli-orchestrator-design.md`; the
+   async chat-result pattern from that work should be the backbone, and
+   `ap watch` ultimately polls + Server-Sent-Event hybrid.
 4. **Tenant context switching** — `ap --tenant prod run …` requires the
    user to have a token for that tenant. Need `ap tenants list` + `ap tenant use`
    ergonomics. *Not blocking Phase 1.*
