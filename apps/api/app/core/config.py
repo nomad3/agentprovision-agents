@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     USE_MEMORY_V2: bool = True
     USE_MEMORY_V2_TENANT_ALLOWLIST: list[str] = []
 
+    # Deployment environment. Used to gate dev-only side-effects
+    # (most notably the demo-user seed at startup; see init_db.py).
+    # Values: "local" / "dev" / "staging" / "production". Anything
+    # outside the {local, dev} set is treated as production-shape
+    # (no demo seed, no debug toggles).
+    ENVIRONMENT: str = "local"
+
     # Transactional email (password recovery, invitations, system
     # notifications). Set EMAIL_SMTP_HOST + the four companions to a
     # real relay (Gmail SMTP, AWS SES, Postmark, Mailgun) in production.
