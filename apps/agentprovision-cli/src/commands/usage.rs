@@ -212,6 +212,10 @@ pub async fn costs(args: CostsArgs, ctx: Context) -> anyhow::Result<()> {
 
 /// Human-readable number with K / M suffixes for the token columns.
 /// Mirrors the roadmap example (`1.2M`, `180K`).
+///
+/// `{:.0}` uses round-half-to-even (banker's) — 1.5K → "2K",
+/// 2.5K → "2K". Acceptable for human-readable rollups since the
+/// exact integer flows through `--json`. Reviewer NIT N3 on PR #448.
 fn format_num(n: i64) -> String {
     let f = n as f64;
     if f.abs() >= 1_000_000.0 {

@@ -10,8 +10,10 @@ Two surfaces:
   by cost desc.
 
 * `GET /api/v1/costs?period=mtd|7d|30d|24h[&agent_id=...]` — daily
-  rollup of cost + task count + p95 latency over `chat_messages`
-  for the caller's tenant. One row per day. Optional agent filter.
+  rollup of cost + message count over `chat_messages` for the
+  caller's tenant. One row per day. Optional agent filter.
+  TODO(phase-5): add p95 latency column per roadmap §7. Needs either
+  a `duration_ms` column on chat_messages OR a join to agent_tasks.
 
 Provider classification uses the same `_PROVIDER_MODEL_PREFIXES`
 map as `cost_estimator.py` so a future ledger schema swap keeps the
@@ -28,12 +30,12 @@ Distinct from `/insights/cost`:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_active_user
@@ -49,9 +51,14 @@ Period = Literal["24h", "7d", "30d", "mtd"]
 
 
 def _period_start(period: str) -> datetime:
-    """Translate a period code to a start datetime (UTC, naive — the
-    column is `TIMESTAMP WITHOUT TIME ZONE`)."""
-    now = datetime.utcnow()
+    """Translate a period code to a tz-aware UTC start datetime.
+
+    `chat_messages.created_at` is `DateTime(timezone=True)`
+    (timestamptz on Postgres). We compare aware-vs-aware to dodge the
+    SQLAlchemy 2.x deprecation warning + any future session-TZ flip.
+    Reviewer IMPORTANT I1 on PR #448.
+    """
+    now = datetime.now(timezone.utc)
     if period == "24h":
         return now - timedelta(hours=24)
     if period == "7d":
@@ -95,7 +102,7 @@ def get_usage(
 ):
     """Per-provider usage rollup for the caller's tenant."""
     start = _period_start(period)
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
 
     # One SQL pass: join chat_messages → chat_sessions for tenant
     # isolation, aggregate per chat_message.model. Then classify in
@@ -188,7 +195,7 @@ def get_costs(
 ):
     """Per-day cost rollup for the caller's tenant."""
     start = _period_start(period)
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
 
     q = (
         db.query(
