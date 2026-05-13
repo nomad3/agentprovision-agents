@@ -253,15 +253,20 @@ def trigger_collaboration(
     """Manually trigger a CoalitionWorkflow. Returns 202 immediately."""
     from app.services.agent_router import dispatch_coalition
 
+    # Round-1 review B3 (#440): thread pattern + role_overrides
+    # through so /trigger's documented fields actually take effect.
     dispatch_coalition(
         tenant_id=current_user.tenant_id,
         chat_session_id=str(request.chat_session_id),
         task_description=request.task_description,
+        pattern=request.pattern,
+        role_overrides=request.role_overrides,
     )
 
     return {
         "status": "dispatched",
         "chat_session_id": str(request.chat_session_id),
         "task_description": request.task_description,
+        "pattern": request.pattern,
         "message": "CoalitionWorkflow dispatched. Subscribe to GET /chat/sessions/{id}/events for collaboration_started.",
     }

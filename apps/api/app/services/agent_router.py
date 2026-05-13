@@ -455,8 +455,17 @@ def dispatch_coalition(
     tenant_id: uuid.UUID,
     chat_session_id: str,
     task_description: str,
+    pattern: Optional[str] = None,
+    role_overrides: Optional[dict] = None,
 ) -> None:
-    """Fire-and-forget CoalitionWorkflow dispatch."""
+    """Fire-and-forget CoalitionWorkflow dispatch.
+
+    Round-1 review B3 (#440): `pattern` + `role_overrides` are now
+    threaded through to the workflow input so `ap coalition run
+    --pattern X` actually pins the pattern instead of having the
+    workflow's internal keyword router pick. Both fields stay
+    Optional — when None the workflow falls back to its prior
+    auto-routing behavior."""
     import asyncio
     import threading
     from temporalio.client import Client
@@ -466,13 +475,18 @@ def dispatch_coalition(
         try:
             async def _go():
                 client = await Client.connect(settings.TEMPORAL_ADDRESS)
+                arg = {
+                    "tenant_id": str(tenant_id),
+                    "chat_session_id": chat_session_id,
+                    "task_description": task_description,
+                }
+                if pattern:
+                    arg["pattern"] = pattern
+                if role_overrides:
+                    arg["role_overrides"] = role_overrides
                 await client.start_workflow(
                     "CoalitionWorkflow",
-                    arg={
-                        "tenant_id": str(tenant_id),
-                        "chat_session_id": chat_session_id,
-                        "task_description": task_description,
-                    },
+                    arg=arg,
                     id=f"coalition-{chat_session_id}-{uuid.uuid4().hex[:8]}",
                     task_queue="agentprovision-orchestration",
                 )
