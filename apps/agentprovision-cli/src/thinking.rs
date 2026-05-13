@@ -14,14 +14,23 @@
 //! suppress or double-render it.
 //!
 //! Behaviour matrix:
-//!   ctx.json        → no spinner (would contaminate the JSON envelope)
+//!   ctx.json        → no spinner (matches `repl()`'s json-bail and keeps
+//!                     stderr clean for `chat send --json` callers piping
+//!                     stdout to jq while leaving stderr on a TTY)
 //!   stdout not TTY  → no spinner (piped to a file / another command)
 //!   otherwise       → ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ braille frame at 80ms with a dim suffix
+//!
+//! Frame count diverges deliberately from `login.rs` / `quickstart.rs`
+//! (which include a trailing blank "breath" frame): the chat spinner
+//! sits inline with prose deltas, so a continuous 10-frame cycle reads
+//! as a single ongoing action rather than a paused-then-resume rhythm.
 
 use std::time::Duration;
 
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 
+// 10-frame braille cycle. See `frame_count_matches_braille_cycle` test
+// + module-level doc for why this diverges from the rest of the CLI.
 const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const TICK_MS: u64 = 80;
@@ -29,6 +38,12 @@ const TICK_MS: u64 = 80;
 /// Spinner handle. `finish()` clears the line; dropping without calling
 /// `finish()` also clears (via Drop) so error paths don't leave the
 /// braille frame behind.
+///
+/// Backed by an indicatif-internal `std::thread` ticker, **not** a tokio
+/// task — independent of runtime suspension at `await` points, and
+/// joined on `finish_and_clear` / `Drop`. A runtime shutdown
+/// (`tokio::main` returning) does not orphan the ticker because either
+/// the explicit `.finish()` ran or the value dropped during unwind.
 pub struct Thinking(Option<ProgressBar>);
 
 impl Thinking {
@@ -96,10 +111,27 @@ mod tests {
     fn finish_is_idempotent() {
         // Drop also calls finish — calling it explicitly first must
         // not panic on the second (Drop-triggered) invocation.
+        //
+        // Note: this test exercises the None branch only (the test
+        // env isn't a TTY). The Some branch path is exercised
+        // manually via `alpha chat repl` and asserted by the round-1
+        // code review against indicatif 0.17's panic-safe Drop impl.
         let mut t = Thinking::start("x", /*json_mode=*/ true);
         t.finish();
         t.finish();
         // Drop fires here when `t` goes out of scope — third call.
+    }
+
+    #[test]
+    fn drop_without_explicit_finish_does_not_panic() {
+        // Belt-and-suspenders for the panic-unwind / `?` error path:
+        // a caller that bails before reaching `.finish()` relies on
+        // Drop to clear the line. Reaching the assertion below proves
+        // Drop completed without panicking.
+        {
+            let _t = Thinking::start("anything", /*json_mode=*/ true);
+        } // Drop fires here.
+          // If we got here, Drop didn't panic.
     }
 
     #[test]
