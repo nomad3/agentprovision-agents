@@ -13,6 +13,7 @@ use agentprovision_core::chat::{stream_chat, ChatStreamEvent};
 
 use crate::context::Context;
 use crate::output;
+use crate::thinking::Thinking;
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
@@ -63,10 +64,19 @@ pub async fn send(args: SendArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     let reply = if ctx.no_stream {
+        // Non-stream: show the spinner for the entire round-trip since
+        // there are no deltas to clear it on. Drop clears the line when
+        // `send_chat_message` returns (success or error).
+        let mut think = Thinking::start("Luna is thinking…", ctx.json);
         let turn = ctx
             .client
             .send_chat_message(&session_id, &args.prompt)
             .await?;
+        // Explicit finish so the line is clear BEFORE render_markdown
+        // writes below. Drop at end-of-scope would clear AFTER, leaving
+        // a brief frame-flicker on slow terminals. Load-bearing — don't
+        // remove on a "simplification" pass (round-1 review I3).
+        think.finish();
         turn.assistant.content
     } else {
         stream_and_collect(&ctx, &session_id, &args.prompt).await?
@@ -146,11 +156,28 @@ pub async fn repl(args: ReplArgs, ctx: Context) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Stream the assistant reply, render deltas live (unless --json), and
+/// re-render with markdown styling on completion.
+///
+/// Spinner lifecycle (one start, three exits):
+///   • start         — top of fn, before `stream_chat` resolves.
+///   • first Delta   — explicit `think.finish()` so the braille glyph
+///                     isn't pinned to the line we're about to write.
+///   • Done w/o data — explicit `think.finish()` in the Done arm so a
+///                     zero-token reply doesn't leave a frozen frame.
+///   • fall-through  — Drop clears on error, panic-unwind, or any
+///                     `Other`-only stream that never terminates with
+///                     Delta/Done.
 async fn stream_and_collect(
     ctx: &Context,
     session_id: &str,
     prompt: &str,
 ) -> anyhow::Result<String> {
+    // Spinner covers the gap between request dispatch and the first
+    // streamed delta — typically the model's prefill + first token.
+    // Cleared on first Delta (below) or on Drop if the stream errors
+    // before producing any tokens.
+    let mut think = Thinking::start("Luna is thinking…", ctx.json);
     let mut stream = stream_chat(&ctx.client, session_id, prompt).await?;
     let mut full = String::new();
     let mut stdout = std::io::stdout();
@@ -179,6 +206,10 @@ async fn stream_and_collect(
     while let Some(item) = stream.next().await {
         match item? {
             ChatStreamEvent::Delta(d) => {
+                // First delta: clear the spinner before printing so the
+                // braille frame doesn't get pinned to the line we're
+                // about to write into. Subsequent calls are no-ops.
+                think.finish();
                 full.push_str(&d);
                 if render_live {
                     let _ = stdout.write_all(d.as_bytes());
@@ -202,7 +233,13 @@ async fn stream_and_collect(
                     }
                 }
             }
-            ChatStreamEvent::Done => break,
+            ChatStreamEvent::Done => {
+                // No delta arrived (empty reply) but the stream
+                // terminated cleanly — kill the spinner so the next
+                // prompt line isn't preceded by a frozen braille frame.
+                think.finish();
+                break;
+            }
             ChatStreamEvent::Other(_) => {
                 // Ignore non-content frames silently in the user-facing path.
             }
