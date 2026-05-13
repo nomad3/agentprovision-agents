@@ -55,7 +55,11 @@ import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+import asyncio as _asyncio
+import json as _json
+
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
@@ -65,6 +69,35 @@ from app.models.user import User
 from app.services.cost_estimator import estimate_fanout_cost
 
 router = APIRouter()
+
+
+def _verify_tenant_header(
+    current_user: User = Depends(get_current_user),
+    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
+) -> User:
+    """Round-1 review M5: shared sub-dependency that codifies the
+    `X-Tenant-Id-must-match-JWT-when-present` contract across every
+    route on this router. Previously only `/run` enforced it; the
+    other routes silently let a stale header slip through. Now
+    every route gets the same gate.
+
+    Round-3 L3-2 (#435) leniency on whitespace-only headers is
+    preserved — pure-whitespace == "no header" == accept.
+
+    Returns `current_user` so route handlers can chain it directly:
+      `current_user: User = Depends(_verify_tenant_header)`
+    """
+    _header_tenant = (x_tenant_id or "").strip()
+    if _header_tenant and _header_tenant != str(current_user.tenant_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "X-Tenant-Id header does not match the JWT tenant. "
+                "Re-login against the intended tenant or clear the "
+                "stale tenant_id from your CLI config."
+            ),
+        )
+    return current_user
 
 
 # ── Request / response schemas ─────────────────────────────────────────
@@ -410,9 +443,8 @@ def _recount_tenant_tasks_from_records(tenant_id: str) -> int:
 )
 async def run_fanout(
     body: RunFanoutRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
     db: Session = Depends(get_db),
-    x_tenant_id: Optional[str] = Header(default=None, alias="X-Tenant-Id"),
 ) -> RunFanoutResponse:
     """Dispatch endpoint hit by `ap run`.
 
@@ -433,29 +465,10 @@ async def run_fanout(
 
     # Tenant identity is JWT-bound. Round-1 B1: we deliberately do not
     # accept a body field for this; it is the JWT's tenant or nothing.
+    # Round-1 review M5 (#188): X-Tenant-Id mismatch check has been
+    # lifted into `_verify_tenant_header` so /status, /cancel, and
+    # /events/stream get the same gate.
     tenant_id = str(current_user.tenant_id)
-
-    # Round-2 M2-1: codify the JWT-only contract. If a client sends
-    # `X-Tenant-Id`, it MUST equal the JWT-bound tenant. The CLI's
-    # `ApiClient` currently attaches this header on every request from
-    # `config.toml`; mismatches mean the local config has drifted
-    # from the active session (e.g. login against a new tenant
-    # without `ap config clean`). Reject with 400 so the user fixes
-    # it instead of silently relying on JWT-wins-by-precedence.
-    # Round-3 L3-2: treat a whitespace-only header as not-set (matches
-    # the empty-string behavior FastAPI already gives us for blank
-    # values). Avoids a confusing 400 on a hand-edited config that
-    # happens to leave an indented blank line.
-    _header_tenant = (x_tenant_id or "").strip()
-    if _header_tenant and _header_tenant != tenant_id:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "X-Tenant-Id header does not match the JWT tenant. "
-                "Re-login against the intended tenant or clear the "
-                "stale tenant_id from your CLI config."
-            ),
-        )
 
     # Belt-and-suspenders mutual-exclusion check. The model_validator
     # on RunFanoutRequest catches this before we reach here for direct
@@ -655,7 +668,7 @@ async def run_fanout(
 )
 async def task_status(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
 ) -> TaskStatusResponse:
     """Status endpoint hit by `ap watch` (poll loop in the prototype).
 
@@ -796,7 +809,7 @@ async def task_status(
 )
 async def cancel_task(
     task_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verify_tenant_header),
 ) -> None:
     """Cancel endpoint for the CLI's eventual `ap cancel`. In the
     prototype we just drop the record; real impl issues
@@ -876,3 +889,198 @@ async def cancel_task(
     for child in record.get("children", []):
         _evict_record(child["task_id"])
     _evict_record(task_id)
+
+
+# ─── #188: SSE event stream for `ap watch` ────────────────────────────
+
+
+@router.get(
+    "/{task_id}/events/stream",
+    summary="Server-Sent Events stream of task status transitions.",
+)
+async def task_events_stream(
+    task_id: str,
+    current_user: User = Depends(_verify_tenant_header),
+):
+    """Long-lived SSE stream for `ap watch <task_id>`. Emits
+    `event: status` records on each parent + child status transition;
+    terminates on the parent reaching a terminal state.
+
+    Implementation:
+      - Stub-path: reads `_TASKS[task_id]` directly, computes
+        synthetic status from the wall-clock lifecycle, emits on
+        change. No external service.
+      - Real-path (`fanout-<tenant_uuid>-...` prefix): polls
+        `_describe_fanout_workflow` every 1s server-side; the
+        Cloudflare-tunnel hop sees a steady stream instead of the
+        524 timeout that a single long request would trip
+        (`docs/plans/2026-05-09-resilient-cli-orchestrator-design.md`).
+      - Heartbeat comments every 15s keep the connection alive
+        through intermediaries that idle-kill silent SSE streams.
+
+    Tenant isolation: same gates as `/status`. Stub-path enforces
+    `record["tenant_id"] == JWT tenant`; real-path enforces via
+    workflow_id parser inside `_describe_fanout_workflow`. 404 on
+    mismatch.
+    """
+
+    tenant_str = str(current_user.tenant_id)
+    is_real = settings.USE_REAL_FANOUT_WORKFLOW and task_id.startswith("fanout-")
+
+    # Pre-flight tenant + existence check. We do this BEFORE the
+    # StreamingResponse so a 404 surfaces cleanly to the CLI instead
+    # of an empty SSE stream that closes immediately.
+    if is_real:
+        prefix = f"fanout-{tenant_str}-"
+        if not task_id.startswith(prefix):
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        try:
+            await _describe_fanout_workflow(task_id, expected_tenant_id=tenant_str)
+        except PermissionError:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
+            )
+    else:
+        record = _TASKS.get(task_id)
+        if not record or record["tenant_id"] != tenant_str:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+
+    async def _generator():
+        # Send an initial comment so the client sees the connection
+        # opened even before the first status transition.
+        yield ": stream open\n\n"
+
+        last_status: Optional[str] = None
+        last_child_status: dict[str, str] = {}
+        last_heartbeat = time.monotonic()
+        # Hard cap on stream duration so a wedged workflow doesn't
+        # park an SSE forever (matches CLI --timeout default).
+        deadline = time.monotonic() + 1800.0
+
+        while time.monotonic() < deadline:
+            try:
+                if is_real:
+                    payload = await _describe_fanout_workflow(
+                        task_id, expected_tenant_id=tenant_str
+                    )
+                    status = payload["status"]
+                    # Round-1 review M3: emit real-path child status by
+                    # reading the mirrored child records stored at
+                    # dispatch (the round-3 H3-1 fix in #435 already
+                    # wrote these into `_TASKS`). They use the same
+                    # _derive_status timer as stub-path; a follow-up
+                    # PR replaces this with real Temporal child handle
+                    # state once the FanoutChatCliWorkflow exposes it.
+                    parent_record = _TASKS.get(task_id)
+                    child_payload: list[dict] = []
+                    if parent_record is not None:
+                        for c in parent_record.get("children", []):
+                            child_payload.append({
+                                "task_id": c["task_id"],
+                                "provider": c["provider"],
+                                "status": _derive_status(c["created_at"]),
+                            })
+                else:
+                    record = _TASKS.get(task_id)
+                    if not record:
+                        # TTL-evicted or cancelled — terminate cleanly.
+                        # Round-1 review L5: emit `cancelled` (a known
+                        # terminal status) instead of `gone` so
+                        # downstream tooling (jq filters, render code)
+                        # doesn't see an out-of-vocab status string.
+                        yield 'event: ended\ndata: {"status": "cancelled"}\n\n'
+                        return
+                    status = _derive_status(record["created_at"])
+                    child_payload = [
+                        {
+                            "task_id": c["task_id"],
+                            "provider": c["provider"],
+                            "status": _derive_status(c["created_at"]),
+                        }
+                        for c in record.get("children", [])
+                    ]
+            except Exception as exc:  # noqa: BLE001
+                # Soft-fail: emit error event + terminate. The CLI's
+                # SSE consumer will see the event and exit gracefully.
+                yield f"event: error\ndata: {_json.dumps({'detail': type(exc).__name__})}\n\n"
+                return
+
+            # Emit transitions only.
+            if status != last_status:
+                yield (
+                    f"event: status\ndata: "
+                    f"{_json.dumps({'task_id': task_id, 'status': status})}\n\n"
+                )
+                last_status = status
+
+            for c in child_payload:
+                prev = last_child_status.get(c["task_id"])
+                if prev != c["status"]:
+                    yield (
+                        f"event: child_status\ndata: {_json.dumps(c)}\n\n"
+                    )
+                    last_child_status[c["task_id"]] = c["status"]
+
+            if status in ("completed", "failed", "cancelled"):
+                # Round-1 review M2: emit `result` event for stub-path
+                # completions too. The CLI's finalize_terminal then
+                # GETs /status to pick up the canonical body — both
+                # paths render identically.
+                if status == "completed":
+                    try:
+                        if is_real:
+                            from app.services import workflows as wf_service
+
+                            raw = await wf_service.fetch_workflow_result(task_id)
+                            merged = (
+                                raw.get("merged_text") if isinstance(raw, dict)
+                                else getattr(raw, "merged_text", None)
+                            )
+                        else:
+                            # Stub-path: reconstruct the synthetic body
+                            # the same way `/status` does inline.
+                            r = _TASKS.get(task_id) or {}
+                            if r.get("fanout"):
+                                providers = ", ".join(r["fanout"])
+                                merged = (
+                                    f"[demo result] Fanout over [{providers}] merged via "
+                                    f"`{r.get('merge', 'council')}`.\n\n"
+                                    f"Consensus: all reviewers converged on the prompt:\n"
+                                    f"  > {r.get('prompt', '')}\n\n"
+                                    f"This is a Phase-1-prototype synthetic response."
+                                )
+                            else:
+                                merged = (
+                                    f"[demo result] Completed.\n\n"
+                                    f"Prompt: {r.get('prompt', '')}\n\n"
+                                    f"This is a Phase-1-prototype synthetic response."
+                                )
+                        if merged:
+                            yield (
+                                f"event: result\ndata: "
+                                f"{_json.dumps({'merged_text': merged})}\n\n"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass  # best-effort; result is also available via /status
+                yield 'event: ended\ndata: ' + _json.dumps({"status": status}) + '\n\n'
+                return
+
+            # Heartbeat every 15s to keep the connection alive through
+            # idle-killing intermediaries.
+            now = time.monotonic()
+            if now - last_heartbeat >= 15.0:
+                yield ": heartbeat\n\n"
+                last_heartbeat = now
+
+            await _asyncio.sleep(1.0)
+
+        # Hit the deadline without reaching terminal.
+        yield (
+            f"event: timeout\ndata: "
+            f"{_json.dumps({'detail': 'SSE deadline (30min) hit; task still running'})}\n\n"
+        )
+
+    return StreamingResponse(_generator(), media_type="text/event-stream")

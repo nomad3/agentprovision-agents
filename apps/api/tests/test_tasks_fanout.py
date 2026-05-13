@@ -573,6 +573,60 @@ def test_real_fanout_flag_on_without_fanout_still_uses_stub(monkeypatch):
     assert resp.json()["task_id"].startswith("t_")
 
 
+# ── #188 SSE endpoint coverage (round-1 review M4) ────────────────────
+
+
+def test_sse_stream_own_tenant_returns_event_stream():
+    """`GET /events/stream` for an own-tenant task returns 200 +
+    text/event-stream and emits at least the initial status event."""
+
+    user = _user()
+    client = _make_client(user)
+    resp = client.post("/api/v1/tasks-fanout/run", json={"prompt": "x"})
+    assert resp.status_code == 200
+    task_id = resp.json()["task_id"]
+
+    # FastAPI TestClient's `stream=True` returns a response that
+    # exposes `.iter_bytes()`. We read a small prefix to confirm
+    # SSE shape without waiting for the full lifecycle.
+    with client.stream("GET", f"/api/v1/tasks-fanout/{task_id}/events/stream") as r:
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/event-stream")
+        chunks = b""
+        for chunk in r.iter_bytes(chunk_size=256):
+            chunks += chunk
+            if b"event: status" in chunks or len(chunks) > 4096:
+                break
+        assert b"event: status" in chunks, (
+            f"expected at least one status event, got: {chunks[:512]!r}"
+        )
+
+
+def test_sse_stream_cross_tenant_returns_404():
+    """SSE endpoint must enforce the same cross-tenant 404 as
+    /status. Tenant B with tenant A's task_id → 404 BEFORE any
+    stream bytes."""
+
+    user_a = _user()
+    client_a = _make_client(user_a)
+    resp = client_a.post("/api/v1/tasks-fanout/run", json={"prompt": "tenant A"})
+    task_id = resp.json()["task_id"]
+
+    user_b = _user()
+    client_b = _make_client(user_b)
+    resp = client_b.get(f"/api/v1/tasks-fanout/{task_id}/events/stream")
+    assert resp.status_code == 404
+
+
+def test_sse_stream_missing_task_returns_404():
+    """Unknown task_id → 404, never an empty stream."""
+
+    user = _user()
+    client = _make_client(user)
+    resp = client.get("/api/v1/tasks-fanout/t_nonexistent/events/stream")
+    assert resp.status_code == 404
+
+
 def test_cancelling_child_removes_it_from_parent_status():
     """Round-2 M2-2: cancelling a child task surgically removes it
     from the parent's children list so /status no longer reports
