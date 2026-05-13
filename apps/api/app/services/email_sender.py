@@ -221,12 +221,14 @@ def send_email(
         )
         return True
     except Exception as exc:
-        # Don't swallow silently — log at WARN so a recurring SMTP
-        # outage surfaces in monitoring. Never raise: the caller's
-        # response shape is identical hit/miss to prevent enumeration,
-        # so an exception only matters for our own observability.
+        # N4-4: structured WARNING line designed to be a metrics
+        # counter signal — "email_dispatch_failed" is a unique
+        # grep key SREs can alert on (e.g. > 5/min triggers an
+        # SMTP-outage page). Don't raise: the caller's response
+        # shape is identical hit/miss to prevent enumeration, so
+        # an exception only matters for our own observability.
         logger.warning(
-            "email_sender: failed — to=%s subject=%r host=%s error=%s",
+            "email_dispatch_failed to=%s subject=%r host=%s error=%s",
             to,
             subject,
             settings.EMAIL_SMTP_HOST,

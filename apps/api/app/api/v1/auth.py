@@ -164,6 +164,27 @@ _RESET_CSRF_COOKIE = "ap_reset_csrf"
 _RESET_CSRF_COOKIE_TTL = 60 * 60 * 24  # 24h; matches token expiry
 
 
+def _cookie_should_be_secure() -> bool:
+    """N4-5: `secure=True` is correct for prod (cookie only travels
+    over HTTPS) but blocks the entire flow when local dev runs over
+    plain HTTP — the browser silently drops the Set-Cookie and the
+    reset confirm endlessly 400s with the same-browser hint.
+
+    Auto-detect by looking at PUBLIC_BASE_URL: localhost / 127.0.0.1
+    over http → allow non-secure cookies so dev works without
+    config; everything else → secure required.
+    """
+    base = (settings.PUBLIC_BASE_URL or "").strip().lower()
+    if not base:
+        # No PUBLIC_BASE_URL configured — assume prod posture
+        # (better to ship the flow broken in dev than ship it
+        # quietly insecure in any unconfigured env).
+        return True
+    if base.startswith("http://localhost") or base.startswith("http://127.0.0.1"):
+        return False
+    return True
+
+
 def _hash_token(t: str) -> str:
     """SHA-256 hex digest — shared helper for both the reset token and
     the CSRF correlation cookie. Both are stored hashed in the DB."""
@@ -232,6 +253,7 @@ def _check_per_email_rate_limit(email: str) -> bool:
     per-IP limit + the no-enumeration response shape are still in
     force.
     """
+    global _redis_client
     client = _get_redis_client()
     if client is None:
         return True  # fail-open per the docstring
@@ -242,7 +264,19 @@ def _check_per_email_rate_limit(email: str) -> bool:
         if n == 1:
             client.expire(key, 60 * 60 * 24)
         return n <= 10
-    except Exception:
+    except Exception as exc:
+        # I4-1 (round-4 review): `redis-py.from_url` is lazy — it
+        # builds a connection-pool client without touching the wire,
+        # so the import-time WARNING in `_get_redis_client` never
+        # fires on the realistic outage scenario (Redis unreachable
+        # over TCP). Log here so a silently-disabled per-email cap
+        # surfaces in monitoring + circuit-break by nulling the
+        # module-level client so the NEXT call attempts a fresh
+        # connection rather than reusing a wedged pool.
+        logger.warning(
+            "pwreset: redis incr failed, per-email cap bypassed: %s", exc
+        )
+        _redis_client = None  # circuit-break — fresh attempt next call
         return True
 
 
@@ -288,7 +322,7 @@ def recover_password(
             decoy,
             max_age=_RESET_CSRF_COOKIE_TTL,
             httponly=True,
-            secure=True,
+            secure=_cookie_should_be_secure(),
             samesite="strict",
             path="/api/v1/auth",
         )
@@ -308,7 +342,7 @@ def recover_password(
         csrf,
         max_age=_RESET_CSRF_COOKIE_TTL,
         httponly=True,
-        secure=True,
+        secure=_cookie_should_be_secure(),
         samesite="strict",
         path="/api/v1/auth",
     )
