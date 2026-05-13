@@ -6,28 +6,35 @@
  * Marketing pitch: "the orchestrator CLI for AI agents" — frames alpha
  * as `kubectl for agents`, not "yet another coding CLI".
  */
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { Link } from 'react-router-dom';
 import { track } from '../../../services/marketingAnalytics';
 
 const INSTALL_CMD = 'curl -fsSL https://agentprovision.com/install.sh | sh';
+// Apex auth URL — see comment on AlphaLandingPage.js. PR #450 BLOCKER B1.
+const APEX_REGISTER = 'https://agentprovision.com/register';
 
 export default function AlphaHero() {
-  const heroRef = useRef(null);
   const prefersReducedMotion = useReducedMotion();
   const [copied, setCopied] = useState(false);
 
   const onCopy = () => {
-    navigator.clipboard.writeText(INSTALL_CMD).then(() => {
-      setCopied(true);
-      track('alpha_install_copy', { location: 'hero' });
-      setTimeout(() => setCopied(false), 2000);
-    });
+    navigator.clipboard.writeText(INSTALL_CMD)
+      .then(() => {
+        setCopied(true);
+        track('alpha_install_copy', { location: 'hero' });
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {
+        // Clipboard API can throw on non-secure contexts / older Safari.
+        // PR #450 review NIT N2: surface a fallback hint rather than
+        // silently swallowing. Track the failure so we can monitor it.
+        track('alpha_install_copy_failed', { location: 'hero' });
+      });
   };
 
   return (
-    <section ref={heroRef} className="alpha-hero">
+    <section className="alpha-hero">
       <div className="alpha-hero__bg" />
 
       <div className="alpha-hero__content">
@@ -61,12 +68,15 @@ export default function AlphaHero() {
           </div>
 
           <div className="alpha-hero__ctas">
-            <Link
-              to="/register"
+            {/* Absolute href to the apex so the auth flow always
+                resolves — cloudflared only routes /api/* on the apex
+                hostname. PR #450 review BLOCKER B1. */}
+            <a
+              href={APEX_REGISTER}
               onClick={() => track('alpha_get_started_click', { location: 'hero' })}
             >
               <button className="alpha-hero__cta-primary">Get started free</button>
-            </Link>
+            </a>
             <a
               href="https://github.com/nomad3/agentprovision-agents/tree/main/apps/agentprovision-cli"
               target="_blank"

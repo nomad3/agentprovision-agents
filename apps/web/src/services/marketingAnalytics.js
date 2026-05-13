@@ -25,12 +25,39 @@ function _enabled() {
 }
 
 
+/**
+ * Pick the right Plausible `data-domain` value at runtime.
+ *
+ * The SAME SPA bundle is served on both `agentprovision.com` and
+ * `alpha.agentprovision.com`. If we used the build-time env var
+ * verbatim, every `alpha_*` event would land in the main site's
+ * Plausible property (or vice versa). Sniffing the live hostname
+ * keeps each subdomain's events in its own dashboard.
+ *
+ * Honors an explicit `REACT_APP_PLAUSIBLE_DOMAIN_ALPHA` override when
+ * set; otherwise derives the alpha domain by replacing the leading
+ * label of the apex domain.
+ *
+ * PR #450 review IMPORTANT I2.
+ */
+function _resolveDomain() {
+  const apex = process.env.REACT_APP_PLAUSIBLE_DOMAIN.trim();
+  if (typeof window === 'undefined' || !window.location) return apex;
+  const host = window.location.hostname;
+  if (host.startsWith('alpha.')) {
+    return (process.env.REACT_APP_PLAUSIBLE_DOMAIN_ALPHA || '').trim()
+      || `alpha.${apex}`;
+  }
+  return apex;
+}
+
+
 export function initMarketingAnalytics() {
   if (_initialized) return;
   if (typeof window === 'undefined') return;
   if (!_enabled()) return;
 
-  const domain = process.env.REACT_APP_PLAUSIBLE_DOMAIN.trim();
+  const domain = _resolveDomain();
   const host = (process.env.REACT_APP_PLAUSIBLE_HOST || 'https://plausible.io').trim();
 
   if (document.querySelector('script[data-domain-marker="plausible"]')) {

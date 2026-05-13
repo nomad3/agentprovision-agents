@@ -19,18 +19,49 @@ import AlphaPlatformPower from './components/marketing/alpha/AlphaPlatformPower'
 import './LandingPage.css'; // shared design tokens + nav/footer/cta styles
 import './AlphaLandingPage.css';
 
+// Reused shared components are parameterized so dead anchors and
+// subdomain-broken auth flows don't ship on the alpha page.
+// PR #450 review BLOCKER B1 + IMPORTANT I1.
+//
+// `register` + `signIn` CTAs land on the apex (agentprovision.com)
+// regardless of which subdomain the user came from. Auth flows POST
+// to relative /api/v1/auth/* paths; only the apex has that route in
+// cloudflared ingress. Sending alpha visitors to the apex auth surface
+// avoids needing to add /api/* to the alpha subdomain's tunnel rules.
+const APEX_REGISTER = 'https://agentprovision.com/register';
+const APEX_SIGNIN = 'https://agentprovision.com/login';
+
+// Anchors that actually exist on this page. The shared LandingNav and
+// LandingFooter default to the main landing's set; we pass our own so
+// clicks don't scroll to nowhere.
+const ALPHA_NAV_LINKS = ['differentiators', 'commands', 'platform'];
+const ALPHA_FOOTER_LINKS = [
+  { key: 'differentiators', href: '#differentiators' },
+  { key: 'commands', href: '#commands' },
+  { key: 'platform', href: '#platform' },
+  // GitHub link is a real external href, not a fake anchor.
+  {
+    key: 'github',
+    href: 'https://github.com/nomad3/agentprovision-agents/tree/main/apps/agentprovision-cli',
+  },
+];
+
 export default function AlphaLandingPage() {
   return (
     <>
-      <LandingNav />
+      <LandingNav
+        links={ALPHA_NAV_LINKS}
+        registerHref={APEX_REGISTER}
+        signInHref={APEX_SIGNIN}
+      />
       <main className="alpha-landing">
         <AlphaHero />
         <AlphaDifferentiators />
         <AlphaCommands />
         <AlphaPlatformPower />
-        <CTASection />
+        <CTASection registerHref={APEX_REGISTER} />
       </main>
-      <LandingFooter />
+      <LandingFooter links={ALPHA_FOOTER_LINKS} />
     </>
   );
 }

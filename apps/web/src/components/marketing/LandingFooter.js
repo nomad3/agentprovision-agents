@@ -1,7 +1,24 @@
 import { useTranslation } from 'react-i18next';
 import { FiGithub, FiTwitter, FiLinkedin } from 'react-icons/fi';
 
-export default function LandingFooter() {
+const DEFAULT_LINKS = [
+  { key: 'platform', href: '#platform' },
+  { key: 'features', href: '#features' },
+  // TODO: wire real /docs + /github routes
+  { key: 'docs', href: '#', preventDefault: true },
+  { key: 'github', href: '#', preventDefault: true },
+];
+
+/**
+ * Shared footer for marketing pages.
+ *
+ * Props:
+ * - links: array of `{key, href, preventDefault?}`. `key` is the i18n
+ *   key under `footer.links.${key}`. Alpha landing overrides this with
+ *   anchors that actually exist on the page (commands, platform, etc.)
+ *   so reused links aren't dead. PR #450 review IMPORTANT I1.
+ */
+export default function LandingFooter({ links = DEFAULT_LINKS } = {}) {
   const { t } = useTranslation('landing');
   const year = new Date().getFullYear();
 
@@ -14,11 +31,16 @@ export default function LandingFooter() {
         </div>
 
         <nav className="landing-footer__nav">
-          <a href="#platform" className="landing-footer__link">{t('footer.links.platform')}</a>
-          <a href="#features" className="landing-footer__link">{t('footer.links.features')}</a>
-          {/* TODO: wire real /docs route */}
-          <a href="#" className="landing-footer__link" onClick={e => e.preventDefault()}>{t('footer.links.docs')}</a>
-          <a href="#" className="landing-footer__link" onClick={e => e.preventDefault()}>{t('footer.links.github')}</a>
+          {links.map(({ key, href, preventDefault }) => (
+            <a
+              key={key}
+              href={href}
+              className="landing-footer__link"
+              onClick={preventDefault ? (e) => e.preventDefault() : undefined}
+            >
+              {t(`footer.links.${key}`)}
+            </a>
+          ))}
         </nav>
 
         <div className="landing-footer__social">
