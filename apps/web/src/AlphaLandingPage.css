@@ -1,0 +1,339 @@
+/**
+ * Styles for `alpha.agentprovision.com` landing page.
+ * Reuses the --land-* design tokens defined in LandingPage.css.
+ * Naming convention: `alpha-` prefix (NOT to be confused with the
+ * `--ap-*` AgentProvision brand CSS custom-properties).
+ */
+
+/* ── Hero ───────────────────────────────────────────────────────── */
+.alpha-hero {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  padding: 96px 24px 64px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0a0f1e 0%, #0d1428 60%, #1a2440 100%);
+  color: #f4f6fb;
+}
+.alpha-hero__bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(94, 197, 176, 0.18), transparent 60%),
+    radial-gradient(circle at 80% 70%, rgba(37, 99, 235, 0.16), transparent 55%);
+  pointer-events: none;
+}
+.alpha-hero__content {
+  position: relative;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  gap: 56px;
+  align-items: center;
+}
+@media (max-width: 900px) {
+  .alpha-hero__content { grid-template-columns: 1fr; gap: 40px; }
+}
+.alpha-hero__text { display: flex; flex-direction: column; gap: 22px; }
+.alpha-hero__badge {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 13px;
+  background: rgba(94, 197, 176, 0.12);
+  color: var(--land-teal);
+  border: 1px solid rgba(94, 197, 176, 0.32);
+  border-radius: 6px;
+  padding: 6px 12px;
+  width: max-content;
+}
+.alpha-hero__title {
+  font-size: clamp(40px, 6vw, 64px);
+  line-height: 1.05;
+  font-weight: 800;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+.alpha-hero__subtitle {
+  font-size: 18px;
+  line-height: 1.5;
+  color: rgba(244, 246, 251, 0.78);
+  margin: 0;
+  max-width: 580px;
+}
+.alpha-hero__install {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 14px;
+  max-width: 580px;
+}
+.alpha-hero__install-cmd {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 14px;
+  color: #cfe2ff;
+  flex: 1;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.alpha-hero__install-copy {
+  background: var(--land-blue);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.alpha-hero__install-copy:hover { filter: brightness(1.1); }
+.alpha-hero__ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+.alpha-hero__cta-primary {
+  background: var(--land-blue);
+  color: #fff;
+  border: none;
+  border-radius: 9999px;
+  padding: 12px 26px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.alpha-hero__cta-ghost {
+  background: transparent;
+  color: rgba(244, 246, 251, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 9999px;
+  padding: 12px 26px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.alpha-hero__cta-ghost:hover { background: rgba(255, 255, 255, 0.06); }
+
+.alpha-hero__terminal {
+  background: #0e1426;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+}
+.alpha-hero__terminal-bar {
+  background: #1a2340;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.alpha-hero__terminal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+.alpha-hero__terminal-dot--red { background: #ff5f57; }
+.alpha-hero__terminal-dot--yellow { background: #febc2e; }
+.alpha-hero__terminal-dot--green { background: #28c840; }
+.alpha-hero__terminal-title {
+  margin-left: 12px;
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 12px;
+  color: rgba(244, 246, 251, 0.6);
+}
+.alpha-hero__terminal-body {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 13px;
+  color: #cfe2ff;
+  line-height: 1.55;
+  margin: 0;
+  padding: 18px;
+  overflow-x: auto;
+}
+
+/* ── Differentiators table ─────────────────────────────────────── */
+.alpha-diff {
+  background: var(--land-bg);
+  padding: 96px 24px;
+}
+.alpha-diff__inner { max-width: 1200px; margin: 0 auto; }
+.alpha-diff__title {
+  font-size: clamp(28px, 4vw, 40px);
+  line-height: 1.15;
+  font-weight: 800;
+  margin: 0 0 16px;
+  color: var(--land-text);
+}
+.alpha-diff__title-accent { color: var(--land-blue); }
+.alpha-diff__subtitle {
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--land-text-muted);
+  max-width: 720px;
+  margin: 0 0 40px;
+}
+.alpha-diff__table-wrap { overflow-x: auto; }
+.alpha-diff__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.alpha-diff__th, .alpha-diff__td {
+  padding: 14px 12px;
+  text-align: center;
+  vertical-align: top;
+  border-bottom: 1px solid var(--land-border);
+}
+.alpha-diff__th--feature, .alpha-diff__td--feature {
+  text-align: left;
+  width: 38%;
+}
+.alpha-diff__th {
+  font-weight: 600;
+  color: var(--land-text-muted);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--land-bg-subtle);
+}
+.alpha-diff__th--alpha {
+  background: rgba(94, 197, 176, 0.08);
+  color: var(--land-teal);
+}
+.alpha-diff__td--alpha-cell {
+  background: rgba(94, 197, 176, 0.05);
+  color: var(--land-teal);
+  font-size: 22px;
+  font-weight: 700;
+}
+.alpha-diff__td--other {
+  color: var(--land-text-muted);
+  font-size: 18px;
+}
+.alpha-diff__td-detail {
+  font-size: 13px;
+  color: var(--land-text-muted);
+  margin-top: 4px;
+  font-weight: 400;
+}
+
+/* ── Commands grid ─────────────────────────────────────────────── */
+.alpha-commands {
+  background: var(--land-bg-subtle);
+  padding: 96px 24px;
+}
+.alpha-commands__inner { max-width: 1200px; margin: 0 auto; }
+.alpha-commands__title {
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  margin: 0 0 16px;
+  color: var(--land-text);
+}
+.alpha-commands__subtitle {
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--land-text-muted);
+  max-width: 720px;
+  margin: 0 0 48px;
+}
+.alpha-commands__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+.alpha-commands__card {
+  background: #ffffff;
+  border: 1px solid var(--land-border);
+  border-radius: 12px;
+  padding: 22px;
+  transition: border-color 0.2s, transform 0.2s;
+}
+.alpha-commands__card:hover {
+  border-color: var(--land-blue);
+  transform: translateY(-2px);
+}
+.alpha-commands__card-cmd {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 13px;
+  color: var(--land-blue);
+  background: rgba(37, 99, 235, 0.08);
+  padding: 4px 8px;
+  border-radius: 4px;
+  display: inline-block;
+  margin-bottom: 12px;
+}
+.alpha-commands__card-title {
+  font-size: 17px;
+  font-weight: 700;
+  margin: 0 0 8px;
+  color: var(--land-text);
+}
+.alpha-commands__card-body {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--land-text-muted);
+  margin: 0 0 14px;
+}
+.alpha-commands__card-example {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 12px;
+  color: var(--land-text);
+  background: var(--land-bg-subtle);
+  padding: 10px;
+  border-radius: 6px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ── Platform-power pillars ─────────────────────────────────────── */
+.alpha-power {
+  background: var(--land-bg);
+  padding: 96px 24px;
+}
+.alpha-power__inner { max-width: 1200px; margin: 0 auto; text-align: center; }
+.alpha-power__title {
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  margin: 0 0 16px;
+}
+.alpha-power__subtitle {
+  font-size: 17px;
+  line-height: 1.55;
+  color: var(--land-text-muted);
+  max-width: 720px;
+  margin: 0 auto 56px;
+}
+.alpha-power__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 28px;
+  text-align: left;
+}
+.alpha-power__pillar {
+  background: var(--land-bg-subtle);
+  border: 1px solid var(--land-border);
+  border-radius: 14px;
+  padding: 28px;
+}
+.alpha-power__pillar-icon { font-size: 36px; line-height: 1; margin-bottom: 14px; }
+.alpha-power__pillar-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  color: var(--land-text);
+}
+.alpha-power__pillar-body {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--land-text-muted);
+  margin: 0 0 14px;
+}
+.alpha-power__pillar-proof {
+  font-family: 'JetBrains Mono', 'Menlo', monospace;
+  font-size: 12px;
+  color: var(--land-blue);
+  margin: 0;
+}

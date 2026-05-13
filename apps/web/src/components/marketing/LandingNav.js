@@ -4,9 +4,25 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { track } from '../../services/marketingAnalytics';
 
-const navLinks = ['platform', 'features', 'integrations', 'pricing'];
+// Default link set for the main agentprovision.com landing. Alpha
+// landing passes its own (differentiators / commands / platform) via
+// the `links` prop so the reused nav doesn't render dead anchors.
+// PR #450 review IMPORTANT I1.
+const DEFAULT_LINKS = ['platform', 'features', 'integrations', 'pricing'];
 
-export default function LandingNav() {
+/**
+ * Shared landing-page navigation bar.
+ *
+ * Props (all optional, default to main-landing behaviour):
+ * - links: array of anchor keys (rendered as `#${key}`); i18n'd via
+ *   `t('nav.${key}')`. Pass [] to hide the link row entirely.
+ * - registerHref: absolute URL to send register/get-started clicks to.
+ *   When omitted we use react-router navigate('/register'). Alpha
+ *   subdomain passes 'https://agentprovision.com/register' so the
+ *   auth flow always lives on the apex (PR #450 review BLOCKER B1).
+ * - signInHref: same shape for sign-in.
+ */
+export default function LandingNav({ links = DEFAULT_LINKS, registerHref, signInHref } = {}) {
   const { t } = useTranslation('landing');
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
@@ -17,6 +33,23 @@ export default function LandingNav() {
     window.addEventListener('scroll', handler, { passive: true });
     return () => window.removeEventListener('scroll', handler);
   }, []);
+
+  const onSignIn = () => {
+    track('cta_sign_in_click', { location: 'nav' });
+    if (signInHref) {
+      window.location.assign(signInHref);
+    } else {
+      navigate('/login');
+    }
+  };
+  const onGetStarted = () => {
+    track('cta_get_started_click', { location: 'nav' });
+    if (registerHref) {
+      window.location.assign(registerHref);
+    } else {
+      navigate('/register');
+    }
+  };
 
   return (
     <motion.nav
@@ -29,7 +62,7 @@ export default function LandingNav() {
         <span className="landing-nav__logo">AgentProvision</span>
 
         <div className="landing-nav__links">
-          {navLinks.map((key, i) => (
+          {links.map((key, i) => (
             <motion.a
               key={key}
               href={`#${key}`}
@@ -44,12 +77,12 @@ export default function LandingNav() {
         </div>
 
         <div className="landing-nav__actions">
-          <button className="landing-nav__signin" onClick={() => { track('cta_sign_in_click', { location: 'nav' }); navigate('/login'); }}>
+          <button className="landing-nav__signin" onClick={onSignIn}>
             {t('nav.signIn')}
           </button>
           <motion.button
             className="landing-nav__cta"
-            onClick={() => { track('cta_get_started_click', { location: 'nav' }); navigate('/register'); }}
+            onClick={onGetStarted}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 17 }}

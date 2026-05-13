@@ -6,6 +6,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import { LunaPresenceProvider } from './context/LunaPresenceContext';
 import { ThemeProvider } from './context/ThemeContext';
 import LandingPage from './LandingPage';
+import AlphaLandingPage from './AlphaLandingPage';
 // Agent Kits removed - using ADK for agent configuration
 import AgentDetailPage from './pages/AgentDetailPage';
 import AgentsPage from './pages/AgentsPage';
@@ -128,7 +129,23 @@ function App() {
           <LunaPresenceProvider>
             <ToastProvider>
               <Routes>
-                <Route path="/" element={<LandingPage />} />
+                {/* Root: alpha.agentprovision.com renders the CLI
+                    landing; agentprovision.com renders the main one.
+                    Hostname-sniff so the same SPA bundle handles both
+                    apex domains without a separate build. */}
+                <Route
+                  path="/"
+                  element={
+                    typeof window !== 'undefined' &&
+                    window.location.hostname.startsWith('alpha.')
+                      ? <AlphaLandingPage />
+                      : <LandingPage />
+                  }
+                />
+                {/* /alpha is also reachable directly (e.g. for staging
+                    or share-links). Idempotent with the hostname-
+                    sniffed root above. */}
+                <Route path="/alpha" element={<AlphaLandingPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/auth/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
