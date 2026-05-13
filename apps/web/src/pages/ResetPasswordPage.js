@@ -42,18 +42,46 @@ const ResetPasswordPage = () => {
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Hydrate from URL when the user lands via the email link. If we
-  // have a token in the query string, jump straight to the confirm
-  // stage so they don't have to re-enter their email.
+  // Hydrate from URL when the user lands via the email link.
+  //
+  // SECURITY (B-1 from 2026-05-12 review): the token lives in the URL
+  // FRAGMENT (after `#`), NOT the query string. Fragments never appear
+  // in:
+  //   - the Referer header (so a third-party <img>/font/CDN/analytics
+  //     pixel on this page can't leak the token)
+  //   - server access logs (nginx, Cloudflare tunnel, Sentry)
+  //   - document.referrer for the next-navigated page
+  // The email STAYS in the query string — it's not the secret.
+  //
+  // After we capture the token into React state, immediately scrub
+  // `window.location.hash` via `replaceState` so it disappears from
+  // browser history. Anyone shoulder-surfing the address bar after
+  // this fires sees a clean `/reset-password?email=…` URL.
   useEffect(() => {
-    const tFromUrl = searchParams.get('token');
     const eFromUrl = searchParams.get('email');
-    if (tFromUrl) {
-      setToken(tFromUrl);
-      setTokenFromUrl(true);
-      setStage('confirm');
-    }
     if (eFromUrl) setEmail(eFromUrl);
+
+    if (typeof window !== 'undefined' && window.location.hash) {
+      // hash starts with `#` — strip it then parse like a query string
+      // so we tolerate other fragment params landing alongside `token`.
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
+      const tFromHash = hashParams.get('token');
+      if (tFromHash) {
+        setToken(tFromHash);
+        setTokenFromUrl(true);
+        setStage('confirm');
+        // Scrub the fragment from the URL bar + history. The current
+        // search-string is preserved (it has the email, not the secret).
+        try {
+          const cleanUrl =
+            window.location.pathname + window.location.search;
+          window.history.replaceState({}, '', cleanUrl);
+        } catch (_e) {
+          // replaceState can throw in privacy/sandboxed contexts;
+          // failing closed (leave the hash alone) is harmless.
+        }
+      }
+    }
   }, [searchParams]);
 
   const handleRequest = async (e) => {
@@ -90,8 +118,22 @@ const ResetPasswordPage = () => {
       setError(t('reset.mismatch'));
       return;
     }
-    if (password.length < 8) {
+    // N-1 (security review 2026-05-12): policy lifted from 8-char
+    // minimum to 12 chars + ≥3 of {upper, lower, digit, symbol}.
+    // Client-side enforcement matches the server-side validator at
+    // apps/api/app/schemas/auth.py — keeps users out of the latency
+    // of a round-trip just to learn their password is too weak.
+    if (password.length < 12) {
       setError(t('reset.tooShort'));
+      return;
+    }
+    const classes =
+      Number(/[A-Z]/.test(password)) +
+      Number(/[a-z]/.test(password)) +
+      Number(/[0-9]/.test(password)) +
+      Number(/[^A-Za-z0-9]/.test(password));
+    if (classes < 3) {
+      setError(t('reset.weakComplexity'));
       return;
     }
 
@@ -199,13 +241,23 @@ const ResetPasswordPage = () => {
 
                 <Form.Group className="mb-3">
                   <Form.Label>{t('reset.token')}</Form.Label>
+                  {/* I-6 (security review 2026-05-12): the token must
+                      NOT be remembered by password managers, NOT be
+                      auto-corrected by mobile keyboards, and NOT be
+                      visible to screen-share overlays. `type=password`
+                      gets us all three behaviours; the label tells
+                      humans what to paste regardless. */}
                   <Form.Control
-                    type="text"
+                    type="password"
                     placeholder={t('reset.tokenPlaceholder')}
                     value={token}
                     onChange={(e) => setToken(e.target.value)}
                     readOnly={tokenFromUrl}
                     required
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck="false"
                   />
                 </Form.Group>
 
