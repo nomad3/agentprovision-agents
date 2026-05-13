@@ -71,7 +71,7 @@ LIMIT {samples};
 
 def run_sql(sql: str) -> str:
     """Run a query inside the running db container and return stdout."""
-    container = os.environ.get("FAB_DB_CONTAINER", "servicetsunami-agents-db-1")
+    container = os.environ.get("FAB_DB_CONTAINER", "agentprovision-agents-db-1")
     db = os.environ.get("FAB_DB_NAME", "agentprovision")
     user = os.environ.get("FAB_DB_USER", "postgres")
     res = subprocess.run(

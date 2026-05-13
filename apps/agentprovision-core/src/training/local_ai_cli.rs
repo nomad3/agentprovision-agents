@@ -383,8 +383,8 @@ fn walk_dir(root: &Path, max_depth: usize) -> Vec<PathBuf> {
 
 /// Claude Code encodes the project working directory as the
 /// directory name with `/` replaced by `-` (e.g.
-/// `-Users-nomade-Documents-GitHub-servicetsunami-agents` for
-/// `/Users/nomade/Documents/GitHub/servicetsunami-agents`).
+/// `-Users-nomade-Documents-GitHub-agentprovision-agents` for
+/// `/Users/nomade/Documents/GitHub/agentprovision-agents`).
 /// Decode by reversing the substitution.
 fn decode_claude_project_dir_name(dir: &Path) -> Option<String> {
     let name = dir.file_name().and_then(|s| s.to_str())?;

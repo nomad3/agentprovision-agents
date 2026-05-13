@@ -1,7 +1,7 @@
 //! `ap upgrade` — self-update from GitHub Releases.
 //!
 //! Replaces the curl|sh re-run path. Resolves the latest release tag from
-//! github.com/nomad3/servicetsunami-agents, downloads the matching
+//! github.com/nomad3/agentprovision-agents, downloads the matching
 //! `ap-{triple}.zip` asset, verifies it against the release's
 //! `SHA256SUMS` manifest (same manifest install.sh consumes — PR-D-3), and
 //! swaps the binary in place via the `self_update` crate.
@@ -30,7 +30,7 @@ use crate::context::Context;
 use crate::output;
 
 const REPO_OWNER: &str = "nomad3";
-const REPO_NAME: &str = "servicetsunami-agents";
+const REPO_NAME: &str = "agentprovision-agents";
 const BIN_NAME: &str = "ap";
 /// Tag scheme published by the release workflow. The CLI ships under
 /// `cli-v{semver}` so the monorepo can host releases for several

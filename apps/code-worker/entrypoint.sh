@@ -7,6 +7,16 @@ GITHUB_TOKEN="$(echo -n "${GITHUB_TOKEN}" | tr -d '[:space:]')"
 # Mark /workspace as safe (ownership may differ across pod restarts)
 git config --global --add safe.directory /workspace
 
+# Repo URL is parameterized so the rename (servicetsunami-agents →
+# agentprovision-agents) can be applied to all in-repo references
+# BEFORE the GitHub repository itself is renamed. The default falls
+# back to the current GitHub slug `servicetsunami-agents` so the
+# worker keeps booting during the transition; once the repo is
+# renamed on GitHub, GitHub's auto-redirect keeps the old slug
+# working for ~3 months, and operators can override
+# GIT_REPO_URL in compose/Helm to point at the new slug directly.
+GIT_REPO_URL="${GIT_REPO_URL:-https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git}"
+
 echo "[code-worker] Setting up repository (branch: ${GIT_BRANCH:-main})..."
 if [ -d /workspace/.git ]; then
     # Verify repo is valid; if not, remove and re-clone
@@ -16,10 +26,10 @@ if [ -d /workspace/.git ]; then
     else
         echo "[code-worker] Removing corrupted repo..."
         rm -rf /workspace/.git /workspace/*
-        git clone --branch "${GIT_BRANCH:-main}" "https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git" /workspace
+        git clone --branch "${GIT_BRANCH:-main}" "${GIT_REPO_URL}" /workspace
     fi
 else
-    git clone --branch "${GIT_BRANCH:-main}" "https://${GITHUB_TOKEN}@github.com/nomad3/servicetsunami-agents.git" /workspace
+    git clone --branch "${GIT_BRANCH:-main}" "${GIT_REPO_URL}" /workspace
 fi
 
 # Configure git identity for commits

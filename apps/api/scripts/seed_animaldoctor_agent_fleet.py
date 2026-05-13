@@ -14,7 +14,7 @@ Tenant: 7f632730-1a38-41f1-9f99-508d696dbcf1 (The Animal Doctor SOC).
 
 Run inside the api container:
 
-    docker exec servicetsunami-agents-api-1 \\
+    docker exec agentprovision-agents-api-1 \\
         python /app/scripts/seed_animaldoctor_agent_fleet.py
 
 Outputs (per re-run, all idempotent):

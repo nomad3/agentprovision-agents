@@ -22,7 +22,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-DB_CONTAINER="${DB_CONTAINER:-servicetsunami-agents-db-1}"
+DB_CONTAINER="${DB_CONTAINER:-agentprovision-agents-db-1}"
 DB_NAME="${DB_NAME:-agentprovision}"
 MIG_DIR="apps/api/migrations"
 

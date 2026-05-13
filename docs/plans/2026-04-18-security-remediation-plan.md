@@ -58,7 +58,7 @@ curl -o /dev/null -w "%{http_code}" \
 - [ ] **Step 5: Verify internal endpoint still works from inside Docker network**
 
 ```bash
-docker exec servicetsunami-agents-code-worker-1 python3 -c "
+docker exec agentprovision-agents-code-worker-1 python3 -c "
 import os, httpx
 key = os.environ.get('API_INTERNAL_KEY','')
 resp = httpx.get('http://api:8000/api/v1/oauth/internal/token/gemini_cli',
@@ -175,7 +175,7 @@ await api.post('/auth/password-recovery', { email })
 curl -X POST "http://localhost:8000/api/v1/auth/password-recovery" \
   -H "Content-Type: application/json" \
   -d '{"email":"test@example.com"}'
-docker logs servicetsunami-agents-api-1 --tail 3 | grep "password-recovery"
+docker logs agentprovision-agents-api-1 --tail 3 | grep "password-recovery"
 # URL should NOT contain the email address
 ```
 
