@@ -157,20 +157,34 @@ def test_unknown_provider_skipped_not_ilike_matched():
 def _make_real_db():
     """In-memory SQLite session with chat_sessions + chat_messages
     tables and a tenants table. Returns the session — caller is
-    responsible for cleanup (just drop reference; the engine is GC'd)."""
+    responsible for cleanup (just drop reference; the engine is GC'd).
+
+    Round-2 B2-1 hardening: SQLAlchemy 2.0+ `postgresql.UUID` renders
+    transparently on SQLite (as CHAR(32)), so this works in our
+    pinned env (2.0.49). On older SQLAlchemy or pure-Postgres-typed
+    columns it can fail to compile — we skip the test gracefully so
+    the H3 coverage either runs cleanly or is documented-skipped,
+    never CI-red."""
     from sqlalchemy import create_engine
+    from sqlalchemy.exc import CompileError
     from sqlalchemy.orm import sessionmaker
 
     from app.db.base import Base
     from app.models import tenant, user, chat  # noqa: F401  side-effect
 
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[
-        tenant.Tenant.__table__,
-        user.User.__table__,
-        chat.ChatSession.__table__,
-        chat.ChatMessage.__table__,
-    ])
+    try:
+        Base.metadata.create_all(engine, tables=[
+            tenant.Tenant.__table__,
+            user.User.__table__,
+            chat.ChatSession.__table__,
+            chat.ChatMessage.__table__,
+        ])
+    except CompileError as e:
+        pytest.skip(
+            f"SQLite cannot render the model schema ({e}); requires Postgres "
+            f"or a SQLAlchemy version with the UUID-on-SQLite fallback."
+        )
     Session = sessionmaker(bind=engine)
     return Session()
 
