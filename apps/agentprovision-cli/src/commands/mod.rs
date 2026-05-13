@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod cancel;
 pub mod chat;
+pub mod coalition;
 pub mod completions;
 pub mod integration;
 pub mod login;

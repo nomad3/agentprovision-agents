@@ -3,8 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, cancel, chat, completions, integration, login, logout, memory, quickstart, recall, run,
-    session, skill, status, upgrade, watch, workflow,
+    agent, cancel, chat, coalition, completions, integration, login, logout, memory, quickstart,
+    recall, run, session, skill, status, upgrade, watch, workflow,
 };
 use crate::context::Context;
 
@@ -117,6 +117,14 @@ pub enum Command {
     /// docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md.
     Recall(recall::RecallArgs),
 
+    /// Dispatch and inspect multi-agent coalitions (incident
+    /// investigations, deal briefs, cardiology case reviews). Backed
+    /// by the existing CoalitionWorkflow on agentprovision-
+    /// orchestration queue + Blackboard pub/sub. Phase 3 of the CLI
+    /// roadmap (#180).
+    #[command(subcommand)]
+    Coalition(coalition::CoalitionCommand),
+
     /// Guided initial-training flow. Auto-fires the first time you
     /// `ap login` against a fresh tenant; can be re-run explicitly to
     /// re-train (with `--force`) or to opt back in after Skip.
@@ -152,6 +160,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Skill(cmd) => skill::dispatch(cmd, ctx).await,
         Command::Memory(cmd) => memory::dispatch(cmd, ctx).await,
         Command::Recall(a) => recall::run(a, ctx).await,
+        Command::Coalition(cmd) => coalition::dispatch(cmd, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
     }
