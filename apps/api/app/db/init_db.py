@@ -83,7 +83,14 @@ def seed_demo_data(db: Session) -> None:
     demo_user = User(
         email=demo_email,
         full_name="Demo Operator",
-        hashed_password=get_password_hash("password"),
+        # N4-1 (security review round 4): demo password lifted to the
+        # post-N-N6 policy (12+ chars, ≥3 of {upper, lower, digit,
+        # symbol}). The previous "password" worked at seed time
+        # because Pydantic isn't on the path here, but a docs-reader
+        # who tried to reset the demo account to that string via the
+        # public API got a 422. Same string used in the login-screen
+        # demo-credential hint + tests/test_api.py fixture.
+        hashed_password=get_password_hash("DemoPass123!"),
         tenant_id=demo_tenant.id,
         is_active=True,
     )

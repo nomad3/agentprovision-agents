@@ -2,7 +2,7 @@
 
 ## Test Environment
 - **URL**: https://agentprovision.com
-- **Credentials**: test@example.com / password
+- **Credentials**: test@example.com / DemoPass123!
 - **Date**: 2025-11-28
 
 ---
@@ -10,7 +10,7 @@
 ## 1. Authentication & Onboarding
 - [x] **Login Flow** (Verified via API)
   - [x] Navigate to `/login`.
-  - [x] Enter `test@example.com` / `password`.
+  - [x] Enter `test@example.com` / `DemoPass123!`.
   - [x] Click "Login".
   - [x] Verify redirection to Dashboard.
 

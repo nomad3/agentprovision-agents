@@ -209,7 +209,17 @@ def test_password_recovery_same_message_for_existing_and_missing_email():
 def _make_reset_test_client(mock_user_or_none):
     """Build a test client whose db.query(User).filter(...).with_for_update().first()
     returns `mock_user_or_none`. Used by the cookie-binding regression
-    tests to exercise both the user-exists and user-missing paths."""
+    tests to exercise both the user-exists and user-missing paths.
+
+    N3-5 (security review round 3): the stub's `_StubDb.commit` is
+    intentionally a no-op. Tests using this client cannot verify
+    post-commit STATE on the user row (e.g. that the attempt-counter
+    actually persisted). The current tests only assert response shape,
+    so this is fine — but if a future test needs to verify post-commit
+    persistence (e.g. attempt-counter > 0 after 1 wrong attempt),
+    it'll need a real Session or a smarter stub that mutates
+    `mock_user_or_none` in place. Filed for visibility, not blocking.
+    """
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api import deps
@@ -267,7 +277,7 @@ def test_reset_password_without_csrf_cookie_returns_same_browser_email_agnostic(
         json={
             "email": "victim@example.com",
             "token": "correcttoken",
-            "new_password": "ValidPass123",
+            "new_password": "ValidPass1234",
         },
     )
     assert resp_a.status_code == 400
@@ -281,7 +291,7 @@ def test_reset_password_without_csrf_cookie_returns_same_browser_email_agnostic(
         json={
             "email": "ghost@example.com",
             "token": "correcttoken",
-            "new_password": "ValidPass123",
+            "new_password": "ValidPass1234",
         },
     )
     assert resp_b.status_code == 400
@@ -317,7 +327,7 @@ def test_reset_password_with_wrong_cookie_returns_generic_error():
         json={
             "email": "victim@example.com",
             "token": "correcttoken",
-            "new_password": "ValidPass123",
+            "new_password": "ValidPass1234",
         },
     )
     assert resp.status_code == 400
@@ -353,9 +363,9 @@ def test_password_complexity_rejected_at_schema_layer():
         )
     # 3 classes — accepted
     ok = PasswordResetConfirm(
-        email="x@y.com", token="abcd1234", new_password="ValidPass123"
+        email="x@y.com", token="abcd1234", new_password="ValidPass1234"
     )
-    assert ok.new_password == "ValidPass123"
+    assert ok.new_password == "ValidPass1234"
 
 
 def test_jwt_iat_floor_rejects_token_issued_before_password_change():
