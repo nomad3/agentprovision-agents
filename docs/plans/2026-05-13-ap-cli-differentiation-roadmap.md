@@ -91,7 +91,7 @@ $ alpha watch t_a4f3b2
 | Persistent task ID with status | ✅ `agent_tasks` table + workflow run ID |
 | `GET /api/v1/tasks/{id}` polling | ⚠️ Partial — exists for some flows; needs unification |
 | SSE `/api/v1/tasks/{id}/events/stream` for live tailing | ⚠️ Exists for chat sessions; reuse pattern |
-| Auth attaches to any machine with same JWT | ✅ — JWT in `~/.alpha/config.toml` |
+| Auth attaches to any machine with same JWT | ✅ — JWT in `~/.config/agentprovision/config.toml` |
 
 **Acceptance:**
 - `alpha run "<prompt>"` returns within 2s with a task ID.

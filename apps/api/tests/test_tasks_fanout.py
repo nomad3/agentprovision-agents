@@ -234,7 +234,7 @@ def test_whitespace_only_providers_with_fanout_is_valid():
 
 def test_x_tenant_id_mismatch_returns_400():
     """If the client sends X-Tenant-Id and it does not match the JWT
-    tenant, return 400. This catches stale `~/.alpha/config.toml` after
+    tenant, return 400. This catches stale `~/.config/agentprovision/config.toml` after
     a tenant switch."""
 
     user = _user()

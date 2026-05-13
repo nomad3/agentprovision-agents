@@ -1,6 +1,6 @@
 //! `alpha watch <task_id>` — resume tailing a durable task from any machine.
 //!
-//! Companion to `alpha run --background`. The same JWT in `~/.alpha/config.toml`
+//! Companion to `alpha run --background`. The same JWT in `~/.config/agentprovision/config.toml`
 //! authorizes the watch, so a task dispatched on a laptop can be tailed
 //! from a desktop without any handoff dance.
 //!
