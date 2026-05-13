@@ -34,16 +34,21 @@ use std::time::Instant;
 /// the JSONL example above — `ts` first so log scrapers can sort
 /// chronologically by prefix. Internal — the public surface is just the
 /// `Emitter::emit_*` helpers.
+///
+/// **Contract: all six top-level keys are always present.** Absent
+/// task_id / status / data values serialize as JSON `null` rather than
+/// being omitted, so a consumer doing `event["data"]["foo"]` (or
+/// `event.task_id`) doesn't blow up on bare-`status` emissions.
+/// Reviewer BLOCKER B1 on PR #444: previous `skip_serializing_if`
+/// attrs broke the contract for the `submitted` / `terminal` paths
+/// that don't carry data.
 #[derive(Debug, Serialize, Deserialize)]
 struct Event<'a> {
     ts: String,
     elapsed_ms: u128,
-    #[serde(skip_serializing_if = "Option::is_none")]
     task_id: Option<&'a str>,
     event: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<&'a str>,
-    #[serde(skip_serializing_if = "Value::is_null")]
     data: Value,
 }
 
@@ -132,6 +137,10 @@ impl ProgressEmitter {
 
     /// Emit one structured event. `data` is `null` when empty; pass
     /// `serde_json::json!({...})` for richer payloads.
+    ///
+    /// For payloads that are expensive to construct, prefer
+    /// `emit_with` — that variant takes a `FnOnce` and short-circuits
+    /// the construction entirely when the sink is `Off`.
     pub fn emit(&self, event: &str, status: Option<&str>, data: Value) {
         if !self.is_active() {
             return;
@@ -155,6 +164,22 @@ impl ProgressEmitter {
     /// Convenience: a no-data status transition.
     pub fn status(&self, event: &str, status: &str) {
         self.emit(event, Some(status), Value::Null);
+    }
+
+    /// Lazy variant of `emit`. The `data` closure runs ONLY when the
+    /// sink is active, so callers can construct large JSON payloads
+    /// (e.g. `json!({"children": vec_iter.collect()})`) without paying
+    /// the allocation cost when `--events` is unset. Reviewer
+    /// IMPORTANT I1 on PR #444: previously the call sites materialised
+    /// the payload before `is_active()` had a chance to short-circuit.
+    pub fn emit_with<F>(&self, event: &str, status: Option<&str>, data_fn: F)
+    where
+        F: FnOnce() -> Value,
+    {
+        if !self.is_active() {
+            return;
+        }
+        self.emit(event, status, data_fn());
     }
 
     /// Final "task complete" emission. Always fired on completion so
@@ -241,14 +266,68 @@ mod tests {
         assert_eq!(first["data"]["provider"], "claude-code");
         assert!(first["ts"].is_string());
         assert!(first["elapsed_ms"].is_u64() || first["elapsed_ms"].is_i64());
+        // All six top-level keys MUST be present (BLOCKER B1 fix).
+        let obj = first.as_object().expect("event is a json object");
+        for k in ["ts", "elapsed_ms", "task_id", "event", "status", "data"] {
+            assert!(obj.contains_key(k), "missing top-level key {k:?}: {first}");
+        }
 
         let second: Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["event"], "completed");
         assert_eq!(second["status"], "succeeded");
         assert_eq!(second["data"]["output_chars"], 1234);
+    }
+
+    #[test]
+    fn status_call_serializes_data_as_null_not_missing() {
+        // BLOCKER B1: a bare `status()` call (no data payload) must
+        // still ship `data: null` so consumers doing `event["data"]`
+        // get null rather than KeyError.
+        let dir =
+            std::env::temp_dir().join(format!("alpha-progress-status-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("status.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let sink = EventSink::from_arg(Some(path.to_str().unwrap())).unwrap();
+        let e = ProgressEmitter::new(sink);
+        e.status("submitted", "running");
+        drop(e);
+
+        let mut s = String::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        let parsed: Value = serde_json::from_str(s.trim()).unwrap();
+        let obj = parsed.as_object().unwrap();
+        // `data` MUST be present and explicitly null (not absent).
+        assert!(obj.contains_key("data"));
+        assert!(parsed["data"].is_null(), "expected null, got {parsed}");
+        // `task_id` likewise — absent task binding still serializes
+        // the key with a null value so the wire contract holds.
+        assert!(obj.contains_key("task_id"));
+        assert!(parsed["task_id"].is_null());
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn emit_with_does_not_invoke_closure_when_off() {
+        // Reviewer I1: payload construction must short-circuit when
+        // sink is Off. The closure should NEVER fire.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let fired = AtomicBool::new(false);
+        let e = ProgressEmitter::new(EventSink::Off);
+        e.emit_with("test", Some("running"), || {
+            fired.store(true, Ordering::SeqCst);
+            json!({"large_payload": "would-be-allocated"})
+        });
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "closure must not run when Off"
+        );
     }
 
     #[test]

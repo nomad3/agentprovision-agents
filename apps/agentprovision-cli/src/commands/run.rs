@@ -245,9 +245,10 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
     // subsequent events carry it. Cheap clone; the underlying sink
     // is Arc<Mutex<File>> or a no-op.
     let emitter = emitter.with_task(&response.task_id);
-    emitter.emit(
-        "dispatched",
-        Some("running"),
+    // Lazy `emit_with`: the closure runs only when --events is set,
+    // so the .collect() / .map() / .to_string() costs are paid only
+    // in the explicit-events case. Reviewer I1 on PR #444.
+    emitter.emit_with("dispatched", Some("running"), || {
         json!({
             "providers": args.providers,
             "fanout": args.fanout,
@@ -260,8 +261,8 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
                 "cost_usd": e.estimated_cost_usd,
                 "confidence": e.confidence,
             })),
-        }),
-    );
+        })
+    });
 
     // Print a compact dispatch banner. JSON output emits the response
     // verbatim for scripting consumers.
@@ -275,11 +276,12 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
         // `--background`: exit immediately so the user can close the
         // terminal. They can resume via `alpha watch <task_id>`. The
         // detach itself is a terminal-from-this-process event — emit
-        // it so agents can short-circuit their wait.
-        emitter.emit(
+        // it so agents can short-circuit their wait. Lazy form so the
+        // format! only runs when events are wired up.
+        emitter.emit_with(
             "detached",
             Some("backgrounded"),
-            json!({"resume": format!("alpha watch {}", response.task_id)}),
+            || json!({"resume": format!("alpha watch {}", response.task_id)}),
         );
         return Ok(());
     }
