@@ -14,6 +14,17 @@ pub struct Token {
     pub access_token: String,
     #[serde(default = "default_token_type")]
     pub token_type: String,
+    /// Long-lived opaque exchange credential (PR `feat(auth): long-lived
+    /// CLI sessions`). Servers running migration 130+ return this on
+    /// `/auth/login`; older deployments leave it null and the CLI falls
+    /// back to the legacy 7-day MAX_TOKEN_CHAIN_AGE refresh chain.
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// Seconds until `access_token` expires. Used by the auto-refresh
+    /// middleware to skip pre-emptive refresh until ~5min before expiry.
+    /// Null on older deployments.
+    #[serde(default)]
+    pub expires_in: Option<u64>,
 }
 
 // PR #332 review Critical #1 fix: never let the bearer token print
@@ -24,6 +35,11 @@ impl fmt::Debug for Token {
         f.debug_struct("Token")
             .field("access_token", &"<redacted>")
             .field("token_type", &self.token_type)
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("expires_in", &self.expires_in)
             .finish()
     }
 }
@@ -401,6 +417,8 @@ mod tests {
         let t = Token {
             access_token: "very-secret-bearer-1234567890".into(),
             token_type: "bearer".into(),
+            refresh_token: Some("rt-very-secret".into()),
+            expires_in: Some(86_400),
         };
         let dbg = format!("{t:?}");
         assert!(

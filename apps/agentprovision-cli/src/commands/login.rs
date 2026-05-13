@@ -8,6 +8,7 @@ use agentprovision_core::auth::{
     self, complete_device_flow, request_device_code, DevicePollOutcome,
 };
 use agentprovision_core::error::Error;
+use agentprovision_core::models::Token;
 
 use crate::context::Context;
 use crate::output;
@@ -53,8 +54,24 @@ pub async fn run(args: LoginArgs, ctx: Context) -> anyhow::Result<()> {
         }
     };
 
-    ctx.token_store.save(&token)?;
-    ctx.client.set_token(Some(token));
+    // Persist the access token (existing behaviour).
+    ctx.token_store.save(&token.access_token)?;
+    ctx.client.set_token(Some(token.access_token.clone()));
+    // PR `feat(auth): long-lived CLI sessions` — if the server issued
+    // a refresh credential, stash it next to the access token so the
+    // auto-refresh middleware can swap on 401 without a re-prompt.
+    // Older servers (pre-migration 130) leave this null and the CLI
+    // falls back to the legacy 7-day forced-relogin behaviour.
+    if let Some(rt) = token.refresh_token.as_deref() {
+        ctx.token_store.save_refresh(rt)?;
+        ctx.client.set_refresh_token(Some(rt.to_string()));
+    } else {
+        // Defensive: if a prior session left a stale refresh token
+        // in the keychain (e.g. server downgraded) drop it now so we
+        // don't try to exchange against an endpoint that no longer
+        // exists.
+        let _ = ctx.token_store.clear_refresh();
+    }
 
     // Pull the current user to confirm the token works and to show identity.
     let me = ctx.client.current_user().await?;
@@ -85,7 +102,7 @@ pub async fn run(args: LoginArgs, ctx: Context) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn try_device_flow(ctx: &Context) -> anyhow::Result<String> {
+async fn try_device_flow(ctx: &Context) -> anyhow::Result<Token> {
     let code = request_device_code(&ctx.client)
         .await
         .map_err(|e| match e {
@@ -123,7 +140,7 @@ async fn try_device_flow(ctx: &Context) -> anyhow::Result<String> {
     if let Some(pb) = pb {
         pb.finish_and_clear();
     }
-    Ok(token.access_token)
+    Ok(token)
 }
 
 async fn password_flow(
@@ -131,7 +148,7 @@ async fn password_flow(
     email_arg: Option<&str>,
     password_stdin: bool,
     password_env: Option<&str>,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<Token> {
     let email = match email_arg {
         Some(e) => e.to_string(),
         None => {
@@ -156,5 +173,5 @@ async fn password_flow(
             .interact()?
     };
     let token = auth::login_password(&ctx.client, &email, &password).await?;
-    Ok(token.access_token)
+    Ok(token)
 }

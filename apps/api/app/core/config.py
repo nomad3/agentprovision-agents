@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # 24 hours. Long-running clients (Luna desktop) call /auth/refresh
     # proactively 5 minutes before expiry to avoid mid-session logouts.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
+    # Long-lived refresh credential (DB-backed, rotation w/ reuse
+    # detection). The CLI mints one at /auth/login and swaps via
+    # /auth/token/refresh whenever the access_token expires, so users
+    # stay signed in across reboots and laptop closures for the full
+    # window. 30 days matches GitHub CLI / Cloud SDK gcloud; raise to
+    # 60–90 if support tickets show people logging in monthly.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
     DATABASE_URL: str = "postgresql://postgres:postgres@db:5432/agentprovision"
     # Default storage path: /app/storage in container (set by IN_DOCKER=1 in
     # Dockerfile), ./storage for local dev. Helm/compose should set

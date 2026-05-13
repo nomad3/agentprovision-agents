@@ -18,7 +18,9 @@ from app.schemas import auth as auth_schema
 from app.api import deps
 from app.core import security
 from app.core.config import settings
+from app.models.refresh_token import RefreshToken
 from app.services import base as base_service
+from app.services import refresh_tokens as refresh_token_service
 from app.services import users as user_service
 from app.core.rate_limit import limiter
 
@@ -32,6 +34,36 @@ _PASSWORD_RESET_MESSAGE = "Password reset instructions sent if email is register
 # at most until hour `MAX_TOKEN_CHAIN_AGE_SECONDS / 3600`. After that the
 # user must re-authenticate. 7 days = weekly forced re-auth.
 MAX_TOKEN_CHAIN_AGE_SECONDS = 7 * 24 * 60 * 60
+
+
+_REFRESH_HINT_DEVICE_LABEL = "X-AP-Device-Label"  # opt-in header for CLI/SDK clients
+
+
+def _device_label_from(request: Request) -> str | None:
+    """Pull a human-readable origin label off the request. The CLI sets
+    `X-AP-Device-Label: alpha CLI on <hostname>`; everyone else falls
+    back to the User-Agent or None. Kept loose on purpose — this is for
+    `alpha sessions list` UX, not for auth decisions."""
+    explicit = request.headers.get(_REFRESH_HINT_DEVICE_LABEL)
+    if explicit:
+        return explicit.strip()[:255] or None
+    ua = request.headers.get("user-agent")
+    if ua:
+        return ua.strip()[:255] or None
+    return None
+
+
+def _client_ip(request: Request) -> str | None:
+    """Cloudflare tunnel + uvicorn behind nginx layer in front; honour
+    common forwarded-for headers but ignore garbage."""
+    for hdr in ("cf-connecting-ip", "x-forwarded-for", "x-real-ip"):
+        val = request.headers.get(hdr)
+        if val:
+            # X-Forwarded-For is comma-separated; first hop is the client.
+            return val.split(",", 1)[0].strip()
+    if request.client is None:
+        return None
+    return request.client.host
 
 
 @router.post("/login", response_model=token_schema.Token)
@@ -57,7 +89,26 @@ def login_for_access_token(
         expires_delta=access_token_expires,
         additional_claims=claims,
     )
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Issue a refresh token alongside the access token so CLIs (and
+    # eventually the web UI's persistent-session pathway) can stay
+    # signed in for REFRESH_TOKEN_EXPIRE_DAYS without re-prompting for
+    # password. Older clients ignore the extra fields per the schema's
+    # Optional shape; new clients persist `refresh_token` next to
+    # `access_token` and call /auth/token/refresh on 401.
+    refresh_secret, _row = refresh_token_service.issue_refresh_token(
+        db,
+        user=user,
+        device_label=_device_label_from(request),
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+    )
+    db.commit()
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "refresh_token": refresh_secret,
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -124,6 +175,155 @@ def refresh_access_token(
     )
     logger.info("Token refreshed for %s", current_user.email)
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/token/refresh", response_model=token_schema.Token)
+@limiter.limit("30/minute")
+def exchange_refresh_token(
+    request: Request,
+    payload: token_schema.RefreshTokenRequest,
+    db: Session = Depends(deps.get_db),
+):
+    """Long-lived "log in once" exchange endpoint.
+
+    Unlike `/auth/refresh` (which requires a still-valid access token
+    and caps at MAX_TOKEN_CHAIN_AGE_SECONDS), this endpoint accepts an
+    opaque DB-backed refresh token. Each successful call:
+
+      1. Returns a fresh access_token + a fresh refresh_token.
+      2. Marks the presented refresh token revoked (reason='rotated').
+      3. Links the new token to the old via parent_id for reuse
+         detection (replaying the old token → kill the whole chain).
+
+    The CLI hits this transparently inside its HTTP client middleware
+    on a 401, then retries the original request with the new
+    access_token. Users see no interruption for 30 days (settings.
+    REFRESH_TOKEN_EXPIRE_DAYS).
+    """
+    secret = (payload.refresh_token or "").strip()
+    if not secret:
+        raise HTTPException(status_code=400, detail="refresh_token is required")
+
+    # Step 1: look up by hash. We deliberately do NOT use find_active here
+    # — we need to see revoked rows to detect replay.
+    import hashlib  # local import to keep top-of-file noise tight
+
+    hashed = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    row = db.query(RefreshToken).filter(RefreshToken.token_hash == hashed).first()
+    if row is None:
+        # Unknown secret — could be a typo or a forged value. Don't leak
+        # which (timing-side-channel doesn't matter here at refresh
+        # cadence). Generic 401.
+        logger.info("refresh_token: unknown hash")
+        raise HTTPException(status_code=401, detail="invalid refresh_token")
+
+    # Step 2: replay detection. If the row exists but is revoked with
+    # reason='rotated', somebody is replaying an already-exchanged
+    # token. We can't tell whether it's the legitimate user or an
+    # attacker, so we kill the entire chain and force re-auth on the
+    # next attempt.
+    if row.revoked_at is not None:
+        if row.revoked_reason == "rotated":
+            burned = refresh_token_service.revoke_chain_from(
+                db, leaf=row, reason="reuse_detected"
+            )
+            db.commit()
+            logger.warning(
+                "refresh_token reuse detected for user_id=%s — revoked %d chain rows",
+                row.user_id,
+                burned,
+            )
+        raise HTTPException(status_code=401, detail="refresh_token revoked")
+
+    # Step 3: expiry
+    if row.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=401, detail="refresh_token expired")
+
+    # Step 4: rotate. Issues a new RefreshToken with parent_id=row.id
+    # and revokes row with reason='rotated'.
+    new_secret, _new_row = refresh_token_service.rotate(
+        db,
+        presented=row,
+        user_agent=request.headers.get("user-agent"),
+        ip=_client_ip(request),
+    )
+
+    # Step 5: mint a fresh access token.
+    user = row.user
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    claims = {"user_id": str(user.id)}
+    if user.tenant_id:
+        claims["tenant_id"] = str(user.tenant_id)
+    access_token = security.create_access_token(
+        user.email,
+        expires_delta=access_token_expires,
+        additional_claims=claims,
+    )
+    db.commit()
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "refresh_token": new_secret,
+        "expires_in": settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    }
+
+
+@router.get("/sessions", response_model=list[token_schema.SessionInfo])
+def list_active_sessions(
+    db: Session = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
+):
+    """List the caller's still-active refresh tokens — one row per
+    live `alpha login` (or other long-lived client). Powers
+    `alpha sessions list` and a future web UI "logged-in devices" panel.
+    """
+    rows = (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.user_id == current_user.id,
+            RefreshToken.revoked_at.is_(None),
+            RefreshToken.expires_at > datetime.utcnow(),
+        )
+        .order_by(RefreshToken.last_used_at.desc().nulls_last(),
+                  RefreshToken.created_at.desc())
+        .all()
+    )
+    return [
+        token_schema.SessionInfo(
+            id=str(r.id),
+            device_label=r.device_label,
+            user_agent=r.user_agent,
+            created_at=r.created_at,
+            last_used_at=r.last_used_at,
+            expires_at=r.expires_at,
+        )
+        for r in rows
+    ]
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+def revoke_session(
+    session_id: str,
+    db: Session = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
+):
+    """Revoke a single refresh token — `alpha sessions revoke <id>`.
+
+    Tenant + ownership check: the row must belong to the caller.
+    Cross-user revoke is intentionally not supported here; admins
+    revoking another user's sessions go through the admin surface
+    (TODO; see `app/api/v1/admin/auth.py`).
+    """
+    row = (
+        db.query(RefreshToken)
+        .filter(RefreshToken.id == session_id, RefreshToken.user_id == current_user.id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    refresh_token_service.revoke_one(db, row=row, reason="user_revoked")
+    db.commit()
+    return None
 
 
 @router.post("/register", response_model=user_schema.User)

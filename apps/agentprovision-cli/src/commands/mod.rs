@@ -11,6 +11,7 @@ pub mod quickstart;
 pub mod recall;
 pub mod run;
 pub mod session;
+pub mod sessions;
 pub mod skill;
 pub mod status;
 pub mod upgrade;
