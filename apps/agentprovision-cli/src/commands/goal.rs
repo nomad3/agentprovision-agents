@@ -168,10 +168,7 @@ pub async fn run(args: GoalArgs, ctx: Context) -> anyhow::Result<()> {
         "[alpha] goal dispatched — run {} (status: {})",
         resp.id, resp.status
     ));
-    output::info(format!(
-        "follow live events: alpha watch {}",
-        resp.id
-    ));
+    output::info(format!("follow live events: alpha watch {}", resp.id));
     if let Some(err) = resp.error {
         output::warn(format!("error: {err}"));
     }
@@ -232,9 +229,14 @@ pub(crate) fn collect_contract(args: &GoalArgs) -> anyhow::Result<serde_json::Va
         Some(s) => s.clone(),
         None if interactive => Input::<String>::with_theme(&ColorfulTheme::default())
             .with_prompt("Final deliverable?")
-            .default("summary message describing the work done and how each success criterion was met".into())
+            .default(
+                "summary message describing the work done and how each success criterion was met"
+                    .into(),
+            )
             .interact_text()?,
-        None => "summary message describing the work done and how each success criterion was met".into(),
+        None => {
+            "summary message describing the work done and how each success criterion was met".into()
+        }
     };
 
     Ok(json!({
@@ -298,7 +300,8 @@ async fn resolve_goal_template(ctx: &Context) -> anyhow::Result<Uuid> {
 }
 
 async fn install_or_reuse(ctx: &Context, template_id: Uuid) -> anyhow::Result<Uuid> {
-    let installed: Vec<InstalledWorkflow> = ctx.client.get_json("/api/v1/dynamic-workflows").await?;
+    let installed: Vec<InstalledWorkflow> =
+        ctx.client.get_json("/api/v1/dynamic-workflows").await?;
     if let Some(existing) = installed
         .iter()
         .find(|w| w.source_template_id == Some(template_id))
@@ -406,7 +409,10 @@ mod tests {
         assert_eq!(v["success_criteria"], "- one\n- two");
         assert_eq!(v["operating_rules"], "(none specified)");
         assert!(v["quality_bar"].as_str().unwrap().contains("ship-ready"));
-        assert!(v["deliverable"].as_str().unwrap().contains("success criterion"));
+        assert!(v["deliverable"]
+            .as_str()
+            .unwrap()
+            .contains("success criterion"));
     }
 
     #[test]
