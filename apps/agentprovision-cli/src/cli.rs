@@ -4,8 +4,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::{
     agent, cancel, chat, coalition, completions, integration, login, logout, memory, policy,
-    quickstart, recall, recipes, remember, run, session, sessions, skill, status, upgrade, watch,
-    workflow,
+    quickstart, recall, recipes, remember, run, session, sessions, skill, status, upgrade, usage,
+    watch, workflow,
 };
 use crate::context::Context;
 
@@ -153,6 +153,16 @@ pub enum Command {
     #[command(subcommand)]
     Recipes(recipes::RecipesCommand),
 
+    /// Per-provider tokens + cost rollup for the caller's tenant.
+    /// Phase 4 of the CLI roadmap (#181). See `alpha costs` for the
+    /// daily breakdown.
+    Usage(usage::UsageArgs),
+
+    /// Per-day cost rollup for the caller's tenant. Optional
+    /// `--agent <uuid>` to scope to a single agent. Phase 4 of the
+    /// CLI roadmap (#181). See `alpha usage` for the provider split.
+    Costs(usage::CostsArgs),
+
     /// Guided initial-training flow. Auto-fires the first time you
     /// `alpha login` against a fresh tenant; can be re-run explicitly to
     /// re-train (with `--force`) or to opt back in after Skip.
@@ -193,6 +203,8 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Policy(cmd) => policy::run(policy::PolicyArgs { command: cmd }, ctx).await,
         Command::Coalition(cmd) => coalition::dispatch(cmd, ctx).await,
         Command::Recipes(cmd) => recipes::run(recipes::RecipesArgs { command: cmd }, ctx).await,
+        Command::Usage(a) => usage::usage(a, ctx).await,
+        Command::Costs(a) => usage::costs(a, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
     }

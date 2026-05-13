@@ -85,6 +85,7 @@ from app.api.v1 import (
     onboarding,
     memory_training,
     mcp_public,
+    usage_costs,
 )
 
 _logger = logging.getLogger(__name__)
@@ -139,6 +140,11 @@ router.include_router(dataset_groups.router, prefix="/dataset-groups", tags=["da
 router.include_router(chat.router, prefix="/chat", tags=["chat"])
 router.include_router(internal.router, prefix="/internal", tags=["internal"])
 router.include_router(memories.router, prefix="/memories", tags=["memories"])
+# `alpha usage` + `alpha costs` (Phase 4 of the CLI roadmap, #181).
+# Aggregates chat_messages per-provider and per-day for the tenant.
+# Mounted at root (no prefix) so the routes read `/usage` and
+# `/costs` matching the roadmap doc verbatim.
+router.include_router(usage_costs.router, tags=["usage-costs"])
 # `alpha remember` (Phase 2 of the CLI roadmap, #179) — free-form
 # fact ingestion via knowledge.create_observation.
 router.include_router(memory_remember.router, prefix="/memory", tags=["memory"])
