@@ -159,7 +159,7 @@ pub async fn repl(args: ReplArgs, ctx: Context) -> anyhow::Result<()> {
 /// Stream the assistant reply, render deltas live (unless --json), and
 /// re-render with markdown styling on completion.
 ///
-/// Spinner lifecycle (three exit points, all covered):
+/// Spinner lifecycle (one start, three exits):
 ///   • start         — top of fn, before `stream_chat` resolves.
 ///   • first Delta   — explicit `think.finish()` so the braille glyph
 ///                     isn't pinned to the line we're about to write.
