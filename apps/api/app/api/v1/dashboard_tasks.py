@@ -28,6 +28,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -41,6 +42,24 @@ router = APIRouter()
 # as history and excluded from the dashboard — keeps the response small
 # and matches the user's mental model of "what did I just finish."
 COMPLETED_LOOKBACK = timedelta(hours=24)
+
+# Floor on the working group. Without this, a worker that crashed
+# mid-step weeks ago leaves a zombie status='running' row that lives
+# in the dashboard forever and eats a LIMIT slot. No reaper exists for
+# these rows (PR #454 review I2). Match the lookback to the completed
+# window with a 7-day grace so genuinely long migrations still surface.
+WORKING_FLOOR = timedelta(days=7)
+
+# Terminal status strings as written into workflow_runs.status. Centralised
+# here so the IN-clause in the query and `_row_from_run`'s working-vs-
+# completed fold stay in sync — PR #454 review N2. If you add a new
+# terminal status, update BOTH this constant and `_row_from_run`.
+#
+# `cancelled` (double-l) is what `feedback_activities.py` writes today.
+# `canceled` (single-l) is the Temporal-side spelling kept here in case
+# a future writer copies it through — defensive, harmless if it never
+# materialises in this column.
+TERMINAL_STATUSES: tuple[str, ...] = ("completed", "failed", "cancelled", "canceled")
 
 
 class TaskRow(BaseModel):
@@ -77,13 +96,41 @@ class TaskDashboardResponse(BaseModel):
     supports_needs_input: bool = False
 
 
+def _utc_aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """Stamp a UTC tzinfo onto a naive datetime so Pydantic serialises
+    with the `Z` suffix.
+
+    Critical for CLI compatibility — PR #454 review BLOCKER B1.
+    `WorkflowRun.started_at` / `completed_at` are declared as
+    `Column(DateTime, ...)` (TIMESTAMP WITHOUT TIME ZONE, populated via
+    `datetime.utcnow()`). Naive datetimes serialise as
+    `"2026-05-13T23:33:12.148613"` (no offset), which the Rust CLI's
+    `chrono::DateTime<Utc>` rejects at deserialisation. Attaching UTC
+    explicitly here forces RFC-3339 with `Z` on the wire.
+
+    The proper long-term fix is migrating the columns to TIMESTAMPTZ,
+    which is tracked separately. Until then this shim is the smallest
+    blast-radius fix.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _row_from_run(run: WorkflowRun, workflow_name: str) -> TaskRow:
     """Map a (run, workflow) tuple to a dashboard row.
 
-    `title` falls back to the workflow name when the run never had its
-    own first message — covers the bootstrap window before the agent
-    has emitted any text.
+    `title` currently falls back to the workflow name. A future
+    iteration may join against the first ChatMessage to surface a
+    user-supplied title — tracked as a follow-up (PR #454 review N3).
+    For now `title` IS `workflow_name`; the comment above keeps that
+    intent explicit.
     """
+    # If you add a new terminal status here, also update
+    # TERMINAL_STATUSES so the query SELECTs the row in the first place.
+    # The constant + this branch are the matched pair (PR #454 review N2).
     if run.status == "running":
         status: Literal["working", "completed"] = "working"
     else:
@@ -95,8 +142,10 @@ def _row_from_run(run: WorkflowRun, workflow_name: str) -> TaskRow:
         title=workflow_name,
         workflow_id=run.workflow_id,
         workflow_name=workflow_name,
-        started_at=run.started_at,
-        completed_at=run.completed_at,
+        # tz-attach defends against the naive-datetime → CLI deser bug
+        # (PR #454 review B1).
+        started_at=_utc_aware(run.started_at),  # type: ignore[arg-type]
+        completed_at=_utc_aware(run.completed_at),
         duration_ms=run.duration_ms,
         total_tokens=run.total_tokens,
         total_cost_usd=run.total_cost_usd,
@@ -125,13 +174,17 @@ def list_dashboard_tasks(
     """
     now = datetime.now(timezone.utc)
 
-    # ── Working: status="running" within this tenant ──
+    # ── Working: status="running" within this tenant, within the
+    # WORKING_FLOOR window so zombie rows from crashed workers don't
+    # bloat the dashboard forever (PR #454 review I2).
+    working_floor = now - WORKING_FLOOR
     working_rows = (
         db.query(WorkflowRun, DynamicWorkflow.name)
         .join(DynamicWorkflow, WorkflowRun.workflow_id == DynamicWorkflow.id)
         .filter(
             WorkflowRun.tenant_id == current_user.tenant_id,
             WorkflowRun.status == "running",
+            WorkflowRun.started_at >= working_floor,
         )
         .order_by(WorkflowRun.started_at.desc())
         .limit(limit)
@@ -139,18 +192,23 @@ def list_dashboard_tasks(
     )
 
     # ── Completed: terminal statuses, within the lookback window ──
+    # If `completed_at` is NULL (crashed mid-step before writing it),
+    # gate on `started_at >= cutoff` instead — without this floor a 6-
+    # month-old crash row would still surface (PR #454 review I1).
     cutoff = now - COMPLETED_LOOKBACK
     completed_rows = (
         db.query(WorkflowRun, DynamicWorkflow.name)
         .join(DynamicWorkflow, WorkflowRun.workflow_id == DynamicWorkflow.id)
         .filter(
             WorkflowRun.tenant_id == current_user.tenant_id,
-            WorkflowRun.status.in_(["completed", "failed", "cancelled", "canceled"]),
-            # Use COALESCE-style fallback: some legacy rows never wrote
-            # completed_at because they crashed mid-step. Allow
-            # started_at as a fallback so the user still sees them.
-            (WorkflowRun.completed_at.is_(None))
-            | (WorkflowRun.completed_at >= cutoff),
+            WorkflowRun.status.in_(TERMINAL_STATUSES),
+            or_(
+                WorkflowRun.completed_at >= cutoff,
+                and_(
+                    WorkflowRun.completed_at.is_(None),
+                    WorkflowRun.started_at >= cutoff,
+                ),
+            ),
         )
         .order_by(
             WorkflowRun.completed_at.desc().nullslast(),

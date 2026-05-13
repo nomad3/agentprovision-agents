@@ -33,12 +33,16 @@ pub struct TasksArgs {
     #[command(subcommand)]
     pub command: Option<TasksCommand>,
 
-    /// Cap each group to N rows (default 50). Server hard-clamps at
-    /// 200 — passing higher silently truncates. Useful when scripting
-    /// over a tenant with hundreds of completed runs in the last day.
+    /// Cap each group to N rows (default 50, max 200). Values above
+    /// 200 are clamped client-side with a stderr warning rather than
+    /// sent through to a server-side 422 (PR #454 review I4).
     #[arg(long, default_value_t = 50)]
     pub limit: u32,
 }
+
+/// Server-side maximum on `?limit=` — keep in sync with
+/// `dashboard_tasks.py::list_dashboard_tasks` `Query(..., le=200)`.
+const LIMIT_CAP: u32 = 200;
 
 #[derive(Debug, Subcommand)]
 pub enum TasksCommand {
@@ -59,6 +63,21 @@ pub struct AttachArgs {
     /// on `alpha watch`.
     #[arg(long)]
     pub poll: bool,
+
+    /// Maximum number of seconds to tail before exiting. The task
+    /// itself keeps running on the backend; the CLI just stops
+    /// rendering. `0` = no ceiling, follow until terminal. Default
+    /// 1800s (30 min). PR #454 review I3 — previously hardcoded,
+    /// which silently capped long-running goal recipes at 30 min.
+    #[arg(long, default_value_t = 1800)]
+    pub timeout: u64,
+
+    /// Mirrors `alpha watch --no-tail-if-done`: if the task is
+    /// already in a terminal state when attach is invoked, print one
+    /// status line and exit instead of rendering the full final
+    /// transcript. Useful for scripted polling.
+    #[arg(long)]
+    pub no_tail_if_done: bool,
 }
 
 #[derive(Debug, Args)]
@@ -107,7 +126,23 @@ pub async fn run(args: TasksArgs, ctx: Context) -> anyhow::Result<()> {
 }
 
 async fn list(limit: u32, ctx: Context) -> anyhow::Result<()> {
-    let path = format!("/api/v1/dashboard/tasks?limit={limit}");
+    // Clamp client-side to match the server's `Query(..., le=200)`.
+    // Sending a higher value would 422 with an opaque body — preserve
+    // the user's intent by capping silently with a stderr warning so
+    // scripted callers still get useful behaviour. PR #454 review I4.
+    let effective_limit = if limit > LIMIT_CAP {
+        output::warn(format!(
+            "--limit {limit} exceeds server cap {LIMIT_CAP}; clamping"
+        ));
+        LIMIT_CAP
+    } else if limit < 1 {
+        // Should be unreachable (clap default is 50, no negative for
+        // u32) but defend anyway.
+        1
+    } else {
+        limit
+    };
+    let path = format!("/api/v1/dashboard/tasks?limit={effective_limit}");
     let board: TaskDashboard = ctx.client.get_json(&path).await?;
 
     if ctx.json {
@@ -153,10 +188,15 @@ async fn attach(args: AttachArgs, ctx: Context) -> anyhow::Result<()> {
     // v1 delegates to `alpha watch` — the underlying SSE stream is the
     // same. Keeps a single source of truth for tail behaviour; once
     // we add reply-on-needs-input, attach grows its own loop.
+    //
+    // `--timeout` and `--no-tail-if-done` are explicit pass-throughs
+    // (PR #454 review I3) so long-running goal recipes aren't silently
+    // capped at 30 min and scripted polling has the same escape hatch
+    // as `alpha watch`.
     let wa = watch::WatchArgs {
         task_id: args.task_id,
-        no_tail_if_done: false,
-        timeout: 1800,
+        no_tail_if_done: args.no_tail_if_done,
+        timeout: args.timeout,
         poll: args.poll,
     };
     watch::run(wa, ctx).await
@@ -188,8 +228,12 @@ fn print_row(row: &TaskRow, completed: bool) {
         _ => "?",
     };
     let title = truncate(&row.title, 40);
+    // Distinguish "unmeasured" (None → `—`) from "measured but $0.00"
+    // (Some(0.0) → `$0.000`). The cost tracker emits 0.00 for cached-
+    // response cases; hiding it as `—` would make those rows look
+    // unmeasured. PR #454 review N4.
     let cost = match row.total_cost_usd {
-        Some(c) if c > 0.0 => format!("${c:.3}"),
+        Some(c) if c >= 0.0 => format!("${c:.3}"),
         _ => "—".into(),
     };
     println!(
@@ -261,7 +305,47 @@ mod tests {
     fn parses_attach_subcommand() {
         let a = parse(&["test", "tasks", "attach", "t-abc"]);
         match a.command {
-            Some(TasksCommand::Attach(att)) => assert_eq!(att.task_id, "t-abc"),
+            Some(TasksCommand::Attach(att)) => {
+                assert_eq!(att.task_id, "t-abc");
+                // PR #454 review I3: defaults must match `alpha watch`.
+                assert_eq!(att.timeout, 1800);
+                assert!(!att.no_tail_if_done);
+                assert!(!att.poll);
+            }
+            other => panic!("expected Attach, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_attach_timeout_and_no_tail_if_done() {
+        // PR #454 review I3: long-running goal recipes need to be able
+        // to override the 30-min default, and scripted polling needs
+        // --no-tail-if-done parity with `alpha watch`.
+        let a = parse(&[
+            "test",
+            "tasks",
+            "attach",
+            "t-long",
+            "--timeout",
+            "7200",
+            "--no-tail-if-done",
+        ]);
+        match a.command {
+            Some(TasksCommand::Attach(att)) => {
+                assert_eq!(att.timeout, 7200);
+                assert!(att.no_tail_if_done);
+            }
+            other => panic!("expected Attach, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_attach_timeout_zero_for_no_ceiling() {
+        // `--timeout 0` is the "follow until terminal" escape hatch
+        // documented on `alpha watch`. Must round-trip cleanly.
+        let a = parse(&["test", "tasks", "attach", "t-x", "--timeout", "0"]);
+        match a.command {
+            Some(TasksCommand::Attach(att)) => assert_eq!(att.timeout, 0),
             other => panic!("expected Attach, got {other:?}"),
         }
     }

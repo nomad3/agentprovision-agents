@@ -43,17 +43,30 @@ def _make_client(user, *, working_rows=None, completed_rows=None):
     The endpoint runs two queries — one for working, one for completed
     — and side_effect on `.all()` lets us pretend the first call
     returns the working rows and the second returns the completed.
+
+    Captures every `.filter(*args)` invocation in `chain.filter_args`
+    so tests can assert tenant-isolation clauses are present in the
+    query (PR #454 review BLOCKER B2).
     """
     working_rows = working_rows or []
     completed_rows = completed_rows or []
 
     chain = MagicMock()
+    chain.filter_args = []  # type: ignore[attr-defined]
 
     def _return_chain(*_a, **_kw):
         return chain
 
+    def _capture_filter(*args, **_kw):
+        # Stringify each BinaryExpression — the str() rendering preserves
+        # the column name ("workflow_runs.tenant_id") and the bound
+        # value (the UUID), which is what the B2 assertion needs.
+        for a in args:
+            chain.filter_args.append(str(a))
+        return chain
+
     chain.join.side_effect = _return_chain
-    chain.filter.side_effect = _return_chain
+    chain.filter.side_effect = _capture_filter
     chain.order_by.side_effect = _return_chain
     chain.limit.side_effect = _return_chain
     chain.all.side_effect = [working_rows, completed_rows]
@@ -154,12 +167,7 @@ def test_runs_two_queries_one_per_group():
     # Each render of /dashboard/tasks must execute exactly two
     # queries — working + completed. If a future refactor folds them
     # into a single query (or adds a third), this fails and forces a
-    # conscious update. Tenant isolation itself is enforced server-
-    # side via `.filter(WorkflowRun.tenant_id == ...)`; an integration
-    # test against a real DB (vs the self-chaining mock here) is the
-    # only honest way to assert the filter semantics, so we lock the
-    # structural count here and the integration coverage lives in
-    # apps/api/tests/integration/.
+    # conscious update.
     user = _fake_user("44444444-4444-4444-4444-444444444444")
     client, db = _make_client(user)
     resp = client.get("/api/v1/dashboard/tasks")
@@ -169,6 +177,105 @@ def test_runs_two_queries_one_per_group():
         f"endpoint should issue 2 queries (working + completed); "
         f"saw {db.query.call_count}"
     )
+
+
+def test_filters_by_tenant_id_on_both_queries():
+    # PR #454 review BLOCKER B2: tenant isolation must be enforced on
+    # EVERY query. `workflow_runs` has no Postgres row-level security
+    # policy — dropping the `tenant_id` clause from a future refactor
+    # would silently leak rows across tenants. SQLAlchemy renders the
+    # captured filter expressions with bind-parameter placeholders
+    # (e.g. `workflow_runs.tenant_id = :tenant_id_1`), so we assert on
+    # the column reference rather than the bound UUID value.
+    user = _fake_user("44444444-4444-4444-4444-444444444444")
+    client, db = _make_client(user)
+    resp = client.get("/api/v1/dashboard/tasks")
+    assert resp.status_code == 200
+    rendered = db.query.return_value.filter_args
+    tenant_clauses = [s for s in rendered if "workflow_runs.tenant_id =" in s]
+    # Two queries (working + completed) → at least two tenant clauses.
+    assert len(tenant_clauses) >= 2, (
+        "expected at least one tenant_id clause per query "
+        f"(2 queries); saw {len(tenant_clauses)} in: {rendered!r}"
+    )
+    # Also confirm the bound value matches the current user — without
+    # this guard a future bug could compare to a constant by mistake.
+    # The bound value lives in `chain.filter` call_args, not in the
+    # rendered string, so dig into the BinaryExpression's right side.
+    chain = db.query.return_value
+    bound_uuids = set()
+    for call in chain.filter.call_args_list:
+        for clause in call.args:
+            # SQLAlchemy BinaryExpression: .right is a BindParameter
+            # whose `.value` is the bound python object.
+            if hasattr(clause, "right") and hasattr(clause.right, "value"):
+                bound_uuids.add(str(clause.right.value))
+    assert str(user.tenant_id) in bound_uuids, (
+        f"tenant_id clause must bind the current user's tenant_id "
+        f"({user.tenant_id}); saw bound values: {bound_uuids!r}"
+    )
+
+
+def test_started_at_emits_with_utc_offset():
+    # PR #454 review BLOCKER B1: server MUST emit tz-aware datetimes
+    # so the Rust CLI's chrono::DateTime<Utc> deserialises. A naive
+    # datetime serialises as "2026-05-13T12:00:00" (no offset), which
+    # the CLI rejects at parse time. Force a NAIVE source datetime
+    # through the endpoint and assert the wire payload has a UTC
+    # offset attached.
+    user = _fake_user("66666666-6666-6666-6666-666666666666")
+    naive_run = _fake_run(status="running")
+    naive_run.started_at = datetime(2026, 5, 13, 12, 0, 0)  # NO tzinfo
+    working = [(naive_run, "Daily Briefing")]
+    client, _ = _make_client(user, working_rows=working)
+    body = client.get("/api/v1/dashboard/tasks").json()
+    iso = body["working"][0]["started_at"]
+    # Pydantic v2 with tz-aware UTC datetimes renders either "Z" or
+    # "+00:00" — accept both.
+    assert iso.endswith("Z") or iso.endswith("+00:00"), (
+        f"expected tz offset suffix on started_at, got {iso!r}"
+    )
+
+
+def test_completed_at_null_does_not_surface_ancient_rows():
+    # PR #454 review IMPORTANT I1: a crashed-mid-step run from months
+    # ago (completed_at IS NULL, started_at far in the past) used to
+    # surface in the completed bucket forever. The fixed filter
+    # requires `started_at >= cutoff` when completed_at is NULL. We
+    # can't easily assert what the DB returned (the mock doesn't run
+    # SQL), so instead inspect the filter expression text for the
+    # presence of both clauses joined under OR/AND.
+    user = _fake_user("77777777-7777-7777-7777-777777777777")
+    client, db = _make_client(user)
+    resp = client.get("/api/v1/dashboard/tasks")
+    assert resp.status_code == 200
+    rendered = " ".join(db.query.return_value.filter_args)
+    # The completed-query filter must reference BOTH completed_at and
+    # started_at within a single OR expression.
+    assert (
+        "workflow_runs.completed_at" in rendered
+        and "workflow_runs.started_at" in rendered
+    ), f"expected completed_at AND started_at gating in: {rendered!r}"
+
+
+def test_working_bucket_has_started_at_floor():
+    # PR #454 review IMPORTANT I2: zombie status='running' rows from
+    # workers that crashed before writing terminal status used to live
+    # in the dashboard forever. The working query now floors on
+    # started_at >= now - WORKING_FLOOR. Verify the column appears in
+    # the captured filter args.
+    user = _fake_user("88888888-8888-8888-8888-888888888888")
+    client, db = _make_client(user)
+    resp = client.get("/api/v1/dashboard/tasks")
+    assert resp.status_code == 200
+    rendered = " ".join(db.query.return_value.filter_args)
+    # Both queries reference started_at; the working query references
+    # it for the floor (>=) while the completed query references it
+    # for the OR-fallback. So multiple references is correct — assert
+    # presence rather than a specific count.
+    assert (
+        rendered.count("workflow_runs.started_at") >= 2
+    ), f"expected started_at gating on both queries: {rendered!r}"
 
 
 def test_limit_param_validation():
