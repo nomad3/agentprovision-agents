@@ -258,6 +258,96 @@ because the new commands are additive. The `goal` recipe lands as
 
 ---
 
+## Amendment 2026-05-13 — as-shipped reconciliation
+
+The design above was the original spec. PRs #453 (PR-A) and #454 (PR-B)
+deliberately reduced scope on several items after implementation surfaced
+a schema gap. This section lists every divergence so a future reader
+reading the doc as historical record isn't misled.
+
+### PR-A — what shipped vs. designed
+
+- **Run endpoint.** Designed: `POST /api/v1/recipes/goal/run`. Shipped:
+  `POST /api/v1/dynamic-workflows/{target_id}/run` after a resolve-by-
+  name + install-if-missing dance through the existing
+  `dynamic-workflows` surface. Same functional outcome.
+- **Interactive prompts crate.** Designed: `inquire`. Shipped: `dialoguer`
+  (already a workspace dep). No `inquire` import was added.
+- **Resolve-by-name vs. UUID.** As-designed.
+- **Dedupe via `source_template_id`.** As-designed.
+
+### PR-B — deferred to v2
+
+The original design promised `needs_input` detection + reply UX. The
+`workflow_runs` schema has no canonical `awaiting_input` column today,
+and every heuristic we considered (last-event-from-agent, idle-since-X)
+would mislead users. Deferring the entire feature in v1 is honest; the
+schema work is now the gating item.
+
+Deferred to a follow-up PR (depends on schema migration):
+
+- **`needs_input` bucket** in `alpha tasks` output. v1 prints
+  `NEEDS INPUT: not yet surfaced. Run alpha watch <id> on a workflow
+  you suspect is blocked.` — server tells the CLI the bucket is
+  unsupported via a new `supports_needs_input: false` response field.
+- **`POST /api/v1/tasks/{id}/reply` endpoint** — depends on
+  needs-input detection.
+- **Custom `tasks attach` peek-and-reply loop** with `q`-to-detach and
+  inline reply input. v1 `alpha tasks attach <id>` simply delegates
+  to `alpha watch <id>` via the same SSE source.
+
+### PR-B — endpoint path & data sources changed
+
+- **Path.** Designed: `GET /api/v1/tasks`. Shipped:
+  `GET /api/v1/dashboard/tasks` — mounted under `/dashboard` because
+  the v1 root already has `/tasks` claimed by `agent_tasks.router`
+  (orchestration-internal `AgentTask` records). The two concepts are
+  distinct: `agent_tasks` is per-agent invocation state, the dashboard
+  rollup is human-facing.
+- **Data sources.** Designed: union of `chat_sessions` + `workflow_runs`
+  + most-recent `ChatMessage` per session. Shipped: `workflow_runs`
+  JOIN `dynamic_workflows` only. `chat_sessions` + `chat_messages` were
+  only needed for the deferred `needs_input` heuristic.
+- **Filters.** Designed: `?status=...&machine=...&limit=...`. Shipped:
+  `?limit=N` only. `machine` (machine-hostname filter) requires a
+  `machine_id` column on `workflow_runs` we don't have today; punted.
+- **CLI rendering crate.** Designed: `comfy-table` (already a dep).
+  Shipped: bare `println!` with manual column padding — `comfy-table`
+  wasn't actually in `Cargo.toml`, design doc was wrong.
+
+### Acceptance criteria — adjusted
+
+- **PR-A AC#2** (`<2s on prod tenant`): not measured; the verification
+  step ran `seed_native_templates(db) → created: 1` against the live API
+  container but didn't time the end-to-end dispatch. Treat as
+  aspirational, not asserted.
+- **PR-B AC#2/3/4** (attach latency, needs-input reply round-trip,
+  `q`-detach semantics): untestable as written — deferred with the
+  `needs_input` feature above.
+- **PR-B AC#5** (tenant isolation): asserted structurally via
+  self-chaining MagicMock in `tests/api/v1/test_dashboard_tasks.py`.
+  A real integration-DB test is the proper guardrail — tracked as a
+  follow-up risk in the register below.
+
+### Risk register addendum (new entries surfaced during build)
+
+| Risk | Status |
+|---|---|
+| `workflow_runs` has no `awaiting_input` column — blocks `needs_input` UX | Confirmed during PR-B; schema migration is gating |
+| Stale "running" zombies (worker crashed pre-terminal-status) bloat the working bucket | Open — no reaper exists; PR-B punts with the 24h completed-lookback |
+| Resolve-by-`(name, tier)` for recipes is ambiguous if a tenant somehow seeds two native rows | Confirmed during PR-A review (#453 I3) |
+| Prompt-injection via `{{input.outcome}}` Markdown splicing | Confirmed during PR-A review (#453 I4) — recipe-level mitigation deferred to a sibling sanitisation PR |
+
+### What did NOT change
+
+- The chain rollout (`main → design → goal → tasks`) matches the diagram.
+- The `tier="native"` seeding model.
+- The interactive-vs-non-interactive split on `alpha goal` (with the
+  contract drift caught in #453 review and fixed in-PR).
+- The "Multi-machine RPC / Local-only mode / `/bg` analog" non-goals.
+
+---
+
 ## References
 
 - Eight-differentiator roadmap — `docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`
