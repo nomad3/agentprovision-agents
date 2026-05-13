@@ -111,12 +111,24 @@ const getCurrentUser = () => {
 };
 
 const requestPasswordReset = async (email) => {
-  const response = await axios.post(API_URL + 'password-reset', { email });
+  // Backend route is `POST /auth/password-recovery/{email}` (email in
+  // path, not body). The earlier `password-reset` URL never existed
+  // and would 404 silently before the response landed at this layer.
+  // slowapi-rate-limited to 3/hr per IP, response is identical for
+  // existing vs missing emails (no enumeration). See
+  // apps/api/app/api/v1/auth.py::recover_password.
+  const response = await axios.post(
+    API_URL + 'password-recovery/' + encodeURIComponent(email),
+  );
   return response.data;
 };
 
 const resetPassword = async (email, token, newPassword) => {
-  const response = await axios.post(API_URL + 'password-reset/confirm', {
+  // Backend route is `POST /auth/reset-password`. Earlier URL
+  // `password-reset/confirm` was wrong shape and would 404.
+  // slowapi-rate-limited to 5/hr per IP; the server only inspects
+  // the SHA-256 hash of the token via hmac.compare_digest.
+  const response = await axios.post(API_URL + 'reset-password', {
     email,
     token,
     new_password: newPassword,
