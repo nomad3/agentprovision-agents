@@ -55,7 +55,11 @@ import uuid
 from collections import defaultdict
 from typing import Any, Dict, List, Optional
 
+import asyncio as _asyncio
+import json as _json
+
 from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
@@ -876,3 +880,157 @@ async def cancel_task(
     for child in record.get("children", []):
         _evict_record(child["task_id"])
     _evict_record(task_id)
+
+
+# ─── #188: SSE event stream for `ap watch` ────────────────────────────
+
+
+@router.get(
+    "/{task_id}/events/stream",
+    summary="Server-Sent Events stream of task status transitions.",
+)
+async def task_events_stream(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Long-lived SSE stream for `ap watch <task_id>`. Emits
+    `event: status` records on each parent + child status transition;
+    terminates on the parent reaching a terminal state.
+
+    Implementation:
+      - Stub-path: reads `_TASKS[task_id]` directly, computes
+        synthetic status from the wall-clock lifecycle, emits on
+        change. No external service.
+      - Real-path (`fanout-<tenant_uuid>-...` prefix): polls
+        `_describe_fanout_workflow` every 1s server-side; the
+        Cloudflare-tunnel hop sees a steady stream instead of the
+        524 timeout that a single long request would trip
+        (`docs/plans/2026-05-09-resilient-cli-orchestrator-design.md`).
+      - Heartbeat comments every 15s keep the connection alive
+        through intermediaries that idle-kill silent SSE streams.
+
+    Tenant isolation: same gates as `/status`. Stub-path enforces
+    `record["tenant_id"] == JWT tenant`; real-path enforces via
+    workflow_id parser inside `_describe_fanout_workflow`. 404 on
+    mismatch.
+    """
+
+    tenant_str = str(current_user.tenant_id)
+    is_real = settings.USE_REAL_FANOUT_WORKFLOW and task_id.startswith("fanout-")
+
+    # Pre-flight tenant + existence check. We do this BEFORE the
+    # StreamingResponse so a 404 surfaces cleanly to the CLI instead
+    # of an empty SSE stream that closes immediately.
+    if is_real:
+        prefix = f"fanout-{tenant_str}-"
+        if not task_id.startswith(prefix):
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        try:
+            await _describe_fanout_workflow(task_id, expected_tenant_id=tenant_str)
+        except PermissionError:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=404,
+                detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
+            )
+    else:
+        record = _TASKS.get(task_id)
+        if not record or record["tenant_id"] != tenant_str:
+            raise HTTPException(status_code=404, detail=f"task {task_id} not found")
+
+    async def _generator():
+        # Send an initial comment so the client sees the connection
+        # opened even before the first status transition.
+        yield ": stream open\n\n"
+
+        last_status: Optional[str] = None
+        last_child_status: dict[str, str] = {}
+        last_heartbeat = time.monotonic()
+        # Hard cap on stream duration so a wedged workflow doesn't
+        # park an SSE forever (matches CLI --timeout default).
+        deadline = time.monotonic() + 1800.0
+
+        while time.monotonic() < deadline:
+            try:
+                if is_real:
+                    payload = await _describe_fanout_workflow(
+                        task_id, expected_tenant_id=tenant_str
+                    )
+                    status = payload["status"]
+                    child_payload: list[dict] = []
+                else:
+                    record = _TASKS.get(task_id)
+                    if not record:
+                        # TTL-evicted or cancelled — terminate cleanly.
+                        yield "event: ended\ndata: {\"status\": \"gone\"}\n\n"
+                        return
+                    status = _derive_status(record["created_at"])
+                    child_payload = [
+                        {
+                            "task_id": c["task_id"],
+                            "provider": c["provider"],
+                            "status": _derive_status(c["created_at"]),
+                        }
+                        for c in record.get("children", [])
+                    ]
+            except Exception as exc:  # noqa: BLE001
+                # Soft-fail: emit error event + terminate. The CLI's
+                # SSE consumer will see the event and exit gracefully.
+                yield f"event: error\ndata: {_json.dumps({'detail': type(exc).__name__})}\n\n"
+                return
+
+            # Emit transitions only.
+            if status != last_status:
+                yield (
+                    f"event: status\ndata: "
+                    f"{_json.dumps({'task_id': task_id, 'status': status})}\n\n"
+                )
+                last_status = status
+
+            for c in child_payload:
+                prev = last_child_status.get(c["task_id"])
+                if prev != c["status"]:
+                    yield (
+                        f"event: child_status\ndata: {_json.dumps(c)}\n\n"
+                    )
+                    last_child_status[c["task_id"]] = c["status"]
+
+            if status in ("completed", "failed", "cancelled"):
+                # Fetch the final result for completed parents (real
+                # path only — stub /status already inlines it).
+                if is_real and status == "completed":
+                    try:
+                        from app.services import workflows as wf_service
+
+                        raw = await wf_service.fetch_workflow_result(task_id)
+                        merged = (
+                            raw.get("merged_text") if isinstance(raw, dict)
+                            else getattr(raw, "merged_text", None)
+                        )
+                        if merged:
+                            yield (
+                                f"event: result\ndata: "
+                                f"{_json.dumps({'merged_text': merged})}\n\n"
+                            )
+                    except Exception:  # noqa: BLE001
+                        pass  # best-effort; result is also available via /status
+                yield "event: ended\ndata: {\"status\": \"" + status + "\"}\n\n"
+                return
+
+            # Heartbeat every 15s to keep the connection alive through
+            # idle-killing intermediaries.
+            now = time.monotonic()
+            if now - last_heartbeat >= 15.0:
+                yield ": heartbeat\n\n"
+                last_heartbeat = now
+
+            await _asyncio.sleep(1.0)
+
+        # Hit the deadline without reaching terminal.
+        yield (
+            f"event: timeout\ndata: "
+            f"{_json.dumps({'detail': 'SSE deadline (30min) hit; task still running'})}\n\n"
+        )
+
+    return StreamingResponse(_generator(), media_type="text/event-stream")
