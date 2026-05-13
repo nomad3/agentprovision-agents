@@ -125,8 +125,12 @@ pub struct RunArgs {
     pub background: bool,
 
     /// Maximum number of seconds to tail the task in the foreground
-    /// before exiting (the task itself continues running; resume with
-    /// `ap watch <task_id>`). Default 1800s (30 min). Round-1 H4 cap.
+    /// before exiting. The task itself keeps running on the backend —
+    /// when the deadline hits, the CLI prints a hint and exits 0;
+    /// resume any time with `ap watch <task_id>` from any machine on
+    /// the same account. Default 1800s (30 min). Round-2 L2-2: long
+    /// migrations may want `--timeout 7200` or `--timeout 0` (= no
+    /// ceiling, runs until terminal).
     #[arg(long, default_value_t = 1800)]
     pub timeout: u64,
 }
@@ -229,15 +233,11 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
 
     // Foreground: tail the task event stream until completion or the
     // user-supplied timeout (round-1 H4). The poll helper is shared
-    // with `ap watch` (round-1 L1).
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
-    poll_until_terminal(
-        &ctx,
-        &response.task_id,
-        Some(deadline),
-        Duration::from_millis(1500),
-    )
-    .await
+    // with `ap watch` (round-1 L1). Round-2 L2-2: `--timeout 0` means
+    // "no ceiling — tail until terminal."
+    let deadline = (args.timeout > 0)
+        .then(|| Instant::now() + Duration::from_secs(args.timeout));
+    poll_until_terminal(&ctx, &response.task_id, deadline, Duration::from_millis(1500)).await
 }
 
 fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {

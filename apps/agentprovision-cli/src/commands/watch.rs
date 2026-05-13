@@ -33,9 +33,12 @@ pub struct WatchArgs {
     #[arg(long)]
     pub no_tail_if_done: bool,
 
-    /// Maximum number of seconds to tail before exiting (the task
-    /// itself continues running; resume with another `ap watch`).
-    /// Default 1800s (30 min). Round-1 H4 cap.
+    /// Maximum number of seconds to tail before exiting. The task
+    /// itself keeps running on the backend — when the deadline hits,
+    /// the CLI prints a "still running; resume with ap watch <id>"
+    /// hint and exits 0. Default 1800s (30 min). Round-2 L2-2: long
+    /// migrations (e.g. monorepo refactors) may want `--timeout 7200`
+    /// or `--timeout 0` (= no ceiling, runs until terminal).
     #[arg(long, default_value_t = 1800)]
     pub timeout: u64,
 }
@@ -45,24 +48,28 @@ pub struct WatchArgs {
 /// Mirrors `apps/api/app/api/v1/tasks_fanout.py::TaskStatusResponse`.
 /// `error` (round-1 M2) is populated on `failed` / `cancelled` so the
 /// CLI can render something more useful than `[ap] t_xxx — failed`.
+///
+/// Round-2 L2-1: kept module-private. `poll_until_terminal` exposes
+/// `Result<()>` to callers; nothing outside this module needs the
+/// type names.
 #[derive(Debug, Deserialize)]
-pub(crate) struct TaskStatus {
-    pub status: String,
+struct TaskStatus {
+    status: String,
     #[serde(default)]
-    pub result: Option<String>,
+    result: Option<String>,
     #[serde(default)]
-    pub error: Option<String>,
+    error: Option<String>,
     /// Children's terminal statuses, populated for fanout parent tasks.
     /// Empty for single-provider tasks.
     #[serde(default)]
-    pub children: Vec<ChildStatus>,
+    children: Vec<ChildStatus>,
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ChildStatus {
-    pub task_id: String,
-    pub provider: String,
-    pub status: String,
+struct ChildStatus {
+    task_id: String,
+    provider: String,
+    status: String,
 }
 
 pub async fn run(args: WatchArgs, ctx: Context) -> anyhow::Result<()> {
@@ -83,9 +90,11 @@ pub async fn run(args: WatchArgs, ctx: Context) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Round-1 H4: tail with a safety ceiling.
-    let deadline = Instant::now() + Duration::from_secs(args.timeout);
-    poll_until_terminal(&ctx, &args.task_id, Some(deadline), Duration::from_millis(1500)).await
+    // Round-1 H4: tail with a safety ceiling. Round-2 L2-2:
+    // `--timeout 0` means no ceiling.
+    let deadline = (args.timeout > 0)
+        .then(|| Instant::now() + Duration::from_secs(args.timeout));
+    poll_until_terminal(&ctx, &args.task_id, deadline, Duration::from_millis(1500)).await
 }
 
 /// Round-1 L1: shared poll loop used by `ap run` (foreground) and
