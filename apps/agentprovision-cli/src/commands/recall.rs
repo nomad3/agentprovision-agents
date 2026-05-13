@@ -56,6 +56,11 @@ fn non_blank_query(s: &str) -> Result<String, String> {
 struct RecallResponse {
     #[serde(default)]
     results: Vec<serde_json::Value>,
+    /// Round-1 review N2: kept for the --json echo of the server's
+    /// query field. Pretty mode renders the user's input from
+    /// `args.query` directly so this isn't dead — it round-trips
+    /// the server's canonicalization (if any) into the JSON shape
+    /// that scripted consumers see.
     #[serde(default)]
     query: String,
 }
@@ -101,36 +106,38 @@ fn render(args: &RecallArgs, resp: &RecallResponse, json: bool) -> anyhow::Resul
         resp.results.len(),
         args.query
     );
+    // Round-1 review L3: scale the numbering column to the result
+    // count so `--limit 500` doesn't drift the alignment past 99.
+    let width = resp.results.len().to_string().len().max(2);
     for (i, r) in resp.results.iter().enumerate() {
+        // Round-1 review B1: the actual wire shape from
+        // `embedding_service.search_similar` (the source of
+        // `/memories/search` rows) is flat:
+        //   {id, tenant_id, content_type, content_id, text_content,
+        //    created_at, similarity}
+        // No `name` / `title` / `content` / `description` / `summary`
+        // fields exist on these rows. The displayable text lives in
+        // `text_content`. Dropping the multi-field fallback chain
+        // (which would always have rendered empty previews).
         let kind = r
             .get("content_type")
-            .or_else(|| r.get("type"))
             .and_then(|v| v.as_str())
             .unwrap_or("?");
-        let name = r
-            .get("name")
-            .or_else(|| r.get("title"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
         let content = r
-            .get("content")
-            .or_else(|| r.get("description"))
-            .or_else(|| r.get("summary"))
+            .get("text_content")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         let similarity = r
             .get("similarity")
             .and_then(|v| v.as_f64())
-            .map(|f| format!(" sim={:.2}", f))
+            .map(|f| format!(" sim={f:.2}"))
             .unwrap_or_default();
-        let header = if name.is_empty() {
-            format!("{:2}. [{}]{}", i + 1, kind, similarity)
-        } else {
-            format!("{:2}. [{}] {}{}", i + 1, kind, name, similarity)
-        };
-        println!("{header}");
+        println!("{:width$}. [{}]{}", i + 1, kind, similarity, width = width);
         if !content.is_empty() {
-            // 2-line preview, trimmed to ~200 chars to keep terminals readable.
+            // Round-1 review N1: 200-char preview (single line).
+            // Newlines in the content are preserved by the terminal —
+            // long entries will visually wrap but the structural cap
+            // keeps any single result from dominating the screen.
             let preview: String = content.chars().take(200).collect();
             println!("    {preview}");
         }
@@ -203,5 +210,19 @@ mod tests {
         assert!(TestCli::try_parse_from(["t", "recall", ""]).is_err());
         assert!(TestCli::try_parse_from(["t", "recall", "  "]).is_err());
         assert!(TestCli::try_parse_from(["t", "recall", "\t"]).is_err());
+    }
+
+    // Round-1 review M1: HTTP-path test coverage deferred — same
+    // rationale as cancel.rs (PR #436): requires httpmock dev-dep
+    // and a streaming-response harness shared across CLI commands.
+    // The placeholder documents the intent so the next reviewer
+    // doesn't have to ask.
+    #[test]
+    #[ignore = "TODO: requires httpmock dev-dep for HTTP-path coverage"]
+    fn recall_renders_results_against_real_response_shape() {
+        // When wired: mock GET /memories/search returning rows
+        // shaped {content_type, text_content, similarity, ...} and
+        // assert the rendered preview contains the text_content
+        // prefix and the type tag.
     }
 }
