@@ -19,12 +19,24 @@
 //! not need to enumerate them.
 
 use clap::Args;
-use clap::builder::NonEmptyStringValueParser;
 
 use agentprovision_core::error::Error;
 use reqwest::Method;
 
 use crate::context::Context;
+
+/// Round-2 L2-2: `NonEmptyStringValueParser` only rejects byte-length-0
+/// strings; whitespace-only IDs slipped through into a URL like
+/// `/api/v1/tasks-fanout/%20%20/cancel` and produced a misleading
+/// network 502/404. This custom validator trims first so both empty
+/// and whitespace-only inputs are caught at parse time.
+fn non_blank_task_id(s: &str) -> Result<String, String> {
+    if s.trim().is_empty() {
+        Err("task_id must not be empty or whitespace-only".to_string())
+    } else {
+        Ok(s.to_string())
+    }
+}
 
 #[derive(Debug, Args)]
 pub struct CancelArgs {
@@ -34,10 +46,11 @@ pub struct CancelArgs {
     /// task_id — child workflows are cancelled automatically by
     /// the backend cascade.
     ///
-    /// Round-1 review L2: empty / whitespace-only IDs are rejected
-    /// at parse time so `ap cancel ""` doesn't silently hit a
-    /// malformed URL and get a misleading "not found".
-    #[arg(value_name = "TASK_ID", value_parser = NonEmptyStringValueParser::new())]
+    /// Round-1 review L2 + round-2 L2-2: empty AND whitespace-only
+    /// IDs are rejected at parse time. Clap's built-in
+    /// NonEmptyStringValueParser only catches byte-length-0; the
+    /// custom validator trims first so "   " is also rejected.
+    #[arg(value_name = "TASK_ID", value_parser = non_blank_task_id)]
     pub task_id: String,
 
     /// Suppress the "cancelled" success line. Useful for scripts
@@ -130,9 +143,20 @@ mod tests {
 
     #[test]
     fn empty_task_id_rejected() {
-        // Round-1 review L2: empty IDs must fail at parse time.
-        let res = TestCli::try_parse_from(["test", "cancel", ""]);
-        assert!(res.is_err(), "empty task_id must be rejected by clap");
+        // Round-1 review L2 + round-2 L2-2: empty AND whitespace-only
+        // IDs must fail at parse time.
+        assert!(
+            TestCli::try_parse_from(["test", "cancel", ""]).is_err(),
+            "empty task_id must be rejected"
+        );
+        assert!(
+            TestCli::try_parse_from(["test", "cancel", "   "]).is_err(),
+            "whitespace-only task_id must be rejected"
+        );
+        assert!(
+            TestCli::try_parse_from(["test", "cancel", "\t"]).is_err(),
+            "tab-only task_id must be rejected"
+        );
     }
 
     // Round-1 review M2: HTTP-path test coverage is deferred — would
