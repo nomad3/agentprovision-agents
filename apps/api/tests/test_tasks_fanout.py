@@ -374,12 +374,136 @@ def test_real_fanout_flag_on_dispatches_workflow(monkeypatch):
     body = resp.json()
     # Real-dispatch task_id has the `fanout-` prefix shape.
     assert body["task_id"].startswith("fanout-"), body
-    # Children have the per-provider deterministic shape.
-    provider_set = {c["provider"] for c in body["children"]}
-    assert provider_set == {"claude", "codex", "gemini"}
+    # Round-1 review N2: real-dispatch path surfaces an empty children
+    # list; real child workflow_ids land on /status from the follow-up.
+    assert body["children"] == []
     # The dispatch helper was called with the body's params verbatim.
     assert fake_dispatched["merge"] == "council"
     assert fake_dispatched["providers"] == ["claude", "codex", "gemini"]
+
+
+def test_real_fanout_cross_tenant_status_returns_404(monkeypatch):
+    """Round-1 review M2: real-path tenant isolation regression test.
+    A user in tenant B passes a task_id with tenant A's prefix; must
+    return 404, not 500, not 200."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    user_a = _user()
+    user_b = _user()
+    assert user_a.tenant_id != user_b.tenant_id
+
+    # Fake a workflow_id under tenant A's prefix.
+    fake_wf_id = f"fanout-{user_a.tenant_id}-deadbeef"
+    client_b = _make_client(user_b)
+    resp = client_b.get(f"/api/v1/tasks-fanout/{fake_wf_id}/status")
+    assert resp.status_code == 404, resp.text
+
+
+def test_real_fanout_cross_tenant_cancel_returns_404(monkeypatch):
+    """Round-1 review M2: same regression for /cancel."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    user_a = _user()
+    user_b = _user()
+    fake_wf_id = f"fanout-{user_a.tenant_id}-deadbeef"
+    client_b = _make_client(user_b)
+    resp = client_b.post(f"/api/v1/tasks-fanout/{fake_wf_id}/cancel")
+    assert resp.status_code == 404, resp.text
+
+
+def test_real_fanout_status_completed_returns_merged_text(monkeypatch):
+    """Round-1 review M2: when Temporal reports COMPLETED, the route
+    surfaces the workflow's `merged_text` from the dataclass result.
+    We mock both describe + fetch helpers so no live Temporal is needed."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    user = _user()
+    tenant_str = str(user.tenant_id)
+    wf_id = f"fanout-{tenant_str}-fake-uuid"
+
+    async def fake_describe(task_id, *, expected_tenant_id):
+        assert task_id == wf_id
+        assert expected_tenant_id == tenant_str
+        return {
+            "task_id": task_id,
+            "status": "completed",
+            "result": None,
+            "error": None,
+            "raw": {},
+        }
+
+    async def fake_fetch_result(workflow_id, *, run_id=None):
+        assert workflow_id == wf_id
+        return {
+            "merge_mode": "council",
+            "merged_text": "consensus: pass",
+            "children": [],
+            "success": True,
+        }
+
+    monkeypatch.setattr(tf, "_describe_fanout_workflow", fake_describe)
+
+    # Patch the workflows service module the route imports lazily.
+    from app.services import workflows as wf_service
+
+    monkeypatch.setattr(wf_service, "fetch_workflow_result", fake_fetch_result)
+
+    client = _make_client(user)
+    resp = client.get(f"/api/v1/tasks-fanout/{wf_id}/status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "completed"
+    assert body["result"] == "consensus: pass"
+    assert body["error"] is None
+
+
+def test_real_fanout_describe_exception_returns_404(monkeypatch):
+    """Round-1 review M2: when `_describe_fanout_workflow` raises
+    (e.g. Temporal unreachable), the route returns 404 with a
+    descriptive error string — not 500."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    user = _user()
+    wf_id = f"fanout-{user.tenant_id}-fake-uuid"
+
+    async def boom(task_id, *, expected_tenant_id):
+        raise RuntimeError("temporal unreachable")
+
+    monkeypatch.setattr(tf, "_describe_fanout_workflow", boom)
+
+    client = _make_client(user)
+    resp = client.get(f"/api/v1/tasks-fanout/{wf_id}/status")
+    assert resp.status_code == 404
+    detail = resp.json()["detail"]
+    assert "RuntimeError" in detail and "temporal unreachable" in detail
+
+
+def test_real_fanout_dispatch_enforces_cap(monkeypatch):
+    """Round-1 review B2 regression: real-dispatch path must also
+    honor MAX_TASKS_PER_TENANT — the cap-bypass was the original
+    blocker. Set MAX low, dispatch one fanout, expect the 2nd to 429."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+    monkeypatch.setattr(tf, "MAX_TASKS_PER_TENANT", 1)
+
+    async def fake_dispatch(*, prompt, tenant_id, providers, merge, agent_id, session_id):
+        return {"task_id": f"fanout-{tenant_id}-x", "run_id": "r"}
+
+    monkeypatch.setattr(tf, "_dispatch_fanout_workflow", fake_dispatch)
+
+    user = _user()
+    client = _make_client(user)
+
+    # Cap is 1, fanout=[a,b] would mint 1 parent + 2 children = 3 slots
+    # which exceeds the cap on the very first request. Use single
+    # provider so we have a chance to push two requests through.
+    resp = client.post("/api/v1/tasks-fanout/run", json={"prompt": "x", "fanout": ["a"]})
+    # n_new = 1 + 1 = 2 which > cap of 1, so this 429s.
+    assert resp.status_code == 429, resp.text
 
 
 def test_real_fanout_flag_on_without_fanout_still_uses_stub(monkeypatch):

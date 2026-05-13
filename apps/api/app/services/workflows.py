@@ -73,3 +73,22 @@ async def describe_workflow(*, workflow_id: str, run_id: str | None = None) -> D
         "history_length": info.history_length,
         "memo": description.memo or {},
     }
+
+
+async def fetch_workflow_result(workflow_id: str, *, run_id: str | None = None) -> Any:
+    """Round-1 review H1 follow-up: public helper for retrieving a
+    completed workflow's return value. Centralizes the
+    `_get_temporal_client` access so route handlers don't reach into
+    private SDK lifecycle. Raises on non-terminal workflows; callers
+    should `describe_workflow` first."""
+    client = await _get_temporal_client()
+    handle = client.get_workflow_handle(workflow_id=workflow_id, run_id=run_id)
+    return await handle.result()
+
+
+async def cancel_workflow(workflow_id: str, *, run_id: str | None = None) -> None:
+    """Round-1 review H1 follow-up: public helper for cancellation.
+    Same centralization rationale as `fetch_workflow_result`."""
+    client = await _get_temporal_client()
+    handle = client.get_workflow_handle(workflow_id=workflow_id, run_id=run_id)
+    await handle.cancel()

@@ -1701,14 +1701,15 @@ class ProviderReviewWorkflow:
 #     the `agentprovision-code` queue by the API on `POST /run` when
 #     the request has a non-empty `fanout` list.
 #   - The parent spawns N child `ChatCliWorkflow` runs in parallel via
-#     `start_child_workflow` and awaits them with `asyncio.gather`.
-#     Each child gets the same prompt with `platform = <fanout entry>`.
+#     `execute_child_workflow` (round-1 review M1). Each child gets
+#     the same prompt with `platform = <fanout entry>`.
 #   - Merge mode `council` concatenates the child outputs under a
 #     consensus-style header (the real meta-adjudicator with semantic
 #     consensus / disagreement scoring is the next-PR work — out of
 #     scope here per the user's option-(a) decision).
-#   - Merge mode `first-wins` returns the first non-failed child and
-#     cancels the rest.
+#   - Merge mode `first-wins` returns the first successful child and
+#     cancels the remaining children (round-1 review H2: real cancel,
+#     not await-all-then-pick-first).
 #   - Merge mode `all` returns every child verbatim under a children
 #     array (no merge).
 
@@ -1719,6 +1720,11 @@ class FanoutChatCliInput:
     tenant_id: str
     providers: List[str]           # the fanout list — N parallel children
     merge: str = "council"         # council | first-wins | all
+    # Round-1 review B1: `agent_id` is accepted on the wire for forward
+    # compatibility, but is NOT propagated to the child ChatCliInput
+    # because ChatCliInput has no `agent_id` field. The workflow logs a
+    # warning when set; full plumbing is the next-PR follow-up so the
+    # leaf CLI can run under the right agent persona / tools / memory.
     agent_id: Optional[str] = None
     session_id: Optional[str] = None
     # Forwarded to each ChatCliInput child; empty = code-worker default
@@ -1756,7 +1762,21 @@ class FanoutChatCliWorkflow:
 
     @workflow.run
     async def run(self, input: FanoutChatCliInput) -> FanoutChatCliResult:
-        from asyncio import gather
+        # Round-1 review N3 + B1: asyncio already in passthrough modules;
+        # local import keeps Temporal sandbox happy. Surface a warning
+        # when agent_id is set so operators don't silently ship wrong-
+        # agent behavior after flipping USE_REAL_FANOUT_WORKFLOW.
+        import asyncio
+        from asyncio import FIRST_COMPLETED, gather, wait
+
+        if input.agent_id:
+            workflow.logger.warning(
+                "FanoutChatCliWorkflow received agent_id=%s but the "
+                "current implementation does not propagate it to ChatCliInput. "
+                "Children will run with the code-worker's tenant default agent. "
+                "Follow-up: add agent_id field to ChatCliInput.",
+                input.agent_id,
+            )
 
         async def _child(provider: str) -> FanoutChildResult:
             child_input = ChatCliInput(
@@ -1770,11 +1790,19 @@ class FanoutChatCliWorkflow:
                 allowed_tools=input.allowed_tools,
             )
             try:
+                # Round-1 review L1: explicit task_queue so a future
+                # parent-on-different-queue refactor doesn't silently
+                # ship children to a worker that doesn't register
+                # ChatCliWorkflow. Round-1 review M4: explicit
+                # execution_timeout matching cli_session_manager's
+                # default cap; otherwise a stuck child wedges the
+                # parent indefinitely.
                 child_result: ChatCliResult = await workflow.execute_child_workflow(
                     ChatCliWorkflow.run,
                     child_input,
-                    # Children share the same task queue (agentprovision-code).
-                    # Temporal infers it from the parent unless we override.
+                    task_queue="agentprovision-code",
+                    execution_timeout=timedelta(minutes=180),
+                    retry_policy=RetryPolicy(maximum_attempts=2),
                 )
                 return FanoutChildResult(
                     provider=provider,
@@ -1793,16 +1821,39 @@ class FanoutChatCliWorkflow:
                     error=str(exc),
                 )
 
-        # Dispatch all children in parallel.
-        children = await gather(*(_child(p) for p in input.providers))
-
-        any_success = any(c.success for c in children)
-
         if input.merge == "first-wins":
-            # Return the first successful child verbatim. We did not
-            # use early-cancel because asyncio.gather already waited
-            # for all of them (children inherit the parent's deadline);
-            # the real follow-up adds a cancel-the-rest path.
+            # Round-1 review H2: real cancel-the-rest. Wrap each child in
+            # an asyncio.Task, wait for the first to complete, cancel the
+            # rest. Cancelled children show up in the result with
+            # success=False, error="cancelled-by-first-wins" so the
+            # operator can audit billing — they were not billed for
+            # those after cancel propagates to the leaf CLI subprocess.
+            tasks = [
+                asyncio.ensure_future(_child(p)) for p in input.providers
+            ]
+            done, pending = await wait(tasks, return_when=FIRST_COMPLETED)
+            for t in pending:
+                t.cancel()
+            # Collect what we have: completed first, then a placeholder
+            # for each cancelled task.
+            children: List[FanoutChildResult] = []
+            for t in done:
+                children.append(t.result())
+            # Map cancelled tasks back to their provider for the result.
+            # This is order-preserving against `input.providers` so the
+            # parent's children list mirrors the dispatch order.
+            done_providers = {c.provider for c in children}
+            for p in input.providers:
+                if p not in done_providers:
+                    children.append(
+                        FanoutChildResult(
+                            provider=p,
+                            response_text="",
+                            success=False,
+                            error="cancelled-by-first-wins",
+                        )
+                    )
+            any_success = any(c.success for c in children)
             first_ok = next((c for c in children if c.success), None)
             text = first_ok.response_text if first_ok else "All providers failed."
             return FanoutChatCliResult(
@@ -1812,14 +1863,24 @@ class FanoutChatCliWorkflow:
                 success=any_success,
             )
 
+        # `council` and `all` paths: dispatch all children in parallel
+        # and await all of them.
+        children = await gather(*(_child(p) for p in input.providers))
+        any_success = any(c.success for c in children)
+
         if input.merge == "all":
-            # Concatenate each child's text under a provider header,
-            # no consensus logic.
-            sections = [
-                f"--- {c.provider} ---\n{c.response_text or '(empty)'}\n"
-                f"{'' if c.success else f'(error: {c.error})'}".rstrip()
-                for c in children
-            ]
+            # Round-1 review N4: when `c.error is None` use the literal
+            # 'unknown', never 'None' which leaks through the f-string.
+            sections = []
+            for c in children:
+                body = c.response_text or "(empty)"
+                if c.success:
+                    sections.append(f"--- {c.provider} ---\n{body}")
+                else:
+                    err = c.error or "unknown"
+                    sections.append(
+                        f"--- {c.provider} ---\n{body}\n(error: {err})"
+                    )
             return FanoutChatCliResult(
                 merge_mode="all",
                 merged_text="\n\n".join(sections),
@@ -1831,11 +1892,14 @@ class FanoutChatCliWorkflow:
         # Mark this output as council-style so a UI can render it as
         # such; the actual semantic-consensus / disagreement scoring
         # ships in the follow-up PR.
-        sections = [
-            f"--- {c.provider} ---\n"
-            f"{c.response_text if c.success else f'(failed: {c.error})'}"
-            for c in children
-        ]
+        sections = []
+        for c in children:
+            if c.success:
+                body = c.response_text
+            else:
+                err = c.error or "unknown"
+                body = f"(failed: {err})"
+            sections.append(f"--- {c.provider} ---\n{body}")
         merged = (
             "[council mode — concat aggregation; meta-adjudicator TBD]\n\n"
             + "\n\n".join(sections)
