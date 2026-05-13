@@ -10,6 +10,7 @@ pub mod memory;
 pub mod policy;
 pub mod quickstart;
 pub mod recall;
+pub mod recipes;
 pub mod remember;
 pub mod run;
 pub mod session;

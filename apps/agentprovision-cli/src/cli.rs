@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::{
     agent, cancel, chat, coalition, completions, integration, login, logout, memory, policy,
-    quickstart, recall, remember, run, session, sessions, skill, status, upgrade, watch, workflow,
+    quickstart, recall, recipes, remember, run, session, sessions, skill, status, upgrade, watch,
+    workflow,
 };
 use crate::context::Context;
 
@@ -144,6 +145,14 @@ pub enum Command {
     #[command(subcommand)]
     Coalition(coalition::CoalitionCommand),
 
+    /// Install + run pre-built dynamic workflows (daily briefing,
+    /// competitor watch, code review, cardiac report, deal pipeline,
+    /// ...). The "Helm charts for AI workflows" surface of the
+    /// roadmap (#180 §8). Use `alpha recipes ls` to browse, then
+    /// `alpha recipes install <id>` or `alpha recipes run <id>`.
+    #[command(subcommand)]
+    Recipes(recipes::RecipesCommand),
+
     /// Guided initial-training flow. Auto-fires the first time you
     /// `alpha login` against a fresh tenant; can be re-run explicitly to
     /// re-train (with `--force`) or to opt back in after Skip.
@@ -183,6 +192,7 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Remember(a) => remember::run(a, ctx).await,
         Command::Policy(cmd) => policy::run(policy::PolicyArgs { command: cmd }, ctx).await,
         Command::Coalition(cmd) => coalition::dispatch(cmd, ctx).await,
+        Command::Recipes(cmd) => recipes::run(recipes::RecipesArgs { command: cmd }, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
     }
