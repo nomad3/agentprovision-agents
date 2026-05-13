@@ -80,7 +80,7 @@ case "$OS" in
         # Linux ships as static musl, runs on any glibc / Alpine / RHEL.
         # NOTE: linux targets ship in PR-D-1.5 — until then this prints a
         # clear message instead of attempting a 404 download.
-        err "Linux binaries ship in PR-D-1.5. For now: \`cargo install --git https://github.com/$REPO --branch main --bin agentprovision\` requires a Rust toolchain but works today."
+        err "Linux binaries ship in PR-D-1.5. For now: \`cargo install --git https://github.com/$REPO --branch main --bin alpha\` requires a Rust toolchain but works today."
         ;;
     MINGW*|MSYS*|CYGWIN*)
         err "Windows: use install.ps1 instead. Run in PowerShell:\n    iwr -useb https://agentprovision.com/install.ps1 | iex"
