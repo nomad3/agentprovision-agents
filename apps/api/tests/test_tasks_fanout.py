@@ -482,6 +482,37 @@ def test_real_fanout_describe_exception_returns_404(monkeypatch):
     assert "RuntimeError" in detail and "temporal unreachable" in detail
 
 
+def test_real_fanout_tenant_counts_invariant(monkeypatch):
+    """Round-3 H3-1 regression: on the real-dispatch path, the
+    parent + mirrored child records must keep `_TENANT_COUNTS` in
+    lock-step with the slow recount. Without the mirrored child
+    records, counter inflates by len(fanout) per dispatch."""
+
+    monkeypatch.setattr(tf.settings, "USE_REAL_FANOUT_WORKFLOW", True)
+
+    async def fake_dispatch(*, prompt, tenant_id, providers, merge, agent_id, session_id):
+        return {"task_id": f"fanout-{tenant_id}-fake", "run_id": "r"}
+
+    monkeypatch.setattr(tf, "_dispatch_fanout_workflow", fake_dispatch)
+
+    user = _user()
+    tenant_id = str(user.tenant_id)
+    client = _make_client(user)
+
+    resp = client.post(
+        "/api/v1/tasks-fanout/run",
+        json={"prompt": "x", "fanout": ["claude", "codex"]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Parent + 2 children = 3 records; counter must == 3.
+    assert tf._TENANT_COUNTS[tenant_id] == 3
+    assert tf._recount_tenant_tasks_from_records(tenant_id) == 3
+    assert tf._TENANT_COUNTS[tenant_id] == tf._recount_tenant_tasks_from_records(
+        tenant_id
+    )
+
+
 def test_real_fanout_dispatch_enforces_cap(monkeypatch):
     """Round-1 review B2 regression: real-dispatch path must also
     honor MAX_TASKS_PER_TENANT — the cap-bypass was the original

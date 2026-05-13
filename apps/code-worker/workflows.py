@@ -1851,28 +1851,27 @@ class FanoutChatCliWorkflow:
                 )
                 handles.append((p, h))
 
-            # Wrap each handle in a Task so wait() can pick the
-            # first-completed one. handle is awaitable for its result.
-            tasks_by_provider = {
-                p: asyncio.create_task(h) for p, h in handles
-            }
+            # Round-3 B3-1 + L3-1: ChildWorkflowHandle inherits from
+            # asyncio.Task — pass directly to wait(), no create_task
+            # wrapping. The previous `asyncio.create_task(h)` raised
+            # TypeError at runtime (Task vs coroutine).
+            tasks_by_provider = {p: h for p, h in handles}
             done, pending = await wait(
                 tasks_by_provider.values(), return_when=FIRST_COMPLETED
             )
 
-            # Cancel pending REMOTE children via their handles. This is
-            # best-effort — Temporal queues a cancellation signal that
-            # the child workflow must observe at its next decision task.
-            pending_providers = []
+            # Round-3 B3-2 + L3-2: handle.cancel() is sync (inherited
+            # from asyncio.Task) and schedules a Temporal cancel
+            # command at the next decision task; do NOT `await` it.
+            # Best-effort — the child workflow must observe cancel at
+            # its next decision point.
             for p, t in tasks_by_provider.items():
                 if t in pending:
-                    pending_providers.append(p)
-                    # Lookup the original handle to call cancel on it.
                     h = next(h for prov, h in handles if prov == p)
                     try:
-                        await h.cancel()
+                        h.cancel()
                     except Exception:  # noqa: BLE001
-                        pass  # best-effort
+                        pass
 
             children: List[FanoutChildResult] = []
             for p, t in tasks_by_provider.items():

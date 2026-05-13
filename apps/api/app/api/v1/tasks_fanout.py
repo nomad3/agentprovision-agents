@@ -495,22 +495,34 @@ async def run_fanout(
             agent_id=body.agent_id,
             session_id=body.session_id,
         )
-        # Round-2 M2-3: bill `n_new` (parent + fanout-count) symmetrically
-        # with the stub path. Pre-check already used n_new (line above);
-        # billing matches so a future flag-flip doesn't change effective
-        # tenant ceiling.
+        # Round-3 H3-1: store stub-shape records for parent + each
+        # child so `_evict_record` (decrement-by-1-per-pop) keeps
+        # `_TENANT_COUNTS` in lock-step with the n_new billed at
+        # dispatch. Otherwise the counter would drift up monotonically
+        # by `len(fanout)` per evicted real-path record.
+        #
+        # Round-2 L2-1: parent record populates the stub-shape fields
+        # (prompt, fanout, merge, etc.) so a flag-flip back to
+        # USE_REAL_FANOUT_WORKFLOW=False while records are warm
+        # doesn't 500 on `record["prompt"]` KeyError.
         _TENANT_COUNTS[tenant_id] += n_new
-        # Round-2 L2-1: populate the stub-shape fields with empty
-        # placeholders so a flag-flip back to USE_REAL_FANOUT_WORKFLOW
-        # =False while real-path records are still warm doesn't 500 on
-        # `record["prompt"]` KeyError. The stub branch of /status uses
-        # `record.get("fanout")` then falls through to `record["prompt"]`
-        # — empty placeholders make that path's else-clause render a
-        # benign placeholder result instead of crashing.
-        _TASKS[dispatch["task_id"]] = {
+        now_mono = time.monotonic()
+        parent_record_id = dispatch["task_id"]
+        # Mirror child IDs into _TASKS so the cap counter has a record
+        # to decrement on eviction. These IDs are synthetic — they are
+        # NOT resolvable through /status (the route only accepts the
+        # real workflow_id for the parent). They exist purely for
+        # cap-accounting parity with the stub path.
+        child_record_ids = [
+            f"{parent_record_id}#child-{i}" for i in range(len(body.fanout))
+        ]
+        _TASKS[parent_record_id] = {
             "tenant_id": tenant_id,
-            "created_at": time.monotonic(),
-            "children": [],
+            "created_at": now_mono,
+            "children": [
+                {"task_id": cid, "provider": p, "created_at": now_mono}
+                for cid, p in zip(child_record_ids, body.fanout)
+            ],
             "real_temporal": True,
             "prompt": body.prompt,
             "providers": [],
@@ -520,6 +532,22 @@ async def run_fanout(
             "agent_id": body.agent_id,
             "session_id": body.session_id,
         }
+        for cid, p in zip(child_record_ids, body.fanout):
+            _TASKS[cid] = {
+                "tenant_id": tenant_id,
+                "created_at": now_mono,
+                "parent_id": parent_record_id,
+                "provider": p,
+                "real_temporal": True,
+                "children": [],
+                "prompt": body.prompt,
+                "providers": [],
+                "fanout": [],
+                "merge": body.merge,
+                "user_id": str(current_user.id),
+                "agent_id": body.agent_id,
+                "session_id": body.session_id,
+            }
         # Cheap estimate — RL retrieval comes in a follow-up PR.
         n_providers = max(len(body.fanout), 1)
         estimate = RunEstimate(
@@ -803,9 +831,13 @@ async def cancel_task(
                 status_code=404,
                 detail=f"task {task_id} not found ({type(exc).__name__}: {str(exc)[:200]})",
             )
-        # Decrement the cap counter for the real-dispatch parent record.
-        # `_evict_record` is idempotent (no-op if key absent), so no
-        # outer guard needed (M2-2 follow-up).
+        # Round-3 H3-1: evict the parent record AND its mirrored child
+        # records so `_TENANT_COUNTS` decrements symmetrically with the
+        # +n_new billed at dispatch. `_evict_record` is idempotent.
+        parent_record = _TASKS.get(task_id)
+        if parent_record:
+            for child in parent_record.get("children", []):
+                _evict_record(child["task_id"])
         _evict_record(task_id)
         return
 
