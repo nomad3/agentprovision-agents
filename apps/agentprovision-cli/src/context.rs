@@ -7,6 +7,10 @@
 use std::sync::Arc;
 
 use agentprovision_core::auth::{FileTokenStore, KeyringTokenStore, TokenStore};
+use agentprovision_core::client::{ApiClient, DEFAULT_BASE_URL};
+use agentprovision_core::config::{self, Config};
+
+use crate::cli::Cli;
 
 /// Derive a human-readable origin label for `X-AP-Device-Label`:
 ///   `alpha CLI on <hostname> (<os> <arch>)`
@@ -24,10 +28,6 @@ fn device_label() -> String {
         std::env::consts::ARCH,
     )
 }
-use agentprovision_core::client::{ApiClient, DEFAULT_BASE_URL};
-use agentprovision_core::config::{self, Config};
-
-use crate::cli::Cli;
 
 const KEYRING_SERVICE: &str = "agentprovision";
 

@@ -234,6 +234,16 @@ impl ApiClient {
         self.send_json(req).await
     }
 
+    /// POST with a JSON body, expecting no JSON response (204 No Content
+    /// or empty 200). Used for revoke-style endpoints that don't have
+    /// a response shape to decode. Reviewer IMPORTANT-3 on PR #445:
+    /// avoids the brittle "got empty body" string-match the previous
+    /// logout.rs needed.
+    pub async fn post_no_body_json<B: Serialize>(&self, path: &str, body: &B) -> Result<()> {
+        let req = self.request(Method::POST, path)?.json(body);
+        self.send_no_body(req).await
+    }
+
     /// Send a request and decode the JSON response body, mapping non-2xx into
     /// `Error::Api` with the response body included for debugging.
     ///
@@ -333,26 +343,15 @@ impl ApiClient {
         // changed since we entered, just retry with the new bearer.
         let _refresh_guard = self.refresh_lock.lock().await;
 
-        let current_token = self.token();
-        let bearer_was_stale = current_token
-            .as_deref()
-            .map(|t| {
-                // The header we sent was `Bearer <t>` — extract from
-                // try_clone()'d retry_req? We can't introspect the
-                // builder. Best signal: if current_token differs from
-                // the one we read when we built the original request,
-                // someone refreshed under us. We can't access the
-                // original bearer here without plumbing, so a coarse
-                // optimization: re-read refresh_token; if it differs
-                // from what we just used, another caller already
-                // rotated.
-                !t.is_empty()
-            })
-            .unwrap_or(false);
+        // Race detection: if the refresh secret we captured before
+        // taking the lock isn't the one currently in memory, another
+        // caller rotated under us — use their freshly-minted access
+        // token instead of re-exchanging. Reviewer IMPORTANT-1 on
+        // PR #445: previous heuristic included a noise-bit
+        // `bearer_was_stale` that hid the real invariant.
         let in_memory_refresh = self.refresh_token();
-        let already_rotated = in_memory_refresh.as_deref() != Some(refresh_secret.as_str())
-            && in_memory_refresh.is_some()
-            && bearer_was_stale;
+        let already_rotated = in_memory_refresh.is_some()
+            && in_memory_refresh.as_deref() != Some(refresh_secret.as_str());
         let pair_access_token: String;
         if already_rotated {
             // Someone else just rotated. Use the freshest in-memory

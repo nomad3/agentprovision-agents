@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.models.refresh_token import RefreshToken
 from app.services import base as base_service
 from app.services import refresh_tokens as refresh_token_service
+from app.services.refresh_tokens import RevokeReason
 from app.services import users as user_service
 from app.core.rate_limit import limiter
 
@@ -46,18 +47,6 @@ MAX_TOKEN_CHAIN_AGE_SECONDS = 7 * 24 * 60 * 60
 # against a very long chain. Pairs with the rate limiter on
 # `/auth/token/refresh` below.
 MAX_REFRESH_CHAIN_TRAVERSAL = 1000
-
-
-# Centralized constants for `refresh_tokens.revoked_reason`. Mirrors the
-# enum-by-string used in the service module — keeps grep working and
-# stops a future typo from creating an out-of-vocabulary state. Also
-# referenced from `tests/services/test_refresh_tokens.py`.
-class RevokeReason:
-    ROTATED = "rotated"
-    USER_REVOKED = "user_revoked"
-    REUSE_DETECTED = "reuse_detected"
-    LOGOUT = "logout"
-    ADMIN_REVOKED = "admin_revoked"
 
 
 _REFRESH_HINT_DEVICE_LABEL = "X-AP-Device-Label"  # opt-in header for CLI/SDK clients
@@ -268,19 +257,13 @@ def exchange_refresh_token(
             if within_grace:
                 child = refresh_token_service.find_rotated_child(db, parent=row)
                 if child is not None:
-                    # Return the SAME access token shape the rotation
-                    # would have produced for the racing caller. We
-                    # can't replay the original access_token (we
-                    # didn't persist it), so mint a fresh one with the
-                    # same claims and return the still-active child
-                    # refresh secret — but the secret is hashed in DB,
-                    # not retrievable. That's a deliberate scope cut:
-                    # the grace window lets the racing call SUCCEED
-                    # with a fresh access_token, but the caller MUST
-                    # re-fetch the refresh token via /auth/login if
-                    # the access token expires a second time within
-                    # grace. In practice the grace window is 30s, so
-                    # this is fine.
+                    # Grace pathway: mint a fresh access_token tied to
+                    # the winning racer's child, but DO NOT issue a new
+                    # refresh credential (the child's secret is only
+                    # stored hashed). The caller's existing refresh in
+                    # keychain becomes the dead `row`; they re-login
+                    # if the next 401 lands outside the grace window.
+                    # Tunable via `REFRESH_REUSE_GRACE_SECONDS`.
                     user = child.user
                     access_token_expires = timedelta(
                         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES

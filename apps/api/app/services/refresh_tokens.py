@@ -28,6 +28,22 @@ from app.models.user import User
 logger = logging.getLogger(__name__)
 
 
+class RevokeReason:
+    """Constants for `refresh_tokens.revoked_reason`.
+
+    Living in the service module (not the route module) so the service
+    can self-reference without a backward layer import. `auth.py`
+    re-imports for use at the route boundary. Reviewer IMPORTANT-2
+    on PR #445.
+    """
+
+    ROTATED = "rotated"
+    USER_REVOKED = "user_revoked"
+    REUSE_DETECTED = "reuse_detected"
+    LOGOUT = "logout"
+    ADMIN_REVOKED = "admin_revoked"
+
+
 def _hash_secret(secret: str) -> str:
     """sha256 in lowercase hex. The DB column is CHAR(64); collision
     space is effectively zero for ≤2^60 tokens, well above any plausible
@@ -145,13 +161,22 @@ def find_rotated_child(
 
     Defensive: a parent can have multiple children only if rotation
     forked (a bug we want to never happen post-B-1 mutex fix); we
-    return the most recent unrevoked one to give the legitimate caller
-    the freshest credential. None when no child is active.
+    return the most recent unrevoked one to give the legitimate
+    caller the freshest credential. None when no child is active.
+
+    Reviewer NIT-3 on PR #445: explicit SQL query instead of
+    lazy-loading `parent.children`, so a pathologically-forked chain
+    doesn't load thousands of rows into memory.
     """
-    candidates = [c for c in parent.children if c.revoked_at is None]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda c: c.created_at)
+    return (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.parent_id == parent.id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .order_by(RefreshToken.created_at.desc())
+        .first()
+    )
 
 
 def rotate(
@@ -181,7 +206,7 @@ def rotate(
     )
     now = datetime.utcnow()
     presented.revoked_at = now
-    presented.revoked_reason = "rotated"
+    presented.revoked_reason = RevokeReason.ROTATED
     presented.last_used_at = now
     db.flush()
     # Forensic breadcrumb so incident review can reconstruct who
@@ -200,7 +225,7 @@ def revoke_one(
     db: Session,
     *,
     row: RefreshToken,
-    reason: str = "user_revoked",
+    reason: str = RevokeReason.USER_REVOKED,
 ) -> None:
     """Revoke a single refresh token (e.g. `alpha sessions revoke <id>`
     or web logout). Idempotent — no-op if already revoked."""

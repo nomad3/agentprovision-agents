@@ -33,9 +33,35 @@ import pytest
 
 pytest.importorskip("sqlalchemy")
 
-from sqlalchemy import create_engine
+from sqlalchemy import String, create_engine
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.types import TypeDecorator
+
+
+class _SqliteUuidShim(TypeDecorator):
+    """Bridges `postgresql.UUID(as_uuid=True)` ↔ `CHAR(36)` on SQLite.
+
+    The model's `default=uuid.uuid4` produces a UUID instance; sqlite3
+    refuses to bind it as a parameter. This shim converts UUID → str
+    on bind and str → UUID on result, so the rest of the code (which
+    expects `row.id` to behave like a UUID) keeps working.
+    """
+
+    impl = String(36)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, uuid.UUID):
+            return str(value)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return uuid.UUID(value) if isinstance(value, str) else value
 
 from app.db.base import Base
 from app.models.refresh_token import RefreshToken
@@ -49,29 +75,47 @@ from app.services import refresh_tokens as svc
 # ──────────────────────────────────────────────────────────────────────
 
 
+# Postgres-only column types that SQLite's compiler refuses. Patched to
+# String(36) for the fixture's lifetime, then restored. Keeping the list
+# explicit (rather than walking columns dynamically) means a future schema
+# add that introduces a new postgres-only type fails loudly here instead
+# of silently breaking collection.
+_PG_ONLY_COLUMNS_BY_TABLE = {
+    "tenants": ("id",),
+    "users": ("id", "tenant_id"),
+    "refresh_tokens": ("id", "user_id", "parent_id", "ip_inet"),
+}
+
+
 @pytest.fixture
 def db() -> Iterator[Session]:
     """Throwaway in-memory SQLite session with the bare-minimum tables.
 
-    We only create `users` + `refresh_tokens` (+ `tenants` for the FK)
-    so model import side-effects don't pull in the whole graph. The
-    `refresh_tokens.ip_inet` column is `postgresql.INET`, which SQLite
-    can't render natively; we patch the column type to TEXT for the
-    test's lifetime so CompileError doesn't kill collection.
+    `postgresql.UUID` and `postgresql.INET` don't render under SQLite,
+    so we monkey-patch the affected columns to `String(36)` for the
+    fixture's lifetime, then restore. Reviewer BLOCKER-1 on PR #445.
+    The shared-global mutation makes pytest-xdist unsafe for this file
+    — gate via `pytestmark = pytest.mark.serial` if we ever add xdist.
     """
-    from sqlalchemy import Text
-
-    rt_table = Base.metadata.tables["refresh_tokens"]
-    original_type = rt_table.c.ip_inet.type
-    rt_table.c.ip_inet.type = Text()
+    original_types: dict[tuple[str, str], object] = {}
     try:
+        for tbl_name, cols in _PG_ONLY_COLUMNS_BY_TABLE.items():
+            tbl = Base.metadata.tables[tbl_name]
+            for col_name in cols:
+                col = tbl.c[col_name]
+                original_types[(tbl_name, col_name)] = col.type
+                # ip_inet is a plain text column under SQLite (the
+                # test never inspects it as INET); UUID columns get
+                # the round-trip-safe shim.
+                col.type = String(36) if col_name == "ip_inet" else _SqliteUuidShim()
+
         engine = create_engine("sqlite:///:memory:", future=True)
         Base.metadata.create_all(
             engine,
             tables=[
                 Base.metadata.tables["tenants"],
                 Base.metadata.tables["users"],
-                rt_table,
+                Base.metadata.tables["refresh_tokens"],
             ],
         )
         Session_ = sessionmaker(bind=engine, future=True)
@@ -82,14 +126,17 @@ def db() -> Iterator[Session]:
             session.close()
             engine.dispose()
     finally:
-        # Restore the postgresql.INET type so the model stays correct
-        # for any subsequent tests / runtime imports in the same process.
-        rt_table.c.ip_inet.type = original_type
+        for (tbl_name, col_name), original in original_types.items():
+            Base.metadata.tables[tbl_name].c[col_name].type = original  # type: ignore[assignment]
 
 
 @pytest.fixture
 def user(db: Session) -> User:
-    """A bare User with no tenant — keeps the test surface tight."""
+    """A bare User with no tenant — keeps the test surface tight.
+
+    `id` and `user_id` are now `String(36)` (see fixture rationale) so we
+    stringify to keep equality joins consistent across tests.
+    """
     u = User(
         id=uuid.uuid4(),
         email=f"refresh-test-{uuid.uuid4()}@example.test",

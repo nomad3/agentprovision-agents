@@ -10,7 +10,9 @@ pub async fn run(ctx: Context) -> anyhow::Result<()> {
     // on this box, wiping the local keychain alone leaves it usable
     // until the 30-day expiry — the whole point of refresh-token
     // rotation in CLI tools is that logout is a hard revocation.
-    // Review finding B-3 on PR #442.
+    // Review finding B-3 on PR #442; reviewer IMPORTANT-3 on PR #445
+    // switched the call to `post_no_body_json` so we no longer
+    // string-match the empty-body decode error.
     let mut server_revoked = false;
     if let Ok(Some(refresh)) = ctx.token_store.load_refresh() {
         // Best-effort: the local keychain wipe below is the
@@ -20,21 +22,11 @@ pub async fn run(ctx: Context) -> anyhow::Result<()> {
         let payload = json!({"refresh_token": refresh});
         match ctx
             .client
-            .post_json::<_, serde_json::Value>("/api/v1/auth/token/revoke", &payload)
+            .post_no_body_json("/api/v1/auth/token/revoke", &payload)
             .await
         {
-            Ok(_) => server_revoked = true,
-            Err(e) => {
-                // The endpoint 204s on success so post_json will
-                // typically fail at JSON decode. Inspect the error;
-                // a generic "empty body" is success-shaped here.
-                let is_no_body = format!("{e}").contains("got empty body");
-                if is_no_body {
-                    server_revoked = true;
-                } else {
-                    log::warn!("alpha logout: server-side revoke failed: {e}");
-                }
-            }
+            Ok(()) => server_revoked = true,
+            Err(e) => log::warn!("alpha logout: server-side revoke failed: {e}"),
         }
     }
 
