@@ -19,33 +19,40 @@
 //! not need to enumerate them.
 
 use clap::Args;
+use clap::builder::NonEmptyStringValueParser;
+
+use agentprovision_core::error::Error;
+use reqwest::Method;
 
 use crate::context::Context;
 
 #[derive(Debug, Args)]
 pub struct CancelArgs {
-    /// Task ID returned by `ap run` (e.g. `t_a4f3b2c1d2e3f4a5` for
-    /// stub-path tasks, or `fanout-<tenant_uuid>-<uuid>` for real-
-    /// path Temporal workflows).
-    #[arg(value_name = "TASK_ID")]
+    /// Task ID returned by `ap run`. Stub-path tasks use a
+    /// `t_<hex>` form (variable length). Real-path Temporal tasks
+    /// use `fanout-<tenant_uuid>-<uuid>`. Always pass the parent
+    /// task_id — child workflows are cancelled automatically by
+    /// the backend cascade.
+    ///
+    /// Round-1 review L2: empty / whitespace-only IDs are rejected
+    /// at parse time so `ap cancel ""` doesn't silently hit a
+    /// malformed URL and get a misleading "not found".
+    #[arg(value_name = "TASK_ID", value_parser = NonEmptyStringValueParser::new())]
     pub task_id: String,
 
-    /// Suppress the "cancelled" success message. Useful for scripts
+    /// Suppress the "cancelled" success line. Useful for scripts
     /// that only care about the exit code.
+    ///
+    /// Round-1 review L4: ignored when `--json` is set (JSON
+    /// emission always happens). The two flags compose: `--quiet`
+    /// suppresses the human-friendly line; `--json` suppresses it
+    /// too but emits a structured record instead.
     #[arg(long, short = 'q')]
     pub quiet: bool,
 }
 
 pub async fn run(args: CancelArgs, ctx: Context) -> anyhow::Result<()> {
     let path = format!("/api/v1/tasks-fanout/{}/cancel", args.task_id);
-
-    // Use the typed `request` helper so auth headers + tenant context
-    // are attached idiomatically. `send_no_body` handles the 204 case
-    // and maps non-2xx to `Error::Api`. 404 is the benign "task
-    // already completed or doesn't exist" path — surface it with a
-    // friendly CLI message rather than the raw 404 body.
-    use agentprovision_core::error::Error;
-    use reqwest::Method;
 
     let req = ctx.client.request(Method::POST, &path)?;
     match ctx.client.send_no_body(req).await {
@@ -60,10 +67,17 @@ pub async fn run(args: CancelArgs, ctx: Context) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Err(Error::Api { status: 404, .. }) => {
-            // The task already finished, was already cancelled, or
-            // never existed for this tenant. Exit non-zero with a
-            // helpful message; not a crash.
+        // Round-1 review M1: dedicated 401 hint matches `quickstart`
+        // and is the first thing a logged-out user reaches for.
+        Err(Error::Unauthorized) => {
+            anyhow::bail!("not logged in — run `ap login` first")
+        }
+        // Round-1 review L3: include the server-side body on -vv so
+        // a Cloudflare / proxy intermediary stripping a real 404 is
+        // distinguishable from a clean backend 404. `log::debug!`
+        // emits only when the user passes `-vv`.
+        Err(Error::Api { status: 404, body }) => {
+            log::debug!("cancel 404 body: {body}");
             anyhow::bail!(
                 "task {} not found (already completed, cancelled, or doesn't exist)",
                 args.task_id
@@ -106,14 +120,33 @@ mod tests {
     #[test]
     fn parses_fanout_workflow_id() {
         // Real-path task_ids have the `fanout-<uuid>-<uuid>` shape
-        // and must parse identically.
-        let cli = TestCli::try_parse_from([
-            "test",
-            "cancel",
-            "fanout-12345678-1234-5678-1234-567812345678-87654321",
-        ])
-        .unwrap();
+        // and must parse identically. Round-1 review N3: assert
+        // round-trip equality, not just prefix.
+        let wf_id = "fanout-12345678-1234-5678-1234-567812345678-87654321";
+        let cli = TestCli::try_parse_from(["test", "cancel", wf_id]).unwrap();
         let TestCmd::Cancel(a) = cli.cmd;
-        assert!(a.task_id.starts_with("fanout-"));
+        assert_eq!(a.task_id, wf_id);
+    }
+
+    #[test]
+    fn empty_task_id_rejected() {
+        // Round-1 review L2: empty IDs must fail at parse time.
+        let res = TestCli::try_parse_from(["test", "cancel", ""]);
+        assert!(res.is_err(), "empty task_id must be rejected by clap");
+    }
+
+    // Round-1 review M2: HTTP-path test coverage is deferred — would
+    // require either `httpmock` as a dev-dep or refactoring the
+    // function to take a trait-object client for test injection. The
+    // current crate pattern is parser-only tests on command files
+    // (peers: `chat.rs`, `agent.rs`, `watch.rs`). Tracked for a
+    // follow-up PR that adds mock-server coverage across all the
+    // CLI commands at once. See round-1 review thread on PR #436.
+    #[test]
+    #[ignore = "TODO: requires httpmock dev-dep for HTTP-path coverage"]
+    fn cancel_204_prints_success_line() {
+        // Placeholder for the round-1 M2 follow-up — when wired,
+        // mock POST /cancel → 204 and assert the "[ap] cancelled <id>"
+        // line is printed (or suppressed under --quiet / --json).
     }
 }

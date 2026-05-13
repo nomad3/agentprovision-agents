@@ -74,9 +74,10 @@ pub enum Command {
     Watch(watch::WatchArgs),
 
     /// Cancel an in-flight task. For fanout tasks, both the parent
-    /// and all child workflows are cancelled. Best-effort under
-    /// Temporal — the leaf CLI subprocess may take seconds to
-    /// observe the cancel signal.
+    /// and all child workflows are cancelled — pass the parent
+    /// task_id only; child workflows are cancelled automatically
+    /// by the backend cascade. Best-effort under Temporal: the
+    /// leaf CLI subprocess may take seconds to observe the signal.
     Cancel(cancel::CancelArgs),
 
     /// Self-update the `ap` binary from GitHub Releases.
