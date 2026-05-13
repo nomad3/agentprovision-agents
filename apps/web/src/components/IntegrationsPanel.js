@@ -558,22 +558,11 @@ const IntegrationsPanel = () => {
     }
   };
 
-  const handleToggleApproval = async (skill) => {
-    const existing = getConfigForSkill(skill.integration_name);
-    if (!existing) return;
-    try {
-      setSaving(skill.integration_name);
-      await integrationConfigService.update(existing.id, {
-        requires_approval: !existing.requires_approval,
-      });
-      await fetchData();
-    } catch (err) {
-      setError(`Failed to update approval setting for ${skill.display_name}`);
-      setTimeout(() => setError(null), 5000);
-    } finally {
-      setSaving(null);
-    }
-  };
+  // handleToggleApproval was removed when the "Requires approval" toggle
+  // was hidden from the integration card (2026-05-08). The
+  // requires_approval field is still respected by the backend; the toggle
+  // is just no longer surfaced from this panel because users found it
+  // ambiguous in WhatsApp re-pair flows.
 
   const handleCredentialChange = (skillName, key, value) => {
     setCredentialForms((prev) => ({
@@ -1292,23 +1281,14 @@ const IntegrationsPanel = () => {
                       )}
                     </div>
 
-                    {/* Requires Approval Toggle */}
-                    {!!config && (
-                      <div className="d-flex align-items-center gap-2">
-                        <Form.Check
-                          type="switch"
-                          id={`approval-${skill.integration_name}`}
-                          label={
-                            <span style={{ fontSize: '0.8rem', color: 'var(--color-muted)' }}>
-                              Requires approval
-                            </span>
-                          }
-                          checked={config?.requires_approval ?? false}
-                          onChange={() => handleToggleApproval(skill)}
-                          disabled={saving === skill.integration_name}
-                        />
-                      </div>
-                    )}
+                    {/*
+                      The "Requires approval" toggle was removed (2026-05-08)
+                      because it had no observable effect on the WhatsApp
+                      pairing/messaging flow and only confused users into
+                      thinking it gated re-pair. The backing field
+                      (`requires_approval`) is still on integration_configs
+                      and respected elsewhere — we just hide the toggle here.
+                    */}
                   </div>
 
                   {/* Credential Form (non-channel skills) */}

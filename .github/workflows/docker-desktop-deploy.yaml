@@ -20,6 +20,16 @@ on:
           - restart
           - rebuild-all
 
+# Self-hosted runners share `_work/<repo>/<repo>` across concurrent jobs. If
+# this workflow races with luna-client-build (or any other actions/checkout
+# job), each `actions/checkout@v4` defaults to `clean: true` and wipes the
+# workdir AFTER our hydration step. This was the root cause of the
+# 2026-05-08 outage: cloudflared came up with an empty creds dir → tunnel
+# down → web UI unreachable. One deploy at a time fixes it.
+concurrency:
+  group: docker-desktop-deploy
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Build & Deploy
@@ -78,26 +88,6 @@ jobs:
             -e cloudflared/credentials.json \
             -e cloudflared/cert.pem
 
-      - name: Symlink env files
-        run: |
-          # The .env files are gitignored but persist on the self-hosted runner's
-          # main working copy. Symlink them into the checkout so docker compose
-          # can read them.
-          SRC="$HOME/Documents/GitHub/servicetsunami-agents"
-          for envfile in apps/api/.env .env; do
-            if [ -f "$SRC/$envfile" ] && [ ! -f "$envfile" ]; then
-              ln -sf "$SRC/$envfile" "$envfile"
-              echo "Linked $envfile"
-            fi
-          done
-          # Copy cloudflared credentials that are gitignored but required for the tunnel
-          for cffile in cloudflared/credentials.json cloudflared/cert.pem; do
-            if [ -f "$SRC/$cffile" ] && [ ! -f "$cffile" ]; then
-              cp "$SRC/$cffile" "$cffile"
-              echo "Copied $cffile"
-            fi
-          done
-
       - name: Detect changed services
         id: changes
         run: |
@@ -135,6 +125,63 @@ jobs:
             # We use docker compose build <service_name> to respect the compose file
             docker compose build $svc || echo "Skipping $svc (not in compose or build error)"
           done
+
+      - name: Hydrate secrets and verify
+        run: |
+          # Self-hosted runners can have concurrent actions/checkout@v4 from
+          # other workflows wipe the workdir AFTER an earlier hydration step.
+          # We do this just before `compose up` so it's the last write before
+          # docker reads the volume mounts.
+          #
+          # Hard requirement: every file in REQUIRED must exist after this
+          # step or the deploy fails. Silent omissions are how cloudflared
+          # came up with an empty creds dir on 2026-05-08.
+          set -euo pipefail
+          SRC="$HOME/Documents/GitHub/servicetsunami-agents"
+
+          # Files that must be present in the runner workdir for the stack
+          # to come up correctly. Source path → destination (relative to repo
+          # root). Symlinks for env files (so dev edits propagate) and copies
+          # for cloudflared creds (cloudflared dereferences -ro mounts and
+          # symlink targets need their own perms).
+          declare -a SYMLINKS=(
+            "apps/api/.env"
+            ".env"
+          )
+          declare -a COPIES=(
+            "cloudflared/credentials.json"
+            "cloudflared/cert.pem"
+          )
+
+          for f in "${SYMLINKS[@]}"; do
+            if [ ! -f "$SRC/$f" ]; then
+              echo "::error::Missing source secret on runner host: $SRC/$f"
+              exit 1
+            fi
+            mkdir -p "$(dirname "$f")"
+            ln -sf "$SRC/$f" "$f"
+            echo "Linked $f -> $SRC/$f"
+          done
+
+          for f in "${COPIES[@]}"; do
+            if [ ! -f "$SRC/$f" ]; then
+              echo "::error::Missing source secret on runner host: $SRC/$f"
+              exit 1
+            fi
+            mkdir -p "$(dirname "$f")"
+            cp -f "$SRC/$f" "$f"
+            chmod 0400 "$f"
+            echo "Copied $f"
+          done
+
+          # Final assertion — fail loud if any expected file isn't readable.
+          for f in "${SYMLINKS[@]}" "${COPIES[@]}"; do
+            if [ ! -r "$f" ]; then
+              echo "::error::Hydrated file unreadable after copy/symlink: $f"
+              exit 1
+            fi
+          done
+          echo "All required secrets present and readable."
 
       - name: Up and prune
         run: |
