@@ -1,0 +1,282 @@
+//! Live progress emission for long-running commands.
+//!
+//! Two consumers, one source of truth:
+//!
+//! * **Humans at a terminal** see `[alpha] [t+12s] dispatched → claude-code`
+//!   lines on stdout / stderr as state changes — these already existed in
+//!   `run.rs` / `watch.rs` and remain. This module ADDS:
+//!
+//! * **Agents / CI / log scrapers** can opt into a machine-readable JSONL
+//!   side-channel via `--events <PATH|->`. One line per state transition:
+//!
+//!   ```json
+//!   {"ts":"2026-05-13T16:42:01Z","elapsed_ms":1234,"task_id":"t_a4f","event":"dispatched","status":"running","data":{"provider":"claude-code"}}
+//!   ```
+//!
+//!   Stable shape: top-level keys are guaranteed; new fields land under
+//!   `data` so old consumers keep parsing. `-` writes to stderr.
+//!
+//! The motivating user story is "agents driving alpha should know when
+//! the task they spawned completed" — same shape as Temporal's history
+//! events but local to a single invocation.
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
+
+/// Stable wire-format for one progress emission. Field ordering matches
+/// the JSONL example above — `ts` first so log scrapers can sort
+/// chronologically by prefix. Internal — the public surface is just the
+/// `Emitter::emit_*` helpers.
+#[derive(Debug, Serialize, Deserialize)]
+struct Event<'a> {
+    ts: String,
+    elapsed_ms: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<&'a str>,
+    event: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<&'a str>,
+    #[serde(skip_serializing_if = "Value::is_null")]
+    data: Value,
+}
+
+/// Where to write the JSONL stream. `Off` means "don't emit anything"
+/// (default; preserves the legacy human-only experience). `Stderr` is
+/// `--events -`. `File` opens the given path append-only.
+#[derive(Clone)]
+pub enum EventSink {
+    Off,
+    Stderr,
+    File(Arc<Mutex<std::fs::File>>),
+}
+
+impl EventSink {
+    /// Parse a `--events <value>` argument:
+    ///   * empty / missing → `Off`
+    ///   * `-` → `Stderr`
+    ///   * any other string → `File(open(...))` (append, create-if-absent)
+    pub fn from_arg(spec: Option<&str>) -> Result<Self> {
+        match spec {
+            None | Some("") => Ok(Self::Off),
+            Some("-") => Ok(Self::Stderr),
+            Some(path) => {
+                let f = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(Path::new(path))
+                    .with_context(|| format!("failed to open --events file {path}"))?;
+                Ok(Self::File(Arc::new(Mutex::new(f))))
+            }
+        }
+    }
+
+    fn write_line(&self, line: &str) {
+        match self {
+            Self::Off => {}
+            Self::Stderr => {
+                // eprintln! is line-buffered on TTY and unbuffered on
+                // pipe → safe for log scrapers.
+                eprintln!("{line}");
+            }
+            Self::File(f) => {
+                if let Ok(mut g) = f.lock() {
+                    // Best-effort: a write failure here shouldn't take
+                    // down the command. The human-visible status line
+                    // is the authoritative UX; this is the side-channel.
+                    let _ = writeln!(g, "{line}");
+                }
+            }
+        }
+    }
+}
+
+/// Emits structured progress events on top of a configurable sink.
+/// Cheap to clone (Arc inside). Pass it down through long-running
+/// command pipelines so every layer can emit on its own timeline.
+#[derive(Clone)]
+pub struct ProgressEmitter {
+    sink: EventSink,
+    task_id: Option<String>,
+    started: Instant,
+}
+
+impl ProgressEmitter {
+    pub fn new(sink: EventSink) -> Self {
+        Self {
+            sink,
+            task_id: None,
+            started: Instant::now(),
+        }
+    }
+
+    /// Bind a task id so subsequent events carry it. Returns self for
+    /// chaining: `ProgressEmitter::new(sink).with_task("t_a4f")`.
+    pub fn with_task(mut self, task_id: impl Into<String>) -> Self {
+        self.task_id = Some(task_id.into());
+        self
+    }
+
+    /// True iff the sink is `Off`. Used by callers to skip work that
+    /// only matters for the event stream (e.g. building rich data
+    /// payloads). Cheap inline check.
+    pub fn is_active(&self) -> bool {
+        !matches!(self.sink, EventSink::Off)
+    }
+
+    /// Emit one structured event. `data` is `null` when empty; pass
+    /// `serde_json::json!({...})` for richer payloads.
+    pub fn emit(&self, event: &str, status: Option<&str>, data: Value) {
+        if !self.is_active() {
+            return;
+        }
+        let ev = Event {
+            ts: Utc::now().to_rfc3339(),
+            elapsed_ms: self.started.elapsed().as_millis(),
+            task_id: self.task_id.as_deref(),
+            event,
+            status,
+            data,
+        };
+        match serde_json::to_string(&ev) {
+            Ok(s) => self.sink.write_line(&s),
+            // Should be impossible (all fields are Serialize) — log
+            // through stderr as a last-resort breadcrumb.
+            Err(e) => eprintln!("progress: serialize failure: {e}"),
+        }
+    }
+
+    /// Convenience: a no-data status transition.
+    pub fn status(&self, event: &str, status: &str) {
+        self.emit(event, Some(status), Value::Null);
+    }
+
+    /// Final "task complete" emission. Always fired on completion so
+    /// agents have a single deterministic terminal event to wait on
+    /// regardless of outcome. Used by `alpha watch` / `alpha coalition
+    /// run` in follow-up wiring; kept here so the public surface is
+    /// stable across the rollout.
+    #[allow(dead_code)]
+    pub fn terminal(&self, status: &str, data: Value) {
+        self.emit("completed", Some(status), data);
+    }
+}
+
+impl Default for ProgressEmitter {
+    fn default() -> Self {
+        Self::new(EventSink::Off)
+    }
+}
+
+/// Human-side helper: a one-line status banner with elapsed seconds.
+/// Returns "[t+12s]" / "[t+1m24s]" etc. — bounded width for steady
+/// terminal rendering. Used alongside the JSONL emitter, not as a
+/// replacement. Used by `alpha watch` in follow-up wiring.
+#[allow(dead_code)]
+pub fn elapsed_label(started: Instant) -> String {
+    let s = started.elapsed().as_secs();
+    if s < 60 {
+        format!("[t+{s}s]")
+    } else if s < 3600 {
+        format!("[t+{}m{}s]", s / 60, s % 60)
+    } else {
+        format!("[t+{}h{}m]", s / 3600, (s / 60) % 60)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Read as _;
+
+    #[test]
+    fn off_sink_emits_nothing() {
+        let e = ProgressEmitter::new(EventSink::Off);
+        e.emit("test", Some("running"), json!({"k": "v"}));
+        // No assertion possible directly; just verify is_active is
+        // false and the call doesn't panic.
+        assert!(!e.is_active());
+    }
+
+    #[test]
+    fn file_sink_writes_jsonl_with_required_keys() {
+        let dir = std::env::temp_dir().join(format!("alpha-progress-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("events.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        let sink = EventSink::from_arg(Some(path.to_str().unwrap())).unwrap();
+        let e = ProgressEmitter::new(sink).with_task("t_a4f");
+        e.emit(
+            "dispatched",
+            Some("running"),
+            json!({"provider": "claude-code"}),
+        );
+        e.terminal("succeeded", json!({"output_chars": 1234}));
+
+        // Drop the emitter so the file lock releases.
+        drop(e);
+
+        let mut s = String::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .read_to_string(&mut s)
+            .unwrap();
+        let lines: Vec<_> = s.lines().collect();
+        assert_eq!(lines.len(), 2, "want 2 lines, got {s:?}");
+
+        // Top-level shape is the agent contract — lock it down so a
+        // future refactor doesn't silently break log-scraper consumers.
+        let first: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["task_id"], "t_a4f");
+        assert_eq!(first["event"], "dispatched");
+        assert_eq!(first["status"], "running");
+        assert_eq!(first["data"]["provider"], "claude-code");
+        assert!(first["ts"].is_string());
+        assert!(first["elapsed_ms"].is_u64() || first["elapsed_ms"].is_i64());
+
+        let second: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["event"], "completed");
+        assert_eq!(second["status"], "succeeded");
+        assert_eq!(second["data"]["output_chars"], 1234);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn from_arg_dash_means_stderr() {
+        match EventSink::from_arg(Some("-")).unwrap() {
+            EventSink::Stderr => {}
+            other => panic!(
+                "expected Stderr, got {other:?}",
+                other = format!("{:?}", matches!(other, EventSink::Off))
+            ),
+        }
+    }
+
+    #[test]
+    fn from_arg_none_means_off() {
+        assert!(matches!(EventSink::from_arg(None).unwrap(), EventSink::Off));
+        assert!(matches!(
+            EventSink::from_arg(Some("")).unwrap(),
+            EventSink::Off
+        ));
+    }
+
+    #[test]
+    fn elapsed_label_formats_buckets() {
+        let now = Instant::now();
+        // Can't easily mock Instant; just sanity-check current is
+        // sub-second.
+        let s = elapsed_label(now);
+        assert!(s.starts_with("[t+") && s.ends_with(']'));
+    }
+}

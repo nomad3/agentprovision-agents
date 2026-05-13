@@ -28,8 +28,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::time::{Duration, Instant};
 
+use serde_json::json;
+
 use crate::commands::watch::poll_until_terminal;
 use crate::context::Context;
+use crate::progress::{EventSink, ProgressEmitter};
 
 /// `MergeMode` is the backend-visible discriminator for how to combine
 /// fanout child outputs. `council` is the council-of-reviewers pattern
@@ -133,6 +136,20 @@ pub struct RunArgs {
     /// ceiling, runs until terminal).
     #[arg(long, default_value_t = 1800)]
     pub timeout: u64,
+
+    /// Emit a JSONL event stream of state transitions for machine
+    /// consumers (CI dashboards, agent supervisors, log scrapers).
+    ///
+    /// Values:
+    ///   * `-`          → write to stderr (default-friendly for piping)
+    ///   * `<path>`     → append to a file
+    ///   * unset        → no events (legacy human-only output)
+    ///
+    /// Schema is stable: one JSON object per line, top-level keys
+    /// `ts`, `elapsed_ms`, `task_id`, `event`, `status`, `data`.
+    /// New fields land under `data` so existing consumers keep parsing.
+    #[arg(long, value_name = "PATH_OR_DASH")]
+    pub events: Option<String>,
 }
 
 /// Request payload for `POST /api/v1/tasks-fanout/run`.
@@ -198,6 +215,13 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
         eprintln!("[alpha] warning: --merge is only meaningful with --fanout; ignoring.");
     }
 
+    // Set up the optional progress event stream. `--events -` ships
+    // JSONL to stderr; `--events /tmp/run.jsonl` to a file; absent
+    // → no events emitted (legacy behaviour). The emitter is cheap
+    // when off (single bool check on .is_active()).
+    let emitter = ProgressEmitter::new(EventSink::from_arg(args.events.as_deref())?);
+    emitter.status("submitted", "running");
+
     let payload = RunRequest {
         prompt: &args.prompt,
         agent_id: args.agent.as_deref(),
@@ -217,6 +241,28 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
         .post_json("/api/v1/tasks-fanout/run", &payload)
         .await?;
 
+    // Bind the emitter to the freshly-issued task_id so all
+    // subsequent events carry it. Cheap clone; the underlying sink
+    // is Arc<Mutex<File>> or a no-op.
+    let emitter = emitter.with_task(&response.task_id);
+    emitter.emit(
+        "dispatched",
+        Some("running"),
+        json!({
+            "providers": args.providers,
+            "fanout": args.fanout,
+            "merge": args.merge.to_string(),
+            "children": response.children.iter().map(|c| {
+                json!({"task_id": c.task_id, "provider": c.provider})
+            }).collect::<Vec<_>>(),
+            "estimate": response.estimate.as_ref().map(|e| json!({
+                "duration_seconds": e.estimated_duration_seconds,
+                "cost_usd": e.estimated_cost_usd,
+                "confidence": e.confidence,
+            })),
+        }),
+    );
+
     // Print a compact dispatch banner. JSON output emits the response
     // verbatim for scripting consumers.
     if ctx.json {
@@ -227,7 +273,14 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
 
     if args.background {
         // `--background`: exit immediately so the user can close the
-        // terminal. They can resume via `alpha watch <task_id>`.
+        // terminal. They can resume via `alpha watch <task_id>`. The
+        // detach itself is a terminal-from-this-process event — emit
+        // it so agents can short-circuit their wait.
+        emitter.emit(
+            "detached",
+            Some("backgrounded"),
+            json!({"resume": format!("alpha watch {}", response.task_id)}),
+        );
         return Ok(());
     }
 
