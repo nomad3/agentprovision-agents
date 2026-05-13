@@ -79,13 +79,17 @@ async fn show(args: ShowArgs, ctx: Context) -> anyhow::Result<()> {
         output::info("[alpha] no policies in effect.");
         return Ok(());
     }
-    // Group by policy_type for compact rendering. The server already
-    // orders by policy_type ASC + created_at DESC, so adjacent rows
-    // share a type heading.
+    // Group by policy_type for compact rendering. The server orders
+    // by policy_type ASC + created_at DESC, so same-type rows are
+    // adjacent — but a single policy_type can have BOTH agent-scoped
+    // and tenant-scoped rows. The scope is rendered inline per row
+    // rather than in the heading so the two scopes don't get
+    // misattributed to whichever happened to be first. Reviewer
+    // IMPORTANT I4 on PR #446.
     let mut last_type: Option<&str> = None;
     for p in &resp.policies {
         if last_type != Some(p.policy_type.as_str()) {
-            println!("  {} ({}-scope):", p.policy_type, p.scope);
+            println!("  {}:", p.policy_type);
             last_type = Some(p.policy_type.as_str());
         }
         let enabled = if p.enabled { "enabled" } else { "disabled" };
@@ -93,7 +97,47 @@ async fn show(args: ShowArgs, ctx: Context) -> anyhow::Result<()> {
         // arbitrary so we don't try to pretty-print it here — the
         // user can pipe through `--json | jq` for the full shape.
         let config = serde_json::to_string(&p.config).unwrap_or_else(|_| "<invalid>".into());
-        println!("    • {enabled}: {config}");
+        println!("    • [{}] {enabled}: {config}", p.scope);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: TestCmd,
+    }
+    #[derive(clap::Subcommand)]
+    enum TestCmd {
+        #[command(subcommand)]
+        Policy(PolicyCommand),
+    }
+
+    fn parse_show(uuid: &str) -> ShowArgs {
+        let cli = TestCli::try_parse_from(["test", "policy", "show", uuid]).expect("clap parse");
+        match cli.cmd {
+            TestCmd::Policy(PolicyCommand::Show(a)) => a,
+        }
+    }
+
+    #[test]
+    fn parses_show_uuid() {
+        let uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let a = parse_show(uuid);
+        assert_eq!(a.agent.to_string(), uuid);
+    }
+
+    #[test]
+    fn rejects_non_uuid_agent() {
+        let cli = TestCli::try_parse_from(["test", "policy", "show", "not-a-uuid"]);
+        assert!(
+            cli.is_err(),
+            "clap should reject malformed agent UUID before reaching the handler"
+        );
+    }
 }

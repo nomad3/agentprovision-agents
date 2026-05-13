@@ -74,7 +74,7 @@ def get_agent_policies(
     )
     return PolicyListResponse(
         agent_id=agent.id,
-        agent_name=getattr(agent, "name", None),
+        agent_name=agent.name,
         policies=[
             PolicyRow(
                 id=r.id,

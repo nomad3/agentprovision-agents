@@ -28,6 +28,7 @@ pub struct RememberArgs {
 
     /// Coarse type for downstream classification — `fact`,
     /// `preference`, `decision`, etc. Free-form; defaults to `fact`.
+    /// Sent as `observation_type` on the wire (see `--json` output).
     #[arg(long, value_name = "TYPE", default_value = "fact")]
     pub kind: String,
 }
@@ -73,4 +74,60 @@ pub async fn run(args: RememberArgs, ctx: Context) -> anyhow::Result<()> {
     ));
     output::info("embedded for semantic recall — try `alpha recall \"<query>\"` later.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: TestCmd,
+    }
+    #[derive(clap::Subcommand)]
+    enum TestCmd {
+        Remember(RememberArgs),
+    }
+
+    fn parse(args: &[&str]) -> RememberArgs {
+        let cli = TestCli::try_parse_from(args).expect("clap parse");
+        match cli.cmd {
+            TestCmd::Remember(a) => a,
+        }
+    }
+
+    #[test]
+    fn parses_bare_text() {
+        let a = parse(&["test", "remember", "we use httpx, never requests"]);
+        assert_eq!(a.text, "we use httpx, never requests");
+        assert!(a.entity.is_none());
+        assert_eq!(a.kind, "fact");
+    }
+
+    #[test]
+    fn parses_with_entity() {
+        let uuid = "11111111-2222-3333-4444-555555555555";
+        let a = parse(&["test", "remember", "fact", "--entity", uuid]);
+        assert_eq!(a.entity.map(|u| u.to_string()).as_deref(), Some(uuid));
+    }
+
+    #[test]
+    fn parses_with_kind() {
+        let a = parse(&["test", "remember", "fact", "--kind", "preference"]);
+        assert_eq!(a.kind, "preference");
+    }
+
+    #[test]
+    fn default_kind_is_fact() {
+        let a = parse(&["test", "remember", "anything"]);
+        assert_eq!(a.kind, "fact");
+    }
+
+    #[test]
+    fn rejects_non_uuid_entity() {
+        let cli = TestCli::try_parse_from(["test", "remember", "fact", "--entity", "not-a-uuid"]);
+        assert!(cli.is_err(), "clap should reject malformed UUID");
+    }
 }

@@ -5,6 +5,7 @@ CLI differentiation roadmap (#179). Thin wrapper around
 `app/services/knowledge.py::create_observation` so the rich
 auto-embedding + memory_activity logging happens automatically.
 """
+import logging
 import uuid
 from typing import Optional
 
@@ -13,8 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_current_active_user
+from app.models.knowledge_entity import KnowledgeEntity
 from app.models.user import User
 from app.services.knowledge import create_observation
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -46,6 +50,23 @@ def remember(
     the shared vector_store (for cross-content semantic recall —
     `alpha recall` picks it up).
     """
+    # Cross-tenant defense: `entity_id` lands on the observation row
+    # verbatim. Without an existence + tenant check here, a caller
+    # could attach their observation to another tenant's entity UUID.
+    # Reviewer BLOCKER B1 on PR #446. Match the pattern used in
+    # agent_policies.py — look up + 404 on cross-tenant lookup.
+    if payload.entity_id is not None:
+        exists = (
+            db.query(KnowledgeEntity.id)
+            .filter(
+                KnowledgeEntity.id == payload.entity_id,
+                KnowledgeEntity.tenant_id == current_user.tenant_id,
+            )
+            .first()
+        )
+        if exists is None:
+            raise HTTPException(status_code=404, detail="entity not found")
+
     try:
         obs = create_observation(
             db,
@@ -57,10 +78,17 @@ def remember(
             source_agent=current_user.email,
             entity_id=payload.entity_id,
         )
-        db.commit()
-    except Exception as e:
+        # `create_observation` already commits internally; no extra
+        # commit here (review NIT N1). The try/except still guards the
+        # embedding/activity-log pipeline which can raise after the
+        # observation insert.
+    except Exception:
+        # Generic 500 message: never leak the underlying DB / driver
+        # exception text to the client (review IMPORTANT I3). The
+        # full stack trace is logged for ops via logger.exception.
+        logger.exception("create_observation failed")
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"failed to record observation: {e}")
+        raise HTTPException(status_code=500, detail="failed to record observation")
     return RememberResponse(
         id=obs.id,
         text=obs.observation_text,
