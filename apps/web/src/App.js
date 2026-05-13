@@ -6,6 +6,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 import { LunaPresenceProvider } from './context/LunaPresenceContext';
 import { ThemeProvider } from './context/ThemeContext';
 import LandingPage from './LandingPage';
+import AlphaLandingPage from './AlphaLandingPage';
 // Agent Kits removed - using ADK for agent configuration
 import AgentDetailPage from './pages/AgentDetailPage';
 import AgentsPage from './pages/AgentsPage';
@@ -129,6 +130,10 @@ function App() {
             <ToastProvider>
               <Routes>
                 <Route path="/" element={<LandingPage />} />
+                {/* Dedicated CLI landing — alpha.agentprovision.com
+                    points the SPA at this route. Reuses LandingNav +
+                    LandingFooter + CTASection. */}
+                <Route path="/alpha" element={<AlphaLandingPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/auth/login" element={<LoginPage />} />
                 <Route path="/register" element={<RegisterPage />} />
