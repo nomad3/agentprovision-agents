@@ -17,21 +17,32 @@ with workflow.unsafe.imports_passed_through():
 class CoalitionWorkflow:
     @workflow.run
     async def run(self, tenant_id: str, chat_session_id: str = None, task_description: str = None) -> dict:
-        # Support cross-pod dispatch pattern where arguments are passed as a single dict
+        # Support cross-pod dispatch pattern where arguments are passed as a single dict.
+        # Round-2 review B1 (#440): also extract pattern + role_overrides from the
+        # dict-unpack branch so `alpha coalition run --pattern X` is honored
+        # end-to-end instead of being silently overridden by the keyword router
+        # inside `select_coalition_template`.
+        pattern: str | None = None
+        role_overrides: dict | None = None
         if isinstance(tenant_id, dict) and chat_session_id is None:
             data = tenant_id
             tenant_id = data.get("tenant_id")
             chat_session_id = data.get("chat_session_id")
             task_description = data.get("task_description")
+            pattern = data.get("pattern")
+            role_overrides = data.get("role_overrides")
 
         retry = RetryPolicy(maximum_attempts=3)
         activity_timeout = timedelta(seconds=60)
         cli_timeout = timedelta(minutes=15)
 
-        # 1. Select the best team shape for this task
+        # 1. Select the best team shape for this task. When `pattern` is
+        # explicit, the activity must skip its internal keyword router and
+        # use the supplied value; `role_overrides` then layers caller-pinned
+        # role→agent_slug mappings on top of the default role assignments.
         template = await workflow.execute_activity(
             select_coalition_template,
-            args=[tenant_id, chat_session_id, task_description],
+            args=[tenant_id, chat_session_id, task_description, pattern, role_overrides],
             start_to_close_timeout=activity_timeout,
             retry_policy=retry,
         )

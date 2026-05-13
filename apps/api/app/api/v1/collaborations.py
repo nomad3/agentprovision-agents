@@ -4,7 +4,7 @@ import json
 import logging
 import time
 import uuid
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import redis as redis_lib
 
@@ -19,6 +19,7 @@ from app.models.user import User
 from app.schemas.blackboard import BlackboardEntryInDB, BlackboardInDB
 from app.schemas.collaboration import (
     AdvancePhaseRequest,
+    CollaborationPattern,
     CollaborationSessionCreate,
     CollaborationSessionInDB,
 )
@@ -240,8 +241,14 @@ def collaboration_detail(
 class CollaborationTriggerRequest(BaseModel):
     chat_session_id: uuid.UUID
     task_description: str
+    # `pattern` stays Optional[str] (rather than Optional[CollaborationPattern])
+    # so the API surfaces a clean 422 with the full allowed-set list via the
+    # explicit validation below, instead of FastAPI's terser enum error.
     pattern: Optional[str] = None
-    role_overrides: Optional[dict] = None
+    # Round-2 review N4 (#440): role overrides are role-name → agent-slug,
+    # both strings. Tightening the schema lets FastAPI 422 on garbage
+    # payloads instead of letting them flow into the workflow.
+    role_overrides: Optional[Dict[str, str]] = None
 
 
 @router.post("/trigger", status_code=202)
@@ -251,17 +258,55 @@ def trigger_collaboration(
     current_user: User = Depends(get_current_user),
 ):
     """Manually trigger a CoalitionWorkflow. Returns 202 immediately."""
+    from app.models.chat import ChatSession
     from app.services.agent_router import dispatch_coalition
 
+    # Round-2 review I1 (#440): validate `pattern` against the
+    # CollaborationPattern enum here so callers get a clear 422 instead
+    # of having `select_coalition_template` silently fall back to its
+    # keyword router on unknown values.
+    if request.pattern is not None:
+        try:
+            CollaborationPattern(request.pattern)
+        except ValueError:
+            valid = ", ".join(p.value for p in CollaborationPattern)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Invalid pattern '{request.pattern}'. Valid patterns: {valid}",
+            )
+
+    # Round-2 review I2 (#440): enforce tenant isolation on the
+    # referenced chat session — same pattern as `get_session` above —
+    # so a logged-in user can't dispatch a coalition against another
+    # tenant's chat session by guessing the UUID.
+    chat_session = (
+        db.query(ChatSession)
+        .filter(
+            ChatSession.id == request.chat_session_id,
+            ChatSession.tenant_id == current_user.tenant_id,
+        )
+        .first()
+    )
+    if not chat_session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Chat session not found",
+        )
+
+    # Round-1 review B3 (#440): thread pattern + role_overrides
+    # through so /trigger's documented fields actually take effect.
     dispatch_coalition(
         tenant_id=current_user.tenant_id,
         chat_session_id=str(request.chat_session_id),
         task_description=request.task_description,
+        pattern=request.pattern,
+        role_overrides=request.role_overrides,
     )
 
     return {
         "status": "dispatched",
         "chat_session_id": str(request.chat_session_id),
         "task_description": request.task_description,
+        "pattern": request.pattern,
         "message": "CoalitionWorkflow dispatched. Subscribe to GET /chat/sessions/{id}/events for collaboration_started.",
     }
