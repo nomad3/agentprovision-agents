@@ -13,6 +13,7 @@ from app.api.v1 import (
     agents,
     agent_groups,
     agent_tasks,
+    tasks_fanout,
     tools,
     connectors,
     deployments,
@@ -121,6 +122,11 @@ router.include_router(insights_fleet_health.router, prefix="/agents", tags=["age
 router.include_router(agents.router, prefix="/agents", tags=["agents"])
 router.include_router(agent_groups.router, prefix="/agent_groups", tags=["agent_groups"])
 router.include_router(agent_tasks.router, prefix="/tasks", tags=["tasks"])
+router.include_router(
+    tasks_fanout.router,
+    prefix="/tasks-fanout",
+    tags=["tasks-fanout (prototype)"],
+)
 router.include_router(tools.router, prefix="/tools", tags=["tools"])
 router.include_router(connectors.router, prefix="/connectors", tags=["connectors"])
 router.include_router(deployments.router, prefix="/deployments", tags=["deployments"])

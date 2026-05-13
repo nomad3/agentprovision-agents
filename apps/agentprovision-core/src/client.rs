@@ -142,6 +142,25 @@ impl ApiClient {
         Ok(req)
     }
 
+    /// Generic typed `GET` helper. Useful for ad-hoc / prototype endpoints
+    /// that don't yet have a dedicated typed method on `Client`. Once an
+    /// endpoint stabilizes, promote it to its own method for discoverability.
+    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let req = self.request(Method::GET, path)?;
+        self.send_json(req).await
+    }
+
+    /// Generic typed `POST` helper. Body is serialized as JSON; auth
+    /// headers are attached. Same promotion rule as `get_json`.
+    pub async fn post_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let req = self.request(Method::POST, path)?.json(body);
+        self.send_json(req).await
+    }
+
     /// Send a request and decode the JSON response body, mapping non-2xx into
     /// `Error::Api` with the response body included for debugging.
     pub async fn send_json<T: DeserializeOwned>(&self, req: RequestBuilder) -> Result<T> {
