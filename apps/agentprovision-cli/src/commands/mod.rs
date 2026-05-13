@@ -3,6 +3,7 @@ pub mod cancel;
 pub mod chat;
 pub mod coalition;
 pub mod completions;
+pub mod goal;
 pub mod integration;
 pub mod login;
 pub mod logout;
