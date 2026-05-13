@@ -1,4 +1,4 @@
-# Plan — `ap` CLI Multi-Runtime Dispatch Verb (Orchestrator *of CLIs*)
+# Plan — `alpha` CLI Multi-Runtime Dispatch Verb (Orchestrator *of CLIs*)
 
 **Date:** 2026-05-11
 **Owner:** `apps/agentprovision-cli` + `apps/agentprovision-core`
@@ -10,7 +10,7 @@
 
 ## 1. Strategic frame
 
-`ap` already routes chat *through* the platform (`ap chat send` → `/api/v1/chat/sessions/{id}/messages` → Temporal `ChatCliWorkflow` → one of four CLI executors in `apps/code-worker/cli_executors/`). The platform is the *orchestrator of CLIs* — but only on the server side. From the user's terminal, the four runtimes are inaccessible directly.
+`alpha` already routes chat *through* the platform (`alpha chat send` → `/api/v1/chat/sessions/{id}/messages` → Temporal `ChatCliWorkflow` → one of four CLI executors in `apps/code-worker/cli_executors/`). The platform is the *orchestrator of CLIs* — but only on the server side. From the user's terminal, the four runtimes are inaccessible directly.
 
 This plan adds **local-dispatch verbs** that let a user invoke a chosen runtime *from their terminal* with platform-injected context (agent_token, MCP URL, memory recall, persona prompt, hooks). The runtime runs locally; the platform supplies identity + tools + memory.
 
@@ -21,16 +21,16 @@ This is the lever that closes "orchestrator of CLIs" as a complete user experien
 Sugar verbs (per-runtime convenience):
 
 ```
-ap claude-code   <PROMPT> [flags]
-ap codex         <PROMPT> [flags]
-ap gemini-cli    <PROMPT> [flags]   # also: ap gemini
-ap copilot       <PROMPT> [flags]
+alpha claude-code   <PROMPT> [flags]
+alpha codex         <PROMPT> [flags]
+alpha gemini-cli    <PROMPT> [flags]   # also: alpha gemini
+alpha copilot       <PROMPT> [flags]
 ```
 
 Canonical verb (power-user / scripting):
 
 ```
-ap run --runtime <claude_code|codex|gemini_cli|copilot_cli> \
+alpha run --runtime <claude_code|codex|gemini_cli|copilot_cli> \
        [--agent <slug-or-uuid>] \
        [--use-tenant-token] \
        [--no-memory] [--no-persona] [--no-hooks] [--no-persist] \
@@ -42,13 +42,13 @@ ap run --runtime <claude_code|codex|gemini_cli|copilot_cli> \
 Fan-out (Section 9):
 
 ```
-ap run --runtimes claude_code,codex,gemini_cli --parallel <PROMPT>
+alpha run --runtimes claude_code,codex,gemini_cli --parallel <PROMPT>
 ```
 
 ## 3. Architecture overview
 
 ```
-ap claude-code "fix X"
+alpha claude-code "fix X"
    │
    ├─► (1) resolve_agent_for_runtime  → /api/v1/agents?runtime=claude_code
    ├─► (2) preflight                  → which claude / version / OAuth env
@@ -167,8 +167,8 @@ Fetches agent.system_prompt, optionally recalls top-K memory observations (1500m
 
 ```
 src/commands/
-  run.rs          # canonical `ap run` + sugar variants
-  preflight.rs    # invoked by `ap status` and pre-run gate
+  run.rs          # canonical `alpha run` + sugar variants
+  preflight.rs    # invoked by `alpha status` and pre-run gate
   transcript.rs   # buffered stdio tee for audit
 ```
 
@@ -187,7 +187,7 @@ Flow (single-runtime):
 
 ## 7. Fan-out (`--parallel`)
 
-`ap run --runtimes claude_code,codex,gemini_cli --parallel "..."`:
+`alpha run --runtimes claude_code,codex,gemini_cli --parallel "..."`:
 
 - `tokio::spawn` per runtime; each runs the full flow concurrently.
 - Per-runtime workdir is `<workdir>/.runtime-<id>/` to avoid file conflicts.
@@ -196,7 +196,7 @@ Flow (single-runtime):
 
 ## 8. Acceptance criteria
 
-Fresh macOS, `ap claude-code "say hello"`:
+Fresh macOS, `alpha claude-code "say hello"`:
 
 1. preflight passes (claude found, version OK).
 2. `POST /api/v1/agent-tokens/mint` returns JWT in <500ms.
@@ -207,13 +207,13 @@ Fresh macOS, `ap claude-code "say hello"`:
 7. User sees streamed reply.
 8. On exit: POST audit, cleanup workdir, propagate exit code.
 
-`ap claude-code --use-tenant-token "..."` without tenant Claude Code integration → fast fail with actionable message.
+`alpha claude-code --use-tenant-token "..."` without tenant Claude Code integration → fast fail with actionable message.
 
-`ap codex "..."` without `codex` installed → exit 2 + install hint, no API calls made.
+`alpha codex "..."` without `codex` installed → exit 2 + install hint, no API calls made.
 
 ## 9. PR breakdown
 
-- **PR-1 (M, 3-4 days):** core::runtime module + new server endpoints (`POST /agent-tokens/mint` user-scoped, `GET /memory/recall` if missing) + `ap run --runtime claude_code` MVP + `ap claude-code` sugar.
+- **PR-1 (M, 3-4 days):** core::runtime module + new server endpoints (`POST /agent-tokens/mint` user-scoped, `GET /memory/recall` if missing) + `alpha run --runtime claude_code` MVP + `alpha claude-code` sugar.
 - **PR-2 (S, 1-2 days):** Codex / Gemini / Copilot runtimes.
 - **PR-3 (S, 1 day, post-MVP):** `--parallel` fan-out + TTY side-by-side renderer.
 

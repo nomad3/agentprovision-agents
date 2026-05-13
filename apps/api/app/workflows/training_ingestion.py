@@ -1,4 +1,4 @@
-"""TrainingIngestionWorkflow — runs initial training for `ap quickstart`.
+"""TrainingIngestionWorkflow — runs initial training for `alpha quickstart`.
 
 Walks the raw items the caller posted to `/memory/training/bulk-ingest`,
 batches them into chunks of 20, and for each batch fires an
@@ -279,7 +279,7 @@ def _persist_item(db, tenant_id, item: Dict[str, Any]) -> str:
     if kind == "local_user_identity":
         name = item.get("name") or item.get("email") or "Local user"
         # Dedup on email when available (the natural key); fall back
-        # to name otherwise. A re-run of ap quickstart on the same
+        # to name otherwise. A re-run of alpha quickstart on the same
         # tenant must not create N Person rows for the same user.
         email = item.get("email")
         if email and _existing_entity_id(

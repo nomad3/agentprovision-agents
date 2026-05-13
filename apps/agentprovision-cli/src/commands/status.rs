@@ -1,4 +1,4 @@
-//! `ap status` — show the current user, tenant, server, and (with
+//! `alpha status` — show the current user, tenant, server, and (with
 //! `--runtimes`) the preflight matrix for the four CLI runtimes the
 //! platform can dispatch locally.
 
@@ -13,7 +13,7 @@ pub struct StatusArgs {
     /// Include a preflight matrix for the four CLI runtimes the platform
     /// orchestrates locally (Claude Code, Codex, Gemini CLI, Copilot CLI).
     /// Runs four `--version` subprocesses, so opt-in — the default
-    /// `ap status` stays a single API round-trip.
+    /// `alpha status` stays a single API round-trip.
     #[arg(long)]
     pub runtimes: bool,
 }
@@ -82,7 +82,7 @@ pub async fn run(ctx: Context, show_runtimes: bool) -> anyhow::Result<()> {
         None
     };
 
-    // Runtime preflight is opt-in (`--runtimes`) so the default `ap status`
+    // Runtime preflight is opt-in (`--runtimes`) so the default `alpha status`
     // stays a sub-200ms round-trip. Spawning five `--version` subprocesses
     // (one per supported CLI runtime) adds ~100-400ms depending on shell
     // init cost, which is annoying for users who just want to confirm auth.

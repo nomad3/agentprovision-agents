@@ -1,4 +1,4 @@
-//! `ap integration` — inspect integration connection status.
+//! `alpha integration` — inspect integration connection status.
 //!
 //! Surfaces `GET /api/v1/integrations/status` — the same endpoint the web
 //! IntegrationsPage and the dynamic-workflow activation gate hit. Tells

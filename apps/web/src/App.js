@@ -137,7 +137,7 @@ function App() {
                 <Route path="/home" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
                 {/* PR-Q6: guided initial-training wizard. Mirrors the
-                    CLI `ap quickstart` flow (apps/agentprovision-cli/
+                    CLI `alpha quickstart` flow (apps/agentprovision-cli/
                     src/commands/quickstart.rs) as React screens.
                     Linked from the dashboard route guard which
                     auto-redirects un-onboarded tenants on first

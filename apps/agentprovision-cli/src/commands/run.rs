@@ -1,23 +1,23 @@
-//! `ap run` — durable task dispatch with optional multi-provider fanout.
+//! `alpha run` — durable task dispatch with optional multi-provider fanout.
 //!
 //! Prototype for Phase 1 of the CLI differentiation roadmap
 //! (`docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`).
 //!
 //! Semantics:
-//!   - One-shot: `ap run "<prompt>"`
+//!   - One-shot: `alpha run "<prompt>"`
 //!     POSTs to `/api/v1/tasks-fanout/run`, returns a `task_id`,
 //!     and (unless `--background`) tails the task's event stream
 //!     until completion.
 //!
-//!   - Fanout: `ap run "<prompt>" --fanout claude,codex,gemini --merge council`
+//!   - Fanout: `alpha run "<prompt>" --fanout claude,codex,gemini --merge council`
 //!     Same endpoint but with N providers; the backend spawns N child
 //!     `ChatCliWorkflow` runs in parallel and merges the result via
 //!     the meta-adjudicator already used by the provider review council.
 //!
-//!   - Fallback: `ap run "<prompt>" --providers claude,codex,opencode`
+//!   - Fallback: `alpha run "<prompt>" --providers claude,codex,opencode`
 //!     Backend tries providers in order; first non-quota-errored win.
 //!
-//! Why a single subcommand instead of `ap run` + `ap fanout`:
+//! Why a single subcommand instead of `alpha run` + `alpha fanout`:
 //!   `--fanout` and `--providers` are orthogonal modes of the same
 //!   verb (dispatch a task across one-or-many runtimes). Splitting
 //!   into separate subcommands would force users to relearn the same
@@ -94,7 +94,7 @@ pub struct RunArgs {
     // `cli.rs:23-29` rationale). Shipping a body field that the
     // backend honored would allow an authenticated user in tenant A
     // to plant tasks under tenant B's `tenant_id`. The override will
-    // return alongside `ap tenant use` (design open question #4).
+    // return alongside `alpha tenant use` (design open question #4).
     /// Comma-separated **fallback** chain. If the first provider fails
     /// with a quota / auth error, the next is tried. Mutually exclusive
     /// with `--fanout` (use `--fanout` for parallel dispatch).
@@ -120,14 +120,14 @@ pub struct RunArgs {
     pub merge: MergeMode,
 
     /// Detach immediately after dispatch. Prints the task id and exits.
-    /// Resume with `ap watch <task_id>`.
+    /// Resume with `alpha watch <task_id>`.
     #[arg(long, short = 'b')]
     pub background: bool,
 
     /// Maximum number of seconds to tail the task in the foreground
     /// before exiting. The task itself keeps running on the backend —
     /// when the deadline hits, the CLI prints a hint and exits 0;
-    /// resume any time with `ap watch <task_id>` from any machine on
+    /// resume any time with `alpha watch <task_id>` from any machine on
     /// the same account. Default 1800s (30 min). Round-2 L2-2: long
     /// migrations may want `--timeout 7200` or `--timeout 0` (= no
     /// ceiling, runs until terminal).
@@ -195,7 +195,7 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
     // the user if they passed a non-default merge alone so it doesn't
     // silently do nothing.
     if !matches!(args.merge, MergeMode::Council) && args.fanout.is_empty() {
-        eprintln!("[ap] warning: --merge is only meaningful with --fanout; ignoring.");
+        eprintln!("[alpha] warning: --merge is only meaningful with --fanout; ignoring.");
     }
 
     let payload = RunRequest {
@@ -227,17 +227,22 @@ pub async fn run(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
 
     if args.background {
         // `--background`: exit immediately so the user can close the
-        // terminal. They can resume via `ap watch <task_id>`.
+        // terminal. They can resume via `alpha watch <task_id>`.
         return Ok(());
     }
 
     // Foreground: tail the task event stream until completion or the
     // user-supplied timeout (round-1 H4). The poll helper is shared
-    // with `ap watch` (round-1 L1). Round-2 L2-2: `--timeout 0` means
+    // with `alpha watch` (round-1 L1). Round-2 L2-2: `--timeout 0` means
     // "no ceiling — tail until terminal."
-    let deadline = (args.timeout > 0)
-        .then(|| Instant::now() + Duration::from_secs(args.timeout));
-    poll_until_terminal(&ctx, &response.task_id, deadline, Duration::from_millis(1500)).await
+    let deadline = (args.timeout > 0).then(|| Instant::now() + Duration::from_secs(args.timeout));
+    poll_until_terminal(
+        &ctx,
+        &response.task_id,
+        deadline,
+        Duration::from_millis(1500),
+    )
+    .await
 }
 
 fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
@@ -249,40 +254,42 @@ fn print_dispatch_banner(response: &RunResponse, args: &RunArgs) {
             .map(|c| format!("{} ({})", c.task_id, c.provider))
             .collect();
         println!(
-            "[ap] dispatched fanout task {task_id} with {} children:",
+            "[alpha] dispatched fanout task {task_id} with {} children:",
             children.len()
         );
         for c in &children {
             println!("       • {c}");
         }
         // Round-1 M5: kebab-case via Display, not Debug `{:?}`.
-        println!("[ap] merge mode: {}", args.merge);
+        println!("[alpha] merge mode: {}", args.merge);
     } else if !args.providers.is_empty() {
         println!(
-            "[ap] dispatched task {task_id} with fallback chain: {}",
+            "[alpha] dispatched task {task_id} with fallback chain: {}",
             args.providers.join(" → ")
         );
     } else {
-        println!("[ap] dispatched task {task_id}");
+        println!("[alpha] dispatched task {task_id}");
     }
 
     if let Some(est) = &response.estimate {
         println!(
-            "[ap] estimated {}s / ${:.2} (confidence={})",
+            "[alpha] estimated {}s / ${:.2} (confidence={})",
             est.estimated_duration_seconds, est.estimated_cost_usd, est.confidence
         );
     }
 
     if args.background {
-        println!("[ap] close this terminal any time — resume with: ap watch {task_id}");
+        println!("[alpha] close this terminal any time — resume with: alpha watch {task_id}");
     } else if args.timeout == 0 {
         // Round-3 L3-1: `--timeout 0` is the "no ceiling" sentinel
         // (round-2 L2-2). Don't print "for up to 0s" which sounds
         // like immediate-exit.
-        println!("[ap] tailing events with no ceiling… (Ctrl-C detaches; task continues running)");
+        println!(
+            "[alpha] tailing events with no ceiling… (Ctrl-C detaches; task continues running)"
+        );
     } else {
         println!(
-            "[ap] tailing events for up to {}s… (Ctrl-C detaches; task continues running)",
+            "[alpha] tailing events for up to {}s… (Ctrl-C detaches; task continues running)",
             args.timeout
         );
     }
@@ -324,7 +331,13 @@ mod tests {
 
     #[test]
     fn parses_providers_fallback_chain() {
-        let a = parse(&["test", "run", "task", "--providers", "claude,codex,opencode"]);
+        let a = parse(&[
+            "test",
+            "run",
+            "task",
+            "--providers",
+            "claude,codex,opencode",
+        ]);
         assert_eq!(a.providers, vec!["claude", "codex", "opencode"]);
         assert!(a.fanout.is_empty());
     }
@@ -332,7 +345,13 @@ mod tests {
     #[test]
     fn parses_fanout_with_merge() {
         let a = parse(&[
-            "test", "run", "audit", "--fanout", "claude,codex,gemini", "--merge", "council",
+            "test",
+            "run",
+            "audit",
+            "--fanout",
+            "claude,codex,gemini",
+            "--merge",
+            "council",
         ]);
         assert_eq!(a.fanout, vec!["claude", "codex", "gemini"]);
         assert!(matches!(a.merge, MergeMode::Council));
@@ -341,9 +360,18 @@ mod tests {
     #[test]
     fn fanout_and_providers_are_mutually_exclusive() {
         let res = TestCli::try_parse_from([
-            "test", "run", "x", "--fanout", "claude", "--providers", "codex",
+            "test",
+            "run",
+            "x",
+            "--fanout",
+            "claude",
+            "--providers",
+            "codex",
         ]);
-        assert!(res.is_err(), "clap should reject --fanout + --providers together");
+        assert!(
+            res.is_err(),
+            "clap should reject --fanout + --providers together"
+        );
     }
 
     #[test]

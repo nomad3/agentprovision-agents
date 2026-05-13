@@ -325,7 +325,7 @@ async def run_orchestration_worker():
             # Dynamic workflow step executor
             execute_dynamic_step,
             finalize_workflow_run,
-            # Initial-training pipeline (ap quickstart / web onboarding)
+            # Initial-training pipeline (alpha quickstart / web onboarding)
             training_extract_and_persist_batch,
             finalize_training_run,
             # Morning briefing / Session Journal activities (Gap 1: Continuity)

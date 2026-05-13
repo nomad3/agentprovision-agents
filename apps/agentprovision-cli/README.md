@@ -1,6 +1,6 @@
-# ap
+# alpha
 
-`ap` — the AgentProvision CLI. Single-binary client for the AgentProvision platform: login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / GitHub Copilot CLI) from your terminal.
+`alpha` — the AgentProvision CLI. Single-binary client for the AgentProvision platform: login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / GitHub Copilot CLI) from your terminal.
 
 The CLI is the orchestrator-of-CLIs: every command you run flows through the agentprovision.com control plane, which dispatches to the right runtime (Temporal workflows, MCP tool calls, A2A coalitions) under the hood.
 
@@ -16,39 +16,39 @@ curl -fsSL https://agentprovision.com/install.sh | sh
 iwr -useb https://agentprovision.com/install.ps1 | iex
 ```
 
-No sudo. No admin. Drops `ap` in `~/.local/bin/` (POSIX) or `%USERPROFILE%\.agentprovision\bin\` (Windows). Linux musl + Windows ARM64 cross-compile ship in PR-D-1.5.
+No sudo. No admin. Drops `alpha` in `~/.local/bin/` (POSIX) or `%USERPROFILE%\.agentprovision\bin\` (Windows). Linux musl + Windows ARM64 cross-compile ship in PR-D-1.5.
 
 For Rust devs:
 
 ```bash
-cargo install agentprovision-cli  # installs the `ap` binary onto PATH
+cargo install agentprovision-cli  # installs the `alpha` binary onto PATH
 ```
 
 ## Quick start
 
 ```bash
 # Login (device-flow first, falls back to email/password if backend doesn't support it)
-ap login
+alpha login
 
 # In CI / scripts
-AGENTPROVISION_PASSWORD=... ap login \
+AGENTPROVISION_PASSWORD=... alpha login \
     --password --email me@example.com --password-env AGENTPROVISION_PASSWORD
 
 # Confirm
-ap status
-ap --json status
+alpha status
+alpha --json status
 
 # One-shot chat
-ap chat send "what's the status of yesterday's lead pipeline?"
+alpha chat send "what's the status of yesterday's lead pipeline?"
 
 # Streaming chat (default)
-ap chat send "summarise the Levi's MDM incident in 3 bullets"
+alpha chat send "summarise the Levi's MDM incident in 3 bullets"
 
 # Non-streaming
-ap --no-stream chat send "..."
+alpha --no-stream chat send "..."
 
 # Interactive REPL
-ap chat repl
+alpha chat repl
 ```
 
 ## Build from source
@@ -56,7 +56,7 @@ ap chat repl
 ```bash
 cd apps/agentprovision-cli
 cargo build --release
-./target/release/ap --help
+./target/release/alpha --help
 ```
 
 ## Global flags
@@ -72,7 +72,7 @@ cargo build --release
 
 Tokens land in the OS keychain (macOS Keychain / Linux secret-service / Windows Credential Manager) under service `agentprovision`. The account string is the host portion of the API URL so prod and self-hosted tokens stay separate.
 
-`ap logout` removes the entry.
+`alpha logout` removes the entry.
 
 ## Configuration
 
@@ -80,10 +80,10 @@ Tokens land in the OS keychain (macOS Keychain / Linux secret-service / Windows 
 
 ## Architecture
 
-`ap` is a thin shell around [`agentprovision-core`](../agentprovision-core/), the same Rust crate Luna's Tauri client links against. Auth, API client, models, and SSE consumers live there; the CLI only adds the clap surface, terminal output, and the REPL loop.
+`alpha` is a thin shell around [`agentprovision-core`](../agentprovision-core/), the same Rust crate Luna's Tauri client links against. Auth, API client, models, and SSE consumers live there; the CLI only adds the clap surface, terminal output, and the REPL loop.
 
 ## Versioning
 
 `cli-v*` git tags trigger the release workflow (`.github/workflows/cli-release.yaml`). Tag version must match `apps/agentprovision-cli/Cargo.toml` `version=` — the validate job fails the build on drift.
 
-Crate name is `agentprovision-cli` (for crates.io); binary name is `ap` (for `$PATH`).
+Crate name is `agentprovision-cli` (for crates.io); binary name is `alpha` (for `$PATH`).

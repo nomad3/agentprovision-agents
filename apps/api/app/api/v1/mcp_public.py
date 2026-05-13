@@ -8,7 +8,7 @@ AgentProvision tool surface without holding the shared
 
 Auth model (Phase 1):
     - Client sends `Authorization: Bearer <jwt>` — the same JWT the
-      web SPA / `ap` CLI already use.
+      web SPA / `alpha` CLI already use.
     - Gateway validates via `get_current_user`, extracts `tenant_id`,
       and forwards the request to internal mcp-tools with
       `X-Internal-Key` + `X-Tenant-Id` populated server-side.
@@ -61,7 +61,7 @@ async def mcp_sse_gateway(
     that Server-Sent Events arrive at the client with the same
     framing the in-cluster server emits. No buffering at this layer
     — FastMCP relies on the client receiving each event promptly,
-    and our SSE clients (Claude.ai, `ap chat` REPL) timeout if the
+    and our SSE clients (Claude.ai, `alpha chat` REPL) timeout if the
     initial `event: endpoint` doesn't arrive within ~5 seconds.
     """
     tenant_id = str(current_user.tenant_id)
@@ -191,7 +191,7 @@ def mcp_info(
             "tenant_name": "<readable>",
             "endpoint_url": "https://agentprovision.com/api/v1/mcp/sse",
             "transport": "sse",
-            "auth": "Bearer <ap login token>",
+            "auth": "Bearer <alpha login token>",
             "phase": 1
         }
 
@@ -215,7 +215,7 @@ def mcp_info(
         "transport": "sse",
         "auth_scheme": "bearer",
         "auth_hint": (
-            "Run `ap login` then paste the access token from "
+            "Run `alpha login` then paste the access token from "
             "~/Library/Application Support/agentprovision/tokens/agentprovision.com.token "
             "(macOS path) into your MCP client's Authorization header."
         ),

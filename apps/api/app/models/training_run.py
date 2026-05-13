@@ -43,7 +43,7 @@ class TrainingRun(Base):
     # Client-supplied idempotency key. `(tenant_id, snapshot_id)` has a
     # unique index — re-POSTing the same snapshot returns the existing
     # row without spawning a parallel workflow. This is what lets
-    # `ap quickstart --resume` retry safely.
+    # `alpha quickstart --resume` retry safely.
     snapshot_id = Column(UUID(as_uuid=True), nullable=False)
     status = Column(String(16), nullable=False, default="pending")
     items_total = Column(Integer, nullable=False, default=0)

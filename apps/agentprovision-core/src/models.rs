@@ -177,7 +177,7 @@ pub struct DynamicWorkflow {
 /// Run record for a dynamic workflow. Matches `WorkflowRunInDB` in
 /// `apps/api/app/schemas/dynamic_workflow.py`. Wider than the legacy
 /// `WorkflowRun` above because `status`, `started_at`, and `duration_ms`
-/// are needed for the `ap workflow runs` table view.
+/// are needed for the `alpha workflow runs` table view.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicWorkflowRun {
     pub id: Uuid,
@@ -319,8 +319,8 @@ pub struct IntegrationStatus {
     pub icon: Option<String>,
 }
 
-/// Onboarding state for the caller's tenant. Drives `ap quickstart`
-/// auto-trigger after a successful `ap login`. Schema mirrors the
+/// Onboarding state for the caller's tenant. Drives `alpha quickstart`
+/// auto-trigger after a successful `alpha login`. Schema mirrors the
 /// server-side `OnboardingStatus` model in `app/api/v1/onboarding.py`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OnboardingStatus {

@@ -1752,7 +1752,7 @@ class FanoutChatCliResult:
 
 @workflow.defn
 class FanoutChatCliWorkflow:
-    """Parallel-fanout parent workflow for `ap run --fanout`.
+    """Parallel-fanout parent workflow for `alpha run --fanout`.
 
     Spawns one `ChatCliWorkflow` child per provider in
     `input.providers`. Awaits all (council / all) or first-non-failure

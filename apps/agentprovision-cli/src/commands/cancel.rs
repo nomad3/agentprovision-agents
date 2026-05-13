@@ -1,6 +1,6 @@
-//! `ap cancel <task_id>` — abort an in-flight durable task.
+//! `alpha cancel <task_id>` — abort an in-flight durable task.
 //!
-//! Companion to `ap run` + `ap watch`. The backend route is
+//! Companion to `alpha run` + `alpha watch`. The backend route is
 //! `POST /api/v1/tasks-fanout/{task_id}/cancel` (returns 204 on
 //! success, 404 if the task does not exist for the caller's tenant).
 //!
@@ -40,7 +40,7 @@ fn non_blank_task_id(s: &str) -> Result<String, String> {
 
 #[derive(Debug, Args)]
 pub struct CancelArgs {
-    /// Task ID returned by `ap run`. Stub-path tasks use a
+    /// Task ID returned by `alpha run`. Stub-path tasks use a
     /// `t_<hex>` form (variable length). Real-path Temporal tasks
     /// use `fanout-<tenant_uuid>-<uuid>`. Always pass the parent
     /// task_id — child workflows are cancelled automatically by
@@ -76,14 +76,14 @@ pub async fn run(args: CancelArgs, ctx: Context) -> anyhow::Result<()> {
                     serde_json::json!({"task_id": args.task_id, "status": "cancelled"})
                 );
             } else if !args.quiet {
-                println!("[ap] cancelled {}", args.task_id);
+                println!("[alpha] cancelled {}", args.task_id);
             }
             Ok(())
         }
         // Round-1 review M1: dedicated 401 hint matches `quickstart`
         // and is the first thing a logged-out user reaches for.
         Err(Error::Unauthorized) => {
-            anyhow::bail!("not logged in — run `ap login` first")
+            anyhow::bail!("not logged in — run `alpha login` first")
         }
         // Round-1 review L3: include the server-side body on -vv so
         // a Cloudflare / proxy intermediary stripping a real 404 is
@@ -170,7 +170,7 @@ mod tests {
     #[ignore = "TODO: requires httpmock dev-dep for HTTP-path coverage"]
     fn cancel_204_prints_success_line() {
         // Placeholder for the round-1 M2 follow-up — when wired,
-        // mock POST /cancel → 204 and assert the "[ap] cancelled <id>"
+        // mock POST /cancel → 204 and assert the "[alpha] cancelled <id>"
         // line is printed (or suppressed under --quiet / --json).
     }
 }

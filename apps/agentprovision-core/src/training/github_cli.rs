@@ -420,7 +420,7 @@ mod tests {
     // `cargo test` runs the suite in parallel threads of one process,
     // so the mutation window leaks. The production code's behaviour
     // when `gh` is missing is exercised end-to-end by the CLI's
-    // existing acceptance tests (which run `ap quickstart --channel
+    // existing acceptance tests (which run `alpha quickstart --channel
     // github_cli` against a controlled `PATH` in a child cargo
     // invocation, not in-process). Dropping the in-process test is
     // the lowest-cost fix; alternatives (#[serial], a `gh_path`

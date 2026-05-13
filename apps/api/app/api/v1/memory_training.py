@@ -1,4 +1,4 @@
-"""Initial-training endpoints for the `ap quickstart` flow.
+"""Initial-training endpoints for the `alpha quickstart` flow.
 
 Routes:
     POST /memory/training/bulk-ingest       — kick off an ingestion (idempotent)

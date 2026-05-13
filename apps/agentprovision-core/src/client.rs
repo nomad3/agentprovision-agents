@@ -369,7 +369,7 @@ impl ApiClient {
     /// `POST /api/v1/dynamic-workflows/{id}/run`
     ///
     /// `dry_run` mirrors the web TestConsole — the backend validates the
-    /// definition without dispatching to Temporal, useful for `ap workflow run
+    /// definition without dispatching to Temporal, useful for `alpha workflow run
     /// --dry-run` ahead of a real run.
     pub async fn run_dynamic_workflow(
         &self,
@@ -522,15 +522,15 @@ impl ApiClient {
 
     // ─── Onboarding (PR-Q0 endpoints) ─────────────────────────────
 
-    /// `GET /api/v1/onboarding/status` — drives `ap login` auto-trigger
-    /// of `ap quickstart` for un-onboarded tenants.
+    /// `GET /api/v1/onboarding/status` — drives `alpha login` auto-trigger
+    /// of `alpha quickstart` for un-onboarded tenants.
     pub async fn get_onboarding_status(&self) -> Result<crate::models::OnboardingStatus> {
         let req = self.request(Method::GET, "/api/v1/onboarding/status")?;
         self.send_json(req).await
     }
 
     /// `POST /api/v1/onboarding/defer` — user pressed Skip. Suppresses
-    /// next auto-trigger but doesn't block explicit `ap quickstart`.
+    /// next auto-trigger but doesn't block explicit `alpha quickstart`.
     pub async fn defer_onboarding(&self) -> Result<()> {
         let req = self.request(Method::POST, "/api/v1/onboarding/defer")?;
         let _ = self.send_no_body(req).await?;
@@ -539,7 +539,7 @@ impl ApiClient {
 
     /// `POST /api/v1/onboarding/complete` — stamps `onboarded_at` so
     /// the user never sees the wedge picker again unless they pass
-    /// `--force` to `ap quickstart`.
+    /// `--force` to `alpha quickstart`.
     pub async fn complete_onboarding(&self, source: &str) -> Result<()> {
         #[derive(Serialize)]
         struct Body<'a> {
