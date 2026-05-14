@@ -1,0 +1,18 @@
+{
+  "compose_workdir": "/Users/nomade/actions-runner/_work/agentprovision-agents/agentprovision-agents",
+  "api_health_path": "/openapi.json",
+  "last_status": "healthy",
+  "consecutive_failures_by_key": {},
+  "last_action_at": {
+    "image_prune": "2026-05-14T12:08:34-04:00",
+    "escalation_push": "2026-05-14T10:19:30-04:00"
+  },
+  "escalated_keys": [],
+  "deploy_grace_until": "2026-05-14T13:25:00-04:00",
+  "deploy_grace_keys": [
+    "api_down",
+    "orchestration_worker_missing",
+    "code_worker_missing"
+  ],
+  "deploy_grace_note": "in-flight rebuild-all (watcher b6sjganjj). 6 build processes still running at 12:18, grace extended to 13:25 (+60min). brief ~30s swap expected when build lands."
+}
