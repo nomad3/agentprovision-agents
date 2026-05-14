@@ -86,6 +86,7 @@ from app.api.v1 import (
     memory_training,
     mcp_public,
     usage_costs,
+    dashboard_tasks,
 )
 
 _logger = logging.getLogger(__name__)
@@ -145,6 +146,11 @@ router.include_router(memories.router, prefix="/memories", tags=["memories"])
 # Mounted at root (no prefix) so the routes read `/usage` and
 # `/costs` matching the roadmap doc verbatim.
 router.include_router(usage_costs.router, tags=["usage-costs"])
+# Dashboard rollup for `alpha tasks` — cross-machine view of working
+# + recently-completed workflow runs. Mounted under /dashboard
+# because the v1 root already has /tasks claimed by agent_tasks
+# (orchestration-internal AgentTask records).
+router.include_router(dashboard_tasks.router, prefix="/dashboard", tags=["dashboard"])
 # `alpha remember` (Phase 2 of the CLI roadmap, #179) — free-form
 # fact ingestion via knowledge.create_observation.
 router.include_router(memory_remember.router, prefix="/memory", tags=["memory"])
