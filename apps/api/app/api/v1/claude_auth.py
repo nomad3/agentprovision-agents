@@ -81,17 +81,22 @@ class ClaudeAuthError(Exception):
 
 
 # Substrings we recognise in claude CLI stderr/stdout that mean the
-# verification code expired or the user took too long. When any of
-# these appear in the buffered output we replace the raw CLI noise
-# with a UX-friendly message instead of dumping ANSI-stripped CLI
-# output on the user.
+# verification code expired or claude.com refused it. When any appears
+# in the buffered output we replace the raw CLI noise with a
+# UX-friendly message instead of dumping ANSI-stripped CLI output.
+#
+# Avoid bare substrings (e.g. `"expired"` alone) — they false-positive
+# on benign output like `"certificate not expired"` or `"token will be
+# expired tomorrow"`. Every entry here is either a full OAuth error
+# code or a phrase that only appears in genuine expiry messages.
 _CLI_EXPIRY_HINTS = (
-    "expired",
     "invalid_grant",
     "authorization_pending",
     "expired_token",
     "code expired",
     "token expired",
+    "code has expired",
+    "session expired",
 )
 
 _CLI_EXPIRY_MESSAGE = (
@@ -133,9 +138,16 @@ def _terminate_and_reap(proc: subprocess.Popen) -> None:
     `terminate()` only sends the signal — the parent must `wait()` to
     reap the child, otherwise it lingers as a zombie. We bound the
     grace period at `_OAUTH_TERMINATE_TIMEOUT` then escalate. Safe to
-    call when the process is already dead (`wait()` returns immediately).
+    call when the process is already dead. Defensive against the
+    poll/wait/terminate primitives themselves raising (rare but
+    documented OSError/EINVAL/ECHILD edges on some kernels).
     """
-    if proc.poll() is not None:
+    try:
+        if proc.poll() is not None:
+            return
+    except Exception:
+        # poll() raised — give up rather than risking SIGTERM on an
+        # unknown child state.
         return
     try:
         proc.terminate()
@@ -149,6 +161,10 @@ def _terminate_and_reap(proc: subprocess.Popen) -> None:
             proc.wait(timeout=2)
         except Exception:
             pass
+    except OSError:
+        # wait() can surface OSError on already-reaped or
+        # cross-process-namespace children. Treat as reaped.
+        return
 
 
 @dataclass
@@ -200,11 +216,10 @@ class ClaudeAuthManager:
             if existing and existing.status in {"starting", "pending"} and existing.process:
                 return existing
 
-            if existing and existing.process and existing.process.poll() is None:
-                try:
-                    existing.process.terminate()
-                except Exception:
-                    pass
+            if existing and existing.process is not None:
+                # Replace a stale process — use the reaper so we don't
+                # leave zombies behind on rapid `/start` re-invocations.
+                _terminate_and_reap(existing.process)
 
             login_id = str(uuid.uuid4())
             claude_home = tempfile.mkdtemp(prefix=f"claude-auth-{tenant_id[:8]}-")
@@ -221,17 +236,43 @@ class ClaudeAuthManager:
     def cancel_login(self, tenant_id: str) -> Optional[ClaudeLoginState]:
         """Cancel an in-progress login.
 
-        Holds `self._lock` around the full transition (lookup → status
-        write → terminate signal) so it cannot interleave with
-        `submit_code`'s status-check + stdin-write. Without this, the
-        two endpoints could observe `state.status == "pending"` then
-        both mutate it, leaving final status non-deterministic across
-        cancel/submit/submitting.
+        Two race directions to defend against:
+
+          1. **cancel-then-submit:** cancel runs first, writes
+             `state.status = "cancelled"` under the lock. The losing
+             submit acquires the lock, sees `cancelled`, raises
+             ClaudeAuthError. Net: cancel wins, no data leaked. ✓
+
+          2. **submit-then-cancel:** submit runs first, writes the
+             paste code to stdin and sets `state.status = "submitting"`.
+             If cancel were unconditional, it would now overwrite
+             `submitting` → `cancelled` and terminate the subprocess
+             AFTER the data was delivered — UI says "cancelled" but
+             the OAuth handshake may already be mid-flight on
+             claude.com. The user thinks they aborted but actually
+             may have completed the flow.
+
+             Fix: only allow cancel from `starting`/`pending`. Once
+             we've moved past `pending`, the paste has been
+             delivered, the action is irreversible, and we let
+             `_run_login` drive to a terminal state on its own. The
+             user can re-`/start` after that.
+
+        Holds `self._lock` around lookup + status mutation so cancel
+        and submit can't interleave their writes. Releases before
+        `_terminate_and_reap` so a concurrent `/status` poll isn't
+        blocked behind the SIGTERM grace period.
         """
         with self._lock:
             state = self._by_tenant.get(tenant_id)
             if not state:
                 return None
+            # Only cancellable from pre-submit states. Past `pending`
+            # the paste has been delivered to claude CLI; tearing it
+            # down would race the handshake without preventing the
+            # actual server-side OAuth from completing.
+            if state.status not in {"starting", "pending"}:
+                return state
             # Mutate status *first* so any concurrent `submit_code` that
             # acquires the lock after us sees the cancellation and bails.
             state.status = "cancelled"

@@ -165,13 +165,21 @@ def test_cancel_during_submit_does_not_leave_submitting_status():
     """Run cancel + submit concurrently and assert the terminal state
     is deterministic.
 
-    Either submit wins (final state == 'submitting') OR cancel wins
-    (final state == 'cancelled'). What MUST NOT happen: status ends
-    in 'submitting' because cancel ran AFTER our status mutation,
-    leaving stdin written to a terminated subprocess silently.
+    Two valid outcomes (depending on which thread acquires the lock
+    first):
 
-    Because both operations hold `self._lock` for the full transition,
-    the writes are serialised — one runs entirely before the other.
+      a) submit wins → final state == 'submitting', submit returns ok,
+         cancel observes 'submitting' (NOT in {starting, pending}) and
+         no-ops without mutating.
+
+      b) cancel wins → final state == 'cancelled', submit observes
+         'cancelled' and raises ClaudeAuthError.
+
+    What MUST NOT happen:
+      * submit succeeds AND state ends 'cancelled' — would mean stdin
+        was written to a subprocess that's then terminated, with the
+        UI reporting cancellation even though the OAuth handshake may
+        have already started server-side.
     """
     mgr = ca.ClaudeAuthManager()
     state, proc = _make_pending_state("tenant-race")
@@ -201,12 +209,81 @@ def test_cancel_during_submit_does_not_leave_submitting_status():
     assert state.status in ("submitting", "cancelled"), (
         f"Race produced bad final state: {state.status}"
     )
-    # If cancel won, submit must NOT have mutated status afterward
-    # (the regression we're guarding against).
+    # The forbidden combination: submit succeeded but state landed
+    # 'cancelled' — the bug the cancel-guard prevents.
     if state.status == "cancelled":
         assert results.get("submit", "").startswith("error:"), (
-            "Cancel won the race but submit succeeded — status was overwritten"
+            "Cancel won the race but submit succeeded — status was overwritten "
+            "after data was already written to subprocess stdin"
         )
+    elif state.status == "submitting":
+        # Submit won. Cancel must have observed `submitting` and returned
+        # without raising (no-op on non-cancellable state).
+        assert results.get("cancel") == "ok"
+        assert results.get("submit") == "ok"
+
+
+def test_cancel_is_noop_when_state_is_submitting():
+    """Direct (non-race) test of the cancel-guard: once status is
+    `submitting`, cancel does not overwrite it."""
+    mgr = ca.ClaudeAuthManager()
+    state, _ = _make_pending_state("tenant-noop")
+    state.status = "submitting"
+    mgr._by_tenant["tenant-noop"] = state
+
+    out = mgr.cancel_login("tenant-noop")
+
+    assert out is state  # returns the state, not None
+    assert state.status == "submitting", "cancel must not overwrite submitting"
+    assert state.error is None  # error field should not be set either
+
+
+def test_cancel_is_noop_when_state_is_connected():
+    """cancel on a terminal state is a no-op."""
+    mgr = ca.ClaudeAuthManager()
+    state, _ = _make_pending_state("tenant-connected")
+    state.status = "connected"
+    state.connected = True
+    mgr._by_tenant["tenant-connected"] = state
+
+    mgr.cancel_login("tenant-connected")
+
+    assert state.status == "connected"
+    assert state.connected is True
+
+
+def test_cancel_succeeds_from_pending():
+    """The happy path: cancel of an in-flight pending login transitions
+    to cancelled and reaps the subprocess."""
+    mgr = ca.ClaudeAuthManager()
+    state, proc = _make_pending_state("tenant-cancel-pending")
+    mgr._by_tenant["tenant-cancel-pending"] = state
+
+    mgr.cancel_login("tenant-cancel-pending")
+
+    assert state.status == "cancelled"
+    assert state.error == "Login cancelled"
+    proc.terminate.assert_called_once()
+
+
+def test_cancel_then_submit_returns_400():
+    """The other race direction: cancel runs first, then submit
+    arrives. Submit must observe 'cancelled' and raise, never write
+    to stdin."""
+    mgr = ca.ClaudeAuthManager()
+    state, proc = _make_pending_state("tenant-cancel-then-submit")
+    mgr._by_tenant["tenant-cancel-then-submit"] = state
+
+    mgr.cancel_login("tenant-cancel-then-submit")
+    assert state.status == "cancelled"
+
+    with pytest.raises(ca.ClaudeAuthError) as exc:
+        mgr.submit_code("tenant-cancel-then-submit", "code-late")
+
+    assert exc.value.status_code == 400
+    assert "cancelled" in exc.value.detail
+    # Crucially, stdin must NOT have been written.
+    proc.stdin.write.assert_not_called()
 
 
 def test_cancel_releases_lock_before_terminating_subprocess(monkeypatch):
@@ -311,6 +388,22 @@ def test_humanise_cli_failure_truncates_to_500_chars():
 
 def test_humanise_cli_failure_handles_empty_input():
     assert ca._humanise_cli_failure("") == "Claude authorization failed"
+
+
+def test_humanise_cli_failure_no_false_positive_on_not_expired():
+    """The hint list must not contain bare `expired` because benign
+    output like 'certificate has not expired' would false-positive
+    into the friendly-message branch. Lock this contract in."""
+    benign_outputs = [
+        "TLS certificate has not expired",
+        "session token will be expired tomorrow",
+        "Error: TLS certificate not yet expired",
+    ]
+    for raw in benign_outputs:
+        out = ca._humanise_cli_failure(raw)
+        assert "Click Connect" not in out, (
+            f"False-positive expiry match on benign output: {raw!r}"
+        )
 
 
 # ── _snapshot_buf (I1 race guard) ────────────────────────────────────────
