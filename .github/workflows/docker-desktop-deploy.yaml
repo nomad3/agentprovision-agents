@@ -24,7 +24,14 @@ jobs:
   deploy:
     name: Build & Deploy
     runs-on: self-hosted
-    timeout-minutes: 60
+    # Cold-cache rebuild-all (8 services, Rust embedding-service +
+    # memory-core, Node web bundle, Python wheels) needs ~70-90 min on
+    # the single Mac-VM self-hosted runner. The previous 60-min ceiling
+    # cancelled the cli-v0.7.4 cycle mid-build; 120 gives Rust release
+    # builds enough room without making the failure mode "wait forever
+    # on a wedged process" — actual hangs still surface within a
+    # reasonable window.
+    timeout-minutes: 120
 
     steps:
       # Phase 1.5 bind-mounts target apps/api/cli_orchestrator +
@@ -114,14 +121,28 @@ jobs:
           # and code-worker — any change rebuilds all three.
           echo "$CHANGED" | grep -q "packages/cli_orchestrator/" && SERVICES="$SERVICES api orchestration-worker code-worker"
           
-          if [ -z "$SERVICES" ] || [ "${{ github.event.inputs.action }}" = "rebuild-all" ]; then
+          # Two cases for an empty SERVICES list:
+          #   (a) explicit `rebuild-all` from workflow_dispatch → build all.
+          #   (b) push event with NO `apps/**/` match (workflow-file
+          #       only, docs-only, etc.) → nothing to build. The
+          #       previous logic collapsed both into rebuild-all,
+          #       which made every workflow-file tweak run a cold
+          #       rebuild that timed out at 60 min (cli-v0.7.4 cycle
+          #       2026-05-13). Skip-build on (b) instead, so the
+          #       deploy fast-paths through `compose up -d` +
+          #       migrations against the existing images.
+          if [ "${{ github.event.inputs.action }}" = "rebuild-all" ]; then
             SERVICES="api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"
           fi
-          
+
           # Dedup services
           SERVICES=$(echo $SERVICES | tr ' ' '\n' | sort -u | tr '\n' ' ')
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
-          echo "Services to build: $SERVICES"
+          if [ -z "$SERVICES" ]; then
+            echo "No service files changed; skipping build step."
+          else
+            echo "Services to build: $SERVICES"
+          fi
 
       # ── Free disk before the heavy Rust builds ──
       # The polling auto-prune sentinel on this host can't reclaim
