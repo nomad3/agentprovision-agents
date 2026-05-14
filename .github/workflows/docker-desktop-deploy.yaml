@@ -123,11 +123,46 @@ jobs:
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
           echo "Services to build: $SERVICES"
 
+      # ── Free disk before the heavy Rust builds ──
+      # The polling auto-prune sentinel on this host can't reclaim
+      # anything while an active `docker buildx` is running — every
+      # cache layer is marked ACTIVE for the in-flight build, so
+      # `prune` returns 0 MiB. The right place to free disk is RIGHT
+      # BEFORE the build kicks off, not after.
+      #
+      # Why these specific filters:
+      #   `image prune -a -f` removes images not used by any running
+      #   container. The 13 currently-running compose containers keep
+      #   their images; everything else from previous deploys goes.
+      #
+      #   `builder prune --filter until=2h` keeps recent build cache
+      #   (so incremental rebuilds still hit warm layers) but drops
+      #   crufty layers from older deploys. Without the filter, every
+      #   deploy would be cold-cache and Rust release builds would
+      #   take 20+ min instead of 5.
+      #
+      #   `container prune -f` is cheap and catches any zombie exited
+      #   containers from killed deploys (per the 2h+ wedge we hit on
+      #   2026-05-13 / cli-v0.7.4 cycle).
+      - name: Free disk before build
+        run: |
+          echo "── Disk before prune ──"
+          df -h /System/Volumes/Data | tail -1 || true
+          docker system df 2>/dev/null | head -6 || true
+
+          docker container prune -f >/dev/null 2>&1 || true
+          docker image prune -a -f >/dev/null 2>&1 || true
+          docker builder prune -a -f --filter "until=2h" >/dev/null 2>&1 || true
+
+          echo "── Disk after prune ──"
+          df -h /System/Volumes/Data | tail -1 || true
+          docker system df 2>/dev/null | head -6 || true
+
       - name: Build and update services
         run: |
           SERVICES="${{ steps.changes.outputs.services }}"
           echo "Updating: $SERVICES"
-          
+
           # Build only the changed services to save time, but use compose context
           for svc in $SERVICES; do
             echo "--- Building $svc ---"
