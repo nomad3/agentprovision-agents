@@ -37,12 +37,27 @@ agentprovision-agents-redis-1
 
 3. **Docker engine reachable?** `docker info >/dev/null 2>&1`. If it fails → push critical (`docker engine unreachable`), log, **stop**.
 
+3a. **Build-active detector.** Set `build_active=true` if EITHER:
+   - `docker buildx history ls 2>/dev/null | grep -q Running`, OR
+   - `ps aux | grep -E 'docker compose build|docker-buildx bake' | grep -v grep | wc -l` ≥ 1.
+   This is the gate for tighter thresholds in step 4-5 below. The Docker VM disk limit on this machine is **86GB** (host VM allocation); a single api build adds ~5-10GB temporary, so reactivity matters during builds.
+
 4. **Host disk** — `df -h /` → free GB.
    - free <5GB → push critical, log, continue (still try other checks).
    - free <10GB → log warn, continue.
 
-5. **Docker disk** — `docker system df`.
-   - reclaimable >10GB → run `docker image prune -f` then `docker builder prune -f` (cooldown key `image_prune`, 15 min). Log the action. **stop tick.**
+5. **Docker disk** — `docker system df` for `Images.SIZE`, `Build Cache.SIZE`, and `Build Cache.RECLAIMABLE`. Compute approximate VM headroom: `vm_used = Images.SIZE + Build Cache.SIZE + Local Volumes.SIZE`; `vm_headroom = 86GB - vm_used` (rough — does not account for overlay journals).
+
+   Thresholds (escalation by build state):
+   - **Idle (`build_active=false`):**
+     - reclaimable >10GB → `docker image prune -f` then `docker builder prune -f` (cooldown key `image_prune`, 15 min). Log + **stop tick.**
+     - vm_headroom <15GB AND reclaimable >2GB → escalate to `docker buildx prune -a -f` (cooldown key `buildx_prune_a`, 30 min — heavier op, longer cooldown). Log + macOS notify + **stop tick.**
+   - **Build active (`build_active=true`):**
+     - vm_headroom <30GB → log warn (no action — pruning during a build can break BuildKit ref-counts; PR #472's whole reason).
+     - vm_headroom <20GB → push critical (`build at risk: <20GB VM headroom while building`); STILL no auto-prune. The operator decides whether to cancel the build vs let it run.
+     - vm_headroom <10GB → push critical AGAIN even if recent (override 30-min repush). At this point the build will likely fail with no-space; user must intervene.
+
+   Never run `docker buildx prune -a -f` while `build_active=true`. Never run `docker image prune -af` from this runbook (caller can do it manually with awareness; PR #472 documents why CI shouldn't).
 
 6. **Container roster** — `docker ps --format '{{.Names}}\t{{.Status}}'`.
    - Any pinned container missing or not `Up` → `cd <workdir> && docker compose up -d <service>` (cooldown key `compose_up_<service>`, 15 min). Log + macOS notify. **stop tick.**
