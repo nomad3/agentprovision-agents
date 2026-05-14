@@ -90,16 +90,21 @@ alpha workflow run incident_investigation --json     # dispatch a dynamic workfl
 | `alpha chat send` / `repl` (streaming + REPL) | Shipped |
 | `alpha agent` (list, get, create, promote, rollback) | Shipped |
 | `alpha workflow` (list templates, run, status) | Shipped |
-| `alpha session` (list, show, resume) | Shipped |
+| `alpha session` / `sessions` (list, show, resume) | Shipped |
 | `alpha memory` (search, recall, record) | Shipped |
 | `alpha skill` (list, run, install) | Shipped |
 | `alpha integration` (list, connect, status) | Shipped |
 | `alpha upgrade` / `completions` / `quickstart` | Shipped |
-| `alpha run` / `watch` / `cancel` — durable runs, terminal-close-safe | **Planned** ([roadmap](docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md)) |
-| `alpha run --fanout` — multi-provider parallel + consensus | **Planned** |
-| Cost attribution, per-tenant RBAC, audit-log surfacing | **Planned** |
+| `alpha run` / `watch` / `cancel` — durable runs, terminal-close-safe (Phase 1 wedge, PRs #434/#436/#438) | Shipped |
+| `alpha run --providers ...` / `--fanout` / `--merge` — multi-provider parallel + consensus | Shipped (backend `/api/v1/tasks-fanout/` flagged prototype) |
+| `alpha recall` / `remember` — explicit memory ingest + recall (Phase 2) | Shipped |
+| `alpha policy show` — per-agent governance read-out, policy enforcement in `run` (Phase 2) | Shipped |
+| `alpha coalition list` / `run` / `watch` — A2A coalitions from the terminal (Phase 3) | Shipped |
+| `alpha recipes list` / `describe` / `run` / `uninstall` — goal-recipe runtime (Phase 3) | Shipped |
+| `alpha usage` / `costs` — per-provider tokens, per-day rollup, `--by team` (Phase 4) | Shipped |
+| `alpha recipes publish` — community recipe contribution (Phase 5) | Planned |
 
-`alpha` is not competing with `claude` / `codex` / `gemini` / `gh copilot` — it orchestrates them. The differentiation roadmap ([`docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`](docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md)) lays out eight CLI surfaces no leaf CLI offers: durable runs, fanout/consensus, cost attribution, team RBAC, A2A coalitions, memory-aware sessions, governance policies, RL-routed model selection.
+`alpha` is not competing with `claude` / `codex` / `gemini` / `gh copilot` — it orchestrates them. The differentiation roadmap ([`docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`](docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md)) covers eight CLI surfaces no leaf CLI offers: durable runs, fanout/consensus, cost attribution, team RBAC, A2A coalitions, memory-aware sessions, governance policies, RL-routed model selection. Phases 1–4 are in code on main; Phase 5 (`recipes publish`) remains future.
 
 Full reference: [`docs/cli/README.md`](docs/cli/README.md).
 
@@ -532,11 +537,11 @@ docker compose up -d --force-recreate api code-worker orchestration-worker mcp-t
 ```
 
 ### Connect Your Agent
-0. **Terminal (`alpha`)**: `curl -fsSL https://agentprovision.com/install.sh | sh && alpha login && alpha quickstart`
-1. **Claude Code**: Integrations -> Claude Code -> run `claude setup-token` -> paste token
-2. **Gemini CLI**: Integrations -> Connect Gemini CLI -> follow link -> paste code
-3. Chat via web, WhatsApp, Luna desktop, or `alpha chat repl` — every channel hits the same agents
-4. Every response auto-scored and logged for RL improvement
+1. **Terminal (`alpha`)**: `curl -fsSL https://agentprovision.com/install.sh | sh && alpha login && alpha quickstart`
+2. **Claude Code**: Integrations -> Claude Code -> run `claude setup-token` -> paste token
+3. **Gemini CLI**: Integrations -> Connect Gemini CLI -> follow link -> paste code
+4. Chat via web, WhatsApp, Luna desktop, or `alpha chat repl` — every channel hits the same agents
+5. Every response auto-scored and logged for RL improvement
 
 ## Luna OS Roadmap
 
@@ -586,4 +591,4 @@ FastAPI · React 18 · Tauri 2.0 (Rust) · Three.js + Framer Motion · PostgreSQ
 
 ---
 
-*Built with Claude Code CLI . Codex CLI . Gemini CLI . MCP . Temporal . Ollama . pgvector . Neonize . Cloudflare . FastAPI . React . Tauri . alpha CLI*
+*Built with Claude Code CLI . Codex CLI . Gemini CLI . MCP . Temporal . Ollama . pgvector . Neonize . Cloudflare . FastAPI . React . Tauri*

@@ -150,3 +150,41 @@ runtimes from the orchestrator CLI. Both are reasonable follow-ups.
   worktree `.claude/worktrees/readme-alpha-cli/`).
 - Two commits: (1) this design doc, (2) the README edits.
 - PR assigned to `nomad3`. No AI-credit lines per repo rules.
+
+## Addendum 2026-05-13 — supersedes parts of this design
+
+After the initial two commits, the user directed: "remove all icons from
+documentation, enhance with ASCII diagrams when necessary." This changes
+two earlier sections of this spec:
+
+- **Section 1 (badge row) is fully superseded.** The shields.io badge row
+  — *including* the `alpha_CLI-terminal_client` badge this spec prescribed
+  — is removed in its entirety and replaced with a fenced ASCII status
+  block that preserves the same information (live URL, orchestrated CLI
+  runtimes, surfaces, capabilities, infra). Commit: `82c5798f`.
+- **Section 2 (Connect Your Agent) item numbering revised.** Initial commit
+  inserted the terminal path as `0.` per the design's "items 0–4" sketch.
+  Code review noted the `0.`-prefixed list renders inconsistently across
+  markdown engines. The list was renumbered 1–5 with the terminal path as
+  step 1.
+
+Subsequent code review (subagent `superpowers:code-reviewer`) also flagged
+that the README's "Planned" column for `alpha run` / `watch` / `cancel` /
+`--fanout` / cost-attribution / RBAC / audit-log was wrong: those
+subcommands are already wired in `apps/agentprovision-cli/src/cli.rs` and
+shipped via PRs #434 / #436 / #438 (Phase 1 wedge). Phases 2–4 of the
+roadmap (`policy`, `coalition`, `recipes`, `usage`, `costs`, `recall`,
+`remember`) are likewise present in the source tree. The "Planned" column
+was rewritten to mark all of these Shipped and to retain only the
+genuinely future item (`alpha recipes publish`, Phase 5).
+
+Other code-review fixes applied in the same fix-up commit:
+
+- `alpha session` row corrected to `alpha session` / `sessions` (both
+  variants exist in `apps/agentprovision-cli/src/commands/`).
+- Footer "Built with…" line no longer credits `alpha CLI` — it is a
+  product, not a dependency, so it does not belong in that list.
+
+The original verification checklist still holds; the only change is that
+the "shipped vs planned" parity now reflects the actual source-tree state
+rather than the design's first-pass guess.
