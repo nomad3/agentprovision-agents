@@ -790,9 +790,16 @@ def _run_agent_session_legacy(
     auth_json = credentials.get("auth_json")
 
     oauth_token = credentials.get("oauth_token")
+    # claude_code supports two credential shapes: OAuth `session_token`
+    # (from the `/start` + `/submit-code` flow) and Anthropic Console
+    # `api_key` (from `/api-key`). Either is sufficient — the downstream
+    # CLI invocation reads whichever is active. Without this branch the
+    # API-key path stores a credential the gate refuses to see and we
+    # fall back to the local agent regardless.
+    claude_api_key = credentials.get("api_key")
     if platform != "opencode":
         subscription_missing = (
-            (platform == "claude_code" and not session_token)
+            (platform == "claude_code" and not (session_token or claude_api_key))
             or (platform == "codex" and not (session_token or auth_json))
             or (platform == "gemini_cli" and not (oauth_token or session_token))
             # Copilot CLI authenticates with the GitHub OAuth token (gho_…)

@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -35,6 +36,11 @@ router = APIRouter()
 
 ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 URL_RE = re.compile(r"https://claude\.com/[^\s]+")
+
+# Credential keys we recognise as "Claude Code is connected". Either is a
+# valid signal; consumers branch on the credential's `credential_type` to
+# pick the auth shape (OAuth `session_token` vs Anthropic Console `api_key`).
+_CLAUDE_CREDENTIAL_KEYS = ("session_token", "api_key")
 
 
 @dataclass
@@ -292,6 +298,14 @@ class ClaudeAuthManager:
                 db.commit()
                 db.refresh(config)
 
+            # Revoke any stale credential from the *other* flow so a
+            # later read returns only the freshly-stored row.
+            # `store_credential` revokes only same-`credential_key` rows
+            # (see credential_vault.store_credential filter), so an
+            # `api_key` → OAuth swap would otherwise leave the old
+            # `api_key` row active and confuse cli_session_manager.
+            _revoke_other_claude_credentials(db, config.id, tid, keep="session_token")
+
             # Store the OAuth token
             store_credential(
                 db,
@@ -301,8 +315,6 @@ class ClaudeAuthManager:
                 plaintext_value=oauth_token,
                 credential_type="oauth_token",
             )
-
-            # store_credential() already handles revoking previous active credentials
 
         finally:
             db.close()
@@ -328,10 +340,54 @@ class ClaudeAuthManager:
 _manager = ClaudeAuthManager()
 
 
+# ── Cross-flow credential housekeeping ──────────────────────────────────────
+
+def _revoke_other_claude_credentials(
+    db: Session,
+    integration_config_id,
+    tenant_id,
+    *,
+    keep: str,
+) -> None:
+    """Revoke active claude_code credentials whose `credential_key` is NOT `keep`.
+
+    `store_credential` only revokes rows with the **same** `credential_key`
+    (vault filter at credential_vault.py:74-83). The OAuth flow stores
+    `credential_key='session_token'` and the API-key flow stores
+    `credential_key='api_key'`, so they live in disjoint key namespaces.
+    Without this helper, switching flows leaves the other path's row
+    active, and `retrieve_credentials_for_skill` returns both — letting
+    cli_session_manager silently keep using a stale credential.
+
+    Caller must commit after `store_credential` lands the new row.
+    """
+    others = [k for k in _CLAUDE_CREDENTIAL_KEYS if k != keep]
+    if not others:
+        return
+    (
+        db.query(IntegrationCredential)
+        .filter(
+            IntegrationCredential.integration_config_id == integration_config_id,
+            IntegrationCredential.tenant_id == tenant_id,
+            IntegrationCredential.credential_key.in_(others),
+            IntegrationCredential.status == "active",
+        )
+        .update({"status": "revoked"}, synchronize_session=False)
+    )
+
+
 # ── API Routes ──────────────────────────────────────────────────────────────
 
+
 def _tenant_has_claude_credential(db: Session, tenant_id) -> bool:
-    """Check if tenant has a stored Claude Code credential in the vault."""
+    """Check if tenant has a stored Claude Code credential in the vault.
+
+    Recognises **either** the OAuth path (`credential_key='session_token'`,
+    written by `_persist_credentials`) **or** the API-key fast-path
+    (`credential_key='api_key'`, written by `/api-key`). Either is a
+    valid "connected" signal — downstream consumers branch on the
+    credential's `credential_type` to pick the auth shape.
+    """
     tid = uuid.UUID(str(tenant_id)) if not isinstance(tenant_id, uuid.UUID) else tenant_id
     config = (
         db.query(IntegrationConfig)
@@ -344,7 +400,7 @@ def _tenant_has_claude_credential(db: Session, tenant_id) -> bool:
         db.query(IntegrationCredential)
         .filter(
             IntegrationCredential.integration_config_id == config.id,
-            IntegrationCredential.credential_key == "session_token",
+            IntegrationCredential.credential_key.in_(_CLAUDE_CREDENTIAL_KEYS),
             IntegrationCredential.status == "active",
         )
         .first()
@@ -403,3 +459,155 @@ def claude_auth_cancel(
     if not state:
         return {"status": "idle", "connected": False}
     return _serialize_state(state)
+
+
+# ── API-key path (option a) ────────────────────────────────────────────────
+# The subscription-OAuth flow above spawns `claude auth login --claudeai`
+# inside the api container and tries to read its callback / paste-code,
+# which is architecturally broken (the container has no browser and no
+# way to receive the OAuth callback or feed a paste-code into the
+# subprocess's stdin). For users who'd rather paste an Anthropic
+# Console API key (`sk-ant-…`), this endpoint stores it directly in the
+# credential vault under the same `claude_code` integration name, so
+# downstream consumers see the same credential shape — they don't need
+# to care which flow produced it.
+
+
+class ClaudeApiKeyRequest(BaseModel):
+    """Payload for `POST /api/v1/claude-auth/api-key`."""
+
+    api_key: str = Field(
+        ...,
+        min_length=20,
+        description="Anthropic Console API key — typically starts with `sk-ant-`.",
+    )
+
+
+@router.post("/api-key")
+def claude_auth_set_api_key(
+    body: ClaudeApiKeyRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: Session = Depends(deps.get_db),
+):
+    """Store a user-supplied Anthropic API key as the tenant's Claude credential.
+
+    Cheap fast-path for users who can't use the subscription-OAuth flow
+    (no browser inside the api container) but have an API key.
+
+    Strips wrapping whitespace and any leading `ANTHROPIC_API_KEY=` /
+    `Bearer ` prefix paste-from-shell-history users tend to include.
+    Validates the `sk-ant-` prefix as a sanity check — Anthropic API
+    keys always use it and the wrong prefix usually means a paste
+    mistake (whole `claude.ai` cookie, an OpenAI key, etc.). Rejects
+    short strings to catch obvious typos.
+
+    Side-effects:
+      * Creates `IntegrationConfig(integration_name='claude_code', enabled=True)`
+        if absent, matching `_persist_credentials` so downstream readers
+        (orchestration, MCP tools) see the same shape regardless of
+        which flow stored the credential.
+      * Stores the key in the vault with `credential_type='api_key'`
+        (vs the OAuth flow's `oauth_token`). Consumers branch on the
+        type when calling Anthropic.
+      * `store_credential` revokes prior active credentials *with the
+        same `credential_key`*. The OAuth path lives under
+        `credential_key='session_token'`, this path under
+        `credential_key='api_key'`, so swapping flows would otherwise
+        leave the other path's row active. We explicitly revoke the
+        cross-flow row via `_revoke_other_claude_credentials` to keep
+        downstream reads single-rowed.
+    """
+    raw = _normalise_api_key_paste(body.api_key)
+
+    if not raw.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "API key must start with `sk-ant-` — that's the Anthropic Console "
+                "prefix. If you pasted a Claude.ai session cookie or a "
+                "different provider's key, swap it for an Anthropic Console "
+                "API key from console.anthropic.com/settings/keys."
+            ),
+        )
+
+    tid = current_user.tenant_id
+    config = (
+        db.query(IntegrationConfig)
+        .filter(
+            IntegrationConfig.tenant_id == tid,
+            IntegrationConfig.integration_name == "claude_code",
+        )
+        .first()
+    )
+    if not config:
+        config = IntegrationConfig(
+            tenant_id=tid,
+            integration_name="claude_code",
+            enabled=True,
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    elif not config.enabled:
+        config.enabled = True
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+
+    # Revoke any stale OAuth `session_token` so downstream readers
+    # don't see two active credentials and silently prefer the old one
+    # (see _revoke_other_claude_credentials docstring).
+    _revoke_other_claude_credentials(db, config.id, tid, keep="api_key")
+
+    store_credential(
+        db,
+        integration_config_id=config.id,
+        tenant_id=tid,
+        credential_key="api_key",
+        plaintext_value=raw,
+        credential_type="api_key",
+    )
+
+    return {
+        "status": "connected",
+        "connected": True,
+        "credential_type": "api_key",
+    }
+
+
+# ── Paste-artefact normalisation ────────────────────────────────────────────
+
+# Prefixes a user might accidentally paste alongside the key, matched
+# case-insensitively. Order matters: longer/more-specific prefixes come
+# first so `export ANTHROPIC_API_KEY=` peels off before
+# `ANTHROPIC_API_KEY=`. Each successful match also strips wrapping
+# whitespace so YAML-style `KEY:  value` (with extra spaces) works.
+_API_KEY_PASTE_PREFIXES = (
+    "export ANTHROPIC_API_KEY=",
+    "ANTHROPIC_API_KEY=",
+    "ANTHROPIC_API_KEY:",
+    "x-api-key:",
+    "Authorization: Bearer",
+    "Authorization:",
+    "Bearer",
+    "bearer",
+)
+
+
+def _normalise_api_key_paste(raw: str) -> str:
+    """Strip wrapping whitespace, common header/.env prefixes, and quotes.
+
+    Idempotent: re-running on the result is a no-op. Case-insensitive
+    on prefix matches because users paste shell history (`Bearer`),
+    curl examples (`bearer`), and YAML (`x-api-key:`) interchangeably.
+    """
+    raw = raw.strip()
+    raw_lower = raw.lower()
+    for prefix in _API_KEY_PASTE_PREFIXES:
+        if raw_lower.startswith(prefix.lower()):
+            raw = raw[len(prefix):].lstrip(" \t")
+            break
+    # Strip a *single* layer of wrapping quotes (.env: `KEY="sk-ant-..."`).
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
+        raw = raw[1:-1].strip()
+    return raw
