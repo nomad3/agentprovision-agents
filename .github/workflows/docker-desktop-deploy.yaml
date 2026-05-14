@@ -144,45 +144,6 @@ jobs:
             echo "Services to build: $SERVICES"
           fi
 
-      # ── Free disk before the heavy Rust builds ──
-      # The polling auto-prune sentinel on this host can't reclaim
-      # anything while an active `docker buildx` is running — every
-      # cache layer is marked ACTIVE for the in-flight build, so
-      # `prune` returns 0 MiB. The right place to free disk is RIGHT
-      # BEFORE the build kicks off, not after.
-      #
-      # Why these specific filters:
-      #   `image prune -a -f` removes images not used by any running
-      #   container. The 13 currently-running compose containers keep
-      #   their images; everything else from previous deploys goes.
-      #
-      #   `builder prune --filter until=2h` keeps recent build cache
-      #   (so incremental rebuilds still hit warm layers) but drops
-      #   crufty layers from older deploys. Without the filter, every
-      #   deploy would be cold-cache and Rust release builds would
-      #   take 20+ min instead of 5.
-      #
-      # Container prune is DELIBERATELY omitted here — the Pre-checkout
-      # step stops api/orchestration-worker/code-worker so it can release
-      # their bind-mounts before `actions/checkout` runs. Pruning here
-      # would remove the just-stopped containers, forcing `compose up
-      # -d` later in `Up and prune` to recreate them from scratch
-      # instead of just restarting. That recreation wedged for 14+ min
-      # in PR #467's deploy. Containers are small metadata; image +
-      # builder prunes do all the real disk-freeing work.
-      - name: Free disk before build
-        run: |
-          echo "── Disk before prune ──"
-          df -h /System/Volumes/Data | tail -1 || true
-          docker system df 2>/dev/null | head -6 || true
-
-          docker image prune -a -f >/dev/null 2>&1 || true
-          docker builder prune -a -f --filter "until=2h" >/dev/null 2>&1 || true
-
-          echo "── Disk after prune ──"
-          df -h /System/Volumes/Data | tail -1 || true
-          docker system df 2>/dev/null | head -6 || true
-
       - name: Build and update services
         run: |
           SERVICES="${{ steps.changes.outputs.services }}"
@@ -196,53 +157,10 @@ jobs:
             docker compose build $svc || echo "Skipping $svc (not in compose or build error)"
           done
 
-      - name: Up and prune
+      - name: Up
         run: |
           echo "Starting services..."
           docker compose up -d
-
-          # Aggressive reclaim after the new images are pinned to live
-          # containers. Three layers — each catches what the others
-          # leave behind:
-          #
-          #   image prune -a -f      Any image not referenced by a
-          #                          running container. The 13 compose
-          #                          services keep theirs; just-replaced
-          #                          versions (and any tagged stragglers
-          #                          from earlier deploys) go.
-          #
-          #   builder prune -af      All BuildKit cache, no filter.
-          #                          For a single-dev self-hosted
-          #                          runner the "warm cache for the
-          #                          next deploy" argument is weak —
-          #                          consecutive deploys often touch
-          #                          different services, and the pre-
-          #                          build step already drops cache
-          #                          older than 2 h anyway. Wipe and
-          #                          let the next build re-fetch.
-          #
-          #   buildx prune -af       Same cache pool as `builder` in
-          #                          modern Docker, but the buildx CLI
-          #                          exposes additional metadata that
-          #                          `docker builder` doesn't always
-          #                          touch (mounted build contexts,
-          #                          per-builder caches). Belt-and-
-          #                          suspenders.
-          #
-          # NB: we do NOT use `docker system prune` — that would also
-          # nuke the compose network which the running services depend
-          # on.
-          echo "── Disk before post-up prune ──"
-          df -h /System/Volumes/Data | tail -1 || true
-          docker system df 2>&1 | head -6 || true
-
-          docker image prune -a -f 2>&1 | tail -3 || true
-          docker builder prune -af 2>&1 | tail -3 || true
-          docker buildx prune -af 2>&1 | tail -3 || true
-
-          echo "── Disk after post-up prune ──"
-          df -h /System/Volumes/Data | tail -1 || true
-          docker system df 2>&1 | head -6 || true
 
       - name: Apply pending DB migrations
         # Runs after `docker compose up -d` so the db container is up,
@@ -269,3 +187,27 @@ jobs:
             sleep 1
           done
           ./scripts/apply_pending_migrations.sh
+
+      # ── End-of-pipeline orphan image cleanup ──
+      # Runs LAST, after `compose up -d` has pinned new images to live
+      # containers AND migrations have completed. `image prune -f`
+      # (no `-a`) removes only DANGLING images — the just-replaced
+      # previous versions whose tags got reassigned to the freshly
+      # built layers. Nothing else; build cache, tagged-but-not-running
+      # images, and volumes are all left alone here.
+      #
+      # Earlier iterations tried more aggressive cleanup at this
+      # point (PR #465) and earlier in the pipeline (PR #463); both
+      # introduced wedges (container prune killing the restart fast
+      # path; aggressive prune mid-pipeline causing BuildKit ref-
+      # counting to stick). On-host disk maintenance is the
+      # auto-prune sentinel's job; the deploy's only cleanup
+      # responsibility is removing the orphans it itself just
+      # created.
+      - name: Prune orphan images
+        run: |
+          echo "── Disk before orphan prune ──"
+          df -h /System/Volumes/Data | tail -1 || true
+          docker image prune -f 2>&1 | tail -3 || true
+          echo "── Disk after orphan prune ──"
+          df -h /System/Volumes/Data | tail -1 || true
