@@ -42,6 +42,16 @@ URL_RE = re.compile(r"https://claude\.com/[^\s]+")
 # pick the auth shape (OAuth `session_token` vs Anthropic Console `api_key`).
 _CLAUDE_CREDENTIAL_KEYS = ("session_token", "api_key")
 
+# Status values from which the flow can still be cancelled or
+# resumed. Past these (`submitting`/`connected`/`failed`/`cancelled`),
+# the paste code has been delivered to claude CLI and the action is
+# irreversible — cancel becomes a no-op and `/start` is the only way
+# to begin a new flow. Single source of truth referenced by:
+#   * start_login's "reuse existing" check
+#   * cancel_login's guard
+#   * _serialize_state.cancellable
+_CANCELLABLE_STATUSES = frozenset({"starting", "pending"})
+
 
 # How long to wait for the user to paste the code into the UI before
 # we give up and tear the subprocess down. 10 min is enough for "open
@@ -213,7 +223,7 @@ class ClaudeAuthManager:
     def start_login(self, tenant_id: str) -> ClaudeLoginState:
         with self._lock:
             existing = self._by_tenant.get(tenant_id)
-            if existing and existing.status in {"starting", "pending"} and existing.process:
+            if existing and existing.status in _CANCELLABLE_STATUSES and existing.process:
                 return existing
 
             # Capture the stale process to reap *after* releasing the
@@ -285,7 +295,7 @@ class ClaudeAuthManager:
             # the paste has been delivered to claude CLI; tearing it
             # down would race the handshake without preventing the
             # actual server-side OAuth from completing.
-            if state.status not in {"starting", "pending"}:
+            if state.status not in _CANCELLABLE_STATUSES:
                 return state
             # Mutate status *first* so any concurrent `submit_code` that
             # acquires the lock after us sees the cancellation and bails.
@@ -811,7 +821,7 @@ def _serialize_state(state: ClaudeLoginState, connected: bool = False) -> dict:
         # past `pending` (the paste has been delivered, cancel is a
         # no-op). UI shouldn't have to know the state-machine
         # vocabulary to render this correctly.
-        "cancellable": bool(state and state.status in ("starting", "pending")),
+        "cancellable": bool(state and state.status in _CANCELLABLE_STATUSES),
     }
 
 
