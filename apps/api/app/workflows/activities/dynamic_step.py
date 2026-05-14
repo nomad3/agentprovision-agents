@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import time
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any, Dict
@@ -461,12 +462,65 @@ def _transform_data(step: dict, context: dict) -> dict:
     return {"result": data}
 
 
+# Fence markers used by the Goal recipe to wrap user-controlled slot
+# content as untrusted prose. Any value being interpolated into a prompt
+# (template strings) MUST NOT contain these literal strings — otherwise
+# the attacker escapes the sandbox by closing the fence early or opening
+# a fake one. Mirrors the CLI-side `scrub_fence_markers` in
+# `apps/agentprovision-cli/src/commands/goal.rs` (PR #456 round-2 fix).
+# Server-side mirror is the backstop for any caller that hits the
+# dynamic-workflows endpoints directly with crafted `input_data`.
+#
+# We also NFKC-normalise before checking so Unicode lookalikes
+# (fullwidth `＜`, zero-width joiners, etc.) collapse to the canonical
+# form before comparison — closes the round-3 deferred Unicode-bypass
+# NIT. The visible REDACTION token lets the LLM recognise that
+# scrubbing happened rather than silently swallowing the attempt.
+_SLOT_FENCE_BEGIN = "<<<USER_SLOT_BEGIN>>>"
+_SLOT_FENCE_END = "<<<USER_SLOT_END>>>"
+_FENCE_REDACTION = "[REDACTED:USER_SLOT_MARKER]"
+
+
+def _scrub_fence_markers(value: str) -> str:
+    """Strip fence markers from a string so it can't escape the Goal
+    recipe's slot sandbox during interpolation.
+
+    NFKC-normalises first so fullwidth / zero-width-joined variants
+    collapse to the canonical ASCII fence and get scrubbed alongside
+    direct matches. Returns a UTF-8 string; the redaction token is
+    visible so the agent recognises the attempt.
+    """
+    if not isinstance(value, str):
+        return value
+    normalised = unicodedata.normalize("NFKC", value)
+    if _SLOT_FENCE_BEGIN not in normalised and _SLOT_FENCE_END not in normalised:
+        # Fast path — most values never carry the fence; skip the
+        # replace overhead and return the NFKC form unchanged. Returning
+        # the normalised form even on the fast path means downstream
+        # comparison sees a consistent encoding regardless of input.
+        return normalised
+    return (
+        normalised
+        .replace(_SLOT_FENCE_BEGIN, _FENCE_REDACTION)
+        .replace(_SLOT_FENCE_END, _FENCE_REDACTION)
+    )
+
+
 def _resolve_template(template: str, context: dict) -> str:
-    """Replace {{var.path}} placeholders with context values."""
+    """Replace {{var.path}} placeholders with context values.
+
+    Every substituted value is fence-scrubbed (`_scrub_fence_markers`)
+    so a malicious slot value can't break out of the Goal recipe's
+    `<<<USER_SLOT_*>>>` sandbox. Defence-in-depth — the CLI scrubs too
+    but anyone calling the dynamic-workflows endpoints directly with
+    crafted `input_data` only hits this layer.
+    """
     def replacer(match):
         path = match.group(1).strip()
         value = _resolve_path(path, context)
-        return str(value) if value is not None else match.group(0)
+        if value is None:
+            return match.group(0)
+        return _scrub_fence_markers(str(value))
     return re.sub(r"\{\{(.+?)\}\}", replacer, template)
 
 
