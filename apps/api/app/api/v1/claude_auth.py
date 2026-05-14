@@ -20,6 +20,7 @@ from datetime import datetime
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api import deps
@@ -403,3 +404,117 @@ def claude_auth_cancel(
     if not state:
         return {"status": "idle", "connected": False}
     return _serialize_state(state)
+
+
+# ── API-key path (option a) ────────────────────────────────────────────────
+# The subscription-OAuth flow above spawns `claude auth login --claudeai`
+# inside the api container and tries to read its callback / paste-code,
+# which is architecturally broken (the container has no browser and no
+# way to receive the OAuth callback or feed a paste-code into the
+# subprocess's stdin). For users who'd rather paste an Anthropic
+# Console API key (`sk-ant-…`), this endpoint stores it directly in the
+# credential vault under the same `claude_code` integration name, so
+# downstream consumers see the same credential shape — they don't need
+# to care which flow produced it.
+
+
+class ClaudeApiKeyRequest(BaseModel):
+    """Payload for `POST /api/v1/claude-auth/api-key`."""
+
+    api_key: str = Field(
+        ...,
+        min_length=20,
+        description="Anthropic Console API key — typically starts with `sk-ant-`.",
+    )
+
+
+@router.post("/api-key")
+def claude_auth_set_api_key(
+    body: ClaudeApiKeyRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: Session = Depends(deps.get_db),
+):
+    """Store a user-supplied Anthropic API key as the tenant's Claude credential.
+
+    Cheap fast-path for users who can't use the subscription-OAuth flow
+    (no browser inside the api container) but have an API key.
+
+    Strips wrapping whitespace and any leading `ANTHROPIC_API_KEY=` /
+    `Bearer ` prefix paste-from-shell-history users tend to include.
+    Validates the `sk-ant-` prefix as a sanity check — Anthropic API
+    keys always use it and the wrong prefix usually means a paste
+    mistake (whole `claude.ai` cookie, an OpenAI key, etc.). Rejects
+    short strings to catch obvious typos.
+
+    Side-effects:
+      * Creates `IntegrationConfig(integration_name='claude_code', enabled=True)`
+        if absent, matching `_persist_credentials` so downstream readers
+        (orchestration, MCP tools) see the same shape regardless of
+        which flow stored the credential.
+      * Stores the key in the vault with `credential_type='api_key'`
+        (vs the OAuth flow's `oauth_token`). Consumers branch on the
+        type when calling Anthropic.
+      * `store_credential` revokes any previous active credential, so
+        switching between OAuth and API-key flows works without manual
+        cleanup.
+    """
+    # Normalise common paste artefacts before validation. Users pasting
+    # from a `.env` line or a `curl` example often include a prefix.
+    raw = body.api_key.strip()
+    for prefix in ("ANTHROPIC_API_KEY=", "ANTHROPIC_API_KEY: ", "Bearer ", "bearer "):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):].strip()
+            break
+    # Strip surrounding quotes if any (.env-style: `KEY="sk-ant-..."`)
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        raw = raw[1:-1].strip()
+
+    if not raw.startswith("sk-ant-"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "API key must start with `sk-ant-` — that's the Anthropic Console "
+                "prefix. If you pasted a Claude.ai session cookie or a "
+                "different provider's key, swap it for an Anthropic Console "
+                "API key from console.anthropic.com/settings/keys."
+            ),
+        )
+
+    tid = current_user.tenant_id
+    config = (
+        db.query(IntegrationConfig)
+        .filter(
+            IntegrationConfig.tenant_id == tid,
+            IntegrationConfig.integration_name == "claude_code",
+        )
+        .first()
+    )
+    if not config:
+        config = IntegrationConfig(
+            tenant_id=tid,
+            integration_name="claude_code",
+            enabled=True,
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    elif not config.enabled:
+        config.enabled = True
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+
+    store_credential(
+        db,
+        integration_config_id=config.id,
+        tenant_id=tid,
+        credential_key="api_key",
+        plaintext_value=raw,
+        credential_type="api_key",
+    )
+
+    return {
+        "status": "connected",
+        "connected": True,
+        "credential_type": "api_key",
+    }
