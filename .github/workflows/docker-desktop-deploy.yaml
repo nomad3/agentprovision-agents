@@ -162,16 +162,20 @@ jobs:
       #   deploy would be cold-cache and Rust release builds would
       #   take 20+ min instead of 5.
       #
-      #   `container prune -f` is cheap and catches any zombie exited
-      #   containers from killed deploys (per the 2h+ wedge we hit on
-      #   2026-05-13 / cli-v0.7.4 cycle).
+      # Container prune is DELIBERATELY omitted here — the Pre-checkout
+      # step stops api/orchestration-worker/code-worker so it can release
+      # their bind-mounts before `actions/checkout` runs. Pruning here
+      # would remove the just-stopped containers, forcing `compose up
+      # -d` later in `Up and prune` to recreate them from scratch
+      # instead of just restarting. That recreation wedged for 14+ min
+      # in PR #467's deploy. Containers are small metadata; image +
+      # builder prunes do all the real disk-freeing work.
       - name: Free disk before build
         run: |
           echo "── Disk before prune ──"
           df -h /System/Volumes/Data | tail -1 || true
           docker system df 2>/dev/null | head -6 || true
 
-          docker container prune -f >/dev/null 2>&1 || true
           docker image prune -a -f >/dev/null 2>&1 || true
           docker builder prune -a -f --filter "until=2h" >/dev/null 2>&1 || true
 
