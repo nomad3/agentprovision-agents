@@ -18,6 +18,7 @@ import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
 import DashboardPage from './pages/DashboardPage';
+import DeviceLoginPage from './pages/DeviceLoginPage';
 // DatasetsPage and DataSourcesPage merged into IntegrationsPage
 import DeploymentsPage from './pages/DeploymentsPage';
 import IntegrationsPage from './pages/IntegrationsPage';
@@ -148,6 +149,11 @@ function App() {
                 <Route path="/alpha" element={<AlphaLandingPage />} />
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/auth/login" element={<LoginPage />} />
+                {/* Device-auth landing for `alpha login` (task #201). Wrapped in
+                    ProtectedRoute because the approve endpoint needs
+                    current_user; unauthenticated visitors get the standard
+                    redirect-to-login flow that returns them here after sign-in. */}
+                <Route path="/login/device" element={<ProtectedRoute><DeviceLoginPage /></ProtectedRoute>} />
                 <Route path="/register" element={<RegisterPage />} />
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
