@@ -2,17 +2,21 @@
 
 <p align="center"><strong>The Orchestration Layer for AI Agents</strong></p>
 
-<p align="center">
-  <a href="https://agentprovision.com"><img src="https://img.shields.io/badge/live-agentprovision.com-00d2ff?style=flat-square" alt="Production"></a>
-  <a href="#"><img src="https://img.shields.io/badge/agents-Claude%20Code%20%7C%20Codex%20%7C%20Gemini%20%7C%20Copilot-blueviolet?style=flat-square" alt="Agents"></a>
-  <a href="#"><img src="https://img.shields.io/badge/MCP_Tools-90%2B-ff6b6b?style=flat-square" alt="MCP Tools"></a>
-  <a href="#"><img src="https://img.shields.io/badge/skills-92%2B%20marketplace-green?style=flat-square" alt="Skill Marketplace"></a>
-  <a href="#"><img src="https://img.shields.io/badge/workflows-26%20native-9b59b6?style=flat-square" alt="Workflows"></a>
-  <a href="#"><img src="https://img.shields.io/badge/RL-auto%20scoring-orange?style=flat-square" alt="RL"></a>
-  <a href="#"><img src="https://img.shields.io/badge/tunnel-Cloudflare-4285F4?style=flat-square" alt="Cloudflare"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Luna_Client-Tauri%202.0-24C8DB?style=flat-square" alt="Luna Client"></a>
-  <a href="docs/cli/README.md"><img src="https://img.shields.io/badge/alpha_CLI-terminal_client-2ecc71?style=flat-square" alt="alpha CLI"></a>
-</p>
+```
+    +---------------------------------------------------------------+
+    |  Live           agentprovision.com                            |
+    |  Orchestrates   Claude Code | Codex CLI | Gemini CLI |        |
+    |                 GitHub Copilot CLI | OpenCode                 |
+    |  Surfaces       Luna desktop (Tauri 2.0)                      |
+    |                 alpha CLI   (terminal, see docs/cli/)         |
+    |                 web SPA     WhatsApp     Microsoft Teams      |
+    |  Capabilities   90+ MCP tools                                 |
+    |                 92+ marketplace skills                        |
+    |                 26 dynamic workflow templates                 |
+    |                 RL auto-scoring on every reply                |
+    |                 Cloudflare tunnel                             |
+    +---------------------------------------------------------------+
+```
 
 <p align="center">
   Don't build agents — orchestrate them. AgentProvision routes tasks to existing AI agent platforms (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI), serves 90+ MCP tools, maintains a knowledge graph, auto-scores every response with a local LLM, and learns which platform performs best via RL. Enterprise-grade <b>Agent Lifecycle Management</b> with versioning, audit, rollback, and governance. Each tenant uses their own subscription — zero API credits.
