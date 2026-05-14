@@ -83,14 +83,25 @@ Cancellation lands `cancelled` from any non-terminal state.
 
 ## Out of scope
 
-- Tests — should be in the PR but the rebuild-all deploy is in flight and the user is blocked NOW. Coming as a follow-up commit on this branch before merge.
 - Removing the OAuth subprocess entirely in favor of direct API calls to `console.anthropic.com/login/oauth` — bigger rewrite, the subprocess works once it gets stdin.
+
+## Concurrency model
+
+The two endpoints that mutate `ClaudeLoginState.status` (`/submit-code` and `/cancel`) hold `ClaudeAuthManager._lock` for the **entire** transition — status check, stdin write, status mutation, event signal — so they cannot interleave. If `/cancel` races `/submit-code`, the lock serialises them: one runs entirely before the other. Cancel writes status before invoking `_terminate_and_reap`, so any losing `/submit-code` observes `cancelled` and bails with a 400. Cancel releases the lock before reaping so `/status` polling isn't blocked behind the SIGTERM grace period.
+
+The reader thread appends to `state._output_buf` while the main thread reads via `_snapshot_buf(buf)`, which copies the list under the GIL before joining — avoids the `RuntimeError: list changed size during iteration` race that `"".join(buf)` would otherwise hit.
+
+`_terminate_and_reap` always pairs SIGTERM with `proc.wait(timeout=5)` and falls back to `proc.kill()` so no zombies linger.
+
+## Manager error class
+
+`ClaudeAuthManager.submit_code` raises `ClaudeAuthError` (domain-level, with a `status_code` hint). The `/submit-code` route translates it to `HTTPException`. Keeps the manager usable from non-FastAPI callers (CLI re-auth tools, tests without a TestClient, future Temporal activities).
 
 ## Risks
 
-- **Subprocess can deadlock if stdout buffer fills before we drain it.** Reader thread drains line-by-line, so this shouldn't happen for normal output. If it does, the 10-min paste deadline catches it.
-- **`_OAUTH_PASTE_DEADLINE_SECONDS` is 10 min.** Long enough for "open URL → sign in → copy code" but not so long that a stale subprocess hangs around forever. claude CLI's own server-side code TTL is shorter; we'll see failures from claude.com before our timeout if the user dawdles past the CLI's window.
-- **Race between `/submit-code` and subprocess exit.** Caught explicitly: we check `proc.poll()` before writing and return 400 if the subprocess already died.
+- **Subprocess can deadlock if stdout buffer fills before we drain it.** Reader thread drains line-by-line, so this shouldn't happen for normal output. If it does, the 10-min paste deadline catches it. Long-term fix: PTY (mirroring `gemini_cli_auth.py`).
+- **`_OAUTH_PASTE_DEADLINE_SECONDS` is 10 min.** Long enough for "open URL → sign in → copy code". claude.com's code TTL is shorter; if it expires first the subprocess exits with `invalid_grant`/`expired_token` in its stdout and we map that to a user-friendly "code expired, click Connect to start over" via `_humanise_cli_failure` instead of dumping ANSI CLI output.
+- **Race between `/submit-code` and subprocess exit.** Caught explicitly: we check `proc.poll()` before writing inside the lock and return 400 if the subprocess already died.
 
 ## References
 
