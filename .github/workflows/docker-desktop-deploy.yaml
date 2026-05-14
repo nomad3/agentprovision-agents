@@ -188,26 +188,16 @@ jobs:
           done
           ./scripts/apply_pending_migrations.sh
 
-      # ── End-of-pipeline orphan image cleanup ──
-      # Runs LAST, after `compose up -d` has pinned new images to live
-      # containers AND migrations have completed. `image prune -f`
-      # (no `-a`) removes only DANGLING images — the just-replaced
-      # previous versions whose tags got reassigned to the freshly
-      # built layers. Nothing else; build cache, tagged-but-not-running
-      # images, and volumes are all left alone here.
+      # ── Image cleanup intentionally omitted ──
+      # Even the documented-as-safe `docker image prune -f` (dangling-only,
+      # no -a) at end-of-pipeline was observed concurrent with the next
+      # workflow_dispatch's BuildKit bake, producing the same image-tag
+      # race + 0%-CPU wedges that PR #465 (container prune) and PR #463
+      # (aggressive mid-pipeline prune) had. Two builds racing to name
+      # `agentprovision-agents-api:latest` → one wins, the other crashes
+      # mid-export → buildkit ref-counts get stuck → 5+h outages.
       #
-      # Earlier iterations tried more aggressive cleanup at this
-      # point (PR #465) and earlier in the pipeline (PR #463); both
-      # introduced wedges (container prune killing the restart fast
-      # path; aggressive prune mid-pipeline causing BuildKit ref-
-      # counting to stick). On-host disk maintenance is the
-      # auto-prune sentinel's job; the deploy's only cleanup
-      # responsibility is removing the orphans it itself just
-      # created.
-      - name: Prune orphan images
-        run: |
-          echo "── Disk before orphan prune ──"
-          df -h /System/Volumes/Data | tail -1 || true
-          docker image prune -f 2>&1 | tail -3 || true
-          echo "── Disk after orphan prune ──"
-          df -h /System/Volumes/Data | tail -1 || true
+      # On-host disk maintenance now lives entirely in the laptop sentinel
+      # (scripts/sentinel/sentinel.md). The deploy is no longer a Docker
+      # housekeeper — its only job is to ship a new image set and migrate.
+      # Disk cleanup happens out-of-band, when no build is in flight.
