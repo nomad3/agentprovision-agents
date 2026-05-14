@@ -22,6 +22,15 @@ const integrationConfigService = {
   claudeAuthStart: () => api.post('/claude-auth/start'),
   claudeAuthStatus: () => api.get('/claude-auth/status'),
   claudeAuthCancel: () => api.post('/claude-auth/cancel'),
+  // Mirrors gemini-cli-auth submit-code: forwards the verification
+  // code the user pasted from claude.com to the running subprocess's
+  // stdin. Required for the modern claude CLI which doesn't have a
+  // localhost OAuth callback inside the container.
+  claudeAuthSubmitCode: (code) => api.post('/claude-auth/submit-code', { code }),
+  // Bypass for users who don't want the subscription-OAuth flow —
+  // paste an Anthropic Console API key (sk-ant-...) and we store it
+  // in the same credential slot.
+  claudeAuthSetApiKey: (apiKey) => api.post('/claude-auth/api-key', { api_key: apiKey }),
   geminiCliAuthStart: () => api.post('/gemini-cli-auth/start'),
   geminiCliAuthStatus: () => api.get('/gemini-cli-auth/status'),
   geminiCliAuthSubmitCode: (code) => api.post('/gemini-cli-auth/submit-code', { code }),
