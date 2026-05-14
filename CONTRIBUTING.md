@@ -24,8 +24,8 @@ Thanks for working on AgentProvision. This file is the short version of the rule
 The primary local runtime is **docker-compose**.
 
 ```bash
-git clone https://github.com/nomad3/servicetsunami-agents.git
-cd servicetsunami-agents
+git clone https://github.com/nomad3/agentprovision-agents.git
+cd agentprovision-agents
 
 # 1. Configure secrets — all three are REQUIRED, no defaults
 cp apps/api/.env.example apps/api/.env
@@ -166,6 +166,7 @@ When adding a feature that dispatches a CLI runtime, route through `apps/api/app
 - For architecture: [`CLAUDE.md`](CLAUDE.md).
 - For agent-system specifics: [`AGENTS.md`](AGENTS.md).
 - For deployment: [`docs/KUBERNETES_DEPLOYMENT.md`](docs/KUBERNETES_DEPLOYMENT.md).
+- For the `alpha` CLI: [`docs/cli/README.md`](docs/cli/README.md).
 - For weekly shipped features: [`docs/changelog/`](docs/changelog/).
 - For design docs and implementation plans: [`docs/plans/`](docs/plans/).
 - For security audits and pentest verifications: [`docs/report/`](docs/report/).
