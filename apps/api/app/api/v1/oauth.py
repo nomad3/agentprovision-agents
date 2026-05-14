@@ -247,14 +247,41 @@ def _update_stored_tokens(
     access_token: str,
     refresh_token: Optional[str] = None,
 ):
-    """Replace stored OAuth credentials with fresh values."""
+    """Replace stored OAuth credentials with fresh values.
+
+    IMPORTANT: only revoke the `refresh_token` row when we have a new
+    one to replace it. Google does **not** rotate refresh_tokens on
+    every refresh — most refresh responses contain only
+    `{access_token, expires_in}` with no `refresh_token`. The previous
+    implementation revoked BOTH credential keys then conditionally
+    stored only the access_token; that meant the very first auto-refresh
+    after initial consent destroyed the long-lived refresh_token and
+    left the tenant with a token that could no longer be refreshed.
+    Subsequent refresh calls would find no refresh_token, fall through,
+    and serve the now-stale access_token until it expired — at which
+    point Luna says "your gmail token expired" with no recovery path
+    short of re-consenting.
+
+    Microsoft refresh-token-rotation IS enabled in this codebase
+    (see `_refresh_access_token`), so when Microsoft returns a
+    `refresh_token` in the refresh response we DO want to swap it in.
+    Hence the guard on `refresh_token` truthiness — present means
+    rotate, absent means preserve the existing row.
+    """
     try:
+        # `oauth_token` is always being replaced on a refresh — revoke
+        # the old row(s). `refresh_token` is only being replaced if the
+        # provider rotated it in this refresh response.
+        keys_to_revoke = ["oauth_token"]
+        if refresh_token:
+            keys_to_revoke.append("refresh_token")
+
         old_creds = (
             db.query(IntegrationCredential)
             .filter(
                 IntegrationCredential.integration_config_id == integration_config_id,
                 IntegrationCredential.tenant_id == tenant_id,
-                IntegrationCredential.credential_key.in_(["oauth_token", "refresh_token"]),
+                IntegrationCredential.credential_key.in_(keys_to_revoke),
                 IntegrationCredential.status == "active",
             )
             .all()
