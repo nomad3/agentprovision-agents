@@ -176,8 +176,48 @@ jobs:
           echo "Starting services..."
           docker compose up -d
 
-          echo "Cleaning up dangling images..."
-          docker image prune -f || true
+          # Aggressive reclaim after the new images are pinned to live
+          # containers. Three layers — each catches what the others
+          # leave behind:
+          #
+          #   image prune -a -f      Any image not referenced by a
+          #                          running container. The 13 compose
+          #                          services keep theirs; just-replaced
+          #                          versions (and any tagged stragglers
+          #                          from earlier deploys) go.
+          #
+          #   builder prune -af      All BuildKit cache, no filter.
+          #                          For a single-dev self-hosted
+          #                          runner the "warm cache for the
+          #                          next deploy" argument is weak —
+          #                          consecutive deploys often touch
+          #                          different services, and the pre-
+          #                          build step already drops cache
+          #                          older than 2 h anyway. Wipe and
+          #                          let the next build re-fetch.
+          #
+          #   buildx prune -af       Same cache pool as `builder` in
+          #                          modern Docker, but the buildx CLI
+          #                          exposes additional metadata that
+          #                          `docker builder` doesn't always
+          #                          touch (mounted build contexts,
+          #                          per-builder caches). Belt-and-
+          #                          suspenders.
+          #
+          # NB: we do NOT use `docker system prune` — that would also
+          # nuke the compose network which the running services depend
+          # on.
+          echo "── Disk before post-up prune ──"
+          df -h /System/Volumes/Data | tail -1 || true
+          docker system df 2>&1 | head -6 || true
+
+          docker image prune -a -f 2>&1 | tail -3 || true
+          docker builder prune -af 2>&1 | tail -3 || true
+          docker buildx prune -af 2>&1 | tail -3 || true
+
+          echo "── Disk after post-up prune ──"
+          df -h /System/Volumes/Data | tail -1 || true
+          docker system df 2>&1 | head -6 || true
 
       - name: Apply pending DB migrations
         # Runs after `docker compose up -d` so the db container is up,
