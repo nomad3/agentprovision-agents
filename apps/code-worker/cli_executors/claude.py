@@ -25,14 +25,21 @@ import cli_runtime
 def execute_claude_chat(task_input, session_dir: str):
     from workflows import (
         _fetch_claude_token,
+        _fetch_claude_credential,
         _INTEGRATION_NOT_CONNECTED_MESSAGES,
         _build_allowed_tools_from_mcp,
         ChatCliResult,
         WORKSPACE,
         CLAUDE_CODE_MODEL,
     )
-    token = _fetch_claude_token(task_input.tenant_id)
-    if not token:
+    # Prefer the typed credential (OAuth vs api_key); fall back to the
+    # legacy OAuth-only helper so existing test monkeypatches on
+    # `_fetch_claude_token` keep working.
+    credential = _fetch_claude_credential(task_input.tenant_id)
+    if credential is None:
+        legacy_token = _fetch_claude_token(task_input.tenant_id)
+        credential = (legacy_token, "oauth") if legacy_token else None
+    if not credential:
         # Canonical not-connected message — must match
         # `cli_platform_resolver._MISSING_CRED_PATTERNS` so the
         # resolver chain classifies this as `missing_credential`
@@ -94,8 +101,15 @@ def execute_claude_chat(task_input, session_dir: str):
     if os.path.exists(mcp_path):
         cmd.extend(["--mcp-config", mcp_path])
 
+    token, kind = credential
     env = os.environ.copy()
-    env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    if kind == "oauth":
+        # Subscription-OAuth flow: token is a Bearer for claude.com.
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+    else:
+        # API-key flow (kind == "api_key"): claude CLI honours
+        # ANTHROPIC_API_KEY and routes to the Console billing path.
+        env["ANTHROPIC_API_KEY"] = token
 
     result = cli_runtime.run_cli_with_heartbeat(
         cmd,

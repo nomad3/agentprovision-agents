@@ -555,10 +555,20 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
     branch_name = f"code/{tag}/{slug}-{ts}"
 
     try:
-        # 1. Fetch tenant's Claude Code session token
+        # 1. Fetch tenant's Claude Code credential (OAuth or api_key).
         activity.heartbeat("Fetching Claude token...")
-        token = _fetch_claude_token(task_input.tenant_id)
-        claude_env = {"CLAUDE_CODE_OAUTH_TOKEN": token}
+        credential = _fetch_claude_credential(task_input.tenant_id)
+        if credential is None:
+            # Legacy back-compat: tests monkeypatch _fetch_claude_token,
+            # and old call sites pre-API-key path return only the OAuth
+            # token here. Treat a bare token as OAuth.
+            legacy_token = _fetch_claude_token(task_input.tenant_id)
+            credential = (legacy_token, "oauth") if legacy_token else (None, "oauth")
+        token, kind = credential
+        if kind == "api_key":
+            claude_env = {"ANTHROPIC_API_KEY": token}
+        else:
+            claude_env = {"CLAUDE_CODE_OAUTH_TOKEN": token}
 
         # 1b. Phase 4 commit 5 — agent-token mint + hook injection.
         # Only fires when the dispatch endpoint populated agent_id +
@@ -1276,7 +1286,30 @@ def _fetch_github_token(tenant_id: str) -> Optional[str]:
 
 
 def _fetch_claude_token(tenant_id: str) -> Optional[str]:
-    """Fetch Claude Code OAuth token from API credential vault."""
+    """Return the Claude Code OAuth subscription token, if any.
+
+    Compatibility shim: callers that only care about the OAuth path
+    should keep using this. The newer two-shape path (OAuth *or*
+    Anthropic Console API key) is exposed by `_fetch_claude_credential`
+    below — the executor branches on the returned `kind` to set the
+    right env var (`CLAUDE_CODE_OAUTH_TOKEN` vs `ANTHROPIC_API_KEY`).
+    """
+    cred = _fetch_claude_credential(tenant_id)
+    if cred and cred[1] == "oauth":
+        return cred[0]
+    return None
+
+
+def _fetch_claude_credential(tenant_id: str) -> Optional[tuple]:
+    """Fetch the active Claude Code credential as `(value, kind)`.
+
+    `kind` is `"oauth"` for the subscription-OAuth flow
+    (`credential_key='session_token'`) or `"api_key"` for the Anthropic
+    Console fast-path (`credential_key='api_key'`). Returns `None` if
+    neither is set. OAuth takes priority when both are present (which
+    shouldn't happen once `_revoke_other_claude_credentials` is in
+    place, but be defensive).
+    """
     try:
         resp = httpx.get(
             f"{API_BASE_URL}/api/v1/oauth/internal/token/claude_code",
@@ -1286,9 +1319,14 @@ def _fetch_claude_token(tenant_id: str) -> Optional[str]:
         )
         if resp.status_code == 200:
             data = resp.json()
-            return data.get("session_token") or data.get("oauth_token")
+            oauth = data.get("session_token") or data.get("oauth_token")
+            if oauth:
+                return (oauth, "oauth")
+            api_key = data.get("api_key")
+            if api_key:
+                return (api_key, "api_key")
     except Exception as e:
-        logger.error("Failed to fetch claude token: %s", e)
+        logger.error("Failed to fetch claude credential: %s", e)
     return None
 
 

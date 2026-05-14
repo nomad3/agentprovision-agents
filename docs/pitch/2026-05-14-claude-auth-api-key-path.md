@@ -63,25 +63,29 @@ The endpoint:
 2. Creates it if missing OR flips `enabled=True` if disabled — same shape as `_persist_credentials`.
 3. Calls `store_credential(...)` with `credential_type='api_key'`.
 
-`store_credential` already revokes any previous active credential for the same `(integration_config_id, credential_key)` pair, so switching between flows works without manual cleanup.
+`store_credential` revokes prior active credentials **with the same `credential_key`** — but OAuth uses `credential_key='session_token'` and this path uses `credential_key='api_key'`, so they live in disjoint key namespaces. Without an explicit cross-key revoke, switching flows would leave the other path's row active and downstream readers would silently prefer it. The endpoint calls `_revoke_other_claude_credentials(..., keep='api_key')` before storing, and the OAuth path does the symmetric revoke with `keep='session_token'`. Single active credential at any time.
 
-Downstream consumers (orchestration, MCP tools) branch on `credential_type`:
-- `'api_key'` → use as `Authorization: Bearer sk-ant-...` against `api.anthropic.com`
-- `'oauth_token'` → use the existing claude CLI subprocess path
+The `_tenant_has_claude_credential` connection-state check now accepts either credential_key, so `/status` and `/start` correctly report `connected: true` immediately after a successful API-key store.
 
-That branch needs to exist in the consumer code — verify before merging that downstream readers actually handle the new type, otherwise this PR ships a credential nothing uses.
+Downstream consumers (`apps/code-worker/cli_executors/claude.py` and the code-task flow in `workflows.py`) now branch on the `(value, kind)` tuple returned by `_fetch_claude_credential`:
+- `kind == 'oauth'` → sets `CLAUDE_CODE_OAUTH_TOKEN` env var (Bearer for claude.com)
+- `kind == 'api_key'` → sets `ANTHROPIC_API_KEY` env var (Console billing path)
+
+`cli_session_manager.subscription_missing` for `claude_code` accepts either `session_token` or `api_key`, so the API-key path actually drives requests instead of falling back to the local agent.
 
 ## Tests
 
-7 cases in `apps/api/tests/api/v1/test_claude_auth_api_key.py`:
+Cases in `apps/api/tests/api/v1/test_claude_auth_api_key.py`:
 
-1. Happy path stores `credential_type='api_key'`
-2. Non-Anthropic prefix (OpenAI `sk-proj-...`) → 400 with pointer to `console.anthropic.com`
-3. `.env`-line prefix stripped
-4. `Bearer ` prefix stripped
-5. Double-quote wrapping stripped
-6. Short string → 422 (pydantic `min_length=20`)
-7. Existing `IntegrationConfig` reused (not duplicated)
+- Happy path stores `credential_type='api_key'` and includes the caller's `tenant_id`.
+- IntegrationConfig query filter includes a `tenant_id` predicate (tenant isolation regression guard).
+- Non-Anthropic prefix (OpenAI `sk-proj-...`) → 400 with pointer to `console.anthropic.com`.
+- Paste-prefix normalisation: `.env`-line, `export ANTHROPIC_API_KEY=`, `x-api-key:` header, `Bearer ` / `BEARER` (case-insensitive), double-quote wrapping, YAML extra-whitespace.
+- `min_length=20` boundary: 19 chars → 422; 20 chars with bad prefix → 400 (proves the length check fires before prefix check and not at e.g. 10).
+- Existing `IntegrationConfig` reused (not duplicated).
+- `_normalise_api_key_paste` is idempotent: f(f(x)) == f(x).
+
+All tests use `monkeypatch.setattr` so module-level mutations are torn down at test teardown — no pollution of other tests in the same pytest process.
 
 ## UI follow-up (separate PR)
 
@@ -102,9 +106,8 @@ curl -X POST https://agentprovision.com/api/v1/claude-auth/api-key \
 
 ## What this does NOT do
 
-- Doesn't fix the subscription-OAuth flow (still architecturally broken; option b is the real fix when needed)
-- Doesn't add the UI input (next PR)
-- Doesn't change how consumers READ the credential — they'll need to branch on type if they want to use API keys
+- Doesn't fix the subscription-OAuth flow (still architecturally broken; option b is the real fix when needed — PR #471 ships that)
+- Doesn't add the UI input (PR #471 ships that, chained off this branch)
 
 ## References
 
