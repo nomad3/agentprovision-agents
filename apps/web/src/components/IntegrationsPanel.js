@@ -1352,32 +1352,48 @@ const IntegrationsPanel = () => {
                   {claudeAuthState.connected && (
                     <Alert variant="success" className="mb-2"><small>Connected to Claude Code</small></Alert>
                   )}
-                  <div className="d-flex gap-2 align-items-center">
-                    <Button
-                      size="sm"
-                      variant={claudeAuthState.connected ? 'outline-success' : 'primary'}
-                      onClick={['starting', 'pending', 'submitting'].includes(claudeAuthState.status) ? handleClaudeCancel : handleClaudeConnect}
-                      disabled={connectingProvider === 'claude_code'}
-                    >
-                      {['starting', 'pending', 'submitting'].includes(claudeAuthState.status)
-                        ? 'Cancel'
-                        : claudeAuthState.connected
-                          ? 'Reconnect'
-                          : 'Connect with Anthropic'}
-                    </Button>
-                    {!['pending', 'submitting'].includes(claudeAuthState.status) && (
-                      <Button
-                        size="sm"
-                        variant="link"
-                        className="p-0"
-                        onClick={() => setClaudeShowApiKey((v) => !v)}
-                        data-testid="claude-toggle-api-key"
-                      >
-                        {claudeShowApiKey ? 'Hide API key option' : 'Or use an API key'}
-                      </Button>
-                    )}
-                  </div>
-                  {claudeShowApiKey && !['pending', 'submitting'].includes(claudeAuthState.status) && (
+                  {/* `cancellable` comes from the server (mirrors
+                      ClaudeAuthManager._CANCELLABLE_STATUSES). UI just
+                      reads the flag — no need to know status-machine
+                      vocabulary. `oauthInFlight` is a separate gate:
+                      hides the API-key disclosure while a subscription-
+                      OAuth flow is mid-flight to prevent the user from
+                      starting both flows simultaneously. It uses
+                      `pending`/`submitting` because the subscription
+                      flow is still active during `submitting` (cancel
+                      is a no-op past `pending` but the handshake is
+                      still in progress). */}
+                  {(() => {
+                    const cancellable = !!claudeAuthState.cancellable;
+                    const oauthInFlight = ['pending', 'submitting'].includes(claudeAuthState.status);
+                    return (
+                      <>
+                        <div className="d-flex gap-2 align-items-center">
+                          <Button
+                            size="sm"
+                            variant={claudeAuthState.connected ? 'outline-success' : 'primary'}
+                            onClick={cancellable ? handleClaudeCancel : handleClaudeConnect}
+                            disabled={connectingProvider === 'claude_code'}
+                          >
+                            {cancellable
+                              ? 'Cancel'
+                              : claudeAuthState.connected
+                                ? 'Reconnect'
+                                : 'Connect with Anthropic'}
+                          </Button>
+                          {!oauthInFlight && (
+                            <Button
+                              size="sm"
+                              variant="link"
+                              className="p-0"
+                              onClick={() => setClaudeShowApiKey((v) => !v)}
+                              data-testid="claude-toggle-api-key"
+                            >
+                              {claudeShowApiKey ? 'Hide API key option' : 'Or use an API key'}
+                            </Button>
+                          )}
+                        </div>
+                        {claudeShowApiKey && !oauthInFlight && (
                     <div className="mt-3 pt-3 border-top">
                       <small className="text-muted d-block mb-2">
                         Paste an Anthropic Console API key (starts with{' '}
@@ -1412,7 +1428,10 @@ const IntegrationsPanel = () => {
                         </Button>
                       </div>
                     </div>
-                  )}
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 
