@@ -96,29 +96,6 @@ class TaskDashboardResponse(BaseModel):
     supports_needs_input: bool = False
 
 
-def _utc_aware(dt: Optional[datetime]) -> Optional[datetime]:
-    """Stamp a UTC tzinfo onto a naive datetime so Pydantic serialises
-    with the `Z` suffix.
-
-    Critical for CLI compatibility — PR #454 review BLOCKER B1.
-    `WorkflowRun.started_at` / `completed_at` are declared as
-    `Column(DateTime, ...)` (TIMESTAMP WITHOUT TIME ZONE, populated via
-    `datetime.utcnow()`). Naive datetimes serialise as
-    `"2026-05-13T23:33:12.148613"` (no offset), which the Rust CLI's
-    `chrono::DateTime<Utc>` rejects at deserialisation. Attaching UTC
-    explicitly here forces RFC-3339 with `Z` on the wire.
-
-    The proper long-term fix is migrating the columns to TIMESTAMPTZ,
-    which is tracked separately. Until then this shim is the smallest
-    blast-radius fix.
-    """
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
 def _row_from_run(run: WorkflowRun, workflow_name: str) -> TaskRow:
     """Map a (run, workflow) tuple to a dashboard row.
 
@@ -127,6 +104,12 @@ def _row_from_run(run: WorkflowRun, workflow_name: str) -> TaskRow:
     user-supplied title — tracked as a follow-up (PR #454 review N3).
     For now `title` IS `workflow_name`; the comment above keeps that
     intent explicit.
+
+    Note: as of migration 132, `WorkflowRun.started_at` and
+    `completed_at` are TIMESTAMPTZ — already tz-aware on the way in,
+    so Pydantic v2 serialises them with the `Z` suffix natively. The
+    previous `_utc_aware()` shim that bridged the naive-column gap is
+    no longer needed and was removed in the same PR as the migration.
     """
     # If you add a new terminal status here, also update
     # TERMINAL_STATUSES so the query SELECTs the row in the first place.
@@ -142,10 +125,8 @@ def _row_from_run(run: WorkflowRun, workflow_name: str) -> TaskRow:
         title=workflow_name,
         workflow_id=run.workflow_id,
         workflow_name=workflow_name,
-        # tz-attach defends against the naive-datetime → CLI deser bug
-        # (PR #454 review B1).
-        started_at=_utc_aware(run.started_at),  # type: ignore[arg-type]
-        completed_at=_utc_aware(run.completed_at),
+        started_at=run.started_at,
+        completed_at=run.completed_at,
         duration_ms=run.duration_ms,
         total_tokens=run.total_tokens,
         total_cost_usd=run.total_cost_usd,
@@ -172,21 +153,17 @@ def list_dashboard_tasks(
     tenant_id filter — the model itself has no row-level policy in
     pg, so missing this filter would leak across tenants.
     """
-    # `WorkflowRun.started_at` and `completed_at` are declared as
-    # `Column(DateTime, ...)` (TIMESTAMP WITHOUT TIME ZONE), populated
-    # by naive `datetime.utcnow()`. Comparing tz-aware Python datetimes
-    # against naive columns raises `DatatypeMismatch` on psycopg3 and
-    # silently strips on psycopg2 — a real footgun under driver upgrade
-    # (PR #454 round-2 review I-new-1). Strip tzinfo on the Python side
-    # for query bounds; `_utc_aware` re-attaches UTC on the way out for
-    # the CLI deser path. The proper fix is migrating the columns to
-    # TIMESTAMPTZ — tracked alongside the B1 follow-up.
-    now_naive = datetime.utcnow()
+    # As of migration 132, `started_at` and `completed_at` are
+    # TIMESTAMPTZ. Comparing tz-aware Python datetimes against TIMESTAMPTZ
+    # columns is correct on both psycopg2 and psycopg3 — the previous
+    # `datetime.utcnow()` workaround for the naive-column footgun is no
+    # longer needed.
+    now = datetime.now(timezone.utc)
 
     # ── Working: status="running" within this tenant, within the
     # WORKING_FLOOR window so zombie rows from crashed workers don't
     # bloat the dashboard forever (PR #454 review I2).
-    working_floor = now_naive - WORKING_FLOOR
+    working_floor = now - WORKING_FLOOR
     working_rows = (
         db.query(WorkflowRun, DynamicWorkflow.name)
         .join(DynamicWorkflow, WorkflowRun.workflow_id == DynamicWorkflow.id)
@@ -204,7 +181,7 @@ def list_dashboard_tasks(
     # If `completed_at` is NULL (crashed mid-step before writing it),
     # gate on `started_at >= cutoff` instead — without this floor a 6-
     # month-old crash row would still surface (PR #454 review I1).
-    cutoff = now_naive - COMPLETED_LOOKBACK
+    cutoff = now - COMPLETED_LOOKBACK
     completed_rows = (
         db.query(WorkflowRun, DynamicWorkflow.name)
         .join(DynamicWorkflow, WorkflowRun.workflow_id == DynamicWorkflow.id)

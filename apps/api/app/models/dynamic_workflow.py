@@ -1,7 +1,7 @@
 """Dynamic workflow models — user-defined workflows executed on Temporal."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text,
@@ -52,8 +52,16 @@ class WorkflowRun(Base):
     workflow_version = Column(Integer)
     trigger_type = Column(String(20))
     status = Column(String(20), nullable=False, default="running")
-    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    completed_at = Column(DateTime)
+    # TIMESTAMPTZ since migration 132. Default is tz-aware UTC so the
+    # value round-trips identically through Pydantic v2 serialisation
+    # (the response side now emits `Z` / `+00:00` natively, removing
+    # the need for the dashboard_tasks `_utc_aware` shim).
+    started_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    completed_at = Column(DateTime(timezone=True))
     duration_ms = Column(Integer)
     step_results = Column(JSON, default={})
     current_step = Column(String(100))

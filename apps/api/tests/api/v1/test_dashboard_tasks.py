@@ -217,16 +217,20 @@ def test_filters_by_tenant_id_on_both_queries():
 
 
 def test_started_at_emits_with_utc_offset():
-    # PR #454 review BLOCKER B1: server MUST emit tz-aware datetimes
-    # so the Rust CLI's chrono::DateTime<Utc> deserialises. A naive
-    # datetime serialises as "2026-05-13T12:00:00" (no offset), which
-    # the CLI rejects at parse time. Force a NAIVE source datetime
-    # through the endpoint and assert the wire payload has a UTC
-    # offset attached.
+    # PR #454 review BLOCKER B1, now backed by migration 132:
+    # `workflow_runs.started_at` is TIMESTAMPTZ, so SQLAlchemy returns
+    # tz-aware datetimes natively and Pydantic v2 serialises them with
+    # the `Z`/`+00:00` suffix the Rust CLI's chrono::DateTime<Utc>
+    # requires. Pass an EXPLICITLY tz-aware datetime (as the DB now
+    # produces) and assert the wire payload keeps the offset.
+    #
+    # Pre-migration this test used a naive datetime + the `_utc_aware`
+    # shim. Both were removed in the migration PR; the contract this
+    # test locks (server emits a UTC offset) is unchanged.
     user = _fake_user("66666666-6666-6666-6666-666666666666")
-    naive_run = _fake_run(status="running")
-    naive_run.started_at = datetime(2026, 5, 13, 12, 0, 0)  # NO tzinfo
-    working = [(naive_run, "Daily Briefing")]
+    aware_run = _fake_run(status="running")
+    aware_run.started_at = datetime(2026, 5, 13, 12, 0, 0, tzinfo=timezone.utc)
+    working = [(aware_run, "Daily Briefing")]
     client, _ = _make_client(user, working_rows=working)
     body = client.get("/api/v1/dashboard/tasks").json()
     iso = body["working"][0]["started_at"]
