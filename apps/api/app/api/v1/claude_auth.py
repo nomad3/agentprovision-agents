@@ -378,8 +378,6 @@ def _revoke_other_claude_credentials(
 
 # ── API Routes ──────────────────────────────────────────────────────────────
 
-_CLAUDE_CREDENTIAL_KEYS = ("session_token", "api_key")
-
 
 def _tenant_has_claude_credential(db: Session, tenant_id) -> bool:
     """Check if tenant has a stored Claude Code credential in the vault.

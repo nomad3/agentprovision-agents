@@ -26,23 +26,35 @@ Three fixes were on the table. This PR ships **option a** (cheapest): direct API
 class ClaudeApiKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=20, ...)
 
+# Case-insensitive prefix peel, ordered longest-first so
+# `export ANTHROPIC_API_KEY=` strips before `ANTHROPIC_API_KEY=`.
+_API_KEY_PASTE_PREFIXES = (
+    "export ANTHROPIC_API_KEY=", "ANTHROPIC_API_KEY=",
+    "ANTHROPIC_API_KEY:", "x-api-key:",
+    "Authorization: Bearer", "Authorization:",
+    "Bearer", "bearer",
+)
+
+def _normalise_api_key_paste(raw: str) -> str:
+    raw = raw.strip()
+    raw_lower = raw.lower()
+    for prefix in _API_KEY_PASTE_PREFIXES:
+        if raw_lower.startswith(prefix.lower()):
+            raw = raw[len(prefix):].lstrip(" \t")
+            break
+    # Strip a single layer of wrapping quotes (.env: `KEY="sk-ant-..."`).
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
+        raw = raw[1:-1].strip()
+    return raw
+
 @router.post("/api-key")
 def claude_auth_set_api_key(body, current_user, db):
-    # 1. Normalise common paste artefacts
-    raw = body.api_key.strip()
-    for prefix in ("ANTHROPIC_API_KEY=", "Bearer ", "bearer ", ...):
-        raw = raw.removeprefix(prefix)
-    # strip surrounding quotes (.env-style)
-    if raw.startswith(('"', "'")) and raw.endswith(('"', "'")):
-        raw = raw[1:-1]
-
-    # 2. Sanity-check prefix
+    raw = _normalise_api_key_paste(body.api_key)
     if not raw.startswith("sk-ant-"):
         raise HTTPException(400, "...console.anthropic.com/settings/keys")
-
-    # 3. Get-or-create IntegrationConfig + store_credential
-    ...
-    store_credential(..., credential_type="api_key", credential_key="api_key")
+    # ... get-or-create IntegrationConfig ...
+    _revoke_other_claude_credentials(db, config.id, tid, keep="api_key")
+    store_credential(..., credential_key="api_key", credential_type="api_key")
     return {"status": "connected", "connected": True, "credential_type": "api_key"}
 ```
 

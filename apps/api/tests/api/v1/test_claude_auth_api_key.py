@@ -284,6 +284,30 @@ def test_reuses_existing_integration_config(monkeypatch):
     assert added_configs == []
 
 
+def test_revokes_cross_flow_session_token_before_storing(monkeypatch):
+    """B1 regression guard: the new /api-key endpoint must run the
+    cross-key revoke (`_revoke_other_claude_credentials(keep='api_key')`)
+    before `store_credential`. Without it, an OAuth `session_token`
+    sitting in the same IntegrationConfig stays active and
+    downstream readers silently prefer it. A regression that drops
+    the revoke call would otherwise pass all happy-path tests.
+    """
+    user = _fake_user()
+    client, db, _, chain = _make_client(user, monkeypatch=monkeypatch)
+    resp = client.post(
+        "/api/v1/claude-auth/api-key",
+        json={"api_key": "sk-ant-api03-cross-key-revoke-test-1"},
+    )
+    assert resp.status_code == 200, resp.text
+    # The cross-key revoke uses `.update({"status": "revoked"}, ...)`.
+    # Assert it ran with the right payload.
+    chain.update.assert_called_once()
+    update_payload = chain.update.call_args.args[0]
+    assert update_payload == {"status": "revoked"}, (
+        f"Expected revoke-payload {{'status': 'revoked'}}; got {update_payload}"
+    )
+
+
 def test_normalise_api_key_paste_is_idempotent():
     """Re-running the normaliser on its own output is a no-op."""
     from app.api.v1.claude_auth import _normalise_api_key_paste
