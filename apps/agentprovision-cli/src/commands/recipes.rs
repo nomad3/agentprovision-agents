@@ -356,10 +356,15 @@ async fn run_recipe(args: RunArgs, ctx: Context) -> anyhow::Result<()> {
             ));
         }
         if !resp.validation_errors.is_empty() {
-            output::warn(format!(
-                "validation errors: {}",
+            // Mirror of #456 I2 for the recipes sibling: bail non-zero
+            // so CI gates using `alpha recipes run <id> --dry-run` as
+            // a pre-flight check actually catch the failure. The
+            // previous soft-warn returned exit 0 even on broken
+            // workflows.
+            anyhow::bail!(
+                "dry-run validation failed: {}",
                 resp.validation_errors.join("; ")
-            ));
+            );
         }
         return Ok(());
     }

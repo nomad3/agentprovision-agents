@@ -30,7 +30,11 @@ use crate::context::Context;
 use crate::output;
 
 const REPO_OWNER: &str = "nomad3";
-const REPO_NAME: &str = "servicetsunami-agents";
+// Repo was renamed 2026-05-13 from `servicetsunami-agents` to
+// `agentprovision-agents`. GitHub's redirect kept the old name working
+// but is fragile — one rename of the old slug elsewhere and the
+// redirect breaks. Track the canonical name here.
+const REPO_NAME: &str = "agentprovision-agents";
 const BIN_NAME: &str = "alpha";
 /// Tag scheme published by the release workflow. The CLI ships under
 /// `cli-v{semver}` so the monorepo can host releases for several
