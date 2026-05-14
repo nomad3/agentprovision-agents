@@ -457,3 +457,26 @@ def test_terminate_and_reap_no_kill_on_graceful_exit():
 
     proc.terminate.assert_called_once()
     proc.kill.assert_not_called()
+
+
+# ── _serialize_state cancellable flag (UX clarity NIT) ───────────────────
+
+
+def test_serialize_state_cancellable_flag():
+    """The serialised state must expose a `cancellable` boolean that
+    mirrors `cancel_login`'s guard. UI uses this to disable the Cancel
+    button past `pending` so the user isn't surprised by a no-op
+    when cancel runs against `submitting`."""
+    # starting / pending → cancellable
+    for st in ("starting", "pending"):
+        state = ca.ClaudeLoginState(login_id="x", tenant_id="t", status=st)
+        out = ca._serialize_state(state)
+        assert out["cancellable"] is True, f"{st!r} should be cancellable"
+    # submitting / connected / failed / cancelled → NOT cancellable
+    for st in ("submitting", "connected", "failed", "cancelled"):
+        state = ca.ClaudeLoginState(login_id="x", tenant_id="t", status=st)
+        out = ca._serialize_state(state)
+        assert out["cancellable"] is False, f"{st!r} should NOT be cancellable"
+    # No state at all → not cancellable.
+    out = ca._serialize_state(None)  # type: ignore[arg-type]
+    assert out["cancellable"] is False

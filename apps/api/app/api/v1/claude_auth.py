@@ -216,10 +216,18 @@ class ClaudeAuthManager:
             if existing and existing.status in {"starting", "pending"} and existing.process:
                 return existing
 
-            if existing and existing.process is not None:
-                # Replace a stale process — use the reaper so we don't
-                # leave zombies behind on rapid `/start` re-invocations.
-                _terminate_and_reap(existing.process)
+            # Capture the stale process to reap *after* releasing the
+            # lock (terminate-and-reap can take up to 7s with the SIGTERM
+            # grace + SIGKILL fallback; holding the lock that long
+            # blocks every other endpoint).
+            stale_proc = existing.process if existing else None
+            # Note: if the existing state is `submitting`, the user
+            # explicitly chose to restart by clicking Connect again —
+            # tear down the mid-handshake subprocess intentionally.
+            # This is the symmetric case to `cancel_login`'s guard but
+            # with opposite intent (`/cancel` past pending is a no-op
+            # because the user "released" the action; `/start` past
+            # pending means the user wants to start over).
 
             login_id = str(uuid.uuid4())
             claude_home = tempfile.mkdtemp(prefix=f"claude-auth-{tenant_id[:8]}-")
@@ -229,6 +237,12 @@ class ClaudeAuthManager:
                 claude_home=claude_home,
             )
             self._by_tenant[tenant_id] = state
+
+        # Reap the stale process outside the lock — `_terminate_and_reap`
+        # can take up to 7s and we don't want `/status` polls blocked
+        # behind it.
+        if stale_proc is not None:
+            _terminate_and_reap(stale_proc)
 
         threading.Thread(target=self._run_login, args=(state,), daemon=True).start()
         return state
@@ -792,6 +806,12 @@ def _serialize_state(state: ClaudeLoginState, connected: bool = False) -> dict:
         # so the UI doesn't have to know the exact state-machine
         # vocabulary. `submitting` and `connected` close the input.
         "awaiting_code": bool(state and state.status == "pending"),
+        # Whether `/cancel` will actually do anything. Mirrors the
+        # `cancel_login` guard so the UI can disable the Cancel button
+        # past `pending` (the paste has been delivered, cancel is a
+        # no-op). UI shouldn't have to know the state-machine
+        # vocabulary to render this correctly.
+        "cancellable": bool(state and state.status in ("starting", "pending")),
     }
 
 
