@@ -41,6 +41,8 @@
     "integrations": "Integraciones",
     "organizations": "Organizaci\u00f3n",
     "settings": "Configuraci\u00f3n",
+    "alphaControl": "Centro Alpha",
+    "agentFleet": "Flota de Agentes",
     "aiOperations": "OPERACIONES IA",
     "data": "DATOS",
     "admin": "ADMIN",
@@ -56,7 +58,22 @@
     "learning": "Información y ajustes de RL",
     "integrations": "Conectores, fuentes de datos y datasets",
     "organizations": "Identidad del tenant, miembros, auditoría",
-    "settings": "Configuraci\u00f3n de la plataforma"
+    "settings": "Configuraci\u00f3n de la plataforma",
+    "alphaControl": "Centro de mando + chat con tus agentes",
+    "agentFleet": "Flota, salud y costo en una sola vista",
+    "memoryLearning": "Memoria + aprendizaje"
+  },
+  "subnav": {
+    "ariaAlphaControl": "Secciones de Centro Alpha",
+    "ariaAgentFleet": "Secciones de Flota de Agentes",
+    "ariaMemory": "Secciones de Memoria",
+    "overview": "Resumen",
+    "chat": "Chat",
+    "fleet": "Flota",
+    "health": "Salud",
+    "costUsage": "Costo y Uso",
+    "memory": "Memoria",
+    "learning": "Aprendizaje"
   },
   "landing": {
     "trustedBy": "Construido con"

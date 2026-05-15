@@ -6,6 +6,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAuth } from '../App';
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { alphaControlTabs, ARIA_LABEL_KEYS } from '../components/subnavConfig';
 import FeedbackActions from '../components/chat/FeedbackActions';
 import ReportVisualization from '../components/chat/ReportVisualization';
 import RoutingFooter from '../components/RoutingFooter';
@@ -537,6 +539,7 @@ const ChatPage = () => {
         </div>
       </header>
       <Container fluid className="chat-page-container">
+        <SubNav tabs={alphaControlTabs} ariaLabelKey={ARIA_LABEL_KEYS.alphaControl} ariaLabelFallback="Alpha Control sections" />
         <Row className="g-4">
           <Col lg={4} xl={3} className="chat-sessions-col">
             <div className="d-flex justify-content-between align-items-center mb-3">

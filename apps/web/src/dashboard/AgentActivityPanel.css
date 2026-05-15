@@ -1,0 +1,66 @@
+.ap-right {
+  background: var(--ap-shell-bg-2);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ap-right-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  text-transform: uppercase;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--ap-shell-text-dim);
+}
+.ap-right-title { font-weight: 600; }
+.ap-right-status {
+  font-size: 10px;
+  font-weight: 500;
+}
+.ap-right-status-open { color: #4ade80; }
+.ap-right-status-connecting { color: var(--ap-shell-text-dim); }
+.ap-right-status-error { color: #fbbf24; }
+.ap-right-status-idle { color: var(--ap-shell-text-dim); }
+
+.ap-right-empty {
+  padding: 16px 14px;
+  font-size: 12px;
+  color: var(--ap-shell-text-dim);
+}
+
+.ap-right-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  overflow-y: auto;
+}
+.ap-right-row {
+  display: flex;
+  gap: 8px;
+  padding: 6px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.ap-right-row-icon {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--ap-shell-text-dim);
+}
+.ap-right-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.ap-right-row-line {
+  font-size: 12px;
+  color: var(--ap-shell-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ap-right-row-meta {
+  font-size: 10px;
+  color: var(--ap-shell-text-dim);
+  margin-top: 2px;
+}

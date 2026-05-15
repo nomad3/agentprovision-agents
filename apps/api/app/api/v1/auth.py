@@ -106,15 +106,6 @@ def login_for_access_token(
     claims = {"user_id": str(user.id)}
     if user.tenant_id:
         claims["tenant_id"] = str(user.tenant_id)
-    # Alpha Control Plane: ride the user's Den tier in the access token so
-    # the SPA `useTier()` hook renders the right zones on first paint
-    # without round-tripping. Source of truth is user_preferences; this
-    # is the cache. Falls back to 0 on lookup error.
-    try:
-        from app.services.user_tier import get_tier as _get_den_tier
-        claims["den_tier"] = _get_den_tier(db, user_id=user.id, tenant_id=user.tenant_id)
-    except Exception:
-        claims["den_tier"] = 0
 
     access_token = security.create_access_token(
         user.email,
@@ -199,12 +190,6 @@ def refresh_access_token(
     claims = {"user_id": str(current_user.id)}
     if current_user.tenant_id:
         claims["tenant_id"] = str(current_user.tenant_id)
-    # Mirror the den_tier claim minted at login so refresh doesn't drop it.
-    try:
-        from app.services.user_tier import get_tier as _get_den_tier
-        claims["den_tier"] = _get_den_tier(db, user_id=current_user.id, tenant_id=current_user.tenant_id)
-    except Exception:
-        claims["den_tier"] = 0
     access_token = security.create_access_token(
         current_user.email,
         expires_delta=access_token_expires,

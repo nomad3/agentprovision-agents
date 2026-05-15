@@ -17,8 +17,8 @@ import TenantHealthPage from './pages/TenantHealthPage';
 import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
-import DenPage from './den/DenPage';
-import DashboardPage from './pages/DashboardPage';
+import DashboardShell from './dashboard/DashboardShell';
+import DashboardLegacyPage from './pages/DashboardLegacyPage';
 import DeviceLoginPage from './pages/DeviceLoginPage';
 // DatasetsPage and DataSourcesPage merged into IntegrationsPage
 import DeploymentsPage from './pages/DeploymentsPage';
@@ -159,8 +159,18 @@ function App() {
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/home" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-                <Route path="/den" element={<ProtectedRoute><DenPage /></ProtectedRoute>} />
+                <Route path="/dashboard" element={<ProtectedRoute><DashboardShell /></ProtectedRoute>} />
+                {/* Legacy widget dashboard kept reachable for one
+                    release while users adopt the new IDE shell.
+                    Plan to remove after Phase 3 of the Alpha Control
+                    Center rollout (see docs/plans/2026-05-15-alpha-
+                    control-center-ide-shell-design.md). */}
+                <Route path="/dashboard/legacy" element={<ProtectedRoute><DashboardLegacyPage /></ProtectedRoute>} />
+                {/* /den sunset — its capabilities (event stream, tier
+                    gating, terminal drawer) are being merged into
+                    Dashboard + AI Chat. Redirect preserves any
+                    bookmarks shared during the brief Tier 0–1 rollout. */}
+                <Route path="/den" element={<Navigate to="/dashboard" replace />} />
                 {/* PR-Q6: guided initial-training wizard. Mirrors the
                     CLI `alpha quickstart` flow (apps/agentprovision-cli/
                     src/commands/quickstart.rs) as React screens.

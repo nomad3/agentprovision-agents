@@ -1,0 +1,67 @@
+.ap-titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--ap-shell-bg-2);
+  font-size: 12px;
+  user-select: none;
+}
+
+.ap-titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ap-titlebar-brand-name {
+  font-weight: 600;
+  color: var(--ap-shell-text);
+}
+.ap-titlebar-divider {
+  color: var(--ap-shell-text-dim);
+}
+.ap-titlebar-session {
+  color: var(--ap-shell-text-dim);
+}
+
+.ap-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ap-titlebar-btn {
+  background: transparent;
+  border: 0;
+  color: var(--ap-shell-text-dim);
+  padding: 4px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ap-titlebar-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ap-shell-text);
+}
+
+.ap-titlebar-user {
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--ap-shell-text-dim) !important;
+  padding: 4px 8px !important;
+  font-size: 12px !important;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+}
+.ap-titlebar-user:hover,
+.ap-titlebar-user:focus {
+  color: var(--ap-shell-text) !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+}
+.ap-titlebar-user::after { display: none; }
+.ap-titlebar-user-email {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
