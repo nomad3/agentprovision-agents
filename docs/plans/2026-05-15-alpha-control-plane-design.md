@@ -10,6 +10,10 @@
 
 ## Revision log
 
+- **rev 2b (2026-05-15)** — round-2 review NITs:
+  - NIT-1 (`seq_no` allocation): picked `pg_advisory_xact_lock(hashtext(session_id))` + COALESCE(MAX+1) with UNIQUE safety net. Explicit failure-ordering paragraph added.
+  - NIT-2 (`auto_quality_score` capability key): added `showAutoQualityScore: true` at tier 4 in `TIER_FEATURES`.
+  - Cross-ref: §5.2 WhatsApp binding now explicitly names `chat_sessions(id)` lookup pattern.
 - **rev 2 (2026-05-15)** — addresses round-1 spec review:
   - B1 (event protocol vs existing infra): added §5.1 with persistence table schema, v2 endpoint, name-mapping policy.
   - B2 (session identity): added §5.2 defining `session_id` as the unifier and how each channel binds.
@@ -221,8 +225,8 @@ Two-pattern hybrid; both required:
      3: { showRail: true, showRightPanel: true, showPalette: true,
           allowedRailIcons: ['integrations', 'memory', 'projects', 'leads',
                              'datasets', 'experiments', 'entities', 'skills'] },
-     4: { ...tier3, showDrawerByDefault: true, allowedRailIcons: [...tier3.allowedRailIcons,
-                                                                    'fleet', 'deployments', 'rl'] },
+     4: { ...tier3, showDrawerByDefault: true, showAutoQualityScore: true,
+          allowedRailIcons: [...tier3.allowedRailIcons, 'fleet', 'deployments', 'rl'] },
      5: { ...tier4, showWorkflowEditor: true, showSkillAuthor: true,
           showPolicyEditor: true, /* all icons */ },
    };
@@ -342,14 +346,31 @@ CREATE INDEX session_events_session_seq ON session_events(session_id, seq_no);
 CREATE INDEX session_events_tenant_created ON session_events(tenant_id, created_at);
 ```
 
-`seq_no` is allocated via a per-session counter (Postgres advisory lock or `SELECT max(seq_no)+1 FOR UPDATE`; tier 0–1 plan picks the simplest correct option). 30-day retention via daily cron `DELETE WHERE created_at < NOW() - INTERVAL '30 days'`.
+**`seq_no` allocation:** Postgres transaction-scoped advisory lock keyed by session.
+
+```sql
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext($session_id::text));
+INSERT INTO session_events (session_id, tenant_id, seq_no, event_type, payload)
+VALUES ($session_id, $tenant_id,
+        COALESCE((SELECT MAX(seq_no) FROM session_events WHERE session_id = $session_id), 0) + 1,
+        $type, $payload);
+-- only AFTER commit: publish to Redis (write-then-publish per §5.1)
+COMMIT;
+```
+
+Stateless (no counter row needed), correctly serializes concurrent publishers in the same session (a coalition activity emitting while a user POSTs), and the lock auto-releases at COMMIT/ROLLBACK. Cross-session writes don't contend. The `UNIQUE(session_id, seq_no)` index is the safety net if the advisory lock is ever bypassed.
+
+**Failure ordering**: if the Postgres INSERT fails (constraint violation, connection drop), the Redis publish is **skipped** — caller returns an error. If the INSERT commits but the Redis publish fails (broker down, network), live SSE listeners miss the event but the next reconnect-with-`since=seq_no` recovers it via replay; this is the case §5.4's 250ms warmup window is designed for.
+
+**30-day retention:** daily cron `DELETE WHERE created_at < NOW() - INTERVAL '30 days'`.
 
 ### 5.2 Session identity across channels
 
 A **session** is the unit that channels subscribe to. `session_id` is the unifier across CLI, Web, Tauri, WhatsApp.
 
 - **Web / Tauri**: explicit. User creates / picks a session via the existing `/sessions` endpoint. Cockpit opens to the last-active session by default.
-- **WhatsApp**: implicit. The existing channel-account → conversation mapping resolves to a `session_id` server-side. One conversation thread = one session. (No design change here; this is how WhatsApp routing already works in `whatsapp_service.py`.)
+- **WhatsApp**: implicit. The existing channel-account → conversation mapping resolves to a `session_id` server-side via a real `chat_sessions` row (`source='whatsapp'`, `external_id=session_key`). One conversation thread = one `chat_sessions.id` = one session_events stream. (No design change here; this is how WhatsApp routing already works in `whatsapp_service.py:964–973`.)
 - **Alpha CLI**: new `alpha attach <session_id>` and `alpha session new` commands. Auto-resumes last session when invoked without args. Binds via user-scoped JWT (not agent-scoped — agent-scoped MCP JWTs continue to flow to mcp-server for tool calls, but the human-facing CLI uses a user JWT). Per `cli_as_agent_control_plane.md` the bidirectional model is preserved: user-mode alpha calls the orchestrator with their user JWT; agent-mode (leaf alpha invoking MCP tools) uses the agent-scoped JWT.
 - **Multi-channel concurrent**: same `session_id` opened from N channels → N subscribers to the same event stream. Single source of truth.
 
