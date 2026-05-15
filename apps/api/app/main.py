@@ -104,6 +104,14 @@ app.add_middleware(
 
 app.include_router(v1_routes.router, prefix="/api/v1")
 
+# Alpha Control Plane v2 — channel-agnostic event protocol with replay.
+# Versioned to keep the legacy v1 envelope unchanged for existing
+# consumers (ChatPage.js). New cockpit / Tauri / CLI viewports
+# subscribe here. See docs/plans/2026-05-15-alpha-control-plane-design.md §5.
+from app.api.v2 import router as v2_router  # noqa: E402
+
+app.include_router(v2_router, prefix="/api/v2")
+
 # Root-level install scripts so the user-visible install command stays
 # short — `curl -fsSL https://agentprovision.com/install.sh | sh` (PR-D-3).
 from app.api.v1 import install_scripts  # noqa: E402
