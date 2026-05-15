@@ -1,20 +1,23 @@
+/* Chat surface used inside the DashboardControlCenter card. Brand
+   tokens only — no IDE-shell custom vars. */
+
 .ap-chattab {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--ap-shell-bg);
+  background: transparent;
 }
 
 .ap-chattab-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--ap-space-2) var(--ap-space-4);
-  border-bottom: 1px solid var(--ap-shell-border);
+  padding: var(--ap-space-2) var(--ap-space-3);
+  border-bottom: 1px solid var(--ap-border);
   font-size: var(--ap-fs-sm);
 }
 .ap-chattab-bar-title {
-  color: var(--ap-shell-text);
+  color: var(--ap-text);
   font-weight: 500;
 }
 .ap-chattab-bar-link {
@@ -27,7 +30,7 @@
 .ap-chattab-thread {
   flex: 1;
   overflow-y: auto;
-  padding: var(--ap-space-4);
+  padding: var(--ap-space-3) var(--ap-space-4);
   display: flex;
   flex-direction: column;
   gap: var(--ap-space-3);
@@ -36,27 +39,25 @@
 .ap-chattab-msg {
   max-width: 720px;
   background: var(--ap-card-bg);
-  border: 1px solid var(--ap-shell-border);
-  padding: var(--ap-space-3) var(--ap-space-4);
+  border: 1px solid var(--ap-border);
+  padding: var(--ap-space-2) var(--ap-space-3);
   border-radius: var(--ap-radius-md);
   font-size: var(--ap-fs-sm);
   line-height: 1.55;
-  color: var(--ap-shell-text);
+  color: var(--ap-text);
 }
 .ap-chattab-msg.user {
   align-self: flex-end;
   background: var(--ap-primary-tint-hi);
   border-color: var(--ap-primary-tint-hi);
 }
-.ap-chattab-msg.assistant {
-  align-self: flex-start;
-}
+.ap-chattab-msg.assistant { align-self: flex-start; }
 .ap-chattab-msg-role {
   font-size: var(--ap-fs-xs);
-  color: var(--ap-shell-text-dim);
+  color: var(--ap-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .ap-chattab-msg-content {
   white-space: pre-wrap;
@@ -70,29 +71,28 @@
 @keyframes ap-chattab-blink { to { opacity: 0; } }
 
 .ap-chattab-empty {
-  color: var(--ap-shell-text-dim);
+  color: var(--ap-text-muted);
   font-size: var(--ap-fs-sm);
-  padding: var(--ap-space-6);
+  padding: var(--ap-space-5);
   text-align: center;
 }
 .ap-chattab-error {
   color: var(--ap-danger);
   font-size: var(--ap-fs-sm);
-  padding: var(--ap-space-3) var(--ap-space-4);
+  padding: var(--ap-space-2) var(--ap-space-4);
 }
 
 .ap-chattab-input {
   display: flex;
   gap: var(--ap-space-2);
-  padding: var(--ap-space-3) var(--ap-space-4);
-  border-top: 1px solid var(--ap-shell-border);
-  background: var(--ap-shell-bg-2);
+  padding: var(--ap-space-2) var(--ap-space-3);
+  border-top: 1px solid var(--ap-border);
 }
 .ap-chattab-input textarea {
   flex: 1;
   background: var(--ap-card-bg);
-  color: var(--ap-shell-text);
-  border: 1px solid var(--ap-shell-border);
+  color: var(--ap-text);
+  border: 1px solid var(--ap-border);
   border-radius: var(--ap-radius-md);
   padding: var(--ap-space-2) var(--ap-space-3);
   font-size: var(--ap-fs-sm);
@@ -108,16 +108,11 @@
   background: var(--ap-primary);
   color: white;
   border: 0;
-  padding: 0 var(--ap-space-5);
+  padding: 0 var(--ap-space-4);
   border-radius: var(--ap-radius-md);
   cursor: pointer;
   font-size: var(--ap-fs-sm);
   font-weight: 500;
 }
-.ap-chattab-input button:hover:not(:disabled) {
-  background: var(--ap-primary-hover);
-}
-.ap-chattab-input button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+.ap-chattab-input button:hover:not(:disabled) { background: var(--ap-primary-hover); }
+.ap-chattab-input button:disabled { opacity: 0.5; cursor: not-allowed; }

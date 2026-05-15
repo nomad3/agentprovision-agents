@@ -1,0 +1,96 @@
+/*
+ * Alpha Control Center page styles. Composes brand tokens + classes
+ * (.ap-card, .ap-btn-primary, .ap-section-label) so the surface
+ * matches every other page in the app.
+ */
+
+.dcc-container {
+  max-width: 1280px;
+}
+
+/* ── Sessions list (left column of the chat surface) ───────────── */
+
+.dcc-sessions { padding: var(--ap-space-3); }
+
+.dcc-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.dcc-session-row {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: var(--ap-space-2) var(--ap-space-3);
+  border-radius: var(--ap-radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+  color: var(--ap-text);
+}
+.dcc-session-row:hover { background: var(--ap-primary-tint); }
+.dcc-session-row.active {
+  background: var(--ap-primary-tint-hi);
+  color: var(--ap-text);
+}
+.dcc-session-title {
+  font-size: var(--ap-fs-sm);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dcc-session-meta {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+}
+
+/* ── Embedded chat thread (center column) ──────────────────────── */
+
+.dcc-chat-row { min-height: 540px; }
+
+.dcc-thread-card { overflow: hidden; }
+.dcc-thread-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  height: 540px;
+}
+.dcc-thread-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: var(--ap-space-3);
+  color: var(--ap-text-muted);
+  text-align: center;
+  padding: var(--ap-space-6);
+}
+
+/* Inside the dashboard card, the ChatTab component should fill the
+   card body rather than its IDE-shell full-height styling. */
+.dcc-thread-body .ap-chattab {
+  height: 540px;
+  background: transparent;
+}
+.dcc-thread-body .ap-chattab-bar { padding-left: var(--ap-space-4); }
+
+/* ── Agent activity right column ───────────────────────────────── */
+
+.dcc-activity-card { overflow: hidden; }
+.dcc-activity-card .ap-right {
+  background: transparent;
+  border: 0;
+  min-height: 540px;
+}
+.dcc-activity-card .ap-right-header { padding-left: var(--ap-space-3); padding-right: var(--ap-space-3); }
+.dcc-activity-card .ap-right-row { padding-left: var(--ap-space-3); padding-right: var(--ap-space-3); }
