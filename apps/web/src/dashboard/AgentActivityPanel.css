@@ -9,25 +9,25 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px 8px;
+  padding: var(--ap-space-4) var(--ap-space-4) var(--ap-space-2);
   text-transform: uppercase;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
+  font-size: var(--ap-fs-xs);
+  letter-spacing: 0.05em;
   color: var(--ap-shell-text-dim);
 }
 .ap-right-title { font-weight: 600; }
 .ap-right-status {
-  font-size: 10px;
+  font-size: var(--ap-fs-xs);
   font-weight: 500;
 }
-.ap-right-status-open { color: #4ade80; }
+.ap-right-status-open { color: var(--ap-success); }
 .ap-right-status-connecting { color: var(--ap-shell-text-dim); }
-.ap-right-status-error { color: #fbbf24; }
+.ap-right-status-error { color: var(--ap-warning); }
 .ap-right-status-idle { color: var(--ap-shell-text-dim); }
 
 .ap-right-empty {
-  padding: 16px 14px;
-  font-size: 12px;
+  padding: var(--ap-space-4);
+  font-size: var(--ap-fs-sm);
   color: var(--ap-shell-text-dim);
 }
 
@@ -39,9 +39,9 @@
 }
 .ap-right-row {
   display: flex;
-  gap: 8px;
-  padding: 6px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  gap: var(--ap-space-2);
+  padding: 6px var(--ap-space-4);
+  border-bottom: 1px solid var(--ap-shell-border);
 }
 .ap-right-row-icon {
   flex: 0 0 auto;
@@ -53,14 +53,14 @@
   min-width: 0;
 }
 .ap-right-row-line {
-  font-size: 12px;
+  font-size: var(--ap-fs-sm);
   color: var(--ap-shell-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ap-right-row-meta {
-  font-size: 10px;
+  font-size: var(--ap-fs-xs);
   color: var(--ap-shell-text-dim);
   margin-top: 2px;
 }

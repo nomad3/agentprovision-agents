@@ -9,38 +9,40 @@
   display: flex;
   background: var(--ap-shell-bg-2);
   border-bottom: 1px solid var(--ap-shell-border);
-  height: 36px;
+  height: 38px;
   overflow-x: auto;
+  padding: 0 var(--ap-space-2);
+  gap: 2px;
+  align-items: center;
 }
 .ap-editor-tabbar-empty {
-  padding: 9px 14px;
-  font-size: 11.5px;
+  padding: 10px var(--ap-space-4);
+  font-size: var(--ap-fs-xs);
   color: var(--ap-shell-text-dim);
 }
 
 .ap-editor-tab {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  height: 100%;
-  font-size: 12px;
+  gap: var(--ap-space-2);
+  padding: 0 var(--ap-space-3);
+  height: 30px;
+  font-size: var(--ap-fs-sm);
   color: var(--ap-shell-text-dim);
   background: transparent;
-  border-right: 1px solid var(--ap-shell-border);
-  border-top: 2px solid transparent;
+  border-radius: var(--ap-radius-sm);
   cursor: pointer;
   min-width: 0;
   max-width: 220px;
 }
 .ap-editor-tab:hover {
   color: var(--ap-shell-text);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--ap-primary-tint);
 }
 .ap-editor-tab.active {
   color: var(--ap-shell-text);
-  background: var(--ap-shell-bg);
-  border-top-color: var(--ap-shell-accent);
+  background: var(--ap-card-bg);
+  box-shadow: inset 0 -2px 0 var(--ap-primary);
 }
 .ap-editor-tab-title {
   overflow: hidden;
@@ -54,10 +56,11 @@
   padding: 2px;
   cursor: pointer;
   border-radius: 2px;
+  display: inline-flex;
 }
 .ap-editor-tab-close:hover {
   color: var(--ap-shell-text);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--ap-primary-tint-hi);
 }
 
 .ap-editor-body {
@@ -73,9 +76,18 @@
   justify-content: center;
   height: 100%;
   color: var(--ap-shell-text-dim);
-  gap: 12px;
+  gap: var(--ap-space-3);
   text-align: center;
-  padding: 40px;
+  padding: var(--ap-space-10);
 }
-.ap-editor-empty-title { font-size: 18px; color: var(--ap-shell-text); }
-.ap-editor-empty-hint { font-size: 13px; }
+.ap-editor-empty-title {
+  font-size: var(--ap-fs-xl, 1.2rem);
+  color: var(--ap-shell-text);
+  font-weight: 500;
+}
+.ap-editor-empty-hint { font-size: var(--ap-fs-base, 0.95rem); }
+.ap-editor-empty-hint a {
+  color: var(--ap-primary);
+  text-decoration: none;
+}
+.ap-editor-empty-hint a:hover { text-decoration: underline; }

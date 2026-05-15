@@ -1,26 +1,29 @@
 /*
- * Alpha Control Center IDE shell — VSCode/Cursor-style grid.
+ * Alpha Control Center IDE shell — VSCode/Cursor-style grid that adapts
+ * to the app's brand tokens (light/dark) instead of forcing its own
+ * VS-Code-grey palette.
  *
  *   ┌── titlebar ──────────────────────────────────┐
  *   │ activity │ sidebar │ editor │ right         │
  *   ├── statusbar ─────────────────────────────────┤
- *
- * Variables are local to the shell so we don't fight the dashboard's
- * own theme tokens elsewhere.
  */
 
 .ap-shell {
-  --ap-shell-titlebar-h: 38px;
-  --ap-shell-statusbar-h: 24px;
-  --ap-shell-activity-w: 48px;
-  --ap-shell-sidebar-w: 280px;
+  --ap-shell-titlebar-h: 42px;
+  --ap-shell-statusbar-h: 26px;
+  --ap-shell-activity-w: 84px;
+  --ap-shell-sidebar-w: 260px;
   --ap-shell-right-w: 340px;
-  --ap-shell-border: var(--ap-border, #2a2a2a);
-  --ap-shell-bg: var(--ap-bg, #1e1e1e);
-  --ap-shell-bg-2: var(--ap-bg-alt, #252526);
-  --ap-shell-text: var(--ap-text, #cccccc);
-  --ap-shell-text-dim: var(--ap-text-muted, #8a8a8a);
-  --ap-shell-accent: var(--ap-primary, #4f46e5);
+
+  /* These are pulled from the global tokens.css so the shell respects
+     [data-bs-theme="light"|"dark"] without local overrides. */
+  --ap-shell-bg: var(--ap-page-bg);
+  --ap-shell-bg-2: var(--ap-card-bg);
+  --ap-shell-text: var(--ap-text);
+  --ap-shell-text-dim: var(--ap-text-muted);
+  --ap-shell-accent: var(--ap-primary);
+  --ap-shell-border: var(--ap-border);
+  --ap-shell-radius: var(--ap-radius-md);
 
   position: fixed;
   inset: 0;
@@ -40,7 +43,8 @@
     var(--ap-shell-statusbar-h);
   background: var(--ap-shell-bg);
   color: var(--ap-shell-text);
-  font-size: 13px;
+  font-family: var(--ap-font-sans);
+  font-size: var(--ap-fs-sm);
   overflow: hidden;
 }
 
@@ -63,7 +67,6 @@
 .ap-right { grid-area: right; overflow: hidden; }
 .ap-statusbar { grid-area: statusbar; }
 
-/* All five zones share thin separators */
 .ap-titlebar,
 .ap-activitybar,
 .ap-sidebar,

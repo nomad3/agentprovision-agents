@@ -9,12 +9,12 @@ import {
 import './ActivityBar.css';
 
 const ICONS = [
-  { id: 'chat', Icon: FaComments, label: 'Chat (⌘⇧C)' },
-  { id: 'agents', Icon: FaRobot, label: 'Agents (⌘⇧A)' },
-  { id: 'memory', Icon: FaDatabase, label: 'Memory (⌘⇧M)' },
-  { id: 'skills', Icon: FaPuzzlePiece, label: 'Skills (⌘⇧K)' },
-  { id: 'workflows', Icon: FaProjectDiagram, label: 'Workflows (⌘⇧W)' },
-  { id: 'integrations', Icon: FaPlug, label: 'Integrations (⌘⇧I)' },
+  { id: 'chat', Icon: FaComments, label: 'Chat' },
+  { id: 'agents', Icon: FaRobot, label: 'Agents' },
+  { id: 'memory', Icon: FaDatabase, label: 'Memory' },
+  { id: 'skills', Icon: FaPuzzlePiece, label: 'Skills' },
+  { id: 'workflows', Icon: FaProjectDiagram, label: 'Workflows' },
+  { id: 'integrations', Icon: FaPlug, label: 'Integrations' },
 ];
 
 const ActivityBar = ({ active, onActivate }) => (
@@ -30,6 +30,7 @@ const ActivityBar = ({ active, onActivate }) => (
         onClick={() => onActivate(id)}
       >
         <Icon size={18} />
+        <span className="ap-activitybar-label">{label}</span>
       </button>
     ))}
   </div>

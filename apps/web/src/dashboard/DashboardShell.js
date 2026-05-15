@@ -62,7 +62,11 @@ const DashboardShell = () => {
     const v = _readLS(LS_ACTIVITY, DEFAULT_ACTIVITY);
     return ACTIVITIES.includes(v) ? v : DEFAULT_ACTIVITY;
   });
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => _readLS(LS_SIDEBAR_COLLAPSED, false));
+  // Default OPEN. Cached `true` from an earlier session is ignored so users
+  // who had it stuck collapsed don't lose the sidebar on every visit; the
+  // toggle (click same activity twice or sidebar header) is the only way
+  // to collapse and it persists from there.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(() => _readLS(LS_RIGHT_COLLAPSED, false));
 
   const tabsApi = useTabs();
