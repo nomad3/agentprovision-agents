@@ -91,9 +91,14 @@ const Layout = ({ children }) => {
 
   // Active matching is path-prefix aware so sub-routes (e.g. /insights/fleet-health
   // under Agent Fleet, /learning under Memory) keep the parent nav highlighted.
+  // We list exact Agent-Fleet siblings rather than a blanket `/insights/` prefix —
+  // /insights/collaborations belongs to Coalition Replay, not the Fleet group.
   const isActive = (path) => {
     if (path === '/dashboard') return location.pathname === '/dashboard' || location.pathname === '/chat';
-    if (path === '/agents') return location.pathname.startsWith('/agents') || location.pathname.startsWith('/insights/');
+    if (path === '/agents') {
+      const p = location.pathname;
+      return p.startsWith('/agents') || p === '/insights/fleet-health' || p === '/insights/cost';
+    }
     if (path === '/memory') return location.pathname === '/memory' || location.pathname === '/learning';
     return location.pathname === path;
   };

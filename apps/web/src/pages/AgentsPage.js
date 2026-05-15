@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import SubNav from '../components/SubNav';
-import { agentFleetTabs } from '../components/subnavConfig';
+import { agentFleetTabs, ARIA_LABEL_KEYS } from '../components/subnavConfig';
 import agentService from '../services/agent';
 import MarketplaceSection from '../components/agent/MarketplaceSection';
 import HireAgentWizard from '../components/HireAgentWizard';
@@ -247,7 +247,7 @@ const AgentsPage = () => {
           </div>
         </header>
 
-        <SubNav tabs={agentFleetTabs} />
+        <SubNav tabs={agentFleetTabs} ariaLabelKey={ARIA_LABEL_KEYS.agentFleet} ariaLabelFallback="Agent Fleet sections" />
 
         {error && <Alert variant="danger" dismissible onClose={() => setError('')} style={{ fontSize: '0.82rem' }}>{error}</Alert>}
         {success && <Alert variant="success" dismissible onClose={() => setSuccess('')} style={{ fontSize: '0.82rem' }}>{success}</Alert>}

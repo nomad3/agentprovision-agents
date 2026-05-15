@@ -25,7 +25,7 @@ import { useNavigate } from 'react-router-dom';
 
 import Layout from '../components/Layout';
 import SubNav from '../components/SubNav';
-import { agentFleetTabs } from '../components/subnavConfig';
+import { agentFleetTabs, ARIA_LABEL_KEYS } from '../components/subnavConfig';
 import api from '../services/api';
 import { formatApiError } from '../services/apiError';
 import './FleetHealthPage.css';
@@ -138,7 +138,7 @@ const FleetHealthPage = () => {
           </div>
         </header>
 
-        <SubNav tabs={agentFleetTabs} />
+        <SubNav tabs={agentFleetTabs} ariaLabelKey={ARIA_LABEL_KEYS.agentFleet} ariaLabelFallback="Agent Fleet sections" />
 
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible>

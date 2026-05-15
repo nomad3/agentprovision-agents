@@ -6,7 +6,7 @@ import { useAuth } from '../App';
 import LiveActivityFeed from '../components/dashboard/LiveActivityFeed';
 import Layout from '../components/Layout';
 import SubNav from '../components/SubNav';
-import { alphaControlTabs } from '../components/subnavConfig';
+import { alphaControlTabs, ARIA_LABEL_KEYS } from '../components/subnavConfig';
 import { getDashboardStats } from '../services/analytics';
 import { getOnboardingStatus } from '../services/onboarding';
 
@@ -143,7 +143,7 @@ const DashboardPage = () => {
         </header>
 
         {/* Alpha Control sub-nav: this surface absorbs AI Chat. */}
-        <SubNav tabs={alphaControlTabs} />
+        <SubNav tabs={alphaControlTabs} ariaLabelKey={ARIA_LABEL_KEYS.alphaControl} ariaLabelFallback="Alpha Control sections" />
 
         {/* Tier 4 — Live activity feed at top of dashboard */}
         <LiveActivityFeed />

@@ -41,6 +41,8 @@
     "integrations": "Integrations",
     "organizations": "Organization",
     "settings": "Settings",
+    "alphaControl": "Alpha Control",
+    "agentFleet": "Agent Fleet",
     "aiOperations": "AI OPERATIONS",
     "data": "DATA",
     "admin": "ADMIN",
@@ -56,7 +58,22 @@
     "learning": "RL insights & settings",
     "integrations": "Connectors, data sources & datasets",
     "organizations": "Tenant identity, members, audit log",
-    "settings": "Platform settings"
+    "settings": "Platform settings",
+    "alphaControl": "Command center + chat with your agents",
+    "agentFleet": "Fleet, health, and cost in one view",
+    "memoryLearning": "Memory + learning"
+  },
+  "subnav": {
+    "ariaAlphaControl": "Alpha Control sections",
+    "ariaAgentFleet": "Agent Fleet sections",
+    "ariaMemory": "Memory sections",
+    "overview": "Overview",
+    "chat": "Chat",
+    "fleet": "Fleet",
+    "health": "Health",
+    "costUsage": "Cost & Usage",
+    "memory": "Memory",
+    "learning": "Learning"
   },
   "landing": {
     "trustedBy": "Powered by"

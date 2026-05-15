@@ -13,7 +13,7 @@ import RelationsTab from '../components/memory/RelationsTab';
 import { ALL_CATEGORIES, ALL_STATUSES, getCategoryConfig } from '../components/memory/constants';
 import Layout from '../components/Layout';
 import SubNav from '../components/SubNav';
-import { memoryTabs } from '../components/subnavConfig';
+import { memoryTabs, ARIA_LABEL_KEYS } from '../components/subnavConfig';
 import api from '../services/api';
 import { memoryService } from '../services/memory';
 import './MemoryPage.css';
@@ -264,7 +264,7 @@ function MemoryPage() {
           </div>
         </header>
 
-        <SubNav tabs={memoryTabs} />
+        <SubNav tabs={memoryTabs} ariaLabelKey={ARIA_LABEL_KEYS.memory} ariaLabelFallback="Memory sections" />
 
         {/* Tabs */}
         <div className="ap-chip-row" role="tablist">
