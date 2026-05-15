@@ -32,6 +32,8 @@ import {
 } from 'recharts';
 
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { agentFleetTabs } from '../components/subnavConfig';
 import api from '../services/api';
 import { formatApiError } from '../services/apiError';
 import './CostInsightsPage.css';
@@ -159,6 +161,8 @@ const CostInsightsPage = () => {
             </p>
           </div>
         </header>
+
+        <SubNav tabs={agentFleetTabs} />
 
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible>

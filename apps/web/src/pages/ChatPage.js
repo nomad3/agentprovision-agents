@@ -6,6 +6,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAuth } from '../App';
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { alphaControlTabs } from '../components/subnavConfig';
 import FeedbackActions from '../components/chat/FeedbackActions';
 import ReportVisualization from '../components/chat/ReportVisualization';
 import RoutingFooter from '../components/RoutingFooter';
@@ -536,6 +538,7 @@ const ChatPage = () => {
           </button>
         </div>
       </header>
+      <SubNav tabs={alphaControlTabs} />
       <Container fluid className="chat-page-container">
         <Row className="g-4">
           <Col lg={4} xl={3} className="chat-sessions-col">

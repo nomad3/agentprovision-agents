@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Alert, Badge, Col, Container, Form, Row, Spinner, Table } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { memoryTabs } from '../components/subnavConfig';
 import learningService from '../services/learningService';
 
 // ── Shared styles (use design tokens) ────────────────────────────
@@ -915,6 +917,8 @@ function LearningPage() {
             </button>
           </div>
         </header>
+
+        <SubNav tabs={memoryTabs} />
 
         {/* Tabs */}
         <div style={tabsBarStyle}>

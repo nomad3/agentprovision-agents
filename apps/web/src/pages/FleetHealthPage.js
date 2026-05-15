@@ -24,6 +24,8 @@ import {
 import { useNavigate } from 'react-router-dom';
 
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { agentFleetTabs } from '../components/subnavConfig';
 import api from '../services/api';
 import { formatApiError } from '../services/apiError';
 import './FleetHealthPage.css';
@@ -135,6 +137,8 @@ const FleetHealthPage = () => {
             </p>
           </div>
         </header>
+
+        <SubNav tabs={agentFleetTabs} />
 
         {error && (
           <Alert variant="danger" onClose={() => setError(null)} dismissible>

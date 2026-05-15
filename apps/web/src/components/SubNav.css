@@ -1,0 +1,27 @@
+.ap-subnav {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--ap-border);
+  margin-bottom: 1.25rem;
+  overflow-x: auto;
+}
+
+.ap-subnav-link {
+  padding: 0.55rem 1rem;
+  font-size: var(--ap-fs-sm);
+  color: var(--ap-text-muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.ap-subnav-link:hover {
+  color: var(--ap-text);
+}
+
+.ap-subnav-link.active {
+  color: var(--ap-text);
+  border-bottom-color: var(--ap-primary, #4f46e5);
+  font-weight: 500;
+}

@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import {
   FaSignOutAlt as BoxArrowRight,
   FaBuilding as BuildingFill,
-  FaComments as ChatDotsFill,
   FaDatabase as DatabaseFill,
   FaCog as GearFill,
   FaHome as HouseDoorFill,
@@ -15,7 +14,6 @@ import {
   FaRobot as Robot,
   FaSun as SunFill,
   FaPuzzlePiece as PuzzlePiece,
-  FaChartLine as ChartLine,
   FaHeartbeat as HeartbeatFill
 } from 'react-icons/fa';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -55,31 +53,25 @@ const Layout = ({ children }) => {
     i18n.changeLanguage(code);
   };
 
-  // Navigation structure
+  // Navigation structure — consolidated into the Alpha Control Center IA:
+  // Integrations leads (most-used surface); Dashboard absorbs AI Chat as a tab;
+  // Agent Fleet absorbs Fleet Health + Cost & Usage via SubNav inside the page;
+  // Memory absorbs Learning via SubNav inside the page.
   const navSections = [
     {
-      title: null,  // No header for top-level dashboard
+      title: null,
       items: [
-        { path: '/dashboard', icon: HouseDoorFill, label: t('sidebar.dashboard'), description: t('sidebar_desc.dashboard') },
+        { path: '/integrations', icon: PlugFill, label: t('sidebar.integrations'), description: t('sidebar_desc.integrations') },
+        { path: '/dashboard', icon: HouseDoorFill, label: t('sidebar.alphaControl', 'Alpha Control'), description: t('sidebar_desc.alphaControl', 'Command center + chat with your agents') },
       ]
     },
     {
       title: t('sidebar.aiOperations'),
       items: [
-        { path: '/chat', icon: ChatDotsFill, label: t('sidebar.chat'), description: t('sidebar_desc.chat') },
-        { path: '/agents', icon: Robot, label: t('sidebar.agents'), description: t('sidebar_desc.agents') },
-        { path: '/insights/fleet-health', icon: HeartbeatFill, label: t('sidebar.fleetHealth', 'Fleet Health'), description: t('sidebar_desc.fleetHealth', 'Imported-agent activity and zombies') },
-        { path: '/insights/cost', icon: ChartLine, label: t('sidebar.costInsights', 'Cost & Usage'), description: t('sidebar_desc.costInsights', 'Token + cost rollup across the fleet') },
+        { path: '/agents', icon: Robot, label: t('sidebar.agentFleet', 'Agent Fleet'), description: t('sidebar_desc.agentFleet', 'Fleet, health, and cost in one view') },
         { path: '/workflows', icon: ProjectDiagramFill, label: t('sidebar.workflows'), description: t('sidebar_desc.workflows') },
-        { path: '/memory', icon: DatabaseFill, label: t('sidebar.memory'), description: t('sidebar_desc.memory') },
+        { path: '/memory', icon: DatabaseFill, label: t('sidebar.memory'), description: t('sidebar_desc.memoryLearning', 'Memory + learning') },
         { path: '/skills', icon: PuzzlePiece, label: t('sidebar.skills'), description: t('sidebar_desc.skills') },
-        { path: '/learning', icon: ChartLine, label: t('sidebar.learning'), description: t('sidebar_desc.learning') },
-      ]
-    },
-    {
-      title: t('sidebar.data'),
-      items: [
-        { path: '/integrations', icon: PlugFill, label: t('sidebar.integrations'), description: t('sidebar_desc.integrations') },
       ]
     },
     {
@@ -97,7 +89,14 @@ const Layout = ({ children }) => {
     }
   ];
 
-  const isActive = (path) => location.pathname === path;
+  // Active matching is path-prefix aware so sub-routes (e.g. /insights/fleet-health
+  // under Agent Fleet, /learning under Memory) keep the parent nav highlighted.
+  const isActive = (path) => {
+    if (path === '/dashboard') return location.pathname === '/dashboard' || location.pathname === '/chat';
+    if (path === '/agents') return location.pathname.startsWith('/agents') || location.pathname.startsWith('/insights/');
+    if (path === '/memory') return location.pathname === '/memory' || location.pathname === '/learning';
+    return location.pathname === path;
+  };
 
   return (
     <div className="layout-container">

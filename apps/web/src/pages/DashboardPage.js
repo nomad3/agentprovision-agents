@@ -5,6 +5,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import LiveActivityFeed from '../components/dashboard/LiveActivityFeed';
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { alphaControlTabs } from '../components/subnavConfig';
 import { getDashboardStats } from '../services/analytics';
 import { getOnboardingStatus } from '../services/onboarding';
 
@@ -139,6 +141,9 @@ const DashboardPage = () => {
             <p className="ap-page-subtitle">{t('subtitle')}</p>
           </div>
         </header>
+
+        {/* Alpha Control sub-nav: this surface absorbs AI Chat. */}
+        <SubNav tabs={alphaControlTabs} />
 
         {/* Tier 4 — Live activity feed at top of dashboard */}
         <LiveActivityFeed />

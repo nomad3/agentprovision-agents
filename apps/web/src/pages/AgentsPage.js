@@ -4,6 +4,8 @@ import { FaFileImport, FaPlus, FaUserPlus } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
+import SubNav from '../components/SubNav';
+import { agentFleetTabs } from '../components/subnavConfig';
 import agentService from '../services/agent';
 import MarketplaceSection from '../components/agent/MarketplaceSection';
 import HireAgentWizard from '../components/HireAgentWizard';
@@ -244,6 +246,8 @@ const AgentsPage = () => {
             </button>
           </div>
         </header>
+
+        <SubNav tabs={agentFleetTabs} />
 
         {error && <Alert variant="danger" dismissible onClose={() => setError('')} style={{ fontSize: '0.82rem' }}>{error}</Alert>}
         {success && <Alert variant="success" dismissible onClose={() => setSuccess('')} style={{ fontSize: '0.82rem' }}>{success}</Alert>}
