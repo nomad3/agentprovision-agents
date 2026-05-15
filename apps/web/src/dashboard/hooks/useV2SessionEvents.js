@@ -15,9 +15,10 @@
  *   when the stream ends unexpectedly. Backend never closes a healthy
  *   stream — a clean EOF means a proxy timeout / network blip and
  *   we should resume.
- * - Dedupes by event_id; skips frames that lack both event_id and
- *   seq_no (the design guarantees both, so the legacy fallback was
- *   silently defeating dedupe).
+ * - Dedupes by event_id (or `seq:${seq_no}` if event_id is missing);
+ *   skips frames that lack both. The dedupe set is rebuilt from the
+ *   live event window whenever the window is trimmed, so it never
+ *   grows unbounded over long sessions.
  *
  * Status values (consumed by AgentActivityPanel for the indicator):
  *   idle          — no session bound
@@ -25,7 +26,7 @@
  *   open          — receiving events
  *   reconnecting  — stream dropped, backoff timer running
  *   error         — non-recoverable (caller should investigate)
- *   unauthorized  — no JWT in localStorage
+ *   unauthorized  — no JWT in localStorage / 401 from server
  */
 import { useEffect, useRef, useState } from 'react';
 
@@ -37,6 +38,8 @@ const BACKOFF_MAX_MS = 30_000;
 const _getToken = () => {
   try { return localStorage.getItem('token') || ''; } catch { return ''; }
 };
+
+const _idFor = (env) => env.event_id || (env.seq_no != null ? `seq:${env.seq_no}` : null);
 
 export const useV2SessionEvents = (sessionId) => {
   const [events, setEvents] = useState([]);
@@ -63,10 +66,12 @@ export const useV2SessionEvents = (sessionId) => {
       if (cancelled) return;
       const token = _getToken();
       if (!token) {
+        if (cancelled) return;
         setStatus('unauthorized');
         return;
       }
       ctrl = new AbortController();
+      if (cancelled) return;
       setStatus((prev) => (prev === 'open' ? 'reconnecting' : 'connecting'));
       const since = lastSeqNo.current;
       const url = since != null
@@ -80,8 +85,8 @@ export const useV2SessionEvents = (sessionId) => {
           },
           signal: ctrl.signal,
         });
+        if (cancelled) return;
         if (!res.ok || !res.body) {
-          // 401 → unauthorized; everything else → transient error, retry.
           if (res.status === 401) {
             setStatus('unauthorized');
             return;
@@ -97,17 +102,16 @@ export const useV2SessionEvents = (sessionId) => {
         // eslint-disable-next-line no-constant-condition
         while (true) {
           const { done, value } = await reader.read();
+          if (cancelled) return;
           if (done) break;
           buf += decoder.decode(value, { stream: true });
           const lines = buf.split('\n');
-          buf = lines.pop();
+          buf = lines.pop() || '';
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue;
             let env;
             try { env = JSON.parse(line.slice(6)); } catch { continue; }
-            const id = env.event_id || (env.seq_no != null ? `seq:${env.seq_no}` : null);
-            // Skip frames that carry neither id nor seq_no — dedupe
-            // can't function and the design guarantees both are present.
+            const id = _idFor(env);
             if (!id) continue;
             if (seenIds.current.has(id)) continue;
             seenIds.current.add(id);
@@ -118,16 +122,28 @@ export const useV2SessionEvents = (sessionId) => {
             }
             setEvents((prev) => {
               const next = [...prev, env];
-              return next.length > MAX_EVENTS ? next.slice(next.length - MAX_EVENTS) : next;
+              if (next.length > MAX_EVENTS) {
+                // Bound dedupe set growth: rebuild it from the trimmed
+                // window. Replay events that fall out of the window can
+                // arrive again from a reconnect's `since=`, but the
+                // server-side seq_no monotonicity already guards that —
+                // we only reset the *dedupe cache* here, not lastSeqNo.
+                const trimmed = next.slice(next.length - MAX_EVENTS);
+                const rebuilt = new Set();
+                for (const e of trimmed) {
+                  const eid = _idFor(e);
+                  if (eid) rebuilt.add(eid);
+                }
+                seenIds.current = rebuilt;
+                return trimmed;
+              }
+              return next;
             });
           }
         }
       } catch (err) {
         if (cancelled || err.name === 'AbortError') return;
       }
-      // Stream ended (clean EOF, network drop, or thrown error). Schedule
-      // a reconnect with `since=lastSeqNo` so the replay endpoint can fill
-      // any gap before resuming live.
       if (cancelled) return;
       setStatus('reconnecting');
       const delay = backoffMs;
