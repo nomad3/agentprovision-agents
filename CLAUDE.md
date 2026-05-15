@@ -112,6 +112,81 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - **Heartbeat**: `POST /agents/{id}/heartbeat` for external/long-running agents to signal liveness.
 - **UI**: `AgentsPage` fleet view (status badges, AI Assistants / External Agents sections, Import modal). `AgentDetailPage` with Performance, Audit, Versions, Integrations tabs.
 
+**Alpha Control Plane** (shipped 2026-05-15, design `docs/plans/2026-05-15-alpha-control-plane-design.md` + plan `…-tier-0-1-plan.md`): the cockpit / Den at `/den` — a redesigned chat workspace that unifies every agentic-AI surface into one place. Three layers:
+
+```
+┌──────────────────────────────────────────────────┐
+│  CHANNELS  (viewports onto the orchestrator)     │
+│  alpha CLI │ Web /den │ Tauri │ WhatsApp │ …      │
+└──────────────────────────────────────────────────┘
+                      ↕  /api/v2/sessions/{id}/events
+┌──────────────────────────────────────────────────┐
+│  MESH  (agent-to-agent collaboration)            │
+│  A2A coalition │ blackboard │ handoffs            │
+│  Inbound-only: leaf → orchestrator via SSE        │
+└──────────────────────────────────────────────────┘
+                      ↕
+┌──────────────────────────────────────────────────┐
+│  KERNEL  (alpha CLI as engine, cloud-resident)   │
+│  CLI fleet routing │ vault │ memory │ MCP tools   │
+│  Workflows │ skills │ RL store                    │
+└──────────────────────────────────────────────────┘
+```
+
+**The Den** is the visual layer — same orchestrator state, multiple viewports. Wolf-pack metaphor: alpha commands the pack from the Den.
+
+```
+┌─[ Left rail ]─┬─────────[ Center ]──────────┬─[ Right panel ]─┐
+│  Icon strip   │   Alpha conversation        │  Context object │
+│  Memory       │   + inline plan stepper     │  (file diff,    │
+│  Projects     │   + inline tool-call cards  │   memory entry, │
+│  Leads        │                             │   lead, agent,  │
+│  Datasets     │                             │   replay)       │
+│  Experiments  │                             │                 │
+│  Entities     │                             │                 │
+│  Fleet (T4+)  │                             │                 │
+├───────────────┴─────────────────────────────┴─────────────────┤
+│  [ Live terminal drawer — tier 4+, collapsible ]              │
+│  Streams cloud worker CLI subprocess output (multi-tab)        │
+└───────────────────────────────────────────────────────────────┘
+```
+
+**Maturity tiers (0-5)**: same shell skeleton at every tier, only the populated density changes. Explicit picker (P3) — stored in `user_preferences.alpha_den_tier`, mirrored as JWT claim `den_tier` for cheap reads in the SPA.
+
+| Tier | Persona | Visible affordances |
+|---|---|---|
+| 0 | First touch | Welcome card + chat only. No rail, no panels, no drawer. |
+| 1 | Connected | + Left rail with integrations + memory icons. |
+| 2 | Multi-agent | + Right context panel + inline plan stepper. |
+| 3 | Workspace | + Full resource browsers + Cmd+K palette + pinning. |
+| 4 | Operator | + Live terminal drawer + auto-quality score viz. |
+| 5 | God | + Workflow / skill / policy editors. |
+
+**Channel-agnostic event protocol** at `/api/v2/sessions/{id}/events`:
+- SSE live tail (via Redis `session:{id}:v2` pub/sub) OR JSON replay (paginated, limit max 500, next_cursor).
+- 9 event types (`chat_message`, `tool_call_started`/`complete`, `plan_step_changed`, `subagent_dispatched`/`response`, `cli_subprocess_stream`, `resource_referenced`, `auto_quality_score`).
+- Persisted in `session_events` (migration 133) with per-session monotonic `seq_no` (allocated via `pg_advisory_xact_lock(hashtext(session_id))`).
+- 24h replay window cap; older → 409 `replay_window_expired`.
+- 30-day retention via daily cron (except `auto_quality_score` kept indefinitely for RL store).
+- Subprocess streams coalesce to one synthetic event per 5s window on replay.
+- Legacy `/api/v1/sessions/{id}/events` envelope untouched — existing `ChatPage.js` keeps working.
+
+**Tier gating** in the SPA:
+- `apps/web/src/den/tierFeatures.js` — `TIER_FEATURES` capability map (one literal config per tier).
+- `apps/web/src/den/useTier.js` — hook reading JWT-cached tier with `/api/v1/users/me/den-tier` confirm.
+- `apps/web/src/den/TierGate.js` — `<TierGate min={N} fallback={…}>` wrapper for whole-component gating.
+- `apps/web/src/den/TierPicker.js` — 6-card explicit picker (settings UI).
+
+**Files**:
+- `apps/api/migrations/133_session_events.sql`
+- `apps/api/app/models/session_event.py`
+- `apps/api/app/services/collaboration_events.py` (extended `publish_session_event` dual-write)
+- `apps/api/app/api/v2/session_events.py` (SSE + replay endpoints)
+- `apps/api/app/services/user_tier.py`
+- `apps/api/app/api/v1/users.py` (Den tier endpoints)
+- `apps/api/app/api/v1/auth.py` (mints `den_tier` JWT claim)
+- `apps/web/src/den/` — the cockpit module (DenShell, DenPage, etc.)
+
 **Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default **Luna Supervisor** agent on registration (previously an AgentKit; unified under Agent model 2026-04-19).
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
 - **Code Agent**: Autonomous coding agent powered by Claude Code CLI. Delegates tasks to a dedicated `code-worker` pod via Temporal (`agentprovision-code` queue). Creates feature branches and PRs automatically. Replaces the old 5-agent dev team.
