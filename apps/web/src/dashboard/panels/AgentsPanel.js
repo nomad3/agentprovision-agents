@@ -45,12 +45,15 @@ const AgentsPanel = () => {
           ))}
         </ul>
       )}
-      <div className="ap-sidebar-cta" style={{ marginTop: 12 }}>
-        <button type="button" onClick={() => navigate('/insights/fleet-health')}>Fleet health</button>
-      </div>
-      <div className="ap-sidebar-cta">
-        <button type="button" onClick={() => navigate('/insights/cost')}>Cost &amp; usage</button>
-      </div>
+      <div className="ap-sidebar-section-divider" />
+      <ul className="ap-sidebar-list">
+        <li>
+          <button type="button" onClick={() => navigate('/insights/fleet-health')}>Fleet health</button>
+        </li>
+        <li>
+          <button type="button" onClick={() => navigate('/insights/cost')}>Cost &amp; usage</button>
+        </li>
+      </ul>
     </>
   );
 };
