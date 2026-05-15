@@ -75,7 +75,12 @@ const AgentActivityPanel = ({ collapsed, sessionId }) => {
       <div className="ap-right-header">
         <span className="ap-right-title">Agent activity</span>
         <span className={`ap-right-status ap-right-status-${status}`}>
-          {status === 'open' ? '● live' : status === 'connecting' ? '○ connecting' : status === 'error' ? '⚠ reconnecting' : '○ idle'}
+          {status === 'open' ? '● live'
+            : status === 'connecting' ? '○ connecting'
+            : status === 'reconnecting' ? '⟳ reconnecting'
+            : status === 'unauthorized' ? '⚠ sign in to see activity'
+            : status === 'error' ? '⚠ error'
+            : '○ idle'}
         </span>
       </div>
       {!sessionId ? (

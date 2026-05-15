@@ -37,7 +37,9 @@ import './DashboardShell.css';
 const ACTIVITIES = ['chat', 'agents', 'memory', 'skills', 'workflows', 'integrations'];
 const DEFAULT_ACTIVITY = 'chat';
 const LS_ACTIVITY = 'apControl.activity';
-const LS_SIDEBAR_COLLAPSED = 'apControl.sidebar.collapsed';
+// v2 key migrates past the v1 default which silently stuck users in
+// collapsed mode whenever they double-clicked an icon. v1 reads are ignored.
+const LS_SIDEBAR_COLLAPSED = 'apControl.sidebar.collapsed.v2';
 const LS_RIGHT_COLLAPSED = 'apControl.right.collapsed';
 
 const _readLS = (key, fallback) => {
@@ -62,11 +64,10 @@ const DashboardShell = () => {
     const v = _readLS(LS_ACTIVITY, DEFAULT_ACTIVITY);
     return ACTIVITIES.includes(v) ? v : DEFAULT_ACTIVITY;
   });
-  // Default OPEN. Cached `true` from an earlier session is ignored so users
-  // who had it stuck collapsed don't lose the sidebar on every visit; the
-  // toggle (click same activity twice or sidebar header) is the only way
-  // to collapse and it persists from there.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Default OPEN. Stores via the v2 key so a legitimate user-driven
+  // collapse persists across refreshes; the broken v1 key is left
+  // alone in localStorage but never read.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => _readLS(LS_SIDEBAR_COLLAPSED, false));
   const [rightCollapsed, setRightCollapsed] = useState(() => _readLS(LS_RIGHT_COLLAPSED, false));
 
   const tabsApi = useTabs();

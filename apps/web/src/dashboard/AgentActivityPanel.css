@@ -22,7 +22,9 @@
 }
 .ap-right-status-open { color: var(--ap-success); }
 .ap-right-status-connecting { color: var(--ap-shell-text-dim); }
-.ap-right-status-error { color: var(--ap-warning); }
+.ap-right-status-reconnecting { color: var(--ap-warning); }
+.ap-right-status-unauthorized { color: var(--ap-warning); }
+.ap-right-status-error { color: var(--ap-danger); }
 .ap-right-status-idle { color: var(--ap-shell-text-dim); }
 
 .ap-right-empty {
