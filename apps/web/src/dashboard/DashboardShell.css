@@ -43,7 +43,12 @@
     var(--ap-shell-statusbar-h);
   background: var(--ap-shell-bg);
   color: var(--ap-shell-text);
-  font-family: var(--ap-font-sans);
+  /* Inherit so the shell uses the same Inter stack as the rest of the
+     app (set on `body` in index.css line 89). The brand `--ap-font-sans`
+     token is currently a system fallback stack, not Inter — using that
+     here was the source of the "different UI style" mismatch the user
+     flagged. */
+  font-family: inherit;
   font-size: var(--ap-fs-sm);
   overflow: hidden;
 }
