@@ -31,11 +31,25 @@ const AUTO_VALUE = '__auto__';
  * config rows already loaded by the parent panel. Mirrors the backend's
  * `_connected_clis` logic so the UI doesn't need an extra API call.
  *
- * A config is considered "connected" if it has stored credentials OR an
- * `account_email` (OAuth-style integrations track presence by email
- * even when the token lives in the credential vault).
+ * Two signal sources, because CLI integrations use different auth shapes:
+ *
+ * 1. **Manual / standard OAuth integrations** (gmail/calendar/drive,
+ *    github, etc.): the config row carries either `account_email` (set
+ *    by the OAuth callback) or has entries in `credentialStatuses`
+ *    (manual auth_type). Either is sufficient.
+ *
+ * 2. **CLI subscription-OAuth integrations** (claude_code, codex,
+ *    gemini_cli): the auth flow stores a `session_token` in the
+ *    credential vault but does NOT set `account_email` and is NOT
+ *    `auth_type='manual'` (so credentialStatuses is empty too). The
+ *    only reliable signal is the per-CLI auth-state's `connected`
+ *    flag from /<cli>-auth/status. Parent passes these in.
+ *
+ *    Without this second signal, a freshly subscription-OAuth'd Claude
+ *    Code (or Codex) doesn't appear in the Default CLI dropdown
+ *    even though its own card shows CONNECTED.
  */
-function deriveConnectedClis(configs, credentialStatuses) {
+function deriveConnectedClis(configs, credentialStatuses, cliAuthStates) {
   const connectedNames = new Set();
   (configs || []).forEach((cfg) => {
     if (!cfg || !cfg.enabled) return;
@@ -50,6 +64,15 @@ function deriveConnectedClis(configs, credentialStatuses) {
       available.add(cli);
     }
   });
+
+  // Layer in the per-CLI subscription-OAuth signals. These come from
+  // the dedicated /<cli>-auth/status endpoints which the parent panel
+  // already polls. `connected: true` on any of these is authoritative
+  // — the CLI has a vault credential the backend can use.
+  if (cliAuthStates?.claudeAuth?.connected) available.add('claude_code');
+  if (cliAuthStates?.codexAuth?.connected) available.add('codex');
+  if (cliAuthStates?.geminiCliAuth?.connected) available.add('gemini_cli');
+
   return available;
 }
 
@@ -60,7 +83,13 @@ function deriveConnectedClis(configs, credentialStatuses) {
  * any user choice to make. Hidden state is the right UX for the common
  * single-CLI tenant.
  */
-const DefaultCliSelector = ({ configs, credentialStatuses }) => {
+const DefaultCliSelector = ({
+  configs,
+  credentialStatuses,
+  claudeAuthState,
+  codexAuthState,
+  geminiCliAuthState,
+}) => {
   const [currentDefault, setCurrentDefault] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -68,8 +97,12 @@ const DefaultCliSelector = ({ configs, credentialStatuses }) => {
   const [savedAt, setSavedAt] = useState(null);
 
   const connectedClis = useMemo(
-    () => deriveConnectedClis(configs, credentialStatuses),
-    [configs, credentialStatuses],
+    () => deriveConnectedClis(configs, credentialStatuses, {
+      claudeAuth: claudeAuthState,
+      codexAuth: codexAuthState,
+      geminiCliAuth: geminiCliAuthState,
+    }),
+    [configs, credentialStatuses, claudeAuthState, codexAuthState, geminiCliAuthState],
   );
 
   useEffect(() => {

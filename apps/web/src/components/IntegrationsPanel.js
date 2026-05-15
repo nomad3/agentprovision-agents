@@ -1721,6 +1721,9 @@ const IntegrationsPanel = () => {
         <DefaultCliSelector
           configs={configs}
           credentialStatuses={credentialStatuses}
+          claudeAuthState={claudeAuthState}
+          codexAuthState={codexAuthState}
+          geminiCliAuthState={geminiCliAuthState}
         />
 
         {/*
