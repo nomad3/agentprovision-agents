@@ -71,7 +71,7 @@ def test_set_then_get_round_trip(db, tenant_and_user):
 
     row_count = db.execute(
         text("SELECT COUNT(*) FROM user_preferences "
-             "WHERE user_id = :uid AND preference_type = 'alpha_cockpit_tier'"),
+             "WHERE user_id = :uid AND preference_type = 'alpha_den_tier'"),
         {"uid": uid},
     ).scalar()
     assert row_count == 1, "set_tier must upsert, not duplicate"
@@ -96,7 +96,7 @@ def test_get_tier_tolerates_corrupt_value(db, tenant_and_user):
     db.execute(
         text("INSERT INTO user_preferences "
              "(id, tenant_id, user_id, preference_type, value, updated_at) "
-             "VALUES (:id, :tid, :uid, 'alpha_cockpit_tier', 'banana', NOW())"),
+             "VALUES (:id, :tid, :uid, 'alpha_den_tier', 'banana', NOW())"),
         {"id": uuid.uuid4(), "tid": tid, "uid": uid},
     )
     db.commit()

@@ -1,7 +1,7 @@
-"""User cockpit-tier helpers (Alpha Control Plane PR-4 of 7).
+"""User den-tier helpers (Alpha Control Plane PR-4 of 7).
 
-Tier 0-5 controls how much of the cockpit UI a user sees. Stored in
-`user_preferences` with `preference_type='alpha_cockpit_tier'` — no
+Tier 0-5 controls how much of the Den UI a user sees. Stored in
+`user_preferences` with `preference_type='alpha_den_tier'` — no
 migration needed (see design §4 → "Tier storage").
 
 Uses raw SQL rather than the UserPreference ORM model so this stays
@@ -19,7 +19,7 @@ from typing import Final
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-_PREFERENCE_TYPE: Final = "alpha_cockpit_tier"
+_PREFERENCE_TYPE: Final = "alpha_den_tier"
 VALID_TIERS: Final = frozenset({0, 1, 2, 3, 4, 5})
 DEFAULT_TIER: Final = 0
 
@@ -29,7 +29,7 @@ class InvalidTierError(ValueError):
 
 
 def get_tier(db: Session, *, user_id: uuid.UUID, tenant_id: uuid.UUID) -> int:
-    """Return the user's current cockpit tier.
+    """Return the user's current den tier.
 
     Defaults to 0 when no preference row exists or when the stored
     value is corrupted (non-integer, out of range).
@@ -51,7 +51,7 @@ def get_tier(db: Session, *, user_id: uuid.UUID, tenant_id: uuid.UUID) -> int:
 
 
 def set_tier(db: Session, *, user_id: uuid.UUID, tenant_id: uuid.UUID, tier: int) -> int:
-    """Upsert the user's cockpit tier and return the persisted value.
+    """Upsert the user's den tier and return the persisted value.
 
     Raises InvalidTierError for tier outside 0..5 or non-int.
     Commits the change.
