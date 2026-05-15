@@ -132,6 +132,14 @@ const IntegrationsPanel = () => {
   const [claudeAuthState, setClaudeAuthState] = useState({ status: 'idle', connected: false });
   const [geminiCliAuthState, setGeminiCliAuthState] = useState({ status: 'idle', connected: false });
   const [geminiCliCode, setGeminiCliCode] = useState('');
+  // claude-auth paste-code (option b) + API-key bypass (option a) inputs.
+  // The paste-code surfaces when the OAuth subprocess is in `pending`
+  // state (URL printed, waiting for the user to come back with the
+  // claude.com verification code). The API-key input is a manual
+  // toggle for users who'd rather skip the OAuth dance entirely.
+  const [claudeCode, setClaudeCode] = useState('');
+  const [claudeApiKey, setClaudeApiKey] = useState('');
+  const [claudeShowApiKey, setClaudeShowApiKey] = useState(false);
   const [monitorRunning, setMonitorRunning] = useState(false);
 
   const fetchData = useCallback(async () => {
@@ -424,10 +432,55 @@ const IntegrationsPanel = () => {
       setSaving('claude-cancel');
       const res = await integrationConfigService.claudeAuthCancel();
       setClaudeAuthState(res.data || { status: 'cancelled', connected: false });
+      setClaudeCode('');
     } catch (err) {
       const detail = err.response?.data?.detail || 'Failed to cancel Claude login';
       setError(detail);
       setTimeout(() => setError(null), 5000);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // Paste-code submit — option b from the OAuth diagnosis. User
+  // pastes the code claude.com showed them; we POST it to
+  // /claude-auth/submit-code which pipes it to the running
+  // subprocess's stdin so claude CLI can finish the handshake.
+  const handleClaudeSubmitCode = async () => {
+    if (!claudeCode.trim()) return;
+    try {
+      setSaving('claude-submit');
+      const res = await integrationConfigService.claudeAuthSubmitCode(claudeCode.trim());
+      setClaudeAuthState(res.data || { status: 'submitting', connected: false });
+      setClaudeCode('');
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to submit Claude verification code';
+      setError(detail);
+      setTimeout(() => setError(null), 5000);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  // API-key bypass — option a. For users who can't / don't want to
+  // do the subscription-OAuth dance and have an Anthropic Console
+  // key. Stores the key in the same credential vault slot as the
+  // OAuth flow's session token; downstream consumers branch on
+  // credential_type.
+  const handleClaudeSubmitApiKey = async () => {
+    if (!claudeApiKey.trim()) return;
+    try {
+      setSaving('claude-apikey');
+      await integrationConfigService.claudeAuthSetApiKey(claudeApiKey.trim());
+      setClaudeAuthState({ status: 'connected', connected: true });
+      setClaudeApiKey('');
+      setClaudeShowApiKey(false);
+      setSuccess('Connected Claude Code via API key');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      const detail = err.response?.data?.detail || 'Failed to store Claude API key';
+      setError(detail);
+      setTimeout(() => setError(null), 6000);
     } finally {
       setSaving(null);
     }
@@ -1230,12 +1283,67 @@ const IntegrationsPanel = () => {
 
               {isDeviceAuth && skill.integration_name === 'gemini_cli' && renderGeminiCliExpanded(skill)}
 
-              {/* Claude Code browser auth */}
+              {/* Claude Code OAuth + API-key auth.
+                  Two paths into the same credential slot:
+                  (1) Subscription OAuth — click Connect → browser
+                      opens claude.com → user copies a code →
+                      pastes it below → /submit-code pipes it to
+                      the running subprocess's stdin (option b).
+                  (2) API-key bypass — toggle the disclosure,
+                      paste an Anthropic Console key (option a). */}
               {isBrowserAuth && skill.integration_name === 'claude_code' && (
                 <div className="p-3">
-                  {claudeAuthState.status === 'pending' && (
+                  {claudeAuthState.status === 'starting' && (
                     <Alert variant="info" className="mb-2">
-                      <small>Sign in with your Anthropic account in the browser window. Waiting for authentication...</small>
+                      <small>Starting Claude login… opening browser window with the verification URL.</small>
+                    </Alert>
+                  )}
+                  {claudeAuthState.status === 'pending' && (
+                    <>
+                      <Alert variant="info" className="mb-2">
+                        <small>
+                          <strong>Step 2 of 2:</strong> after signing in on claude.com, copy the verification code it shows and paste it below.
+                        </small>
+                      </Alert>
+                      {claudeAuthState.verification_url && (
+                        <div className="mb-2">
+                          <small className="text-muted">
+                            URL didn&apos;t open?{' '}
+                            <a href={claudeAuthState.verification_url} target="_blank" rel="noopener noreferrer">
+                              Open it manually
+                            </a>
+                          </small>
+                        </div>
+                      )}
+                      <div className="d-flex gap-2 mb-2">
+                        <Form.Control
+                          type="text"
+                          size="sm"
+                          placeholder="Paste the code from claude.com"
+                          value={claudeCode}
+                          onChange={(e) => setClaudeCode(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && claudeCode.trim() && saving !== 'claude-submit') {
+                              handleClaudeSubmitCode();
+                            }
+                          }}
+                          disabled={saving === 'claude-submit'}
+                          data-testid="claude-paste-code-input"
+                        />
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={handleClaudeSubmitCode}
+                          disabled={!claudeCode.trim() || saving === 'claude-submit'}
+                        >
+                          {saving === 'claude-submit' ? 'Submitting…' : 'Submit'}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                  {claudeAuthState.status === 'submitting' && (
+                    <Alert variant="info" className="mb-2">
+                      <small>Finishing OAuth handshake with Anthropic…</small>
                     </Alert>
                   )}
                   {claudeAuthState.status === 'failed' && claudeAuthState.error && (
@@ -1244,14 +1352,86 @@ const IntegrationsPanel = () => {
                   {claudeAuthState.connected && (
                     <Alert variant="success" className="mb-2"><small>Connected to Claude Code</small></Alert>
                   )}
-                  <Button
-                    size="sm"
-                    variant={claudeAuthState.connected ? 'outline-success' : 'primary'}
-                    onClick={['starting', 'pending'].includes(claudeAuthState.status) ? handleClaudeCancel : handleClaudeConnect}
-                    disabled={connectingProvider === 'claude_code'}
-                  >
-                    {['starting', 'pending'].includes(claudeAuthState.status) ? 'Cancel' : claudeAuthState.connected ? 'Reconnect' : 'Connect with Anthropic'}
-                  </Button>
+                  {/* `cancellable` comes from the server (mirrors
+                      ClaudeAuthManager._CANCELLABLE_STATUSES). UI just
+                      reads the flag — no need to know status-machine
+                      vocabulary. `oauthInFlight` is a separate gate:
+                      hides the API-key disclosure while a subscription-
+                      OAuth flow is mid-flight to prevent the user from
+                      starting both flows simultaneously. It uses
+                      `pending`/`submitting` because the subscription
+                      flow is still active during `submitting` (cancel
+                      is a no-op past `pending` but the handshake is
+                      still in progress). */}
+                  {(() => {
+                    const cancellable = !!claudeAuthState.cancellable;
+                    const oauthInFlight = ['pending', 'submitting'].includes(claudeAuthState.status);
+                    return (
+                      <>
+                        <div className="d-flex gap-2 align-items-center">
+                          <Button
+                            size="sm"
+                            variant={claudeAuthState.connected ? 'outline-success' : 'primary'}
+                            onClick={cancellable ? handleClaudeCancel : handleClaudeConnect}
+                            disabled={connectingProvider === 'claude_code'}
+                          >
+                            {cancellable
+                              ? 'Cancel'
+                              : claudeAuthState.connected
+                                ? 'Reconnect'
+                                : 'Connect with Anthropic'}
+                          </Button>
+                          {!oauthInFlight && (
+                            <Button
+                              size="sm"
+                              variant="link"
+                              className="p-0"
+                              onClick={() => setClaudeShowApiKey((v) => !v)}
+                              data-testid="claude-toggle-api-key"
+                            >
+                              {claudeShowApiKey ? 'Hide API key option' : 'Or use an API key'}
+                            </Button>
+                          )}
+                        </div>
+                        {claudeShowApiKey && !oauthInFlight && (
+                    <div className="mt-3 pt-3 border-top">
+                      <small className="text-muted d-block mb-2">
+                        Paste an Anthropic Console API key (starts with{' '}
+                        <code>sk-ant-</code>). Get one at{' '}
+                        <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">
+                          console.anthropic.com/settings/keys
+                        </a>
+                        .
+                      </small>
+                      <div className="d-flex gap-2">
+                        <Form.Control
+                          type="password"
+                          size="sm"
+                          placeholder="sk-ant-..."
+                          value={claudeApiKey}
+                          onChange={(e) => setClaudeApiKey(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && claudeApiKey.trim() && saving !== 'claude-apikey') {
+                              handleClaudeSubmitApiKey();
+                            }
+                          }}
+                          disabled={saving === 'claude-apikey'}
+                          data-testid="claude-api-key-input"
+                        />
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onClick={handleClaudeSubmitApiKey}
+                          disabled={!claudeApiKey.trim() || saving === 'claude-apikey'}
+                        >
+                          {saving === 'claude-apikey' ? 'Saving…' : 'Save'}
+                        </Button>
+                      </div>
+                    </div>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
 

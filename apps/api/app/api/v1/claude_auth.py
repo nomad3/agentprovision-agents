@@ -42,11 +42,154 @@ URL_RE = re.compile(r"https://claude\.com/[^\s]+")
 # pick the auth shape (OAuth `session_token` vs Anthropic Console `api_key`).
 _CLAUDE_CREDENTIAL_KEYS = ("session_token", "api_key")
 
+# Status values from which the flow can still be cancelled or
+# resumed. Past these (`submitting`/`connected`/`failed`/`cancelled`),
+# the paste code has been delivered to claude CLI and the action is
+# irreversible — cancel becomes a no-op and `/start` is the only way
+# to begin a new flow. Single source of truth referenced by:
+#   * start_login's "reuse existing" check
+#   * cancel_login's guard
+#   * _serialize_state.cancellable
+_CANCELLABLE_STATUSES = frozenset({"starting", "pending"})
+
+
+# How long to wait for the user to paste the code into the UI before
+# we give up and tear the subprocess down. 10 min is enough for "open
+# the URL → log into claude.com → copy the code → switch tabs → paste"
+# without forcing a re-`/start` for slow flows. claude CLI's own
+# timeout is on the order of a few minutes; if we wait longer than
+# that the subprocess will have exited and the code write will no-op.
+_OAUTH_PASTE_DEADLINE_SECONDS = 600
+
+# After we write the code to stdin, how long to wait for claude CLI
+# to finish the OAuth handshake and exit. Should be fast (<10s on a
+# good network).
+_OAUTH_FINALIZE_TIMEOUT = 60
+
+# After SIGTERM, how long to wait for the subprocess to exit on its
+# own before escalating to SIGKILL. Keeps zombies from accumulating
+# when claude CLI is mid-stdin-read and ignores the first signal.
+_OAUTH_TERMINATE_TIMEOUT = 5
+
+
+class ClaudeAuthError(Exception):
+    """Domain-level error raised by `ClaudeAuthManager`.
+
+    Separate from `HTTPException` so the manager stays usable from
+    non-HTTP callers (CLI re-auth tools, future Temporal activities,
+    tests without a TestClient). The `/submit-code` route translates
+    these into `HTTPException(status_code=...)`.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 400):
+        super().__init__(message)
+        self.status_code = status_code
+
+    @property
+    def detail(self) -> str:
+        return str(self)
+
+
+# Substrings we recognise in claude CLI stderr/stdout that mean the
+# verification code expired or claude.com refused it. When any appears
+# in the buffered output we replace the raw CLI noise with a
+# UX-friendly message instead of dumping ANSI-stripped CLI output.
+#
+# Avoid bare substrings (e.g. `"expired"` alone) — they false-positive
+# on benign output like `"certificate not expired"` or `"token will be
+# expired tomorrow"`. Every entry here is either a full OAuth error
+# code or a phrase that only appears in genuine expiry messages.
+_CLI_EXPIRY_HINTS = (
+    "invalid_grant",
+    "authorization_pending",
+    "expired_token",
+    "code expired",
+    "token expired",
+    "code has expired",
+    "session expired",
+)
+
+_CLI_EXPIRY_MESSAGE = (
+    "The verification code expired or was rejected by claude.com before we "
+    "could submit it. Click Connect to start over."
+)
+
+
+def _humanise_cli_failure(cleaned_output: str) -> str:
+    """Map a claude CLI failure dump to a user-friendly message.
+
+    The CLI emits ANSI-formatted errors that aren't useful to end
+    users. We pattern-match common cases and return a concise message;
+    falls back to the last 500 chars of the raw output for unfamiliar
+    failures so we never swallow a useful error silently.
+    """
+    haystack = cleaned_output.lower()
+    if any(hint in haystack for hint in _CLI_EXPIRY_HINTS):
+        return _CLI_EXPIRY_MESSAGE
+    return cleaned_output[-500:] if cleaned_output else "Claude authorization failed"
+
+
+def _snapshot_buf(buf: list) -> str:
+    """Snapshot the reader-thread buffer for safe joining.
+
+    `state._output_buf` is appended-to by the background reader thread
+    and read by the main thread. `"".join(buf)` iterates the list;
+    if `buf.append(...)` fires mid-iteration on CPython we can hit
+    `RuntimeError: list changed size during iteration`. Copying with
+    `list(buf)` is GIL-atomic and cheap (the list is small — at most
+    a few dozen short lines for a healthy OAuth flow).
+    """
+    return "".join(list(buf))
+
+
+def _terminate_and_reap(proc: subprocess.Popen) -> None:
+    """SIGTERM the subprocess; SIGKILL if it doesn't exit promptly.
+
+    `terminate()` only sends the signal — the parent must `wait()` to
+    reap the child, otherwise it lingers as a zombie. We bound the
+    grace period at `_OAUTH_TERMINATE_TIMEOUT` then escalate. Safe to
+    call when the process is already dead. Defensive against the
+    poll/wait/terminate primitives themselves raising (rare but
+    documented OSError/EINVAL/ECHILD edges on some kernels).
+    """
+    try:
+        if proc.poll() is not None:
+            return
+    except Exception:
+        # poll() raised — give up rather than risking SIGTERM on an
+        # unknown child state.
+        return
+    try:
+        proc.terminate()
+    except Exception:
+        return
+    try:
+        proc.wait(timeout=_OAUTH_TERMINATE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+    except OSError:
+        # wait() can surface OSError on already-reaped or
+        # cross-process-namespace children. Treat as reaped.
+        return
+
 
 @dataclass
 class ClaudeLoginState:
     login_id: str
     tenant_id: str
+    # Status machine:
+    #   starting           — subprocess spawned, waiting for URL
+    #   pending            — URL captured, waiting for user to open browser
+    #                        and paste the resulting code into the UI
+    #   submitting         — `/submit-code` received the paste; we wrote
+    #                        it to subprocess stdin; waiting for claude
+    #                        CLI to complete and exit
+    #   connected          — credentials persisted to the vault
+    #   failed / cancelled — terminal error states
     status: str = "starting"
     verification_url: Optional[str] = None
     error: Optional[str] = None
@@ -55,6 +198,17 @@ class ClaudeLoginState:
     completed_at: Optional[str] = None
     claude_home: Optional[str] = None
     process: Optional[subprocess.Popen] = field(default=None, repr=False, compare=False)
+    # Buffer for stdout the reader thread captures while the
+    # subprocess runs. We don't use `proc.communicate()` for the
+    # whole lifecycle (it consumes stdin / closes pipes), so we
+    # collect line-by-line on a background thread instead.
+    _output_buf: list = field(default_factory=list, repr=False, compare=False)
+    # Signal from `/submit-code` to `_run_login` that the user has
+    # pasted a code. The main thread waits on this event before
+    # invoking `proc.wait()`.
+    _code_submitted: threading.Event = field(
+        default_factory=threading.Event, repr=False, compare=False
+    )
 
 
 class ClaudeAuthManager:
@@ -69,14 +223,21 @@ class ClaudeAuthManager:
     def start_login(self, tenant_id: str) -> ClaudeLoginState:
         with self._lock:
             existing = self._by_tenant.get(tenant_id)
-            if existing and existing.status in {"starting", "pending"} and existing.process:
+            if existing and existing.status in _CANCELLABLE_STATUSES and existing.process:
                 return existing
 
-            if existing and existing.process and existing.process.poll() is None:
-                try:
-                    existing.process.terminate()
-                except Exception:
-                    pass
+            # Capture the stale process to reap *after* releasing the
+            # lock (terminate-and-reap can take up to 7s with the SIGTERM
+            # grace + SIGKILL fallback; holding the lock that long
+            # blocks every other endpoint).
+            stale_proc = existing.process if existing else None
+            # Note: if the existing state is `submitting`, the user
+            # explicitly chose to restart by clicking Connect again —
+            # tear down the mid-handshake subprocess intentionally.
+            # This is the symmetric case to `cancel_login`'s guard but
+            # with opposite intent (`/cancel` past pending is a no-op
+            # because the user "released" the action; `/start` past
+            # pending means the user wants to start over).
 
             login_id = str(uuid.uuid4())
             claude_home = tempfile.mkdtemp(prefix=f"claude-auth-{tenant_id[:8]}-")
@@ -87,35 +248,107 @@ class ClaudeAuthManager:
             )
             self._by_tenant[tenant_id] = state
 
+        # Reap the stale process outside the lock — `_terminate_and_reap`
+        # can take up to 7s and we don't want `/status` polls blocked
+        # behind it.
+        if stale_proc is not None:
+            _terminate_and_reap(stale_proc)
+
         threading.Thread(target=self._run_login, args=(state,), daemon=True).start()
         return state
 
     def cancel_login(self, tenant_id: str) -> Optional[ClaudeLoginState]:
+        """Cancel an in-progress login.
+
+        Two race directions to defend against:
+
+          1. **cancel-then-submit:** cancel runs first, writes
+             `state.status = "cancelled"` under the lock. The losing
+             submit acquires the lock, sees `cancelled`, raises
+             ClaudeAuthError. Net: cancel wins, no data leaked. ✓
+
+          2. **submit-then-cancel:** submit runs first, writes the
+             paste code to stdin and sets `state.status = "submitting"`.
+             If cancel were unconditional, it would now overwrite
+             `submitting` → `cancelled` and terminate the subprocess
+             AFTER the data was delivered — UI says "cancelled" but
+             the OAuth handshake may already be mid-flight on
+             claude.com. The user thinks they aborted but actually
+             may have completed the flow.
+
+             Fix: only allow cancel from `starting`/`pending`. Once
+             we've moved past `pending`, the paste has been
+             delivered, the action is irreversible, and we let
+             `_run_login` drive to a terminal state on its own. The
+             user can re-`/start` after that.
+
+        Holds `self._lock` around lookup + status mutation so cancel
+        and submit can't interleave their writes. Releases before
+        `_terminate_and_reap` so a concurrent `/status` poll isn't
+        blocked behind the SIGTERM grace period.
+        """
         with self._lock:
             state = self._by_tenant.get(tenant_id)
-        if not state:
-            return None
-        if state.process and state.process.poll() is None:
-            try:
-                state.process.terminate()
-            except Exception:
-                pass
-        state.status = "cancelled"
-        state.error = "Login cancelled"
-        state.completed_at = datetime.utcnow().isoformat()
+            if not state:
+                return None
+            # Only cancellable from pre-submit states. Past `pending`
+            # the paste has been delivered to claude CLI; tearing it
+            # down would race the handshake without preventing the
+            # actual server-side OAuth from completing.
+            if state.status not in _CANCELLABLE_STATUSES:
+                return state
+            # Mutate status *first* so any concurrent `submit_code` that
+            # acquires the lock after us sees the cancellation and bails.
+            state.status = "cancelled"
+            state.error = "Login cancelled"
+            state.completed_at = datetime.utcnow().isoformat()
+            proc = state.process
+        # Reap the subprocess outside the lock — terminate-and-wait can
+        # take up to _OAUTH_TERMINATE_TIMEOUT and we don't want
+        # `/status` or `start_login` blocked behind it.
+        if proc is not None:
+            _terminate_and_reap(proc)
         return state
 
     def _run_login(self, state: ClaudeLoginState) -> None:
+        """Drive the `claude auth login --claudeai` subprocess.
+
+        claude CLI v2.1.140 prints the verification URL on stdout then
+        blocks at the `Paste code here if prompted >` prompt reading
+        from stdin. The previous implementation used
+        `proc.communicate(timeout=5)` to grab the URL, which:
+          (a) consumed the stdin pipe so we could never write to it
+          (b) returned the buffered output via the
+              `TimeoutExpired.output` field — fragile in newer
+              Python / subprocess versions where that attribute can
+              be empty if the process is fully blocked on a read.
+        The result: the subprocess hung forever, the UI never saw the
+        URL, and the deploy state machine wedged.
+
+        Rewrite:
+          * Spawn with `stdin=PIPE` so `/submit-code` can write to it.
+          * Drain stdout on a background thread, line-by-line, so we
+            can detect the URL without blocking and without closing
+            the stdin pipe.
+          * Wait on a `threading.Event` (`state._code_submitted`) for
+            the user's paste — set by `/submit-code`.
+          * Once the code is written, close stdin to signal EOF and
+            let claude CLI finish. `proc.wait(timeout=…)` reaps the
+            exit status.
+          * On exit, persist credentials from `CLAUDE_CONFIG_DIR`.
+        """
         cmd = ["claude", "auth", "login", "--claudeai"]
         env = {**os.environ, "CLAUDE_CONFIG_DIR": state.claude_home or ""}
 
         try:
             proc = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 env=env,
+                bufsize=1,  # line-buffered so the URL line surfaces immediately
             )
         except FileNotFoundError:
             state.status = "failed"
@@ -130,37 +363,125 @@ class ClaudeAuthManager:
 
         state.process = proc
 
-        # Read initial output to capture the verification URL
-        try:
-            proc.communicate(timeout=5)
-            initial_output = ""
-        except subprocess.TimeoutExpired as exc:
-            initial_output = self._ensure_text(exc.output)
-        except Exception as exc:
+        # ── stdout reader thread ─────────────────────────────────
+        # Reads line-by-line into state._output_buf so we can detect
+        # the verification URL without consuming stdin. The thread
+        # exits naturally when proc closes stdout (i.e. when claude
+        # CLI exits).
+        def _drain_stdout():
+            try:
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    state._output_buf.append(line)
+                    if not state.verification_url:
+                        cleaned = self._clean_output(line)
+                        url = URL_RE.search(cleaned)
+                        if not url:
+                            url = re.search(r"https://[^\s]+", cleaned)
+                        if url:
+                            state.verification_url = url.group(0)
+                            # Promote to "pending" the moment we have a
+                            # URL — UI starts polling immediately.
+                            if state.status == "starting":
+                                state.status = "pending"
+            except Exception:
+                # Reader thread errors aren't fatal — the main thread
+                # observes proc.returncode and surfaces failure via
+                # the buffered output.
+                logger.debug("claude_auth stdout reader exited", exc_info=True)
+
+        reader = threading.Thread(target=_drain_stdout, daemon=True)
+        reader.start()
+
+        # ── Wait for URL (max 10s) ───────────────────────────────
+        # If the URL never appears something is wrong with the
+        # subprocess (claude CLI may have changed flags, claude_home
+        # may be unwritable, etc.). Fail fast.
+        url_deadline = time.time() + 10
+        while time.time() < url_deadline and state.status == "starting":
+            if proc.poll() is not None:
+                # Subprocess exited before we got a URL — surface its
+                # combined output as the error.
+                cleaned = self._clean_output(_snapshot_buf(state._output_buf))
+                state.status = "failed"
+                state.error = _humanise_cli_failure(cleaned) if cleaned else (
+                    "Claude CLI exited before printing a verification URL"
+                )
+                state.completed_at = datetime.utcnow().isoformat()
+                reader.join(timeout=2)
+                self._cleanup(state)
+                return
+            time.sleep(0.2)
+
+        if state.status == "starting":
+            # No URL after 10s but proc still running — older fallback.
+            cleaned = self._clean_output(_snapshot_buf(state._output_buf))
+            self._parse_initial_output(state, cleaned)
+            if state.status == "failed":
+                _terminate_and_reap(proc)
+                state.completed_at = datetime.utcnow().isoformat()
+                reader.join(timeout=2)
+                self._cleanup(state)
+                return
+
+        # ── Wait for /submit-code to fire, or for cancellation ──
+        # `state._code_submitted` is set by `claude_auth_submit_code`
+        # endpoint after writing the user's pasted code to stdin.
+        # While waiting we also poll for the subprocess exiting on
+        # its own (timeout / claude.com refused) and for explicit
+        # cancellation.
+        paste_deadline = time.time() + _OAUTH_PASTE_DEADLINE_SECONDS
+        while time.time() < paste_deadline:
+            if state.status == "cancelled":
+                _terminate_and_reap(proc)
+                reader.join(timeout=2)
+                self._cleanup(state)
+                return
+            if state._code_submitted.is_set():
+                break
+            if proc.poll() is not None:
+                # Subprocess died while waiting for paste — claude.com
+                # may have refused, or the code TTL expired.
+                cleaned = self._clean_output(_snapshot_buf(state._output_buf))
+                state.status = "failed"
+                state.error = _humanise_cli_failure(cleaned) if cleaned else (
+                    "Claude CLI exited while waiting for verification code"
+                )
+                state.completed_at = datetime.utcnow().isoformat()
+                reader.join(timeout=2)
+                self._cleanup(state)
+                return
+            time.sleep(0.5)
+        else:
+            # Loop fell through without break or return → paste deadline expired.
+            _terminate_and_reap(proc)
             state.status = "failed"
-            state.error = str(exc)
+            state.error = (
+                f"Timed out waiting for verification code ({_OAUTH_PASTE_DEADLINE_SECONDS // 60} min). "
+                "Open the verification URL in a browser, copy the code, and try again."
+            )
             state.completed_at = datetime.utcnow().isoformat()
+            reader.join(timeout=2)
+            self._cleanup(state)
             return
 
-        self._parse_initial_output(state, initial_output)
-
-        # Wait for user to complete browser auth (up to 5 minutes)
+        # ── Code was submitted. Wait for proc to finish. ─────────
         try:
-            remaining_output, _ = proc.communicate(timeout=300)
+            proc.wait(timeout=_OAUTH_FINALIZE_TIMEOUT)
         except subprocess.TimeoutExpired:
-            if proc.poll() is None:
-                proc.terminate()
+            _terminate_and_reap(proc)
             state.status = "failed"
-            state.error = "Login timed out (5 min). Please try again."
+            state.error = (
+                f"Claude CLI did not finish within {_OAUTH_FINALIZE_TIMEOUT}s "
+                "after the code was submitted. Try again."
+            )
             state.completed_at = datetime.utcnow().isoformat()
+            reader.join(timeout=2)
             self._cleanup(state)
             return
-        except Exception as exc:
-            state.status = "failed"
-            state.error = str(exc)
-            state.completed_at = datetime.utcnow().isoformat()
-            self._cleanup(state)
-            return
+
+        # Drain reader thread so any final lines are in the buffer.
+        reader.join(timeout=2)
 
         if proc.returncode == 0:
             try:
@@ -173,13 +494,88 @@ class ClaudeAuthManager:
                 state.status = "failed"
                 state.error = f"Failed to store credentials: {exc}"
         elif state.status != "cancelled":
-            combined = (initial_output or "") + self._ensure_text(remaining_output)
-            cleaned = self._clean_output(combined)
+            cleaned = self._clean_output(_snapshot_buf(state._output_buf))
             state.status = "failed"
-            state.error = cleaned[-500:] if cleaned else "Claude authorization failed"
+            state.error = _humanise_cli_failure(cleaned)
 
         state.completed_at = datetime.utcnow().isoformat()
         self._cleanup(state)
+
+    def submit_code(self, tenant_id: str, code: str) -> ClaudeLoginState:
+        """Pipe the user-pasted verification code to the running
+        subprocess's stdin and signal `_run_login` to wait for proc
+        exit.
+
+        Called from the `/submit-code` route. Strips whitespace +
+        wrapping quotes from the paste, writes one line terminated
+        with `\\n` (claude CLI's prompt reads a line; line terminator
+        is `\\n` because the api container is Linux-only — never
+        Windows), then closes stdin to surface EOF.
+
+        Holds `self._lock` for the **entire** transition (state
+        lookup → status guards → stdin write → status mutation →
+        event signal) so it cannot interleave with `cancel_login`.
+        Without this, both endpoints could race past their respective
+        status checks and one would clobber the other's terminal
+        state. The lock is released before this returns so callers
+        polling `/status` aren't blocked.
+
+        Raises `ClaudeAuthError` on caller errors (no active flow,
+        wrong state, dead subprocess); the route handler translates
+        these to `HTTPException`. The manager itself stays HTTP-free
+        so non-FastAPI callers (CLI re-auth, tests, future Temporal
+        activities) can use it directly.
+        """
+        # Normalise paste outside the lock — pure string ops, no
+        # shared state mutated.
+        clean_code = code.strip()
+        if (clean_code.startswith('"') and clean_code.endswith('"')) or (
+            clean_code.startswith("'") and clean_code.endswith("'")
+        ):
+            clean_code = clean_code[1:-1].strip()
+        if not clean_code:
+            raise ClaudeAuthError("Verification code is empty.")
+
+        with self._lock:
+            state = self._by_tenant.get(tenant_id)
+            if not state:
+                raise ClaudeAuthError(
+                    "No active Claude login flow. Start one with `/start`.",
+                    status_code=404,
+                )
+            if state.status != "pending":
+                # Covers: already cancelled, already submitting (double
+                # submit), already terminal (connected/failed). Anything
+                # that's not 'pending' shouldn't accept a paste.
+                raise ClaudeAuthError(
+                    f"Login is in state '{state.status}', not 'pending'. Cannot accept code.",
+                )
+            if not state.process or state.process.poll() is not None:
+                raise ClaudeAuthError(
+                    "Claude CLI subprocess is no longer running. Re-run `/start`.",
+                )
+
+            try:
+                assert state.process.stdin is not None
+                state.process.stdin.write(clean_code + "\n")
+                state.process.stdin.flush()
+                state.process.stdin.close()
+            except (BrokenPipeError, OSError) as exc:
+                # Subprocess died between our state check and the write
+                # (race the lock cannot help with — the child can die
+                # at any moment). Surface with a hint to restart.
+                raise ClaudeAuthError(
+                    f"Could not deliver code to Claude CLI: {exc}. Re-run `/start`.",
+                )
+
+            # Status mutation + event signal happen under the lock so a
+            # racing `cancel_login` either runs entirely before (and we
+            # see state.status == 'cancelled' above) or entirely after
+            # (and overwrites our 'submitting' cleanly — the cancel is
+            # authoritative).
+            state.status = "submitting"
+            state._code_submitted.set()
+            return state
 
     def _parse_initial_output(self, state: ClaudeLoginState, output: str) -> None:
         cleaned = self._clean_output(output)
@@ -415,6 +811,17 @@ def _serialize_state(state: ClaudeLoginState, connected: bool = False) -> dict:
         "verification_url": state.verification_url if state else None,
         "connected": connected or (state.connected if state else False),
         "error": state.error if state else None,
+        # Whether the UI should render the "Paste your code" input.
+        # Mirrors `status == 'pending'` but spelled out as a boolean
+        # so the UI doesn't have to know the exact state-machine
+        # vocabulary. `submitting` and `connected` close the input.
+        "awaiting_code": bool(state and state.status == "pending"),
+        # Whether `/cancel` will actually do anything. Mirrors the
+        # `cancel_login` guard so the UI can disable the Cancel button
+        # past `pending` (the paste has been delivered, cancel is a
+        # no-op). UI shouldn't have to know the state-machine
+        # vocabulary to render this correctly.
+        "cancellable": bool(state and state.status in _CANCELLABLE_STATUSES),
     }
 
 
@@ -611,3 +1018,56 @@ def _normalise_api_key_paste(raw: str) -> str:
     if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ('"', "'"):
         raw = raw[1:-1].strip()
     return raw
+
+
+# ── Submit-code path (option b: stdin-forward) ─────────────────────────────
+
+
+class ClaudeSubmitCodeRequest(BaseModel):
+    """Payload for `/submit-code` — the verification code claude.com
+    showed the user after they authorized in the browser."""
+
+    code: str = Field(
+        ...,
+        min_length=4,
+        description="The verification code from claude.com (typically a short alphanumeric token).",
+    )
+
+
+@router.post("/submit-code")
+def claude_auth_submit_code(
+    body: ClaudeSubmitCodeRequest,
+    current_user: User = Depends(deps.get_current_active_user),
+    db: Session = Depends(deps.get_db),
+):
+    """Forward a user-pasted verification code to the running claude
+    CLI subprocess via stdin.
+
+    This is the SECOND half of the subscription-OAuth flow. The first
+    half (`/start`) spawned `claude auth login --claudeai` and surfaced
+    the verification URL. The user opened that URL in a browser,
+    authorized on claude.com, and got back a code. This endpoint pipes
+    that code into the subprocess's stdin so it can complete the
+    handshake.
+
+    Why this is a separate endpoint instead of folding into `/start`:
+    the `/start` call returns immediately with the URL — we can't
+    block it waiting for a paste that might be 10 minutes away.
+    Separating "I'm ready" from "here's my code" gives the UI a
+    natural two-stage flow that mirrors what the user is actually
+    doing.
+
+    Status transitions on success:
+      pending → submitting → connected
+    Status transitions on the various failure modes are documented in
+    `ClaudeAuthManager.submit_code`.
+    """
+    try:
+        state = _manager.submit_code(str(current_user.tenant_id), body.code)
+    except ClaudeAuthError as exc:
+        # Domain → HTTP boundary. The manager raises ClaudeAuthError so
+        # it stays usable from non-FastAPI callers (CLI re-auth tools,
+        # tests). Route translates to HTTPException here.
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    connected = _tenant_has_claude_credential(db, current_user.tenant_id)
+    return _serialize_state(state, connected=connected)
