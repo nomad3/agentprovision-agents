@@ -85,8 +85,14 @@ const AgentActivityPanel = ({ collapsed, sessionId }) => {
       </div>
       {!sessionId ? (
         <div className="ap-right-empty">Open a chat session to see activity.</div>
+      ) : status === 'unauthorized' ? (
+        <div className="ap-right-empty">Your session expired. Sign in again to see live activity.</div>
+      ) : status === 'error' ? (
+        <div className="ap-right-empty">Couldn’t connect to the event stream.</div>
       ) : events.length === 0 && status === 'open' ? (
         <div className="ap-right-empty">No events yet for this session.</div>
+      ) : events.length === 0 && status === 'reconnecting' ? (
+        <div className="ap-right-empty">Reconnecting…</div>
       ) : events.length === 0 ? (
         <div className="ap-right-empty">Connecting…</div>
       ) : (

@@ -35,8 +35,23 @@ const API_BASE = process.env.REACT_APP_API_URL || '';
 const BACKOFF_START_MS = 1000;
 const BACKOFF_MAX_MS = 30_000;
 
+// Canonical token storage is `user.access_token` (see services/auth.js).
+// The `token` localStorage key is a legacy artifact — older code paths
+// wrote both; everything authenticated today reads from the `user` blob.
 const _getToken = () => {
-  try { return localStorage.getItem('token') || ''; } catch { return ''; }
+  try {
+    const raw = localStorage.getItem('user');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.access_token) return parsed.access_token;
+    }
+    // Fallback to the legacy `token` key for sessions minted before
+    // the auth migration. Will be removed once the user blob is the
+    // sole source of truth everywhere.
+    return localStorage.getItem('token') || '';
+  } catch {
+    return '';
+  }
 };
 
 const _idFor = (env) => env.event_id || (env.seq_no != null ? `seq:${env.seq_no}` : null);

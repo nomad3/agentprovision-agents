@@ -73,3 +73,13 @@
 .ap-sidebar-cta button:hover {
   background: var(--ap-primary-hover);
 }
+
+/* Visual divider between primary actions and secondary nav rows in
+   panels that have both (e.g. AgentsPanel — "+ New agent" CTA above,
+   "Fleet health" / "Cost & usage" links below). Keeps the heavy CTA
+   from stacking with subtle list rows. */
+.ap-sidebar-section-divider {
+  height: 1px;
+  margin: var(--ap-space-3) var(--ap-space-3);
+  background: var(--ap-shell-border);
+}
