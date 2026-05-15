@@ -17,6 +17,7 @@ import TenantHealthPage from './pages/TenantHealthPage';
 import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
+import DenPage from './den/DenPage';
 import DashboardPage from './pages/DashboardPage';
 import DeviceLoginPage from './pages/DeviceLoginPage';
 // DatasetsPage and DataSourcesPage merged into IntegrationsPage
@@ -159,6 +160,7 @@ function App() {
                 <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/home" element={<Navigate to="/dashboard" replace />} />
                 <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+                <Route path="/den" element={<ProtectedRoute><DenPage /></ProtectedRoute>} />
                 {/* PR-Q6: guided initial-training wizard. Mirrors the
                     CLI `alpha quickstart` flow (apps/agentprovision-cli/
                     src/commands/quickstart.rs) as React screens.
