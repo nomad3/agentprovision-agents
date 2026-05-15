@@ -70,6 +70,15 @@ jobs:
           # clean: false and do an explicit git-clean below that excludes
           # only the bind-mount phantoms.
           clean: false
+          # `fetch-depth: 0` so the change-detection step below can resolve
+          # `HEAD~1` for `git diff`. Default depth is 1 (shallow), which
+          # makes `HEAD~1` unknown — the diff silently fails, the fallback
+          # `echo "apps/api"` fires, and the grep against `"apps/api/"`
+          # (trailing slash) doesn't match → SERVICES comes out empty
+          # and `compose up -d` runs without `--build`, leaving images
+          # stale. This bit the 2026-05-14 #471 deploy: web bundle was
+          # never rebuilt despite the squash-merge touching apps/web/*.
+          fetch-depth: 0
 
       - name: Reset working tree (skipping Docker bind-mount phantoms)
         run: |
@@ -108,7 +117,12 @@ jobs:
       - name: Detect changed services
         id: changes
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "apps/api")
+          # Diff against the prior commit. fetch-depth: 0 in the checkout
+          # above ensures HEAD~1 resolves. The fallback string ends in a
+          # slash so the `grep -q "apps/api/"` pattern matches — a prior
+          # version used "apps/api" (no slash) and silently emitted an
+          # empty SERVICES on diff failure.
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "apps/api/")
           SERVICES=""
           echo "$CHANGED" | grep -q "apps/api/" && SERVICES="$SERVICES api orchestration-worker"
           echo "$CHANGED" | grep -q "apps/web/" && SERVICES="$SERVICES web"
@@ -159,7 +173,22 @@ jobs:
 
       - name: Up
         run: |
-          echo "Starting services..."
+          SERVICES="${{ steps.changes.outputs.services }}"
+          # Recreate the specific services that were rebuilt above so
+          # their containers swap to the fresh images. Plain `compose
+          # up -d` (no service args) only starts stopped containers; it
+          # does NOT recreate already-running containers whose images
+          # were just rebuilt — that's how the 2026-05-14 #471 deploy
+          # left web on the old image even though apps/web/* had been
+          # rebuilt. With explicit services + --force-recreate the
+          # swap is unambiguous.
+          if [ -n "$SERVICES" ]; then
+            echo "Recreating rebuilt services: $SERVICES"
+            docker compose up -d --force-recreate --no-deps $SERVICES
+          fi
+          # Then bring up anything else that's stopped (db, cloudflared,
+          # temporal, redis, etc.) without recreating live containers.
+          echo "Ensuring all services are running..."
           docker compose up -d
 
       - name: Apply pending DB migrations
