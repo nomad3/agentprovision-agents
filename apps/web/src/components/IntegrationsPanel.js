@@ -200,6 +200,19 @@ const IntegrationsPanel = () => {
         setCodexAuthState({ status: 'idle', connected: false });
       }
 
+      // Hydrate claudeAuthState on mount so returning users (no live
+      // login flow) still surface as "connected" in the Default CLI
+      // dropdown. The polling effect only fires for `starting`/`pending`
+      // statuses, so without this fetch the connected flag stays
+      // `false` after a page reload — bug previously masked because
+      // the dropdown didn't read this signal at all.
+      try {
+        const claudeRes = await integrationConfigService.claudeAuthStatus();
+        setClaudeAuthState(claudeRes.data || { status: 'idle', connected: false });
+      } catch {
+        setClaudeAuthState({ status: 'idle', connected: false });
+      }
+
       try {
         const geminiRes = await integrationConfigService.geminiCliAuthStatus();
         setGeminiCliAuthState(geminiRes.data || { status: 'idle', connected: false });

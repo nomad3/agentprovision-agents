@@ -151,4 +151,128 @@ describe('DefaultCliSelector', () => {
     // Only one CLI effectively connected → selector hidden.
     expect(container.firstChild).toBeNull();
   });
+
+  // ── Subscription-OAuth CLI auth-state path (PR #477) ──────────────
+  //
+  // claude_code / codex / gemini_cli connected via the dedicated
+  // /<cli>-auth flow store a session_token in the vault but don't set
+  // `account_email` and aren't `auth_type='manual'` — neither of the
+  // two config-derived signals fires. The selector must read the
+  // per-CLI `/<cli>-auth/status` connected flag instead.
+
+  test('claudeAuthState.connected surfaces Claude Code in the dropdown', async () => {
+    // Only github config carries account_email; claude_code config has
+    // neither account_email nor an entry in credentialStatuses. Without
+    // the auth-state signal the dropdown would exclude Claude Code.
+    const configs = [
+      { integration_name: 'github', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'claude_code', enabled: true },
+    ];
+    render(
+      <DefaultCliSelector
+        configs={configs}
+        credentialStatuses={{}}
+        claudeAuthState={{ status: 'connected', connected: true }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Default CLI/)).toBeInTheDocument());
+    const select = screen.getByLabelText(/Default CLI platform/i);
+    const optionTexts = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionTexts).toEqual(expect.arrayContaining(['Claude Code', 'GitHub Copilot CLI']));
+  });
+
+  test('codexAuthState.connected surfaces Codex in the dropdown', async () => {
+    const configs = [
+      { integration_name: 'github', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'codex', enabled: true },
+    ];
+    render(
+      <DefaultCliSelector
+        configs={configs}
+        credentialStatuses={{}}
+        codexAuthState={{ status: 'connected', connected: true }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Default CLI/)).toBeInTheDocument());
+    const select = screen.getByLabelText(/Default CLI platform/i);
+    const optionTexts = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionTexts).toEqual(expect.arrayContaining(['Codex', 'GitHub Copilot CLI']));
+  });
+
+  test('geminiCliAuthState.connected surfaces Gemini CLI even without sibling Google integrations', async () => {
+    // Distinct from the existing gmail-piggy-back test: this case has
+    // NO Google integrations at all, only a direct gemini_cli OAuth.
+    const configs = [
+      { integration_name: 'github', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'gemini_cli', enabled: true },
+    ];
+    render(
+      <DefaultCliSelector
+        configs={configs}
+        credentialStatuses={{}}
+        geminiCliAuthState={{ status: 'connected', connected: true }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Default CLI/)).toBeInTheDocument());
+    const select = screen.getByLabelText(/Default CLI platform/i);
+    const optionTexts = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionTexts).toEqual(expect.arrayContaining(['Gemini CLI', 'GitHub Copilot CLI']));
+  });
+
+  test('stored default of claude_code preserved when claudeAuthState.connected=true', async () => {
+    // Returning user scenario: tenant previously set Claude Code as
+    // default, page reloads. claudeAuthState.connected=true must hold
+    // the stored default in place (not fall back to Auto).
+    brandingService.getFeatures.mockResolvedValue({ default_cli_platform: 'claude_code' });
+    const configs = [
+      { integration_name: 'github', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'claude_code', enabled: true },
+    ];
+    render(
+      <DefaultCliSelector
+        configs={configs}
+        credentialStatuses={{}}
+        claudeAuthState={{ status: 'connected', connected: true }}
+      />,
+    );
+    const select = await screen.findByLabelText(/Default CLI platform/i);
+    expect(select.value).toBe('claude_code');
+  });
+
+  test('connected=false in auth state does NOT add the CLI', async () => {
+    // Defence: a stale `claudeAuthState` of `{ status: 'failed',
+    // connected: false }` must not falsely surface Claude Code.
+    const configs = [
+      { integration_name: 'github', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'gemini_cli', enabled: true, account_email: 'a@b.com' },
+    ];
+    render(
+      <DefaultCliSelector
+        configs={configs}
+        credentialStatuses={{}}
+        claudeAuthState={{ status: 'failed', connected: false }}
+        codexAuthState={{ status: 'idle', connected: false }}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText(/Default CLI/)).toBeInTheDocument());
+    const select = screen.getByLabelText(/Default CLI platform/i);
+    const optionTexts = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionTexts).not.toContain('Claude Code');
+    expect(optionTexts).not.toContain('Codex');
+  });
+
+  test('missing auth-state props are treated as not-connected (back-compat)', async () => {
+    // The new props are optional — existing callers that don't pass
+    // them should see identical behaviour to pre-#477.
+    const configs = [
+      { integration_name: 'github', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'gemini_cli', enabled: true, account_email: 'a@b.com' },
+      { integration_name: 'claude_code', enabled: true },  // no account_email
+    ];
+    render(<DefaultCliSelector configs={configs} credentialStatuses={{}} />);
+    await waitFor(() => expect(screen.getByText(/Default CLI/)).toBeInTheDocument());
+    const select = screen.getByLabelText(/Default CLI platform/i);
+    const optionTexts = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionTexts).not.toContain('Claude Code');
+  });
 });
