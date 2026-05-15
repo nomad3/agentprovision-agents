@@ -20,7 +20,8 @@ export function TerminalDrawer({ visible, streams }) {
         </div>
       ) : (
         streams.map((s, i) => (
-          <pre key={i} style={{ margin: 0 }}>
+          // Prefer stable identifiers; index fallback is permissive.
+          <pre key={s.event_id || s.seq_no || `idx-${i}`} style={{ margin: 0 }}>
             {s.chunk}
           </pre>
         ))

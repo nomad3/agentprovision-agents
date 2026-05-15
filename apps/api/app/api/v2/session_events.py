@@ -106,10 +106,12 @@ def _coalesce_subprocess_streams(events: List[Dict[str, Any]]) -> List[Dict[str,
         )
 
         if same_window:
-            # Merge chunk into pending event
-            chunks = pending["payload"].setdefault("chunks", [])
+            # Merge chunk into pending event. Replace the chunks list
+            # rather than mutating in place so the caller's input dicts
+            # are never modified — keeps this helper a pure transformation.
             new_chunk = (evt.get("payload") or {}).get("chunk", "")
-            chunks.append(new_chunk)
+            chunks = list(pending["payload"].get("chunks", [])) + [new_chunk]
+            pending["payload"]["chunks"] = chunks
             # Keep only last 3 chunks to bound the payload
             if len(chunks) > 3:
                 pending["payload"]["chunks"] = chunks[-3:]
