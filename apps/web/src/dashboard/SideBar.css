@@ -6,10 +6,10 @@
 }
 
 .ap-sidebar-header {
-  padding: 10px 14px 8px;
+  padding: var(--ap-space-4) var(--ap-space-4) var(--ap-space-2);
   text-transform: uppercase;
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
+  font-size: var(--ap-fs-xs);
+  letter-spacing: 0.05em;
   color: var(--ap-shell-text-dim);
 }
 .ap-sidebar-title { font-weight: 600; }
@@ -17,7 +17,7 @@
 .ap-sidebar-body {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0 12px;
+  padding: 4px 0 var(--ap-space-3);
 }
 
 .ap-sidebar-list {
@@ -27,45 +27,49 @@
 }
 .ap-sidebar-list li button,
 .ap-sidebar-list li a {
-  width: 100%;
+  width: calc(100% - var(--ap-space-3));
+  margin: 1px var(--ap-space-2);
   text-align: left;
   background: transparent;
   border: 0;
   color: var(--ap-shell-text);
-  padding: 5px 14px;
-  font-size: 12.5px;
+  padding: 7px var(--ap-space-3);
+  font-size: var(--ap-fs-sm);
   cursor: pointer;
   display: block;
   text-decoration: none;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  border-radius: var(--ap-radius-sm);
 }
 .ap-sidebar-list li button:hover,
 .ap-sidebar-list li a:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--ap-shell-text);
+  background: var(--ap-primary-tint);
 }
 .ap-sidebar-list li button.active {
-  background: rgba(79, 70, 229, 0.18);
+  background: var(--ap-primary-tint-hi);
   color: var(--ap-shell-text);
 }
 .ap-sidebar-empty {
-  padding: 8px 14px;
-  font-size: 12px;
+  padding: var(--ap-space-2) var(--ap-space-4);
+  font-size: var(--ap-fs-sm);
   color: var(--ap-shell-text-dim);
 }
 .ap-sidebar-cta {
-  padding: 6px 14px;
+  padding: var(--ap-space-2) var(--ap-space-3);
 }
 .ap-sidebar-cta button {
   width: 100%;
-  background: var(--ap-shell-accent);
+  background: var(--ap-primary);
   color: white;
   border: 0;
-  padding: 6px 10px;
-  border-radius: 3px;
-  font-size: 12px;
+  padding: 8px var(--ap-space-3);
+  border-radius: var(--ap-radius-sm);
+  font-size: var(--ap-fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
-.ap-sidebar-cta button:hover { filter: brightness(1.1); }
+.ap-sidebar-cta button:hover {
+  background: var(--ap-primary-hover);
+}

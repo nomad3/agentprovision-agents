@@ -75,7 +75,12 @@ const AgentActivityPanel = ({ collapsed, sessionId }) => {
       <div className="ap-right-header">
         <span className="ap-right-title">Agent activity</span>
         <span className={`ap-right-status ap-right-status-${status}`}>
-          {status === 'open' ? '● live' : status === 'connecting' ? '○ connecting' : status === 'error' ? '⚠ reconnecting' : '○ idle'}
+          {status === 'open' ? '● live'
+            : status === 'connecting' ? '○ connecting'
+            : status === 'reconnecting' ? '⟳ reconnecting'
+            : status === 'unauthorized' ? '⚠ sign in to see activity'
+            : status === 'error' ? '⚠ error'
+            : '○ idle'}
         </span>
       </div>
       {!sessionId ? (
@@ -91,7 +96,7 @@ const AgentActivityPanel = ({ collapsed, sessionId }) => {
             const Icon = ICON_FOR_TYPE[t] || FaBolt;
             const ts = env.ts ? new Date(env.ts).toLocaleTimeString() : '';
             return (
-              <li key={env.event_id || `${env.seq_no}-${env.ts}`} className="ap-right-row">
+              <li key={env.event_id || `seq:${env.seq_no}`} className="ap-right-row">
                 <Icon className="ap-right-row-icon" size={11} />
                 <div className="ap-right-row-body">
                   <div className="ap-right-row-line">{renderLine(env)}</div>

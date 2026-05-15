@@ -1,28 +1,50 @@
 .ap-activitybar {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  padding-top: 6px;
-  gap: 2px;
+  padding: var(--ap-space-3) var(--ap-space-2);
+  gap: 4px;
   background: var(--ap-shell-bg-2);
 }
 
 .ap-activitybar-btn {
-  width: 40px;
-  height: 40px;
+  width: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   background: transparent;
   border: 0;
-  border-left: 2px solid transparent;
+  border-radius: var(--ap-radius-md);
   color: var(--ap-shell-text-dim);
   cursor: pointer;
+  padding: 8px 4px;
+  position: relative;
+  transition: color 120ms ease, background 120ms ease;
 }
 .ap-activitybar-btn:hover {
   color: var(--ap-shell-text);
+  background: var(--ap-primary-tint);
 }
 .ap-activitybar-btn.active {
-  color: var(--ap-shell-text);
-  border-left-color: var(--ap-shell-accent);
+  color: var(--ap-primary);
+  background: var(--ap-primary-tint);
+}
+.ap-activitybar-btn.active::before {
+  content: '';
+  position: absolute;
+  left: -2px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  background: var(--ap-primary);
+  border-radius: 999px;
+}
+
+.ap-activitybar-label {
+  font-size: 10px;
+  line-height: 1.2;
+  font-weight: 500;
+  text-align: center;
+  letter-spacing: 0.01em;
 }
