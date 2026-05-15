@@ -38,8 +38,18 @@ agentprovision-agents-redis-1
 3. **Docker engine reachable?** `docker info >/dev/null 2>&1`. If it fails → push critical (`docker engine unreachable`), log, **stop**.
 
 4. **Host disk** — `df -h /` → free GB.
+
+   **Absolute thresholds:**
    - free <5GB → push critical, log, continue (still try other checks).
    - free <10GB → log warn, continue.
+
+   **Rate-of-change (NEW — added after 2026-05-14 incident #4):** maintain `state.host_free_history` as a rolling window of the last 4 ticks (~20 min). Compute `delta_5min = host_free_history[0] - host_free` (current minus 5min ago). On each tick:
+   - `delta_5min >= 5GB` (>=5GB consumed in 5min) → push critical immediately, regardless of absolute level. Message: `"host disk dropping fast: -<N>GB in 5min, currently <M>GB free"`. Bypass the 30-min repush cooldown.
+   - `delta_5min >= 10GB` AND `host_free < 30GB` → in addition to push, set `state.disk_emergency=true` for next-tick handling (see step 4a).
+
+4a. **Disk emergency action (NEW).** If `state.disk_emergency=true` from previous tick AND `build_active=true`:
+   - **Kill the in-flight build to prevent host-disk fill.** Run `pkill -9 -f 'docker compose build'` and `pkill -9 -f 'docker-buildx bake'`. Push critical: `"killed build to prevent disk fill: host_free=<N>GB, falling at <rate>GB/5min"`. Log. **stop tick.** Clear `disk_emergency` next tick if delta normalizes.
+   - This is the *only* sentinel auto-kill path for builds, gated by both rate-of-change AND build_active. Better to lose a build than fill the host.
 
 5. **Docker disk** — `docker system df`.
    - reclaimable >10GB → run `docker image prune -f` then `docker builder prune -f` (cooldown key `image_prune`, 15 min). Log the action. **stop tick.**
