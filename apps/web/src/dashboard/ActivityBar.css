@@ -1,0 +1,28 @@
+.ap-activitybar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 6px;
+  gap: 2px;
+  background: var(--ap-shell-bg-2);
+}
+
+.ap-activitybar-btn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--ap-shell-text-dim);
+  cursor: pointer;
+}
+.ap-activitybar-btn:hover {
+  color: var(--ap-shell-text);
+}
+.ap-activitybar-btn.active {
+  color: var(--ap-shell-text);
+  border-left-color: var(--ap-shell-accent);
+}

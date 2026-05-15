@@ -17,7 +17,8 @@ import TenantHealthPage from './pages/TenantHealthPage';
 import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
-import DashboardPage from './pages/DashboardPage';
+import DashboardShell from './dashboard/DashboardShell';
+import DashboardLegacyPage from './pages/DashboardLegacyPage';
 import DeviceLoginPage from './pages/DeviceLoginPage';
 // DatasetsPage and DataSourcesPage merged into IntegrationsPage
 import DeploymentsPage from './pages/DeploymentsPage';
@@ -158,7 +159,13 @@ function App() {
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/home" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
+                <Route path="/dashboard" element={<ProtectedRoute><DashboardShell /></ProtectedRoute>} />
+                {/* Legacy widget dashboard kept reachable for one
+                    release while users adopt the new IDE shell.
+                    Plan to remove after Phase 3 of the Alpha Control
+                    Center rollout (see docs/plans/2026-05-15-alpha-
+                    control-center-ide-shell-design.md). */}
+                <Route path="/dashboard/legacy" element={<ProtectedRoute><DashboardLegacyPage /></ProtectedRoute>} />
                 {/* /den sunset — its capabilities (event stream, tier
                     gating, terminal drawer) are being merged into
                     Dashboard + AI Chat. Redirect preserves any

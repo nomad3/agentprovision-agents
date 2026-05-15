@@ -10,7 +10,7 @@ import { alphaControlTabs, ARIA_LABEL_KEYS } from '../components/subnavConfig';
 import { getDashboardStats } from '../services/analytics';
 import { getOnboardingStatus } from '../services/onboarding';
 
-const DashboardPage = () => {
+const DashboardLegacyPage = () => {
   const { t } = useTranslation('dashboard');
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -308,4 +308,4 @@ const DashboardPage = () => {
   );
 };
 
-export default DashboardPage;
+export default DashboardLegacyPage;

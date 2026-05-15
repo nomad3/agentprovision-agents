@@ -1,9 +1,4 @@
-"""Tenant user endpoints — self-service profile + member directory + gesture bindings.
-
-Also serves the Alpha Control Plane den-tier preference (PR-4 of 7):
-  GET  /users/me/den-tier  → {tier: int}
-  PUT  /users/me/den-tier  → {tier: int}
-"""
+"""Tenant user endpoints — self-service profile + member directory + gesture bindings."""
 import json
 import logging
 import uuid
@@ -19,7 +14,7 @@ from app.db.safe_ops import safe_rollback
 from app.models.user import User as UserModel
 from app.schemas import user as user_schema
 from app.schemas.gesture_binding import BindingsPayload, BindingsResponse
-from app.services import gesture_bindings_service, user_tier as user_tier_service
+from app.services import gesture_bindings_service
 
 logger = logging.getLogger(__name__)
 
@@ -198,50 +193,3 @@ def put_my_gesture_bindings(
     return None
 
 
-# ── Alpha Control Plane den-tier (PR-4) ────────────────────────────────
-
-
-class DenTierResponse(BaseModel):
-    tier: int = Field(..., ge=0, le=5, description="0=first touch ... 5=god mode")
-
-
-class DenTierUpdate(BaseModel):
-    tier: int = Field(..., ge=0, le=5)
-
-
-@router.get("/me/den-tier", response_model=DenTierResponse)
-def get_my_den_tier(
-    *,
-    db: Session = Depends(deps.get_db),
-    current_user: UserModel = Depends(deps.get_current_active_user),
-):
-    """Return the user's current Alpha Control Plane Den tier.
-
-    Source of truth is `user_preferences.alpha_den_tier`. The JWT
-    also carries `den_tier` for cheap reads, but this endpoint is
-    the authoritative answer (the SPA hits it on mount to confirm).
-    """
-    tier = user_tier_service.get_tier(
-        db, user_id=current_user.id, tenant_id=current_user.tenant_id,
-    )
-    return {"tier": tier}
-
-
-@router.put("/me/den-tier", response_model=DenTierResponse)
-def set_my_den_tier(
-    body: DenTierUpdate,
-    *,
-    db: Session = Depends(deps.get_db),
-    current_user: UserModel = Depends(deps.get_current_active_user),
-):
-    """Set the user's den tier. The next JWT refresh carries the new value."""
-    try:
-        tier = user_tier_service.set_tier(
-            db,
-            user_id=current_user.id,
-            tenant_id=current_user.tenant_id,
-            tier=body.tier,
-        )
-    except user_tier_service.InvalidTierError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"tier": tier}
