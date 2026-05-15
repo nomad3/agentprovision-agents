@@ -31,6 +31,7 @@ import { getOnboardingStatus } from '../services/onboarding';
 import chatService from '../services/chat';
 import AgentActivityPanel from '../dashboard/AgentActivityPanel';
 import ChatTab from '../dashboard/tabs/ChatTab';
+import TerminalCard from '../dashboard/TerminalCard';
 import './DashboardControlCenter.css';
 
 const statusDotStyle = (status) => ({
@@ -56,6 +57,23 @@ const DashboardControlCenter = () => {
   // Sessions for the embedded chat surface.
   const [sessions, setSessions] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
+
+  // Binary mode toggle: 'simple' hides the terminal card and the live
+  // agent activity panel; 'pro' shows everything. Persisted to
+  // localStorage; default is 'simple' for first-touch users.
+  const [mode, setMode] = useState(() => {
+    try {
+      const v = localStorage.getItem('alpha.dashboard.mode');
+      return v === 'pro' ? 'pro' : 'simple';
+    } catch { return 'simple'; }
+  });
+  const toggleMode = () => {
+    setMode((prev) => {
+      const next = prev === 'simple' ? 'pro' : 'simple';
+      try { localStorage.setItem('alpha.dashboard.mode', next); } catch { /* quota */ }
+      return next;
+    });
+  };
 
   // Onboarding redirect — keeps the same gate the legacy dashboard had.
   useEffect(() => {
@@ -118,11 +136,38 @@ const DashboardControlCenter = () => {
     );
   }
 
+  // Keys live under `system.*` and `system.deployed/sourcesPipelines/rows/vectorStores`
+  // in apps/web/src/i18n/locales/{en,es}/dashboard.json. Earlier draft used
+  // `cards.*` which doesn't exist in that namespace.
   const systemItems = [
-    { label: t('cards.agents'), value: dashboardData?.agents?.total ?? 0, sub: t('cards.agentsSub', { count: dashboardData?.agents?.deployed ?? 0 }), status: 'ok' },
-    { label: t('cards.integrations'), value: dashboardData?.integrations?.total ?? 0, sub: t('cards.integrationsSub', { sources: dashboardData?.integrations?.data_sources ?? 0, pipelines: dashboardData?.integrations?.pipelines ?? 0 }), status: 'ok' },
-    { label: t('cards.datasets'), value: dashboardData?.datasets?.total ?? 0, sub: t('cards.datasetsSub', { count: dashboardData?.datasets?.rows ?? 0 }), status: 'ok' },
-    { label: t('cards.memory'), value: dashboardData?.memory?.total ?? 0, sub: t('cards.memorySub'), status: 'ok' },
+    {
+      label: t('system.agents', 'Agents'),
+      value: dashboardData?.agents?.total ?? 0,
+      sub: t('system.deployed', { count: dashboardData?.agents?.deployed ?? 0, defaultValue: '{{count}} deployed' }),
+      status: 'ok',
+    },
+    {
+      label: t('system.integrations', 'Integrations'),
+      value: dashboardData?.integrations?.total ?? 0,
+      sub: t('system.sourcesPipelines', {
+        sources: dashboardData?.integrations?.data_sources ?? 0,
+        pipelines: dashboardData?.integrations?.pipelines ?? 0,
+        defaultValue: '{{sources}} sources · {{pipelines}} pipelines',
+      }),
+      status: 'ok',
+    },
+    {
+      label: t('system.datasets', 'Datasets'),
+      value: dashboardData?.datasets?.total ?? 0,
+      sub: t('system.rows', { count: dashboardData?.datasets?.rows ?? 0, defaultValue: '{{count}} rows' }),
+      status: 'ok',
+    },
+    {
+      label: t('system.memory', 'Memory'),
+      value: dashboardData?.memory?.total ?? 0,
+      sub: t('system.vectorStores', 'vector stores'),
+      status: 'ok',
+    },
   ];
 
   return (
@@ -132,6 +177,18 @@ const DashboardControlCenter = () => {
           <div>
             <h1 className="ap-page-title">{t('title')}</h1>
             <p className="ap-page-subtitle">{t('subtitle')}</p>
+          </div>
+          <div className="ap-page-actions">
+            <button
+              type="button"
+              className="dcc-mode-toggle"
+              onClick={toggleMode}
+              aria-pressed={mode === 'pro'}
+              title={mode === 'simple' ? 'Switch to Pro mode (terminal + advanced)' : 'Switch to Simple mode'}
+            >
+              <span className={`dcc-mode-pill ${mode === 'simple' ? 'active' : ''}`}>Simple</span>
+              <span className={`dcc-mode-pill ${mode === 'pro' ? 'active' : ''}`}>Pro</span>
+            </button>
           </div>
         </header>
 
@@ -233,7 +290,7 @@ const DashboardControlCenter = () => {
             </article>
           </Col>
 
-          <Col lg={6} md={8}>
+          <Col lg={mode === 'pro' ? 6 : 9} md={8}>
             <article className="ap-card h-100 dcc-thread-card">
               <div className="ap-card-body dcc-thread-body">
                 {activeSession ? (
@@ -250,14 +307,25 @@ const DashboardControlCenter = () => {
             </article>
           </Col>
 
-          <Col lg={3} md={12}>
-            <article className="ap-card h-100 dcc-activity-card">
-              <div className="ap-card-body p-0">
-                <AgentActivityPanel collapsed={false} sessionId={activeSession?.id || null} />
-              </div>
-            </article>
-          </Col>
+          {mode === 'pro' && (
+            <Col lg={3} md={12}>
+              <article className="ap-card h-100 dcc-activity-card">
+                <div className="ap-card-body p-0">
+                  <AgentActivityPanel collapsed={false} sessionId={activeSession?.id || null} />
+                </div>
+              </article>
+            </Col>
+          )}
         </Row>
+
+        {/* Phase 2: live terminal output (collapsed by default; auto-opens
+            when alpha runs a CLI subprocess in the active session). Power
+            users get this; simple mode hides it. */}
+        {mode === 'pro' && (
+          <div className="mt-4">
+            <TerminalCard sessionId={activeSession?.id || null} />
+          </div>
+        )}
       </div>
     </Layout>
   );

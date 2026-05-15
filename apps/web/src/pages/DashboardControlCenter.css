@@ -84,6 +84,33 @@
 }
 .dcc-thread-body .ap-chattab-bar { padding-left: var(--ap-space-4); }
 
+/* ── Simple / Pro mode toggle ──────────────────────────────────── */
+
+.dcc-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-pill);
+  padding: 3px;
+  cursor: pointer;
+}
+.dcc-mode-toggle:focus { outline: 2px solid var(--ap-primary-ring); outline-offset: 2px; }
+
+.dcc-mode-pill {
+  font-size: var(--ap-fs-xs);
+  font-weight: 500;
+  color: var(--ap-text-muted);
+  padding: 4px var(--ap-space-3);
+  border-radius: var(--ap-radius-pill);
+  transition: background 120ms ease, color 120ms ease;
+}
+.dcc-mode-pill.active {
+  background: var(--ap-primary);
+  color: white;
+}
+
 /* ── Agent activity right column ───────────────────────────────── */
 
 .dcc-activity-card { overflow: hidden; }
