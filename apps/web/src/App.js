@@ -17,7 +17,7 @@ import TenantHealthPage from './pages/TenantHealthPage';
 import AgentWizardPage from './pages/AgentWizardPage';
 import BrandingPage from './pages/BrandingPage';
 import ChatPage from './pages/ChatPage';
-import DashboardShell from './dashboard/DashboardShell';
+import DashboardControlCenter from './pages/DashboardControlCenter';
 import DashboardLegacyPage from './pages/DashboardLegacyPage';
 import DeviceLoginPage from './pages/DeviceLoginPage';
 // DatasetsPage and DataSourcesPage merged into IntegrationsPage
@@ -159,7 +159,7 @@ function App() {
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/auth/reset-password" element={<ResetPasswordPage />} />
                 <Route path="/home" element={<Navigate to="/dashboard" replace />} />
-                <Route path="/dashboard" element={<ProtectedRoute><DashboardShell /></ProtectedRoute>} />
+                <Route path="/dashboard" element={<ProtectedRoute><DashboardControlCenter /></ProtectedRoute>} />
                 {/* Legacy widget dashboard kept reachable for one
                     release while users adopt the new IDE shell.
                     Plan to remove after Phase 3 of the Alpha Control
