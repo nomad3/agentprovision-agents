@@ -16,6 +16,7 @@ from .agent_task import AgentTask
 from .channel_account import ChannelAccount
 from .channel_event import ChannelEvent
 from .chat import ChatSession, ChatMessage
+from .session_event import SessionEvent
 from .connector import Connector
 from .data_pipeline import DataPipeline
 from .data_source import DataSource
