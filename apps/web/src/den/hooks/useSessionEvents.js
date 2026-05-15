@@ -2,6 +2,11 @@ import { useEffect, useReducer } from 'react';
 
 import api from '../../utils/api';
 
+// Explicit v2 base URL so this hook doesn't depend on regex-transforming
+// `api.defaults.baseURL` (currently /api/v1 but the constant could change).
+// One place to flip if the API moves.
+const V2_BASE_URL = '/api/v2';
+
 /**
  * Subscribe to /api/v2/sessions/{id}/events for live + replay.
  *
@@ -52,7 +57,7 @@ export function useSessionEvents(sessionId) {
 
     // 1. Initial replay so we have the conversation history on mount.
     api.get(`/sessions/${sessionId}/events`, {
-      baseURL: api.defaults.baseURL?.replace(/\/v1\/?$/, '/v2') || '/api/v2',
+      baseURL: V2_BASE_URL,
       headers: { Accept: 'application/json' },
       params: { since: 0, limit: 200 },
     })
@@ -67,7 +72,7 @@ export function useSessionEvents(sessionId) {
       .catch(() => { /* network blip — SSE will reconcile */ });
 
     // 2. Live tail via SSE.
-    const url = `${api.defaults.baseURL?.replace(/\/v1\/?$/, '/v2') || '/api/v2'}/sessions/${sessionId}/events`;
+    const url = `${V2_BASE_URL}/sessions/${sessionId}/events`;
     const source = new EventSource(url, { withCredentials: true });
     source.onmessage = (msg) => {
       try {
