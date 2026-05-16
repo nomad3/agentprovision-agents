@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import time
+import urllib.parse
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional
@@ -1466,6 +1467,27 @@ def _codex_mcp_config_lines(mcp_config_json: str) -> list[str]:
     return lines
 
 
+# In-cluster MCP server hostnames we know expose the dual-transport
+# layout (legacy SSE at ``/sse`` + streamable-HTTP at ``/mcp/``). Only
+# these hosts get URL-rewritten for Codex; external partner SSE servers
+# (tenant connectors at arbitrary domains) pass through unchanged so
+# their URLs are never silently mangled. External SSE servers will
+# still fail under Codex's rmcp client (which can't speak SSE), but the
+# failure surfaces clearly instead of as a 404 on a wrong-shaped URL.
+_INCLUSTER_MCP_HOSTS = frozenset({"mcp-tools", "agentprovision-mcp", "mcp"})
+
+
+def _is_incluster_mcp_url(url: str) -> bool:
+    """Return True if ``url``'s hostname matches a known in-cluster MCP
+    service. Defensive against malformed URLs — a parse failure means
+    "not in-cluster, leave it alone"."""
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+    except Exception:  # noqa: BLE001 — urlparse never raises in practice, but be safe
+        return False
+    return host in _INCLUSTER_MCP_HOSTS
+
+
 def _rewrite_sse_to_streamable_http_url(url: str) -> str:
     """Rewrite an in-cluster SSE URL onto the streamable-HTTP mount.
 
@@ -1476,12 +1498,17 @@ def _rewrite_sse_to_streamable_http_url(url: str) -> str:
     need); for Codex we strip the ``/sse`` suffix and substitute
     ``/mcp/``.
 
-    Idempotent + safe on URLs that don't end in ``/sse`` — an external
-    MCP server (tenant connector) might be served at any path. External
-    streamable-HTTP servers go through the ``elif`` branch above and
-    never hit this rewriter.
+    Scope: ONLY rewrites URLs whose hostname is in
+    ``_INCLUSTER_MCP_HOSTS``. External partner SSE servers (e.g. a
+    tenant connector at ``partner.example.com``) pass through
+    unchanged — they speak SSE and Codex's rmcp will fail on them
+    anyway, but the URL won't be silently mangled.
+
+    Idempotent + safe on URLs that don't end in ``/sse``.
     """
     if not url:
+        return url
+    if not _is_incluster_mcp_url(url):
         return url
     trimmed = url.rstrip("/")
     if trimmed.endswith("/sse"):

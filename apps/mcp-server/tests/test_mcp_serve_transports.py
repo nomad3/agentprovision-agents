@@ -39,6 +39,35 @@ def app():
     return build_app()
 
 
+@pytest.fixture(scope="module")
+def client_with_lifespan(app):
+    """A module-scoped TestClient with lifespan entered exactly once.
+
+    Why module-scoped: ``StreamableHTTPSessionManager.run()`` is
+    explicitly single-shot — its docstring says *"This method can only
+    be called once per instance"* — and FastMCP returns the same
+    cached streamable_http_app (with the same session manager) across
+    ``mcp.streamable_http_app()`` calls. If each HTTP-issuing test
+    opened its own ``with TestClient(app)`` block, the second one
+    would crash with ``RuntimeError: ...can only be called once``.
+
+    ``raise_server_exceptions=False``: an unhandled exception inside
+    the streamable-HTTP session manager (e.g. a transitive
+    ``anyio`` / ``mcp`` lib version mismatch in dev or CI) would
+    otherwise bubble out of TestClient and fail every probe. For
+    route-wiring assertions we don't care if the handler completes
+    cleanly — we only care that the bytes reached the handler
+    (anything other than 404/405). Surface server errors as 500
+    responses so the 404/405 contract test stays meaningful.
+
+    Tests that only need route introspection (no real HTTP request)
+    keep using the bare ``app`` fixture. Tests that actually POST/GET
+    use this client so they share one lifespan boot.
+    """
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield client
+
+
 def _collect_mounted_paths(app) -> dict[str, list[str]]:
     """Return ``{mount_prefix: [inner_route_paths...]}`` for each Mount.
 
@@ -100,17 +129,16 @@ def test_messages_route_is_registered(app):
     ), f"/messages/ not registered. Mounted layout: {mounts}."
 
 
-def test_sse_post_returns_405(app):
+def test_sse_post_returns_405(client_with_lifespan):
     """``POST /sse`` MUST return 405. This is the exact failure mode
     Codex's rmcp client hit before the fix — it POSTed JSON-RPC to
     ``/sse`` (GET-only) and the worker tore down on the 405. The
     SSE route's verb contract is unchanged by the fix; only Codex's
     target URL moved (to ``/mcp/``).
     """
-    with TestClient(app) as client:
-        response = client.post(
-            "/sse", json={"jsonrpc": "2.0", "method": "ping"}
-        )
+    response = client_with_lifespan.post(
+        "/sse", json={"jsonrpc": "2.0", "method": "ping"}
+    )
     assert response.status_code == 405, (
         f"Expected 405 on POST /sse, got {response.status_code}. "
         "If this is 200, the SSE route somehow accepts POST and the "
@@ -139,4 +167,41 @@ def test_mcp_streamable_mount_registered(app):
     assert "/" in mounts["/mcp"], (
         f"Inner streamable-HTTP path is not '/' — got {mounts['/mcp']}. "
         "Public URL would be /mcp/mcp instead of /mcp/."
+    )
+
+
+def test_mcp_streamable_endpoint_is_wired(client_with_lifespan):
+    """Real HTTP probe of ``/mcp/`` — proves the route is wired AND the
+    streamable-HTTP session manager booted via the parent app's
+    lifespan. Route-tree introspection (above) is necessary but not
+    sufficient: a bug in the parent ``lifespan`` (e.g. forgetting to
+    re-enter ``streamable_app.router.lifespan_context``) leaves the
+    mount registered but every POST returns 503 or the session manager
+    raises ``RuntimeError: Task group is not initialized``. We don't
+    care if ``initialize`` actually succeeds — only that the response
+    is NOT 404 (mount missing) and NOT 405 (verb contract broken).
+    A 200/400/406/503 from the session manager all prove lifespan
+    boot + route wiring are intact.
+
+    Shares one TestClient/lifespan with the SSE 405 probe because
+    ``StreamableHTTPSessionManager.run()`` is single-shot per
+    instance (see ``client_with_lifespan`` fixture docstring). That
+    fixture also disables ``raise_server_exceptions`` so a 500 from
+    a transitive lib bug still surfaces as a response — the
+    route-wiring assertion below only cares about 404/405.
+    """
+    resp = client_with_lifespan.post(
+        "/mcp/",
+        json={
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "id": 1,
+            "params": {},
+        },
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code not in (404, 405), (
+        f"streamable-http route not reachable: {resp.status_code} "
+        f"{resp.text!r}. 404 → mount missing or shadowed; 405 → "
+        "verb contract broken (the regression Codex's rmcp hit on /sse)."
     )

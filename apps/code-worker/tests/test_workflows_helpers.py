@@ -238,6 +238,32 @@ class TestRewriteSseToStreamableHttpUrl:
             == "https://example.com/api/v1/mcp"
         )
 
+    def test_leaves_external_partner_sse_url_untouched(self):
+        """A hypothetical tenant connector served at an external host
+        speaking SSE (``https://partner.example.com/api/sse``) MUST
+        NOT be rewritten — the rewrite only makes sense for our own
+        in-cluster mcp-tools that exposes the dual transport. External
+        SSE servers pass through verbatim; Codex's rmcp will still
+        fail on them (no SSE variant) but the URL stays honest instead
+        of being silently mangled to ``/mcp/`` on a host that has no
+        such mount."""
+        assert (
+            wf._rewrite_sse_to_streamable_http_url(
+                "https://partner.example.com/api/sse"
+            )
+            == "https://partner.example.com/api/sse"
+        )
+
+    def test_rewrites_incluster_url(self):
+        """Regression guard for the in-cluster rewrite contract — the
+        hostname-narrowing change must not break the primary path."""
+        assert (
+            wf._rewrite_sse_to_streamable_http_url(
+                "http://agentprovision-mcp:8086/sse"
+            )
+            == "http://agentprovision-mcp:8086/mcp/"
+        )
+
     def test_empty_string_is_safe(self):
         assert wf._rewrite_sse_to_streamable_http_url("") == ""
 
