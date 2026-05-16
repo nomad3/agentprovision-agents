@@ -73,6 +73,14 @@ class TenantFeatures(Base):
     # tenant validation per the cutover plan).
     shadow_mode_real_dispatch = Column(Boolean, nullable=False, default=False)
 
+    # CLI stream-output rollout gate (migration 134). When TRUE the
+    # code-worker switches Claude Code to `--output-format stream-json`
+    # and streams every reasoning/tool_use/tool_result event into the
+    # terminal card. Default OFF prod; seeded ON for the saguilera
+    # test tenant. Plan:
+    # docs/plans/2026-05-16-terminal-full-cli-output.md §9
+    cli_stream_output = Column(Boolean, nullable=False, default=False)
+
     # CPA software export format for the Bookkeeper Agent's weekly
     # categorized output. AAHA stays canonical — the Bookkeeper still
     # categorizes against the AAHA chart of accounts; this just picks

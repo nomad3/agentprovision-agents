@@ -617,6 +617,7 @@ def run_agent_session(
     agent_tool_groups: list = None,
     agent_memory_domains: list = None,
     agent_skill_slugs: list = None,
+    attempt: int = 1,
 ) -> Tuple[Optional[str], Dict]:
     """Public entry — runs the legacy session and fires shadow comparison.
 
@@ -641,6 +642,7 @@ def run_agent_session(
         agent_tier=agent_tier, agent_tool_groups=agent_tool_groups,
         agent_memory_domains=agent_memory_domains,
         agent_skill_slugs=agent_skill_slugs,
+        attempt=attempt,
     )
 
     # Phase 2 shadow comparison — wrapped in try/except so the shadow
@@ -679,6 +681,7 @@ def _run_agent_session_legacy(
     agent_tool_groups: list = None,
     agent_memory_domains: list = None,
     agent_skill_slugs: list = None,
+    attempt: int = 1,
 ) -> Tuple[Optional[str], Dict]:
     """Legacy run_agent_session — body unchanged from Phase 1.6.
 
@@ -1217,6 +1220,13 @@ def _run_agent_session_legacy(
                 session_id: str = ""
                 model: str = ""  # model slug e.g., "claude-haiku-4-5-20251001"
                 allowed_tools: str = ""  # comma-separated MCP tool names
+                # Plan 2026-05-16-terminal-full-cli-output §4.1: the worker
+                # needs the agentprovision chat_session_id (NOT the CLI's
+                # native session_id) so it can POST stream chunks back to
+                # /api/v2/internal/sessions/{id}/events. `attempt` is the
+                # 1-based index in the cli chain — stamped on every chunk.
+                chat_session_id: str = ""
+                attempt: int = 1
 
             existing_session_id = (
                 (db_session_memory or {}).get(f"{platform}_cli_session_id")
@@ -1227,6 +1237,10 @@ def _run_agent_session_legacy(
             model_slug = TIER_MODEL_MAP.get(agent_tier, {}).get(platform, "")
             tool_names = resolve_tool_names(agent_tool_groups)
             allowed_tools_str = format_allowed_tools(tool_names) if tool_names else ""
+
+            chat_session_id_for_stream = str(
+                (db_session_memory or {}).get("chat_session_id", "") or ""
+            )
 
             task_input = _ChatCliInput(
                 platform=platform,
@@ -1239,6 +1253,8 @@ def _run_agent_session_legacy(
                 session_id=existing_session_id,
                 model=model_slug,
                 allowed_tools=allowed_tools_str,
+                chat_session_id=chat_session_id_for_stream,
+                attempt=attempt,
             )
 
             return await client.execute_workflow(

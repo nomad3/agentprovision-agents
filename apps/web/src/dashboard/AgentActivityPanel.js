@@ -31,7 +31,9 @@ const ICON_FOR_TYPE = {
   plan_step_changed: FaArrowRight,
   subagent_dispatched: FaBolt,
   subagent_response: FaBolt,
-  cli_subprocess_stream: FaTerminal,
+  // cli_subprocess_stream intentionally NOT here — owned by the
+  // terminal card (plan 2026-05-16 §5.2). The filter below also
+  // excludes those events from the activity list defensively.
   resource_referenced: FaDatabase,
   auto_quality_score: FaStar,
   auto_quality_consensus: FaStar,
@@ -56,8 +58,9 @@ const renderLine = (env) => {
       return `dispatch → ${p.agent_id || p.role || 'peer'}`;
     case 'subagent_response':
       return `${p.agent_id || 'peer'}: ${(p.text || '').slice(0, 100)}`;
-    case 'cli_subprocess_stream':
-      return `${p.platform || 'cli'}: ${(p.chunk || '').slice(0, 100)}`;
+    // cli_subprocess_stream cases intentionally omitted — the terminal
+    // card owns those (plan 2026-05-16 §5.2). Activity panel only
+    // shows lifecycle + decisions + tool calls.
     case 'cli_subprocess_started':
       return `▶ ${p.platform || 'cli'} (attempt ${p.attempt ?? '?'})`;
     case 'cli_subprocess_complete': {
@@ -89,7 +92,13 @@ const AgentActivityPanel = ({ collapsed, sessionId }) => {
   // events/status come from the shared SessionEventsProvider in
   // DashboardControlCenter — one SSE connection per session, not one
   // per consumer.
-  const { events, status } = useSessionEvents();
+  const { events: rawEvents, status } = useSessionEvents();
+  // Activity panel must NOT show per-chunk stream events — the terminal
+  // card owns those (plan 2026-05-16 §5.2 / §7). Filtering here keeps
+  // the list focused on lifecycle / tool-call / routing decisions.
+  const events = rawEvents.filter(
+    (e) => (e.type || e.event_type) !== 'cli_subprocess_stream',
+  );
 
   if (collapsed) return <div className="ap-right" aria-hidden="true" />;
 

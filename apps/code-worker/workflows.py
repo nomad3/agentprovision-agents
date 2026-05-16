@@ -1069,6 +1069,15 @@ class ChatCliInput:
     session_id: str = ""  # Platform-native session continuity (e.g. Claude --resume)
     model: str = ""        # Override model slug (e.g. "claude-haiku-4-5-20251001"); empty = use env default
     allowed_tools: str = ""  # Comma-separated tool list override; empty = derive from MCP config
+    # ---- terminal-full-cli-output (2026-05-16) ----
+    # agentprovision chat_sessions.id — used by the SessionEventEmitter
+    # to POST stream chunks to /api/v2/internal/sessions/{id}/events.
+    # NOT the CLI's native session_id (see `session_id` above).
+    chat_session_id: str = ""
+    # 1-based chain attempt index, stamped on every emitted chunk so
+    # the terminal can tab/colour the fallback CLI without re-deriving
+    # from cli_subprocess_started lifecycle events.
+    attempt: int = 1
 
 
 @dataclass

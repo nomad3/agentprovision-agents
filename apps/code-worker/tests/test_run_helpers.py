@@ -157,48 +157,100 @@ class TestRunLongCommand:
 
 # ── _run_cli_with_heartbeat (247-317) ─────────────────────────────────────
 
+class _FakeStream:
+    """Tiny readable file-like for the line-reader threads.
+
+    ``readline()`` returns the next line until exhausted, then "" to
+    signal EOF — the canonical iter(readline, "") idiom in the helper
+    terminates on that empty string.
+    """
+
+    def __init__(self, content: str = ""):
+        # Split preserving newlines so each call returns a single line.
+        self._lines = content.splitlines(keepends=True) if content else []
+        self._idx = 0
+        self.closed = False
+
+    def readline(self):
+        if self._idx >= len(self._lines):
+            return ""
+        ln = self._lines[self._idx]
+        self._idx += 1
+        return ln
+
+    def close(self):
+        self.closed = True
+
+
 class _FakeChatPopen:
-    """Fake Popen for the heartbeat wrapper.
+    """Fake Popen for the heartbeat wrapper (Phase 5: line-reader pump).
 
-    ``communicate(timeout=...)`` blocks for ``block_seconds`` of real time
-    before returning canned ``(stdout, stderr)``. We pair this with a small
-    ``heartbeat_interval`` in the helper call so ``future.result(timeout=...)``
-    in ``_run_cli_with_heartbeat`` times out N times (each timeout fires a
-    heartbeat) before the future finally completes.
+    The helper now drains ``stdout``/``stderr`` via two reader threads
+    instead of ``communicate()``. We expose ``_FakeStream`` instances so
+    those threads see canned output and reach EOF cleanly. The main
+    thread loops on ``poll()`` to decide when the child exited — we
+    flip ``returncode`` from None to the configured value after
+    ``block_polls`` polls, so the helper has time to fire at least one
+    "running..." heartbeat.
 
-    For the timeout-expired test path, set ``raise_timeout_expired=True`` —
-    the helper's _wait_and_drain catches ``TimeoutExpired`` and re-raises.
+    For the timeout-expired test path, set ``raise_on_kill=False`` and
+    keep ``returncode=None`` forever; the helper's main loop kills the
+    process when ``time.monotonic()`` advances past ``timeout``.
     """
 
     def __init__(
         self,
         *,
-        block_seconds=0.05,
-        returncode=0,
-        stdout="result",
-        stderr="",
-        raise_timeout_expired=False,
+        block_polls: int = 2,
+        returncode: int = 0,
+        stdout: str = "result",
+        stderr: str = "",
+        raise_timeout_expired: bool = False,
+        # Kept for back-compat with older tests; not used internally.
+        block_seconds: float = 0.0,
     ):
-        self._block_seconds = block_seconds
-        self.returncode = returncode
-        self._stdout = stdout
-        self._stderr = stderr
+        self._block_polls = block_polls
+        self._final_returncode = returncode
+        self.stdout = _FakeStream(stdout)
+        self.stderr = _FakeStream(stderr)
         self._raise_timeout_expired = raise_timeout_expired
+        self._poll_calls = 0
         self.killed = False
+        # When True: returncode is None forever, forcing the helper's
+        # timeout branch to fire (used by the timeout test).
+        if raise_timeout_expired:
+            self.returncode = None
+            self._final_returncode = None
+        else:
+            self.returncode = None
+        # Retained but unused — silences any test that still passes it.
+        self._block_seconds = block_seconds
 
-    def communicate(self, timeout=None):
-        import time as _time
-
+    def poll(self):
+        # Stay alive for `block_polls` calls, then flip to the final
+        # returncode so the helper's main loop sees the exit.
+        self._poll_calls += 1
         if self._raise_timeout_expired:
-            raise subprocess.TimeoutExpired(cmd=["fake"], timeout=timeout)
-        _time.sleep(self._block_seconds)
-        return self._stdout, self._stderr
+            return None
+        if self._poll_calls <= self._block_polls:
+            return None
+        self.returncode = self._final_returncode
+        return self._final_returncode
 
     def kill(self):
         self.killed = True
+        # Drain threads need to see EOF — they already do, since
+        # readline() has exhausted the canned content. Setting
+        # returncode here lets the helper's exception handler unwind
+        # cleanly.
+        if self.returncode is None:
+            self.returncode = -9
 
-    def poll(self):
-        return None if not self.killed else self.returncode
+    # Back-compat shim for any test that still calls communicate().
+    def communicate(self, timeout=None):
+        if self._raise_timeout_expired:
+            raise subprocess.TimeoutExpired(cmd=["fake"], timeout=timeout)
+        return "".join(self.stdout._lines), "".join(self.stderr._lines)
 
 
 class TestRunCliWithHeartbeat:
@@ -256,21 +308,40 @@ class TestRunCliWithHeartbeat:
         assert fake.killed is True
 
     def test_unhandled_exception_kills_subprocess(self, monkeypatch):
-        """Any non-timeout exception in the future must still kill the
-        subprocess — the BaseException handler at line 308 covers cancel."""
+        """Any non-timeout exception in the main loop must still kill the
+        subprocess — the BaseException handler at the bottom of
+        ``run_cli_with_heartbeat`` covers cancel + unexpected errors.
+
+        Phase 5 (line-reader pump) note: the previous test patched
+        ``communicate()`` to raise, but the new impl polls + drains via
+        threads. Equivalent failure mode: ``poll()`` itself raises
+        mid-loop. Same recovery contract: kill the subprocess, propagate
+        the exception.
+        """
 
         class _ExplodingPopen:
-            returncode = None
             killed = False
 
-            def communicate(self, timeout=None):
-                raise RuntimeError("boom")
+            def __init__(self):
+                self.stdout = _FakeStream("")
+                self.stderr = _FakeStream("")
+                self.returncode = None
+                self._poll_calls = 0
+
+            def poll(self):
+                self._poll_calls += 1
+                # First call (right after Popen) returns None so the main
+                # loop enters. Second call raises — fires BaseException
+                # branch. Subsequent calls (inside the exception handler:
+                # "if proc.poll() is None: kill") return None so the
+                # handler proceeds to kill().
+                if self._poll_calls == 2:
+                    raise RuntimeError("boom")
+                return None
 
             def kill(self):
                 self.killed = True
-
-            def poll(self):
-                return None  # still alive when the killer runs
+                self.returncode = -9
 
         fake = _ExplodingPopen()
         monkeypatch.setattr(cli_runtime.subprocess, "Popen", lambda *a, **kw: fake)

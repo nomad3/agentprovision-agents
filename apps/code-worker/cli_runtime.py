@@ -134,6 +134,7 @@ def run_cli_with_heartbeat(
     env: dict | None = None,
     cwd: str | None = None,
     heartbeat_interval: int = 30,
+    on_chunk=None,  # Callable[[str, str], None] | None — (line, fd_name)
 ) -> subprocess.CompletedProcess:
     """Run a chat-CLI subprocess while heartbeating Temporal from the activity thread.
 
@@ -145,55 +146,136 @@ def run_cli_with_heartbeat(
     activity at ``heartbeat_timeout`` even when the subprocess is alive — which
     surfaces to callers as ``WorkflowFailureError: Workflow execution failed``.
 
-    Fix: launch the subprocess via ``Popen``, drain it on a worker thread
-    (``communicate`` reads stdout/stderr concurrently — no PIPE deadlock even
-    on multi-MB CLI output), and heartbeat from the main activity thread while
-    polling the future. On any exception path (Temporal cancellation,
-    subprocess timeout) the subprocess is killed before re-raising, so a
-    cancelled activity never leaves a live ``gemini``/``claude``/``codex``
-    process behind.
+    Streaming pump (2026-05-16 §4.4):
+        Previous impl used ``proc.communicate(timeout=...)`` which buffers
+        the *entire* stdout/stderr to completion. Switched to dual
+        line-reader threads (``_drain``) so each line fires ``on_chunk``
+        as it arrives — that's what lets the terminal card show real-time
+        Claude reasoning + tool calls instead of an empty progress bar
+        for 20s.
+
+    On any exception path (Temporal cancellation, subprocess timeout) the
+    subprocess is killed before re-raising, so a cancelled activity never
+    leaves a live ``gemini``/``claude``/``codex`` process behind.
     """
-    import concurrent.futures
+    import threading as _threading
 
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        bufsize=1,  # line-buffered — pairs with the line-reader threads
         env=env,
         cwd=cwd,
     )
 
-    def _wait_and_drain() -> tuple[str, str]:
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    # Event the drain threads set after EOF (stream closed). The main
+    # loop waits on this with a short timeout instead of blocking on a
+    # 5-second sleep — that drops tail-latency on short Claude turns
+    # from ~5 s to <0.5 s (review B2). The Event is set TWICE in the
+    # happy path (once per drain thread) and that's fine — Event.set()
+    # is idempotent.
+    drains_done = _threading.Event()
+    drains_remaining = [2]  # mutable counter shared by both drain threads
+    drains_lock = _threading.Lock()
+
+    def _drain(stream, sink: list[str], fd_name: str) -> None:
+        # ``iter(stream.readline, "")`` is the canonical "read until
+        # EOF" idiom — terminates when the child closes the FD.
         try:
-            return proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+            for line in iter(stream.readline, ""):
+                sink.append(line)
+                if on_chunk is not None:
+                    try:
+                        on_chunk(line, fd_name)
+                    except Exception:  # noqa: BLE001
+                        # on_chunk must never break the drain. Stream
+                        # emitter has its own fail-soft logic; anything
+                        # else is the caller's bug, log and continue.
+                        logger.debug(
+                            "on_chunk handler raised (fd=%s); continuing drain",
+                            fd_name, exc_info=True,
+                        )
+        finally:
             try:
-                proc.communicate()
-            except Exception:
+                stream.close()
+            except Exception:  # noqa: BLE001
                 pass
-            raise
+            # Signal main loop once both drains have closed their streams.
+            with drains_lock:
+                drains_remaining[0] -= 1
+                if drains_remaining[0] <= 0:
+                    drains_done.set()
+
+    t_out = _threading.Thread(
+        target=_drain, args=(proc.stdout, stdout_lines, "stdout"),
+        name=f"{label}-stdout-drain", daemon=True,
+    )
+    t_err = _threading.Thread(
+        target=_drain, args=(proc.stderr, stderr_lines, "stderr"),
+        name=f"{label}-stderr-drain", daemon=True,
+    )
+    t_out.start()
+    t_err.start()
 
     activity.heartbeat(f"{label} starting...")
     start = time.monotonic()
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(_wait_and_drain)
-            while True:
-                try:
-                    stdout, stderr = future.result(timeout=heartbeat_interval)
-                    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
-                except concurrent.futures.TimeoutError:
-                    elapsed = int(time.monotonic() - start)
-                    activity.heartbeat(f"{label} running... ({elapsed}s elapsed)")
+        # Heartbeat-while-alive on the main activity thread (preserves
+        # Temporal's thread-local activity context — see top docstring).
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                # Child exited — wait for the drain threads so we don't
+                # lose trailing lines that arrived after the last sleep.
+                t_out.join(timeout=5)
+                t_err.join(timeout=5)
+                return subprocess.CompletedProcess(
+                    cmd, rc, "".join(stdout_lines), "".join(stderr_lines),
+                )
+            elapsed = time.monotonic() - start
+            if elapsed > timeout:
+                # Match subprocess.TimeoutExpired semantics — kill, wait,
+                # raise so callers' try/except paths still work.
+                proc.kill()
+                t_out.join(timeout=2)
+                t_err.join(timeout=2)
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            activity.heartbeat(f"{label} running... ({int(elapsed)}s elapsed)")
+            # Wake on EITHER a drain-side signal (stream closed → child
+            # likely just exited) OR a short timeout cap. The cap is
+            # min(heartbeat_interval, 0.5) so heartbeat cadence still
+            # tightens to ≤ heartbeat_interval s when the caller passes
+            # a sub-second value. This gives a tail latency of <500 ms
+            # while keeping poll() rate ≤ 2/s (review B2).
+            wake_timeout = min(heartbeat_interval, 0.5)
+            if drains_done.wait(timeout=wake_timeout):
+                # Drain signalled — drain_done can ONLY be set after
+                # both pipes hit EOF, which in turn only happens after
+                # the child either exits cleanly or is killed. Loop
+                # around to poll() once more to pick up the exit code;
+                # don't break here in case the child is still flushing
+                # its exit status to the OS.
+                continue
     except BaseException:
         # Cancellation, subprocess timeout, or any other exit — don't let the
-        # CLI subprocess outlive this activity. Kill it before the
-        # ThreadPoolExecutor's __exit__ blocks on shutdown(wait=True).
-        if proc.poll() is None:
+        # CLI subprocess outlive this activity. The poll() call below may
+        # itself raise (rare, but undefined per CPython source when the
+        # subprocess is in a weird state), so we wrap it defensively —
+        # an unconditional kill() is the safest fallback (review B1).
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except Exception:
             try:
                 proc.kill()
             except Exception:
                 pass
+        # Give drain threads a moment to flush so any captured trailing
+        # output isn't lost when we re-raise.
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
         raise
