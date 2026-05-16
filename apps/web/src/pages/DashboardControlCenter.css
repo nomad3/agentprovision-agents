@@ -88,8 +88,12 @@
    shoved the terminal below the fold. Bias toward "chat + terminal
    both visible" — the chat still scrolls its own thread internally. */
 
+/* FIXED row height so a long chat thread doesn't push the terminal
+   below the fold — the thread scrolls internally inside
+   .ap-chattab-thread. min-height was the bug: it's a floor, not a
+   ceiling. height: <clamp> gives both a floor AND a ceiling. */
 .dcc-chat-row {
-  min-height: clamp(360px, calc(100vh - 540px), 560px);
+  height: clamp(360px, calc(100vh - 520px), 520px);
 }
 
 .dcc-thread-card { overflow: hidden; }
@@ -98,7 +102,6 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-height: clamp(360px, calc(100vh - 540px), 560px);
 }
 .dcc-thread-empty {
   display: flex;
@@ -139,9 +142,8 @@
    horizontal list at top; chat fills the rest of the viewport. */
 @media (max-width: 767.98px) {
   .dcc-container { padding: 0 var(--ap-space-2); }
-  .dcc-chat-row { min-height: auto; }
-  .dcc-thread-body {
-    min-height: clamp(320px, calc(100vh - 480px), 480px);
+  .dcc-chat-row {
+    height: clamp(280px, calc(100vh - 460px), 420px);
   }
   .dcc-sessions { padding: var(--ap-space-2); }
   .dcc-session-list {
