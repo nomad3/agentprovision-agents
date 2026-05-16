@@ -21,7 +21,7 @@ import {
   FaTerminal,
   FaStar,
 } from 'react-icons/fa';
-import { useV2SessionEvents } from './hooks/useV2SessionEvents';
+import { useSessionEvents } from './SessionEventsContext';
 import './AgentActivityPanel.css';
 
 const ICON_FOR_TYPE = {
@@ -66,7 +66,10 @@ const renderLine = (env) => {
 };
 
 const AgentActivityPanel = ({ collapsed, sessionId }) => {
-  const { events, status } = useV2SessionEvents(sessionId);
+  // events/status come from the shared SessionEventsProvider in
+  // DashboardControlCenter — one SSE connection per session, not one
+  // per consumer.
+  const { events, status } = useSessionEvents();
 
   if (collapsed) return <div className="ap-right" aria-hidden="true" />;
 

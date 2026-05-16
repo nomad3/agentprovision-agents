@@ -17,7 +17,7 @@
  */
 import { useEffect, useMemo, useState } from 'react';
 import { FaCheck, FaTimes, FaForward, FaCircle } from 'react-icons/fa';
-import { useV2SessionEvents } from './hooks/useV2SessionEvents';
+import { useSessionEvents } from './SessionEventsContext';
 import './PlanStepper.css';
 
 const STATUS_ICONS = {
@@ -31,8 +31,8 @@ const STATUS_ICONS = {
 const PLAN_LINGER_MS = 5000;
 
 const PlanStepper = ({ sessionId }) => {
-  const { events } = useV2SessionEvents(sessionId);
-  const [hideAfter, setHideAfter] = useState(null);
+  const { events } = useSessionEvents();
+  const [hidden, setHidden] = useState(false);
 
   const plan = useMemo(() => {
     // Reduce the event stream into the most recent plan's step map.
@@ -63,15 +63,15 @@ const PlanStepper = ({ sessionId }) => {
   // Linger logic — when every step is in a terminal status, set a 5s
   // timer to hide the stepper. Cleared if a new step starts.
   useEffect(() => {
-    if (!plan) { setHideAfter(null); return undefined; }
+    if (!plan) { setHidden(false); return undefined; }
     const allTerminal = plan.steps.every((s) => ['complete', 'failed', 'skipped'].includes(s.status));
-    if (!allTerminal) { setHideAfter(null); return undefined; }
-    const t = setTimeout(() => setHideAfter(Date.now()), PLAN_LINGER_MS);
+    if (!allTerminal) { setHidden(false); return undefined; }
+    const t = setTimeout(() => setHidden(true), PLAN_LINGER_MS);
     return () => clearTimeout(t);
   }, [plan]);
 
   if (!plan) return null;
-  if (hideAfter) return null;
+  if (hidden) return null;
 
   const total = plan.steps.length;
   const done = plan.steps.filter((s) => s.status === 'complete').length;

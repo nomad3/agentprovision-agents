@@ -122,10 +122,14 @@ def _coalesce_subprocess_streams(events: List[Dict[str, Any]]) -> List[Dict[str,
             pending["seq_no"] = evt["seq_no"]  # last seq_no in the window
         else:
             _flush()
+            # Deep-copy the payload so nested mutable values (lists/dicts
+            # inside the original payload) don't share references with
+            # the caller's input — matches the helper's docstring contract.
+            from copy import deepcopy
             pending = {
                 **evt,
                 "payload": {
-                    **(evt.get("payload") or {}),
+                    **deepcopy(evt.get("payload") or {}),
                     "chunks": [(evt.get("payload") or {}).get("chunk", "")],
                     "coalesced_count": 1,
                 },
