@@ -88,10 +88,12 @@ export const useV2SessionEvents = (sessionId) => {
       ctrl = new AbortController();
       if (cancelled) return;
       setStatus((prev) => (prev === 'open' ? 'reconnecting' : 'connecting'));
-      const since = lastSeqNo.current;
-      const url = since != null
-        ? `${API_BASE}/api/v2/sessions/${sessionId}/events?since=${since}`
-        : `${API_BASE}/api/v2/sessions/${sessionId}/events`;
+      // On the very first connect for a session, ask for full history
+      // (since=0) so navigating away and back doesn't wipe AgentActivity
+      // / Terminal. On reconnects after a network blip, resume from the
+      // last seq_no we saw. Backend caps the replay at 500 events.
+      const since = lastSeqNo.current != null ? lastSeqNo.current : 0;
+      const url = `${API_BASE}/api/v2/sessions/${sessionId}/events?since=${since}`;
       try {
         const res = await fetch(url, {
           headers: {
