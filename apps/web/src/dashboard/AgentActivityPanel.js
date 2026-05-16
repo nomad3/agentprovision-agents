@@ -34,6 +34,10 @@ const ICON_FOR_TYPE = {
   cli_subprocess_stream: FaTerminal,
   resource_referenced: FaDatabase,
   auto_quality_score: FaStar,
+  auto_quality_consensus: FaStar,
+  cli_routing_decision: FaArrowRight,
+  cli_subprocess_started: FaTerminal,
+  cli_subprocess_complete: FaTerminal,
 };
 
 const renderLine = (env) => {
@@ -54,6 +58,22 @@ const renderLine = (env) => {
       return `${p.agent_id || 'peer'}: ${(p.text || '').slice(0, 100)}`;
     case 'cli_subprocess_stream':
       return `${p.platform || 'cli'}: ${(p.chunk || '').slice(0, 100)}`;
+    case 'cli_subprocess_started':
+      return `▶ ${p.platform || 'cli'} (attempt ${p.attempt ?? '?'})`;
+    case 'cli_subprocess_complete': {
+      const tail = p.error
+        ? `${p.latency_ms ?? '?'}ms · ${p.error}`
+        : `${p.latency_ms ?? '?'}ms${p.token_count != null ? ' · ' + p.token_count + 'tok' : ''}${p.cost_usd != null ? ' · $' + Number(p.cost_usd).toFixed(4) : ''}`;
+      return `${p.error ? '✗' : '✓'} ${p.platform || 'cli'} (${tail})`;
+    }
+    case 'cli_routing_decision': {
+      const served = p.served_by || 'none';
+      const attempted = (p.attempted || []).join(' → ');
+      const tail = p.total_latency_ms != null ? ` · ${p.total_latency_ms}ms` : '';
+      return `routed → ${served}  [${attempted || 'no chain'}]${tail}`;
+    }
+    case 'auto_quality_consensus':
+      return `score ${p.adjusted_score ?? p.score}/100 · ${p.consensus_passed ? '✓' : '✗'} ${p.approved_count}/${p.total_reviewers} reviewers · reward ${p.reward}`;
     case 'resource_referenced':
       return `${p.kind || 'ref'} ${p.resource_type || ''}:${p.resource_id || ''}`;
     case 'auto_quality_score':
