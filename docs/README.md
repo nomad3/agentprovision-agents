@@ -6,6 +6,7 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 
 | Folder | Purpose |
 |--------|---------|
+| [`architecture/`](architecture/) | Canonical reference for cross-cutting subsystems (dashboard, kernel principle, …) |
 | [`changelog/`](changelog/) | Weekly digests of shipped features. Start here for "what's new". |
 | [`plans/`](plans/) | Design docs + implementation plans (per feature, dated `YYYY-MM-DD-<slug>.md`) |
 | [`report/`](report/) | Security audits, pentest reports, system health snapshots |
@@ -51,7 +52,12 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 | 2026-04-26 | [`plans/2026-04-26-external-agents-and-a2a-enhancement-plan.md`](plans/2026-04-26-external-agents-and-a2a-enhancement-plan.md) | **External Agents + A2A v2** — Workflows-as-spine, Microsoft import |
 | 2026-04-26 | [`plans/2026-04-26-skills-fleet-alignment-plan.md`](plans/2026-04-26-skills-fleet-alignment-plan.md) | **Skills Marketplace v2** — `_bundled/` + `_tenant/<uuid>/`, library_revisions |
 | 2026-05-03 | [`plans/2026-05-03-visibility-roadmap-plan.md`](plans/2026-05-03-visibility-roadmap-plan.md) | Visibility roadmap — Tier 1 shipped, Tier 2-5 + ops + marketing scoped |
-| 2026-05-03 | [`plans/2026-05-03-documentation-refresh-plan.md`](plans/2026-05-03-documentation-refresh-plan.md) | This documentation refresh |
+| 2026-05-03 | [`plans/2026-05-03-documentation-refresh-plan.md`](plans/2026-05-03-documentation-refresh-plan.md) | Earlier documentation refresh |
+| 2026-05-15 | [`plans/2026-05-15-alpha-control-plane-design.md`](plans/2026-05-15-alpha-control-plane-design.md) / [`tier-0-1 plan`](plans/2026-05-15-alpha-control-plane-tier-0-1-plan.md) | **Alpha Control Plane** — three-layer architecture (kernel / mesh / channels), event protocol v2 |
+| 2026-05-15 | [`plans/2026-05-15-alpha-control-center-ide-shell-design.md`](plans/2026-05-15-alpha-control-center-ide-shell-design.md) | **Alpha Control Center IDE shell** (canonical UI; supersedes /den) — VSCode/Cursor layout at `/dashboard` |
+| 2026-05-16 | [`plans/2026-05-16-dashboard-split-pane-spec-doc-viewer.md`](plans/2026-05-16-dashboard-split-pane-spec-doc-viewer.md) | Right-column pane composition: chat / doc / activity with uniform chrome |
+| 2026-05-16 | [`plans/2026-05-16-terminal-full-cli-output.md`](plans/2026-05-16-terminal-full-cli-output.md) | TerminalCard renders full CLI transcript (reasoning, tool calls, edits) |
+| 2026-05-16 | [`plans/2026-05-16-codex-mcp-tool-access-fix.md`](plans/2026-05-16-codex-mcp-tool-access-fix.md) | Codex CLI MCP-over-SSE — enable `experimental_use_rmcp_client` |
 
 ## Recent Reports
 
@@ -67,6 +73,8 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 | Topic | Doc |
 |-------|-----|
 | Architecture | [`../CLAUDE.md`](../CLAUDE.md) |
+| Alpha Control Center dashboard | [`architecture/dashboard.md`](architecture/dashboard.md) |
+| Alpha CLI kernel principle | [`architecture/alpha_cli_kernel.md`](architecture/alpha_cli_kernel.md) |
 | K8s deployment | [`KUBERNETES_DEPLOYMENT.md`](KUBERNETES_DEPLOYMENT.md) |
 | MCP integration | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) |
 | LLM integration | [`LLM_INTEGRATION_README.md`](LLM_INTEGRATION_README.md) |

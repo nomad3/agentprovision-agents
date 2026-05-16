@@ -2,6 +2,23 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Alpha CLI is the Kernel — Read First
+
+**Every feature flows through Alpha CLI.** Frontend → CLI (kernel) → internal API → MCP tools / memory / RL. The web `/dashboard`, Tauri, WhatsApp, MCP-leaves, and the `alpha` binary are **viewports**, not implementations. One brain, many viewports.
+
+If a new feature can't be expressed as `alpha <verb>`, the design is wrong. Concretely:
+
+1. Name the verb (`alpha workspace tree`, `alpha chat send`, `alpha workflow run`, …).
+2. The v1 HTTP route is **thin** — it delegates to the same Python entrypoint the `alpha` binary calls. No business logic in the route.
+3. Frontend calls the v1 route. Never reach into PostgreSQL / Redis / filesystem directly from a React component or a Rust Tauri command.
+4. Emit `publish_session_event(...)` for anything a human or other agent might want to watch — single SSE consumer via `SessionEventsContext` in the SPA.
+5. Log `rl_experience` for any autonomous decision.
+6. If a leaf agent needs the verb, wrap it as a tool in `apps/mcp-server/src/mcp_tools/<area>.py` — leaves call the kernel via MCP over SSE with an agent-scoped JWT.
+
+Anti-patterns to reject: per-component SSE subscriptions; Tauri Rust talking direct to DB; a "special case" WhatsApp prompt path that diverges from web; an MCP tool whose capability has no `alpha` subcommand.
+
+Full principle + examples: [`docs/architecture/alpha_cli_kernel.md`](docs/architecture/alpha_cli_kernel.md).
+
 ## Project Overview
 
 AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration platform. Routes tasks across four CLI runtimes (**Claude Code, Codex, Gemini CLI, GitHub Copilot CLI**) via Temporal workflows, with autodetect + quota-fallback chaining (#245) and per-tenant default selectable in `tenant_features.default_cli_platform`. Agents are governed via the ALM platform, tools are served via **MCP** (90+ tools), and the platform learns which runtime performs best per task type via RL. Deployed on **Rancher Desktop K8s** with **Cloudflare Tunnel** (in-cluster pod) serving `agentprovision.com`.
@@ -112,7 +129,7 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - **Heartbeat**: `POST /agents/{id}/heartbeat` for external/long-running agents to signal liveness.
 - **UI**: `AgentsPage` fleet view (status badges, AI Assistants / External Agents sections, Import modal). `AgentDetailPage` with Performance, Audit, Versions, Integrations tabs.
 
-**Alpha Control Plane** (shipped 2026-05-15, design `docs/plans/2026-05-15-alpha-control-plane-design.md` + plan `…-tier-0-1-plan.md`): the cockpit / Den at `/den` — a redesigned chat workspace that unifies every agentic-AI surface into one place. Three layers:
+**Alpha Control Plane / Alpha Control Center** (shipped 2026-05-15 → 2026-05-16, design `docs/plans/2026-05-15-alpha-control-plane-design.md`; UI shape revised by `docs/plans/2026-05-15-alpha-control-center-ide-shell-design.md`; architectural reference [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md)): the unified user-facing surface at **`/dashboard`** that replaces the prior separate `/chat` page. The earlier `/den` route + tier picker is **dropped** — the IDE shell mounts at the existing `/dashboard` route. Three layers:
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -133,34 +150,45 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 └──────────────────────────────────────────────────┘
 ```
 
-**The Den** is the visual layer — same orchestrator state, multiple viewports. Wolf-pack metaphor: alpha commands the pack from the Den.
+**The Alpha Control Center** is the visual layer — same orchestrator state, multiple viewports. Mounted at `/dashboard` (`apps/web/src/pages/DashboardControlCenter.js`):
 
 ```
-┌─[ Left rail ]─┬─────────[ Center ]──────────┬─[ Right panel ]─┐
-│  Icon strip   │   Alpha conversation        │  Context object │
-│  Memory       │   + inline plan stepper     │  (file diff,    │
-│  Projects     │   + inline tool-call cards  │   memory entry, │
-│  Leads        │                             │   lead, agent,  │
-│  Datasets     │                             │   replay)       │
-│  Experiments  │                             │                 │
-│  Entities     │                             │                 │
-│  Fleet (T4+)  │                             │                 │
-├───────────────┴─────────────────────────────┴─────────────────┤
-│  [ Live terminal drawer — tier 4+, collapsible ]              │
-│  Streams cloud worker CLI subprocess output (multi-tab)        │
-└───────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ TitleBar · session title · ⚡ A2A · ⌘K · Pro/Simple · user ▾         │
+├────────────┬─────────────────────────────────────┬───────────────────┤
+│ Left card  │ EditorArea (1..4 chat groups)       │ AgentActivityPanel│
+│ Chats │    │ side-by-side splits; focused group  │ live v2 SSE feed  │
+│ Files      │ takes new sessions from left rail   │ (Pro mode only)   │
+├────────────┴─────────────────────────────────────┴───────────────────┤
+│  ⇕  horizontal resize handle                                         │
+├──────────────────────────────────────────────────────────────────────┤
+│  TerminalCard — auto-opens on first cli_subprocess_stream            │
+│  Tabs per CLI: claude_code · codex · gemini_cli · copilot · …         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Maturity tiers (0-5)**: same shell skeleton at every tier, only the populated density changes. Explicit picker (P3) — stored in `user_preferences.alpha_den_tier`, mirrored as JWT claim `den_tier` for cheap reads in the SPA.
+| Surface | What |
+|---|---|
+| Left card modes | `Chats` ↔ `Files` (workspace tree). Persists in `apControl.leftMode`. |
+| File tree | Lazy-loaded. Tenant scope (`/var/agentprovision/workspaces/<tenant_id>/`) for all users; Platform scope (`/opt/agentprovision/platform-docs/`) superusers only. Backend `GET /api/v1/workspace/{tree,file}` (`apps/api/app/api/v1/workspace.py`). Click a file → `FileViewer` overrides the right pane until closed. |
+| Editor groups | Up to 4 chat panes side-by-side, each with its own active `sessionId`. Focused group = 2 px inset `var(--brand-primary)` border. Sidebar click → focused group. State: `apControl.editorGroups`, `apControl.focusedGroupId`. |
+| Inline CLI picker | Pill widget (`InlineCliPicker.js`) in the chat thread header writes `tenant_features.default_cli_platform` via `brandingService.updateTenantFeatures`. **Pattern guidance**: compact pill widgets like `InlineCliPicker` are preferred over full Alert UI (`DefaultCliSelector`) when the choice is contextual to a working surface rather than an explicit settings page. |
+| Pro / Simple | Top-right toggle. Simple hides AgentActivityPanel + TerminalCard. |
+| ⚡ A2A trigger | `TriggerCoalitionModal` dispatches `incident_investigation`, `plan_verify`, `propose_critique_revise`, etc. |
+| ⌘K palette | `CommandPalette.js` — fuzzy search over sessions, agents, static nav. |
+| Live agent activity | Single shared SSE subscription via `SessionEventsContext.js` (PR #500) — **canonical pattern**: one stream per session, N consumers. Per-pane fan-out is forbidden. |
+| Live terminal | `TerminalCard.js` auto-opens on first `cli_subprocess_stream`; tabs per CLI platform. Renders the full transcript (reasoning, tool calls, edits) — see [`docs/plans/2026-05-16-terminal-full-cli-output.md`](docs/plans/2026-05-16-terminal-full-cli-output.md). |
+| Resize | Three nested `<ResizableSplit>` (outer chat-row vs terminal; inner left/center/right; editor groups). Sizes persist per Pro/Simple mode in localStorage (`dcc.*` namespace). |
 
-| Tier | Persona | Visible affordances |
-|---|---|---|
-| 0 | First touch | Welcome card + chat only. No rail, no panels, no drawer. |
-| 1 | Connected | + Left rail with integrations + memory icons. |
-| 2 | Multi-agent | + Right context panel + inline plan stepper. |
-| 3 | Workspace | + Full resource browsers + Cmd+K palette + pinning. |
-| 4 | Operator | + Live terminal drawer + auto-quality score viz. |
-| 5 | God | + Workflow / skill / policy editors. |
+**Height chain** (critical for keeping the terminal on-screen): every level is `height: 100%`:
+
+```
+.dcc-outer-col → .rs-root → .rs-pane → .dcc-chat-row → .ap-card  (all 100%)
+```
+
+Lose one level and the terminal pushes below the fold (regressions: PRs #508/509/510). Responsive: ≥992 px full IDE shell; 768–991 px left card collapses to icon rail; <768 px chain is disarmed and layout stacks.
+
+**Workspace volume**: named `workspaces` volume in `docker-compose.yml`; guarded PVC template in `helm/charts/microservice/templates/workspaces-pvc.yaml` activated via `workspaces.enabled=true` in `helm/values/agentprovision-api.yaml` (10 GiB default; PR #515). Mounts at `/var/agentprovision/workspaces`.
 
 **Channel-agnostic event protocol** at `/api/v2/sessions/{id}/events`:
 - SSE live tail (via Redis `session:{id}:v2` pub/sub) OR JSON replay (paginated, limit max 500, next_cursor).
@@ -171,21 +199,17 @@ Previously a Turborepo monorepo managed with `pnpm` workspaces:
 - Subprocess streams coalesce to one synthetic event per 5s window on replay.
 - Legacy `/api/v1/sessions/{id}/events` envelope untouched — existing `ChatPage.js` keeps working.
 
-**Tier gating** in the SPA:
-- `apps/web/src/den/tierFeatures.js` — `TIER_FEATURES` capability map (one literal config per tier).
-- `apps/web/src/den/useTier.js` — hook reading JWT-cached tier with `/api/v1/users/me/den-tier` confirm.
-- `apps/web/src/den/TierGate.js` — `<TierGate min={N} fallback={…}>` wrapper for whole-component gating.
-- `apps/web/src/den/TierPicker.js` — 6-card explicit picker (settings UI).
+**Tier gating** — **removed** (2026-05-15 IDE-shell revision). The Den concept, `/den` route, tier picker, `user_tier`, `den_tier` JWT claim, and `/users/me/den-tier` endpoints are gone. The IDE shell mounts at `/dashboard` with no tier abstraction.
 
 **Files**:
-- `apps/api/migrations/133_session_events.sql`
+- `apps/api/migrations/133_session_events.sql` — event persistence
 - `apps/api/app/models/session_event.py`
-- `apps/api/app/services/collaboration_events.py` (extended `publish_session_event` dual-write)
-- `apps/api/app/api/v2/session_events.py` (SSE + replay endpoints)
-- `apps/api/app/services/user_tier.py`
-- `apps/api/app/api/v1/users.py` (Den tier endpoints)
-- `apps/api/app/api/v1/auth.py` (mints `den_tier` JWT claim)
-- `apps/web/src/den/` — the cockpit module (DenShell, DenPage, etc.)
+- `apps/api/app/services/collaboration_events.py` — extended `publish_session_event` dual-write
+- `apps/api/app/api/v2/session_events.py` — SSE + replay endpoints
+- `apps/api/app/api/v1/workspace.py` — workspace tree + file read endpoints (tenant + platform scopes)
+- `apps/web/src/pages/DashboardControlCenter.js` — Alpha Control Center entrypoint
+- `apps/web/src/dashboard/` — `ResizableSplit`, `SessionEventsContext`, `AgentActivityPanel`, `TerminalCard`, `InlineCliPicker`, `CommandPalette`, `TriggerCoalitionModal`, `FileTreePanel`, `FileViewer`, `PlanStepper`, `tabs/`, `hooks/`
+- `helm/charts/microservice/templates/workspaces-pvc.yaml` + `helm/values/agentprovision-api.yaml` (`workspaces.enabled=true`)
 
 **Multi-Agent Orchestration**: Agents are organized into a hierarchical multi-team structure. The **Root Supervisor** routes to 5 top-level teams, each with its own sub-supervisor. New tenants get a default **Luna Supervisor** agent on registration (previously an AgentKit; unified under Agent model 2026-04-19).
 - **Personal Assistant Team**: "Luna", WhatsApp-native business co-pilot for high-level tasks. Shows typing indicator (composing presence) while processing. Luna's personality is warm and conversational — sends short messages like real human texting.
@@ -470,8 +494,8 @@ FastAPI routers mounted at `/api/v1`. All routes use dependency injection via `d
 ### Pages (`apps/web/src/pages/`)
 
 Organized in 3-section navigation:
-- **INSIGHTS**: `DashboardPage.js`, `DatasetsPage.js`
-- **AI OPERATIONS**: `ChatPage.js` (with `CollaborationPanel` for A2A sessions), `AgentsPage.js` (fleet view — AI Assistants, External Agents sections, status badges, Import Agent modal), `AgentDetailPage.js` (Overview, Performance, Audit, Versions, Integrations tabs — 2026-04-18), `WorkflowsPage.js` (tabs: My Workflows, Templates, Runs, Executions, Designs + builder at `/workflows/builder/:id`), `MemoryPage.js` (labeled "Knowledge Base" in sidebar)
+- **INSIGHTS**: `DashboardControlCenter.js` mounted at `/dashboard` (Alpha Control Center — VSCode-style IDE shell; merges the prior `DashboardPage.js` + `ChatPage.js`. See [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md)), `DatasetsPage.js`
+- **AI OPERATIONS**: `ChatPage.js` legacy route (still present for deep-links from coalitions / handoffs; the merged Alpha Control Center at `/dashboard` is the primary chat surface), `AgentsPage.js` (fleet view — AI Assistants, External Agents sections, status badges, Import Agent modal), `AgentDetailPage.js` (Overview, Performance, Audit, Versions, Integrations tabs — 2026-04-18), `WorkflowsPage.js` (tabs: My Workflows, Templates, Runs, Executions, Designs + builder at `/workflows/builder/:id`), `MemoryPage.js` (labeled "Knowledge Base" in sidebar)
 - **WORKSPACE**: `IntegrationsPage.js`, `NotebooksPage.js`, `VectorStoresPage.js`, `ToolsPage.js`
 - **SETTINGS**: `SettingsPage.js`, `LLMSettingsPage.js`, `BrandingPage.js`
 - **AUTH**: `RegisterPage.js`, `AgentWizardPage.js`, `ResetPasswordPage.js`
@@ -692,8 +716,16 @@ PRs created by the code agent include structured body with full audit trail:
 - **Files Changed**: Bulleted list of modified files
 - **Footer**: AgentProvision Code Agent attribution
 
+## Operational Notes (2026-05-15 → 2026-05-16)
+
+- **Gated end-of-deploy emergency disk cleanup** in `.github/workflows/docker-desktop-deploy.yaml` (PR #517). Tiered behaviour: <80% disk → no-op; 80–85% → `builder prune`; ≥90% → recycle the `code-worker` writable layer **only if no active CLI sessions are running**. Volumes are **never** pruned (would lose workspace data).
+- **`docker-cleanup.yaml` cron** stopped pruning volumes — previous behaviour was dangerous against the `workspaces` named volume. Cleanup is now image- and builder-only.
+- **Single SSE per session** (PR #500): `SessionEventsContext` is the only place the SPA opens `EventSource(/api/v2/sessions/{id}/events)`. Every consumer (AgentActivityPanel, TerminalCard, EditorArea, PlanStepper) reads from the same context. Do not open a second connection in a new component.
+
 ## Additional Documentation
 
+- [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md): Alpha Control Center `/dashboard` — IDE shell layout, pane model, height chain, localStorage namespace map, don't-touch zones for parallel agents
+- [`docs/architecture/alpha_cli_kernel.md`](docs/architecture/alpha_cli_kernel.md): "Every feature through Alpha CLI" — principle, concrete examples, anti-patterns, implementation checklist
 - `docs/KUBERNETES_DEPLOYMENT.md`: Full Kubernetes deployment runbook
 - `docs/plans/`: Implementation plans and design documents
   - `2025-02-13-enterprise-orchestration-engine-design.md`: Orchestration engine design document
@@ -723,6 +755,15 @@ PRs created by the code agent include structured body with full audit trail:
   - `2026-04-18-chat-ui-redesign-plan.md`: Chat UI modernization plan
   - `2026-04-18-skills-marketplace-redesign-plan.md`: Skills marketplace UX plan
   - `2026-04-18-security-fixes.md` / `2026-04-18-security-remediation-plan.md`: Security hardening + pentest follow-ups
+  - `2026-05-15-alpha-control-plane-design.md` / `2026-05-15-alpha-control-plane-tier-0-1-plan.md`: Three-layer architecture (kernel / mesh / channels) + initial event-protocol implementation
+  - `2026-05-15-alpha-control-center-ide-shell-design.md`: **Canonical UI shape** — VSCode/Cursor IDE shell at `/dashboard`, supersedes /den + tier picker
+  - `2026-05-16-dashboard-split-pane-spec-doc-viewer.md`: Right-column pane composition (chat / doc / activity) + workspace file viewer
+  - `2026-05-16-terminal-full-cli-output.md`: TerminalCard renders full CLI transcript (reasoning, tool calls, edits) via `stream-json` and per-line worker→API fan-out
+  - `2026-05-16-codex-mcp-tool-access-fix.md`: Enable `experimental_use_rmcp_client = true` so Codex CLI honours MCP-over-SSE
+
+- `docs/architecture/`: Cross-cutting subsystem reference
+  - `dashboard.md`: Alpha Control Center layout, pane model, height chain, localStorage map, don't-touch zones
+  - `alpha_cli_kernel.md`: "Every feature through Alpha CLI" — design principle + examples + anti-patterns
 
 - `docs/report/`: Audit reports and verification
   - `2026-04-13-a2a-coalition-verification-report.md`: A2A Coalition demo verification
