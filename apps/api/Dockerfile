@@ -87,6 +87,19 @@ COPY --chown=appuser:appgroup packages/cli_orchestrator /app/cli_orchestrator
 # Create storage directory with correct permissions
 RUN mkdir -p /app/storage && chown -R appuser:appgroup /app/storage
 
+# PR #514 / B3: curated platform-docs surface for the dashboard
+# Files-mode "platform" scope. Copied from the repo's /docs tree so
+# super-admins see release notes / plans / changelog, NOT the source
+# tree. Verified clean of secrets (grep for sk-*/ghp_*/AIza*/PEM
+# returned zero matches at the time of the copy). The workspace API
+# reads from PLATFORM_DOCS_ROOT which defaults to this path.
+COPY --chown=appuser:appgroup docs /opt/agentprovision/platform-docs
+# Per-tenant workspace mount-point. Created here so the directory
+# exists with the right ownership before the PVC / named volume is
+# mounted on top (the mount preserves the underlying perms).
+RUN mkdir -p /var/agentprovision/workspaces && \
+    chown -R appuser:appgroup /var/agentprovision/workspaces
+
 # Switch to non-root user
 USER appuser
 

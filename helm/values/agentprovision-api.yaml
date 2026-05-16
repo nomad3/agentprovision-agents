@@ -175,6 +175,15 @@ env:
     value: "http://agentprovision-mcp:80"
   - name: MCP_TOOLS_URL
     value: "http://agentprovision-mcp:80"
+  # PR #514 / B3: curated platform-docs surface for the dashboard
+  # Files-mode "platform" scope. NEVER point this at /app — it would
+  # expose source + secrets via the workspace API. The image copies
+  # repo /docs into /opt/agentprovision/platform-docs (see Dockerfile).
+  - name: PLATFORM_DOCS_ROOT
+    value: "/opt/agentprovision/platform-docs"
+  # PR #514 / B2: tenant workspace root (mirrors docker-compose).
+  - name: WORKSPACES_ROOT
+    value: "/var/agentprovision/workspaces"
 
 # Horizontal Pod Autoscaler - Enable for production
 autoscaling:
@@ -196,6 +205,18 @@ persistence:
   accessModes:
     - ReadWriteOnce
   size: 50Gi
+
+# Per-tenant workspace storage for the dashboard Files mode (PR #514).
+# Mounted at /var/agentprovision/workspaces; matches WORKSPACES_ROOT
+# default in apps/api/app/api/v1/workspace.py and the named volume in
+# docker-compose.yml.
+workspaces:
+  enabled: true
+  storageClass: standard-rwo
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  mountPath: /var/agentprovision/workspaces
 
 # Temporary directories
 tmpDirs:

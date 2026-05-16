@@ -1,0 +1,71 @@
+/*
+ * ResizableSplit styles.
+ *
+ * Brand-token only: --ap-border (idle), --ap-primary (hover/dragging).
+ * The container is a CSS grid on desktop and a flex column on
+ * narrow viewports (< 992px) where dragging is disabled.
+ */
+
+.rs-root {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Stacked / mobile fallback. The component swaps to this shape when
+   the viewport drops below 992 px or when the `disabled` prop is set.
+   Handles are not rendered in this mode, so we don't need to hide
+   them — the flex container just stacks panes vertically with the
+   same gap the Bootstrap rows used to give us. */
+.rs-stacked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ap-space-3);
+}
+
+.rs-pane {
+  /* Each pane fills its grid cell. min-width:0 lets children with
+     long text or `overflow:hidden` cards shrink without forcing the
+     pane wider than its track. */
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.rs-stacked .rs-pane {
+  height: auto;
+}
+
+.rs-handle {
+  /* 6 px wide vertical bar between panes. The track itself is 6 px in
+     the grid-template-columns, so the visible bar fills the track
+     edge-to-edge. We use a thinner inner pill via a pseudo so the
+     touch target is the full 6 px but the visible cue is calmer. */
+  position: relative;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.rs-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  right: 2px;
+  background: var(--ap-border);
+  border-radius: 1px;
+  transition: background 120ms ease;
+}
+
+.rs-handle:hover::after,
+.rs-handle:active::after {
+  background: var(--ap-primary);
+}
