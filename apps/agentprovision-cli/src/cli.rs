@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::{
     agent, cancel, chat, coalition, completions, goal, integration, login, logout, memory, policy,
     quickstart, recall, recipes, remember, run, session, sessions, skill, status, tasks, upgrade,
-    usage, watch, workflow,
+    usage, watch, workflow, workspace,
 };
 use crate::context::Context;
 
@@ -184,6 +184,15 @@ pub enum Command {
 
     /// Emit shell completion script (bash / zsh / fish / powershell / elvish).
     Completions(completions::CompletionsArgs),
+
+    /// Manage the tenant's persistent workspace tree. Currently
+    /// exposes `clone <owner/name>` which fetches a GitHub repo into
+    /// `/var/agentprovision/workspaces/<tenant_id>/projects/<repo>/`
+    /// using the user's connected `github` integration token. The
+    /// repo is immediately visible in the dashboard Files mode.
+    /// Task #255.
+    #[command(subcommand)]
+    Workspace(workspace::WorkspaceCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -223,5 +232,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Costs(a) => usage::costs(a, ctx).await,
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
+        Command::Workspace(cmd) => workspace::dispatch(cmd, ctx).await,
     }
 }

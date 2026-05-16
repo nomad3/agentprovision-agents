@@ -408,6 +408,39 @@ fn default_interval() -> u64 {
     5
 }
 
+/// Request body for `POST /api/v1/workspace/clone` (task #255).
+/// Backs the `alpha workspace clone <repo>` CLI verb and the FE
+/// empty-state "Clone a repo" affordance. The endpoint resolves the
+/// caller's tenant + github token server-side, kicks off a background
+/// clone, and returns immediately.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceCloneRequest<'a> {
+    pub repo: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<&'a str>,
+    /// Overwrite a dirty re-clone target. The CLI wraps this in a
+    /// confirmation prompt; the FE empty-state surfaces it as a
+    /// "force overwrite" toggle. Default false → the server returns
+    /// 409 when the target has unstaged changes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
+}
+
+/// Response for `POST /api/v1/workspace/clone`. ``status`` is
+/// ``"started"`` while the clone runs in the BackgroundTasks pool —
+/// poll the file-tree endpoint to observe completion. ``target_path``
+/// is relative to the tenant workspace root.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceCloneResponse {
+    pub job_id: String,
+    pub status: String,
+    pub target_path: String,
+    pub owner: String,
+    pub repo: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

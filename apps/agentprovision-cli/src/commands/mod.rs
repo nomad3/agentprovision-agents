@@ -23,3 +23,4 @@ pub mod upgrade;
 pub mod usage;
 pub mod watch;
 pub mod workflow;
+pub mod workspace;

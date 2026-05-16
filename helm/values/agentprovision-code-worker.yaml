@@ -131,6 +131,30 @@ tmpDirs:
   - /workspace
   - /home/codeworker
 
+# Per-tenant workspace storage shared with the api service. The api
+# reads files via /api/v1/workspace/{tree,file}; the code-worker writes
+# files via CLI subprocesses (Claude Code / Codex / `git clone` from
+# `alpha workspace clone`). Both deployments mount the same PVC at the
+# same path so subprocess writes are immediately visible to the file-
+# tree endpoints. ReadWriteMany is required because the api and code-
+# worker run as separate pods. The `existingClaim` setting below points
+# this deployment at the api chart's PVC — the api chart owns the
+# `storageClass` choice (intentionally empty default; operator sets
+# `standard-rwx` for GKE, `efs-sc` for EKS, `azurefile-csi-premium`
+# for AKS, etc).
+#
+# Mirrored in docker-compose.yml — the code-worker service mounts the
+# shared `workspaces` named volume at the same path.
+workspaces:
+  enabled: true
+  # Share the api chart's PVC instead of creating a second one. The api
+  # chart owns provisioning (size + storageClass); we just mount it.
+  # `agentprovision-api` is the fullnameOverride in
+  # helm/values/agentprovision-api.yaml, so its workspaces PVC name is
+  # `agentprovision-api-workspaces`.
+  existingClaim: agentprovision-api-workspaces
+  mountPath: /var/agentprovision/workspaces
+
 # Init container to wait for Temporal
 initContainers:
   - name: wait-for-temporal

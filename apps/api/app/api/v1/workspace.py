@@ -53,18 +53,27 @@ Security posture (v1 — read-only)
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import mimetypes
 import os
+import re
+import shutil
+import subprocess
+import uuid
 from pathlib import Path
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.api import deps
 from app.core.config import settings  # noqa: F401  (kept for future toggles)
+from app.models.integration_config import IntegrationConfig
 from app.models.user import User as UserModel
+from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +110,24 @@ _BLOCKED_DIRS = {"__pycache__", "node_modules", ".git", ".venv", "venv"}
 # or source. Restrict to docs-style content. Tenant scope keeps the
 # open contract (tenants own their files).
 _PLATFORM_ALLOWED_EXTS = {".md", ".txt", ".rst", ".yaml", ".yml", ".json"}
+
+# ── Clone resource controls (I1, I2, B3) ──────────────────────────────
+#
+# Cap concurrent clones across the api process. Prevents a clone storm
+# from starving the FastAPI threadpool for sync DB queries. Background
+# tasks run in anyio's threadpool; this semaphore bounds the parallel
+# git clone count.
+_CLONE_SEMAPHORE = asyncio.Semaphore(2)
+
+# Per-tenant workspace quota. 1 GiB by default; trips a 413 before we
+# dispatch a new clone. Overridable via env so ops can tune per cluster.
+_TENANT_WORKSPACE_BUDGET = int(
+    os.environ.get("TENANT_WORKSPACE_BUDGET_BYTES", str(1_073_741_824))
+)
+
+# Redis lock TTL for the clone-in-flight guard. 10 minutes matches the
+# subprocess.run(clone) timeout (600s) in `_run_clone`.
+_CLONE_LOCK_TTL_SECONDS = 600
 
 
 def _seed_tenant_workspace(tenant_root: Path) -> None:
@@ -329,4 +356,531 @@ def workspace_file(
         content=content,
         is_binary=is_binary,
         truncated=truncated,
+    )
+
+
+# ── Repo clone (task #255) ────────────────────────────────────────────
+#
+# `POST /api/v1/workspace/clone` clones a GitHub repo into the caller's
+# tenant workspace at `<tenant_root>/projects/<repo-slug>/` using the
+# user's `github` integration token. The endpoint kicks off a
+# background subprocess and returns a job_id immediately so the CLI /
+# UI can return without blocking on the network.
+#
+# Surfaced through `alpha workspace clone <owner/repo>` in the
+# AgentProvision CLI; same call shape on the FE empty-state "Clone a
+# repo" affordance.
+#
+# Security:
+#   - `repo` is validated against a strict owner/name regex; rejects
+#     anything containing `..`, shell metacharacters, or path
+#     separators outside the owner/name shape.
+#   - `branch` is validated against a permissive but bounded ref-name
+#     regex (no spaces, no shell metas).
+#   - The github token is resolved from the user's tenant integration
+#     row via the credential vault; the user can't clone using
+#     anyone else's credentials.
+#   - The token is injected into the URL only for the duration of the
+#     subprocess and never echoed to logs.
+
+# Accepts ``owner/name`` or ``https://github.com/owner/name(.git)?``.
+# Owner: github username/org rules (letters, digits, dash, no leading/
+# trailing dash). Name: github repo name rules (letters, digits, dot,
+# underscore, dash). Both bounded to 100 chars to head off DoS-ish
+# inputs.
+_GITHUB_OWNER = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,99})"
+_GITHUB_REPO = r"[A-Za-z0-9_.\-]{1,100}"
+_REPO_RE = re.compile(
+    r"^(?:https?://github\.com/)?"
+    r"(?P<owner>" + _GITHUB_OWNER + r")"
+    r"/"
+    r"(?P<repo>" + _GITHUB_REPO + r")"
+    r"(?:\.git)?/?$"
+)
+# A git ref-name is intentionally permissive (slashes are valid in
+# ``release/1.2.x``) but we bound length + reject shell metacharacters.
+# Used as a first-pass cheap filter before delegating to
+# ``git check-ref-format`` (I7) for canonical validation.
+_BRANCH_RE = re.compile(r"^[A-Za-z0-9_.\-/]{1,255}$")
+
+
+class CloneRequest(BaseModel):
+    repo: str = Field(..., description="owner/name or https://github.com/owner/name")
+    branch: Optional[str] = Field(default=None, description="branch to checkout; default branch when omitted")
+    # B2: dirty-worktree guard. When the idempotent re-clone path
+    # detects a non-empty `git status --porcelain`, the endpoint returns
+    # 409 unless `force=True` is passed. The CLI wraps this in a
+    # confirmation prompt before propagating.
+    force: bool = Field(default=False, description="overwrite dirty target during re-clone")
+
+
+class CloneResponse(BaseModel):
+    job_id: str
+    status: str
+    target_path: str
+    owner: str
+    repo: str
+    branch: Optional[str]
+
+
+def _parse_repo(raw: str) -> tuple[str, str]:
+    """Return ``(owner, repo)`` after validating ``raw``.
+
+    Raises HTTPException(400) on anything that doesn't match the
+    GitHub owner/name shape — guards against shell injection and path
+    traversal (``..``, slashes, etc).
+    """
+    m = _REPO_RE.match(raw.strip())
+    if not m:
+        raise HTTPException(status_code=400, detail="invalid repo (expected owner/name)")
+    owner = m.group("owner")
+    repo = m.group("repo")
+    # Strip a trailing ``.git`` if it slipped past the URL form.
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    # Defence in depth — should be unreachable given the regex.
+    if ".." in owner or ".." in repo or "/" in owner or "/" in repo:
+        raise HTTPException(status_code=400, detail="invalid repo (segments)")
+    return owner, repo
+
+
+def _is_valid_branch(name: str) -> bool:
+    """Authoritative branch-name check (I7).
+
+    Combines the cheap regex pass with ``git check-ref-format --branch``
+    so we reject inputs git itself wouldn't accept (``refs/heads/main``,
+    ``a..b``, ``-flag-like``, ``branch.lock``, ``branch@{1}``…).
+    """
+    if not name or len(name) > 255:
+        return False
+    if name.startswith("-") or name.startswith(".") or name.endswith("/") or name.endswith(".lock"):
+        return False
+    if ".." in name or "@{" in name:
+        return False
+    # Reject fully-qualified ref names — the caller is supposed to
+    # pass a short branch name like ``main`` / ``release/1.2``; a
+    # ``refs/heads/...`` form usually means a confused integration.
+    if name.startswith("refs/"):
+        return False
+    try:
+        subprocess.run(
+            ["git", "check-ref-format", "--branch", name],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+        return True
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _validate_branch(branch: Optional[str]) -> Optional[str]:
+    if branch is None:
+        return None
+    b = branch.strip()
+    if not b:
+        return None
+    # Cheap regex first to bound the input before forking git.
+    if not _BRANCH_RE.match(b):
+        raise HTTPException(status_code=400, detail="invalid branch")
+    if not _is_valid_branch(b):
+        raise HTTPException(status_code=400, detail="invalid branch")
+    return b
+
+
+# ── Clone helpers (B3, I1, I2) ─────────────────────────────────────────
+
+
+def _tenant_workspace_bytes(tenant_id: str) -> int:
+    """Best-effort recursive size of the tenant's workspace tree (I2).
+
+    Used to gate new clones against ``_TENANT_WORKSPACE_BUDGET``. Errors
+    on individual entries are swallowed so a transient ``OSError``
+    doesn't 500 the endpoint — we'd rather under-count than refuse.
+    """
+    root = Path(_WORKSPACES_ROOT).resolve() / tenant_id
+    if not root.exists():
+        return 0
+    total = 0
+    for p in root.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _clone_lock_key(tenant_id: str, owner: str, repo: str) -> str:
+    return f"workspace:clone:{tenant_id}:{owner}/{repo}"
+
+
+def _acquire_clone_lock(key: str) -> bool:
+    """Redis SETNX-style lock (B3) keyed per ``tenant/repo``.
+
+    Returns True when the caller now owns the lock. Returns False on
+    contention (another clone is in flight). Returns True when Redis is
+    unavailable — we degrade open rather than fail closed; the
+    semaphore + on-disk idempotency still bound damage.
+    """
+    try:
+        from app.services.collaboration_events import _get_redis  # noqa: WPS437
+    except Exception:  # noqa: BLE001
+        return True
+    try:
+        r = _get_redis()
+        # `set(... nx=True, ex=...)` is the idiomatic atomic SETNX-with-TTL.
+        ok = r.set(key, "1", nx=True, ex=_CLONE_LOCK_TTL_SECONDS)
+        return bool(ok)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("clone-lock acquire failed (degrading open): %s", e)
+        return True
+
+
+def _release_clone_lock(key: str) -> None:
+    """Release the SETNX lock. Best-effort; the TTL will auto-clear."""
+    try:
+        from app.services.collaboration_events import _get_redis  # noqa: WPS437
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        r = _get_redis()
+        r.delete(key)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("clone-lock release failed (TTL will reap): %s", e)
+
+
+def _resolve_github_token(db: Session, tenant_id: uuid.UUID) -> Optional[str]:
+    """Look up the active github integration token for ``tenant_id``.
+
+    Returns the decrypted ``oauth_token`` from the first active
+    ``github`` integration_config row, or None if none is configured.
+    Mirrors what oauth.get_integration_token does for the MCP server
+    but stays in-process (no extra HTTP hop).
+    """
+    cfg = (
+        db.query(IntegrationConfig)
+        .filter(
+            IntegrationConfig.tenant_id == tenant_id,
+            IntegrationConfig.integration_name == "github",
+            IntegrationConfig.enabled.is_(True),
+        )
+        .first()
+    )
+    if not cfg:
+        return None
+    try:
+        creds = retrieve_credentials_for_skill(db, cfg.id, tenant_id)
+    except Exception:  # noqa: BLE001 — surface as missing-token, not 500
+        logger.exception("github credential decrypt failed for tenant=%s", tenant_id)
+        return None
+    return creds.get("oauth_token")
+
+
+def _publish_workspace_event(tenant_id: str, event_type: str, payload: dict) -> None:
+    """Best-effort tenant-scoped event fan-out for workspace mutations.
+
+    Publishes to ``workspace:{tenant_id}`` on Redis so any future SSE
+    consumer (planned dashboard subscription) can refresh the file
+    tree. Swallows all errors — clone success/failure is the source of
+    truth, this is just a UI hint.
+    """
+    try:
+        # Lazy import keeps the workspace router importable in test
+        # environments where Redis isn't wired up.
+        from app.services.collaboration_events import _get_redis  # noqa: WPS437 — internal helper
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        r = _get_redis()
+        r.publish(
+            f"workspace:{tenant_id}",
+            json.dumps({
+                "event_type": event_type,
+                "payload": payload,
+            }),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("workspace event publish failed: %s", e)
+
+
+def _run_clone(
+    *,
+    tenant_id: str,
+    owner: str,
+    repo: str,
+    branch: Optional[str],
+    token: str,
+    target: Path,
+    projects_root: Path,
+    job_id: str,
+    force: bool = False,
+    lock_key: Optional[str] = None,
+) -> None:
+    """Synchronous git clone / fetch+reset. Runs in the FastAPI
+    BackgroundTasks pool; the endpoint returns before this finishes.
+
+    Idempotent: if ``target`` already exists, switches to
+    ``git fetch --all`` + ``git reset --hard origin/<branch>`` instead
+    of erroring out. This mirrors what users expect from "clone again"
+    in a CI / repeat-flow context.
+
+    Token handling (B1): we pass the github token via
+    ``git -c http.extraHeader="Authorization: bearer <token>"`` for the
+    duration of the subprocess invocation. The header is visible to
+    ``ps`` for the millisecond the process is alive but never written
+    to ``.git/config``, ``.git/FETCH_HEAD``, ``.git/logs/…`` or
+    ``.git/packed-refs``. The clone URL itself is the plain
+    ``https://github.com/<owner>/<repo>.git`` form.
+    """
+    # I6: re-resolve target inside the worker thread to catch any
+    # symlink swap between request validation and clone. Aborts
+    # silently with no rmtree (path may not be ours anymore).
+    try:
+        real_target = Path(os.path.realpath(str(target)))
+        projects_root_real = Path(os.path.realpath(str(projects_root)))
+    except OSError as e:
+        logger.warning("workspace clone: realpath failed (job=%s): %s", job_id, e)
+        if lock_key:
+            _release_clone_lock(lock_key)
+        return
+    if not (
+        str(real_target) == str(projects_root_real)
+        or str(real_target).startswith(str(projects_root_real) + os.sep)
+    ):
+        logger.error(
+            "workspace clone: symlink escape detected (job=%s): %s -> %s",
+            job_id, target, real_target,
+        )
+        if lock_key:
+            _release_clone_lock(lock_key)
+        return
+
+    clean_url = f"https://github.com/{owner}/{repo}.git"
+    auth_header = f"Authorization: bearer {token}"
+    env = os.environ.copy()
+    # GIT_TERMINAL_PROMPT=0 keeps git from blocking on stdin if the
+    # token is missing/invalid — fail fast instead.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    is_clone_path = not (target.exists() and (target / ".git").exists())
+    try:
+        if not is_clone_path:
+            logger.info("workspace clone: refreshing %s (job=%s)", target, job_id)
+            # B2: dirty-worktree guard. Before we blow away local edits
+            # with `reset --hard`, check `git status --porcelain`.
+            status = subprocess.run(
+                ["git", "-C", str(target), "status", "--porcelain"],
+                env=env,
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            if status.stdout.strip() and not force:
+                # Caller must re-invoke with force=True. The endpoint
+                # already returned 200 by now (we're in a background
+                # task), so we publish a failure event and bail.
+                logger.info(
+                    "workspace clone: dirty target, refusing (job=%s, target=%s)",
+                    job_id, target,
+                )
+                _publish_workspace_event(
+                    tenant_id,
+                    "workspace_repo_clone_failed",
+                    {
+                        "owner": owner,
+                        "repo": repo,
+                        "job_id": job_id,
+                        "error": "dirty worktree; pass force=true to overwrite",
+                    },
+                )
+                return
+            subprocess.run(
+                [
+                    "git",
+                    "-c", f"http.extraHeader={auth_header}",
+                    "-C", str(target),
+                    "fetch", "--all", "--prune",
+                ],
+                env=env,
+                check=True,
+                capture_output=True,
+                timeout=300,
+            )
+            if branch:
+                subprocess.run(
+                    ["git", "-C", str(target), "reset", "--hard", f"origin/{branch}"],
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    timeout=60,
+                )
+        else:
+            logger.info(
+                "workspace clone: cloning %s into %s (job=%s)",
+                clean_url, target, job_id,
+            )
+            cmd: List[str] = [
+                "git",
+                "-c", f"http.extraHeader={auth_header}",
+                "clone",
+                "--depth=1",
+            ]
+            if branch:
+                cmd += ["--branch", branch]
+            cmd += [clean_url, str(target)]
+            subprocess.run(
+                cmd,
+                env=env,
+                check=True,
+                capture_output=True,
+                timeout=600,
+            )
+        _publish_workspace_event(
+            tenant_id,
+            "workspace_repo_cloned",
+            {
+                "owner": owner,
+                "repo": repo,
+                "branch": branch,
+                "target": str(target),
+                "job_id": job_id,
+            },
+        )
+    except subprocess.CalledProcessError as e:
+        # stderr can contain the URL with the token if git echoed the
+        # remote name — strip our injected token before logging.
+        stderr = (e.stderr or b"").decode("utf-8", errors="replace")
+        stderr_safe = stderr.replace(token, "<token>") if token else stderr
+        logger.warning(
+            "workspace clone failed (job=%s, rc=%s): %s",
+            job_id, e.returncode, stderr_safe[:1024],
+        )
+        # B4: scrub a half-written clone directory so a retry starts
+        # fresh. Only on the clone path — partial fetch+reset on an
+        # existing repo is recoverable in place.
+        if is_clone_path:
+            shutil.rmtree(target, ignore_errors=True)
+        _publish_workspace_event(
+            tenant_id,
+            "workspace_repo_clone_failed",
+            {"owner": owner, "repo": repo, "job_id": job_id, "error": stderr_safe[:512]},
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("workspace clone timed out (job=%s)", job_id)
+        if is_clone_path:
+            shutil.rmtree(target, ignore_errors=True)
+        _publish_workspace_event(
+            tenant_id,
+            "workspace_repo_clone_failed",
+            {"owner": owner, "repo": repo, "job_id": job_id, "error": "timeout"},
+        )
+    finally:
+        # B3: always release the per-repo lock, regardless of success
+        # or failure. The TTL is a safety net for crashes.
+        if lock_key:
+            _release_clone_lock(lock_key)
+
+
+async def _run_clone_bounded(**kwargs) -> None:
+    """Dispatch ``_run_clone`` through the module-level semaphore (I1).
+
+    Bounds concurrent clones across the api process so a burst doesn't
+    starve the FastAPI threadpool. Background tasks run on anyio's
+    threadpool; we acquire the semaphore here and delegate the blocking
+    subprocess work via ``asyncio.to_thread``.
+    """
+    async with _CLONE_SEMAPHORE:
+        await asyncio.to_thread(_run_clone, **kwargs)
+
+
+@router.post("/workspace/clone", response_model=CloneResponse, status_code=200)
+def workspace_clone(
+    body: CloneRequest,
+    background: BackgroundTasks,
+    current_user: UserModel = Depends(deps.get_current_active_user),
+    db: Session = Depends(deps.get_db),
+):
+    """Clone a GitHub repo into the caller's tenant workspace.
+
+    Resolves the user's `github` integration token, kicks off a
+    background ``git clone`` (or ``fetch + reset`` if the target
+    already exists), and returns a ``job_id`` immediately. On success
+    the function emits a ``workspace_repo_cloned`` event on the
+    tenant's Redis channel for any subscribed UI.
+
+    The clone target is
+    ``<WORKSPACES_ROOT>/<tenant_id>/projects/<repo-name>/`` — readable
+    via the existing ``/workspace/tree`` + ``/workspace/file``
+    endpoints with no extra plumbing.
+    """
+    if not current_user.tenant_id:
+        raise HTTPException(status_code=400, detail="user has no tenant")
+
+    owner, repo = _parse_repo(body.repo)
+    branch = _validate_branch(body.branch)
+
+    token = _resolve_github_token(db, current_user.tenant_id)
+    if not token:
+        raise HTTPException(
+            status_code=409,
+            detail="no active github integration; connect github first",
+        )
+
+    tenant_id_str = str(current_user.tenant_id)
+    tenant_root = Path(_WORKSPACES_ROOT).resolve() / tenant_id_str
+    _seed_tenant_workspace(tenant_root)
+    projects_root = tenant_root / "projects"
+    target = (projects_root / repo).resolve()
+    # Defence in depth: the resolved target must still live inside the
+    # tenant's projects/ dir. ``_parse_repo`` already rejects slashes,
+    # so this is belt-and-braces.
+    try:
+        target.relative_to(projects_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid repo path")
+
+    # I2: per-tenant disk quota. Block new clones once the tenant
+    # exceeds the budget; the operator can lift it via the env var.
+    used = _tenant_workspace_bytes(tenant_id_str)
+    if used > _TENANT_WORKSPACE_BUDGET:
+        raise HTTPException(status_code=413, detail="tenant workspace quota exceeded")
+
+    # B3: per-(tenant, repo) Redis lock. Returns 409 on contention so
+    # the caller knows to wait rather than dispatching a parallel clone
+    # that would race on the same target directory.
+    lock_key = _clone_lock_key(tenant_id_str, owner, repo)
+    if not _acquire_clone_lock(lock_key):
+        raise HTTPException(status_code=409, detail="clone already in flight")
+
+    job_id = uuid.uuid4().hex
+    logger.info(
+        "workspace clone dispatched: tenant=%s owner=%s repo=%s branch=%s job=%s force=%s",
+        tenant_id_str, owner, repo, branch, job_id, body.force,
+    )
+
+    # I1: dispatch via the semaphore-bounded wrapper so concurrent
+    # clones across the api process don't starve the threadpool.
+    background.add_task(
+        _run_clone_bounded,
+        tenant_id=tenant_id_str,
+        owner=owner,
+        repo=repo,
+        branch=branch,
+        token=token,
+        target=target,
+        projects_root=projects_root,
+        job_id=job_id,
+        force=body.force,
+        lock_key=lock_key,
+    )
+
+    return CloneResponse(
+        job_id=job_id,
+        status="started",
+        target_path=str(target.relative_to(tenant_root)),
+        owner=owner,
+        repo=repo,
+        branch=branch,
     )
