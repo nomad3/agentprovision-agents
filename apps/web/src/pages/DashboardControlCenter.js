@@ -519,10 +519,12 @@ const DashboardControlCenter = () => {
             the height chain is unbroken. */}
         {(() => {
           // Right pane is visible when Pro mode is on OR when the user
-          // has opened a file from the Files navigator. Drives both the
-          // ResizableSplit children count (filter(Boolean) drops null)
-          // and its defaultSizes/minSizes arrays.
-          const hasRightPane = mode === 'pro' || (leftMode === 'files' && !!openFile);
+          // is in Files mode (the pane shows either the previewed file
+          // or a "pick a file" placeholder). Keeping Files mode at a
+          // stable 3-pane shape avoids remounting the outer
+          // ResizableSplit on every file open/close, which would
+          // collapse the FileTreePanel's lazy-loaded expand state.
+          const hasRightPane = mode === 'pro' || leftMode === 'files';
           return (
         <div className="dcc-chat-row">
           <ResizableSplit
@@ -629,17 +631,24 @@ const DashboardControlCenter = () => {
               creating={creating}
             />
 
-            {/* Pane 3 — right column. FileViewer takes precedence when
-                the user is in Files mode AND has opened a file; the
-                AgentActivityPanel renders otherwise (Pro mode only).
-                Rendering null when neither applies keeps the
-                ResizableSplit children count in sync with the size
-                arrays above (filter(Boolean) inside ResizableSplit
-                drops the null pane). */}
-            {leftMode === 'files' && openFile ? (
+            {/* Pane 3 — right column. In Files mode the pane always
+                renders (FileViewer when a file is selected, empty-state
+                placeholder otherwise) so the outer ResizableSplit stays
+                mounted across file open/close transitions — that keeps
+                FileTreePanel's lazy-loaded expand state intact. In
+                Chats mode the pane renders the AgentActivityPanel only
+                when Pro mode is on; null otherwise drops the pane via
+                filter(Boolean) inside ResizableSplit. */}
+            {leftMode === 'files' ? (
               <article className="ap-card h-100 dcc-activity-card">
                 <div className="ap-card-body p-0 dcc-file-viewer-body">
-                  <FileViewer file={openFile} />
+                  {openFile ? (
+                    <FileViewer file={openFile} />
+                  ) : (
+                    <div className="dcc-thread-empty">
+                      <p>{t('files.pickPrompt', 'Pick a file from the tree to preview it here.')}</p>
+                    </div>
+                  )}
                 </div>
               </article>
             ) : mode === 'pro' ? (
