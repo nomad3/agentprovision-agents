@@ -84,6 +84,35 @@
 }
 .dcc-thread-body .ap-chattab-bar { padding-left: var(--ap-space-4); }
 
+/* ── Command palette trigger ───────────────────────────────────── */
+
+.dcc-palette-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+  padding: 5px var(--ap-space-3);
+  cursor: pointer;
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  font-family: inherit;
+}
+.dcc-palette-trigger:hover {
+  color: var(--ap-text);
+  border-color: var(--ap-primary);
+}
+.dcc-palette-kbd {
+  background: var(--ap-code-bg);
+  color: var(--ap-text-muted);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-sm);
+  padding: 1px 6px;
+  font-size: 10px;
+  font-family: var(--ap-font-mono);
+}
+
 /* ── Simple / Pro mode toggle ──────────────────────────────────── */
 
 .dcc-mode-toggle {

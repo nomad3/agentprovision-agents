@@ -1,0 +1,106 @@
+/* Brand-styled ⌘K command palette. Overlays via react-bootstrap Modal. */
+
+.cmd-palette-modal .modal-dialog { max-width: 640px; }
+.cmd-palette-modal .modal-content {
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.cmd-palette { display: flex; flex-direction: column; }
+
+.cmd-palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  padding: var(--ap-space-3) var(--ap-space-4);
+  border-bottom: 1px solid var(--ap-border);
+}
+.cmd-palette-input-icon { color: var(--ap-text-muted); }
+.cmd-palette-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  color: var(--ap-text);
+  font-size: var(--ap-fs-base, 0.95rem);
+  font-family: inherit;
+  outline: none;
+}
+.cmd-palette-input::placeholder { color: var(--ap-text-muted); }
+
+.cmd-palette-kbd,
+.cmd-palette-footer kbd {
+  background: var(--ap-code-bg);
+  color: var(--ap-text-muted);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-sm);
+  padding: 1px 6px;
+  font-size: 10px;
+  font-family: var(--ap-font-mono);
+}
+
+.cmd-palette-results {
+  list-style: none;
+  margin: 0;
+  padding: var(--ap-space-1) 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.cmd-palette-empty {
+  padding: var(--ap-space-4);
+  text-align: center;
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+}
+.cmd-palette-row {
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-3);
+  padding: var(--ap-space-2) var(--ap-space-4);
+  cursor: pointer;
+  color: var(--ap-text);
+}
+.cmd-palette-row.active { background: var(--ap-primary-tint); }
+.cmd-palette-row-icon {
+  flex: 0 0 auto;
+  color: var(--ap-text-muted);
+}
+.cmd-palette-row.active .cmd-palette-row-icon { color: var(--ap-primary); }
+.cmd-palette-row-body {
+  flex: 1;
+  min-width: 0;
+}
+.cmd-palette-row-label {
+  font-size: var(--ap-fs-sm);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-palette-row-sub {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmd-palette-row-kind {
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ap-text-muted);
+  background: var(--ap-code-bg);
+  padding: 2px 8px;
+  border-radius: var(--ap-radius-pill);
+}
+
+.cmd-palette-footer {
+  display: flex;
+  gap: var(--ap-space-3);
+  padding: var(--ap-space-2) var(--ap-space-4);
+  border-top: 1px solid var(--ap-border);
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+}

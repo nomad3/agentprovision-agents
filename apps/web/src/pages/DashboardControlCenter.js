@@ -29,9 +29,11 @@ import Layout from '../components/Layout';
 import { getDashboardStats } from '../services/analytics';
 import { getOnboardingStatus } from '../services/onboarding';
 import chatService from '../services/chat';
+import agentService from '../services/agent';
 import AgentActivityPanel from '../dashboard/AgentActivityPanel';
 import ChatTab from '../dashboard/tabs/ChatTab';
 import TerminalCard from '../dashboard/TerminalCard';
+import CommandPalette from '../dashboard/CommandPalette';
 import './DashboardControlCenter.css';
 
 const statusDotStyle = (status) => ({
@@ -57,6 +59,10 @@ const DashboardControlCenter = () => {
   // Sessions for the embedded chat surface.
   const [sessions, setSessions] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
+
+  // Agents and command-palette state for ⌘K jump.
+  const [agents, setAgents] = useState([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Binary mode toggle: 'simple' hides the terminal card and the live
   // agent activity panel; 'pro' shows everything. Persisted to
@@ -126,6 +132,34 @@ const DashboardControlCenter = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Agents feed the command palette. Fail-soft — palette still works
+  // with sessions + static nav even if the agent list 403s.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await agentService.getAll();
+        if (cancelled) return;
+        setAgents(Array.isArray(resp.data) ? resp.data : resp.data?.agents || []);
+      } catch { /* fail-soft */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // ⌘K / Ctrl+K opens the command palette. Esc handled inside the
+  // palette modal itself. Ignore the shortcut if the user is editing
+  // inside an input/textarea/contenteditable that's not the palette.
+  useEffect(() => {
+    const onKey = (e) => {
+      const isPaletteShortcut = (e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K');
+      if (!isPaletteShortcut) return;
+      e.preventDefault();
+      setPaletteOpen((v) => !v);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   if (loading) {
     return (
       <Layout>
@@ -181,6 +215,16 @@ const DashboardControlCenter = () => {
           <div className="ap-page-actions">
             <button
               type="button"
+              className="dcc-palette-trigger"
+              onClick={() => setPaletteOpen(true)}
+              title="Search and jump (⌘K)"
+              aria-label="Open command palette"
+            >
+              <span>Search</span>
+              <kbd className="dcc-palette-kbd">⌘K</kbd>
+            </button>
+            <button
+              type="button"
               className="dcc-mode-toggle"
               onClick={toggleMode}
               aria-pressed={mode === 'pro'}
@@ -191,6 +235,14 @@ const DashboardControlCenter = () => {
             </button>
           </div>
         </header>
+
+        <CommandPalette
+          open={paletteOpen}
+          onClose={() => setPaletteOpen(false)}
+          sessions={sessions}
+          agents={agents}
+          onSelectSession={(s) => setActiveSession(s)}
+        />
 
         {error && (
           <Alert variant="warning" dismissible onClose={() => setError(null)} className="mb-3" style={{ fontSize: 'var(--ap-fs-sm)' }}>
