@@ -89,12 +89,41 @@
    both visible" — the chat still scrolls its own thread internally. */
 
 /* FIXED row height so a long chat thread doesn't push the terminal
-   below the fold — the thread scrolls internally inside
-   .ap-chattab-thread. min-height was the bug: it's a floor, not a
-   ceiling. height: <clamp> gives both a floor AND a ceiling. */
+   below the fold. The thread scrolls internally inside
+   .ap-chattab-thread.
+   The chain of `height: 100%` only works if every ancestor in the
+   chain has an explicit height — Bootstrap's `<Col>` is height:auto
+   by default, so we force the Cols inside this row to stretch (the
+   Row's `align-items: stretch` is the Bootstrap default). The cards
+   themselves get `height: 100%` so they fill the col, and
+   `.dcc-thread-body` (height:100%) fills the card. Without this
+   chain, a tall chat thread blew past the row height and pushed the
+   terminal off-screen. */
 .dcc-chat-row {
   height: clamp(360px, calc(100vh - 520px), 520px);
+  align-items: stretch; /* explicit; Bootstrap row default */
 }
+/* `[class*="col-"]` catches col-12 / col-md-8 / col-lg-6 etc.;
+   `.col` (no suffix) doesn't match the attribute pattern so it
+   needs its own selector. */
+.dcc-chat-row > [class*="col-"],
+.dcc-chat-row > .col {
+  height: 100%;
+}
+.dcc-chat-row .ap-card { height: 100%; display: flex; flex-direction: column; }
+/* Scope the inner-card overflow hidden to thread + activity ONLY —
+   the sessions card has its own inner-scroll list (.dcc-session-list)
+   that breaks if its parent body is overflow:hidden + shorter than
+   its content. */
+.dcc-chat-row .dcc-thread-card .ap-card-body,
+.dcc-chat-row .dcc-activity-card .ap-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Sessions card body: NOT in the overflow-hidden list — its inner
+   .dcc-session-list owns the scroll. Adding overflow:hidden to the
+   parent broke 12+ session row clipping in the previous attempt. */
 
 .dcc-thread-card { overflow: hidden; }
 .dcc-thread-body {
@@ -102,6 +131,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 .dcc-thread-empty {
   display: flex;
@@ -142,8 +172,19 @@
    horizontal list at top; chat fills the rest of the viewport. */
 @media (max-width: 767.98px) {
   .dcc-container { padding: 0 var(--ap-space-2); }
-  .dcc-chat-row {
-    height: clamp(280px, calc(100vh - 460px), 420px);
+  /* Disarm the desktop height chain on mobile — when the three cols
+     stack to a single column, sharing 420 px squashes them to
+     ~140 px each which is useless. Let each card own its content
+     height instead; the thread card keeps a clamped height so the
+     chat surface is still tall enough to interact with. */
+  .dcc-chat-row,
+  .dcc-chat-row > [class*="col-"],
+  .dcc-chat-row > .col,
+  .dcc-chat-row .ap-card {
+    height: auto;
+  }
+  .dcc-chat-row .dcc-thread-card {
+    height: clamp(360px, calc(100vh - 280px), 540px);
   }
   .dcc-sessions { padding: var(--ap-space-2); }
   .dcc-session-list {
