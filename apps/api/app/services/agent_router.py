@@ -1083,6 +1083,12 @@ def _legacy_chain_walk(
                 agent_tier=agent_tier,
                 agent_tool_groups=agent_tool_groups,
                 agent_memory_domains=agent_memory_domains,
+                # Plan 2026-05-16-terminal-full-cli-output §4.1: pass the
+                # 1-based chain index so each stream chunk emitted by the
+                # worker can be tagged with the attempt number — lets the
+                # terminal tab the fallback CLI without re-deriving from
+                # cli_subprocess_started events.
+                attempt=attempt_idx + 1,
             )
         except Exception as exc:
             # Hard exception. Classify finer than just "exception" —

@@ -20,6 +20,17 @@
  * so layout doesn't shift on focus change. PointerDownCapture shifts
  * focus before any inner click handler runs (matches
  * DashboardControlCenter.js around line 79).
+ *
+ * Full-CLI-stream enhancements (plan
+ * docs/plans/2026-05-16-terminal-full-cli-output.md):
+ *   - chunk_kind / fd attributes drive per-kind colouring via
+ *     TerminalGroup.css. Coalesced replay envelopes ({chunks:[…]})
+ *     are spread into per-line entries so colours survive replay.
+ *   - MAX_LINES_PER_TAB raised to 1000 — sustained reasoning streams
+ *     blow past 200 lines easily.
+ *   - Sticky-bottom auto-scroll is per-platform (review I7): switching
+ *     tabs preserves the user's read position for each individual
+ *     stream rather than yanking back to live tail every tab change.
  */
 import { useEffect, useMemo, useRef } from 'react';
 import { useSessionEvents } from './SessionEventsContext';
@@ -31,44 +42,84 @@ const MAX_LINES_PER_TAB = 1000;
 // the user can read history without the stream yanking them back.
 const STICKY_BOTTOM_PX = 24;
 
-// Reuse the same lifecycle/chunk → line conversion that TerminalCard
-// used pre-refactor. Kept verbatim so the parallel CLI-streaming branch
-// (#240) can replay its rendering enhancements onto this function with
-// a mechanical merge.
+// Lifecycle/chunk → per-line conversion. Output is a list of
+// `{platform, lines:[{seq, chunk, fd, chunk_kind, ts}]}` so each line
+// can carry its kind/fd into the DOM (data-kind / fd attribute) for
+// CSS colouring.
 const linesFromEvents = (events) => {
   const byPlatform = new Map();
-  for (const env of events) {
-    const type = env.type || env.event_type;
-    const p = (env.payload || {}).platform || 'cli';
-    let line = null;
-    let fd = 'stdout';
-    if (type === 'cli_subprocess_stream') {
-      line = (env.payload || {}).chunk || '';
-      fd = (env.payload || {}).fd || 'stdout';
-    } else if (type === 'cli_subprocess_started') {
-      const pl = env.payload || {};
-      line = `▶ start ${pl.platform || p}  (attempt ${pl.attempt ?? '?'}/${(pl.chain || []).length || '?'})`;
-    } else if (type === 'cli_subprocess_complete') {
-      const pl = env.payload || {};
-      if (pl.error) {
-        line = `✗ end   ${pl.platform || p}  ${pl.latency_ms ?? '?'}ms — ${pl.error}${pl.error_detail ? ': ' + String(pl.error_detail).slice(0, 100) : ''}`;
-        fd = 'stderr';
-      } else {
-        const cost = pl.cost_usd != null ? `  $${Number(pl.cost_usd).toFixed(4)}` : '';
-        const tok = pl.token_count != null ? `  ${pl.token_count}tok` : '';
-        line = `✓ end   ${pl.platform || p}  ${pl.latency_ms ?? '?'}ms${tok}${cost}`;
-      }
-    } else {
-      continue;
-    }
-    if (!line) continue;
-    if (!line.endsWith('\n')) line += '\n';
-    const arr = byPlatform.get(p) || [];
-    arr.push({ seq: env.seq_no, chunk: line, fd, ts: env.ts });
+  const pushLine = (platform, line) => {
+    const arr = byPlatform.get(platform) || [];
+    arr.push(line);
     if (arr.length > MAX_LINES_PER_TAB) {
       arr.splice(0, arr.length - MAX_LINES_PER_TAB);
     }
-    byPlatform.set(p, arr);
+    byPlatform.set(platform, arr);
+  };
+
+  for (const env of events) {
+    const type = env.type || env.event_type;
+    const pl = env.payload || {};
+    const p = pl.platform || 'cli';
+
+    if (type === 'cli_subprocess_stream') {
+      // Coalesced replay shape — array of chunk dicts. Spread each
+      // into its own line so kind colouring survives replay.
+      if (Array.isArray(pl.chunks)) {
+        for (const c of pl.chunks) {
+          if (!c) continue;
+          const chunkStr = typeof c === 'string' ? c : (c.chunk || '');
+          if (!chunkStr) continue;
+          const kind = (typeof c === 'object' && c.chunk_kind) || pl.chunk_kind || 'stdout';
+          const fdv = (typeof c === 'object' && c.fd) || pl.fd || 'stdout';
+          const ending = chunkStr.endsWith('\n') ? chunkStr : `${chunkStr}\n`;
+          pushLine(p, {
+            seq: env.seq_no,
+            chunk: ending,
+            fd: fdv,
+            chunk_kind: kind,
+            ts: env.ts,
+          });
+        }
+        continue;
+      }
+      // Live (non-coalesced) per-chunk event.
+      const chunk = pl.chunk || '';
+      if (!chunk) continue;
+      const kind = pl.chunk_kind || 'stdout';
+      const fdv = pl.fd || 'stdout';
+      const ending = chunk.endsWith('\n') ? chunk : `${chunk}\n`;
+      pushLine(p, {
+        seq: env.seq_no,
+        chunk: ending,
+        fd: fdv,
+        chunk_kind: kind,
+        ts: env.ts,
+      });
+    } else if (type === 'cli_subprocess_started') {
+      const line = `▶ start ${pl.platform || p}  (attempt ${pl.attempt ?? '?'}/${(pl.chain || []).length || '?'})\n`;
+      pushLine(p, {
+        seq: env.seq_no,
+        chunk: line,
+        fd: 'stdout',
+        chunk_kind: 'lifecycle',
+        ts: env.ts,
+      });
+    } else if (type === 'cli_subprocess_complete') {
+      let line;
+      let fd = 'stdout';
+      let kind = 'lifecycle';
+      if (pl.error) {
+        line = `✗ end   ${pl.platform || p}  ${pl.latency_ms ?? '?'}ms — ${pl.error}${pl.error_detail ? ': ' + String(pl.error_detail).slice(0, 100) : ''}\n`;
+        fd = 'stderr';
+        kind = 'lifecycle_error';
+      } else {
+        const cost = pl.cost_usd != null ? `  $${Number(pl.cost_usd).toFixed(4)}` : '';
+        const tok = pl.token_count != null ? `  ${pl.token_count}tok` : '';
+        line = `✓ end   ${pl.platform || p}  ${pl.latency_ms ?? '?'}ms${tok}${cost}\n`;
+      }
+      pushLine(p, { seq: env.seq_no, chunk: line, fd, chunk_kind: kind, ts: env.ts });
+    }
   }
   return Array.from(byPlatform.entries()).map(([platform, lines]) => ({ platform, lines }));
 };
@@ -83,9 +134,12 @@ const TerminalGroup = ({
 }) => {
   const { events } = useSessionEvents();
   const scrollRef = useRef(null);
-  // Track whether the user is "stuck to bottom" so we only auto-snap
-  // when they haven't scrolled up to read history.
-  const stuckToBottomRef = useRef(true);
+  // Per-platform sticky-to-bottom map (review I7). Keyed by platform
+  // name; absent entries default to "true" (follow tail) so the very
+  // first chunk autoscrolls without requiring an initialisation pass.
+  // Stored in a ref so the scroll handler can update without forcing
+  // a re-render.
+  const stuckToBottomRef = useRef({});
 
   const streams = useMemo(() => linesFromEvents(events), [events]);
 
@@ -103,22 +157,25 @@ const TerminalGroup = ({
     }
   }, [streams, activeTabKey, onActiveChange]);
 
-  // Auto-scroll to bottom on new chunks, but only when we were already
-  // pinned to bottom. Without this guard, reading historical output
-  // would get yanked away every time a new line arrives.
+  // Auto-scroll to bottom on new chunks, but only when this platform's
+  // sticky flag is true. Switching to a new tab preserves the previous
+  // tab's sticky state — when you come back, you're still where you
+  // left off.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (stuckToBottomRef.current) {
+    if (!activeTabKey) return;
+    // Default to "follow tail" the first time we see a platform.
+    if (stuckToBottomRef.current[activeTabKey] !== false) {
       el.scrollTop = el.scrollHeight;
     }
   }, [events, activeTabKey]);
 
   const onScroll = () => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || !activeTabKey) return;
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stuckToBottomRef.current = dist <= STICKY_BOTTOM_PX;
+    stuckToBottomRef.current[activeTabKey] = dist <= STICKY_BOTTOM_PX;
   };
 
   const activeStream = streams.find((s) => s.platform === activeTabKey);
@@ -170,6 +227,8 @@ const TerminalGroup = ({
                   <span
                     key={`${line.seq}-${idx}`}
                     className={`tg-line${line.fd === 'stderr' ? ' stderr' : ''}`}
+                    data-kind={line.chunk_kind || 'stdout'}
+                    data-fd={line.fd || 'stdout'}
                   >
                     {line.chunk}
                   </span>

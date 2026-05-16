@@ -77,6 +77,44 @@
 .tg-line { display: inline; }
 .tg-line.stderr { color: var(--ap-danger); }
 
+/* Per-chunk_kind colouring (plan
+ * docs/plans/2026-05-16-terminal-full-cli-output.md §5.1). Order
+ * matters: more-specific rules (lifecycle_error, stderr-fd) come
+ * after broader ones (text/reasoning) so the cascade resolves them
+ * last. */
+.tg-line[data-kind="reasoning"] {
+  color: var(--ap-text-muted);
+  font-style: italic;
+}
+.tg-line[data-kind="text"] {
+  color: var(--ap-text);
+}
+.tg-line[data-kind="tool_use"] {
+  color: var(--ap-primary);
+}
+.tg-line[data-kind="tool_result"] {
+  color: var(--ap-success, #2c9c46);
+}
+.tg-line[data-kind="lifecycle"] {
+  color: var(--ap-text);
+  font-weight: 600;
+}
+.tg-line[data-kind="lifecycle_error"] {
+  color: var(--ap-danger);
+  font-weight: 600;
+}
+.tg-line[data-kind="stderr"] {
+  color: var(--ap-danger);
+}
+
+/* Specificity guard (review I1): stderr-fd lines must stay red even
+ * when their data-kind (lifecycle / lifecycle_error) would otherwise
+ * win the cascade. Both selectors below override the data-kind rules
+ * above thanks to the [fd][data-kind] compound specificity. */
+.tg-line[data-fd="stderr"] { color: var(--ap-danger); }
+.tg-line[data-fd="stderr"][data-kind="lifecycle"],
+.tg-line[data-fd="stderr"][data-kind="lifecycle_error"] { color: var(--ap-danger); }
+
 .tg-empty {
   padding: var(--ap-space-4) var(--ap-space-5);
   font-size: var(--ap-fs-sm);

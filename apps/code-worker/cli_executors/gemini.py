@@ -18,6 +18,8 @@ import os
 import re
 
 import cli_runtime
+from cli_executors import gemini_stream_parser
+from session_event_emitter import SessionEventEmitter
 
 logger = logging.getLogger(__name__)
 
@@ -122,13 +124,28 @@ def execute_gemini_chat(task_input, session_dir: str, image_path: str):
         p = os.path.join(gemini_home, f)
         logger.info("Gemini home file %s present=%s", f, os.path.exists(p))
 
-    result = cli_runtime.run_cli_with_heartbeat(
-        cmd,
-        label="Gemini CLI",
-        timeout=1500,
-        env=env,
-        cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+    # ---- streaming emitter (plan 2026-05-16 §4.5 / §2.3) ----
+    # Gemini's stdout is a single end-of-run JSON blob, but stderr
+    # carries live tool errors. The parser classifies stderr lightly
+    # and forwards the rest verbatim.
+    emitter = SessionEventEmitter(
+        chat_session_id=getattr(task_input, "chat_session_id", "") or "",
+        tenant_id=task_input.tenant_id,
+        platform="gemini_cli",
+        attempt=getattr(task_input, "attempt", 1) or 1,
     )
+    on_chunk = gemini_stream_parser.build_parser(emitter) if emitter.enabled else None
+    try:
+        result = cli_runtime.run_cli_with_heartbeat(
+            cmd,
+            label="Gemini CLI",
+            timeout=1500,
+            env=env,
+            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            on_chunk=on_chunk,
+        )
+    finally:
+        emitter.close()
     logger.info("Gemini CLI exit code: %s", result.returncode)
     if result.stdout:
         logger.info("Gemini CLI stdout: %s", result.stdout[:500])

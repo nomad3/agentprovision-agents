@@ -13,6 +13,15 @@ the function body so:
      dispatch table inside ``execute_chat_cli``).
   2. Existing test monkeypatches on ``wf._fetch_claude_token`` etc. still
      take effect — lazy imports re-resolve the attribute on every call.
+
+2026-05-16: gains a streaming pump (`SessionEventEmitter` +
+`claude_stream_parser`) wired through `cli_runtime.on_chunk` so the
+dashboard terminal card sees reasoning + tool_use + tool_result live
+instead of waiting for `proc.communicate()` to return. The
+`--output-format stream-json --verbose` switch is rollout-flagged via
+`tenant_features.cli_stream_output` (default OFF prod, ON for the
+saguilera test tenant). When the flag is OFF we keep the legacy
+single-line `--output-format json` shape.
 """
 from __future__ import annotations
 
@@ -20,6 +29,9 @@ import json
 import os
 
 import cli_runtime
+from cli_executors import claude_stream_parser
+from session_event_emitter import SessionEventEmitter
+from tenant_feature_flags import is_enabled as _feature_enabled
 
 
 def execute_claude_chat(task_input, session_dir: str):
@@ -72,13 +84,24 @@ def execute_claude_chat(task_input, session_dir: str):
         # instructions and conversation history directly into the prompt.
         prompt = f"{task_input.instruction_md_content.strip()}\n\n# User Request\n\n{task_input.message}"
 
-    cmd = [
-        "claude", "-p", prompt,
-        "--output-format", "json",
+    # ---- output-format rollout gate (plan 2026-05-16 §9) ----
+    # `stream-json` emits NDJSON per event (system.init / assistant.text /
+    # tool_use / tool_result / result.*) which the terminal card renders
+    # live. Falls back to single-line `json` when the flag is OFF so the
+    # legacy parse below (line 125) still works byte-for-byte.
+    _stream_enabled = _feature_enabled(
+        task_input.tenant_id, "cli_stream_output", default=False
+    )
+    cmd = ["claude", "-p", prompt]
+    if _stream_enabled:
+        cmd.extend(["--output-format", "stream-json", "--verbose"])
+    else:
+        cmd.extend(["--output-format", "json"])
+    cmd.extend([
         "--model", _model,
         "--allowedTools", _allowed,
         "--add-dir", session_dir,
-    ]
+    ])
     if os.path.isdir(WORKSPACE):
         cmd.extend(["--add-dir", WORKSPACE])
 
@@ -111,13 +134,27 @@ def execute_claude_chat(task_input, session_dir: str):
         # ANTHROPIC_API_KEY and routes to the Console billing path.
         env["ANTHROPIC_API_KEY"] = token
 
-    result = cli_runtime.run_cli_with_heartbeat(
-        cmd,
-        label="Claude Code",
-        timeout=1500,
-        env=env,
-        cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+    # ---- streaming emitter (no-op if flag off / chat_session_id missing) ----
+    emitter = SessionEventEmitter(
+        chat_session_id=getattr(task_input, "chat_session_id", "") or "",
+        tenant_id=task_input.tenant_id,
+        platform="claude_code",
+        attempt=getattr(task_input, "attempt", 1) or 1,
     )
+    on_chunk = claude_stream_parser.build_parser(emitter) if (_stream_enabled and emitter.enabled) else None
+
+    try:
+        result = cli_runtime.run_cli_with_heartbeat(
+            cmd,
+            label="Claude Code",
+            timeout=1500,
+            env=env,
+            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            on_chunk=on_chunk,
+        )
+    finally:
+        emitter.close()
+
     if result.returncode != 0:
         err = cli_runtime.safe_cli_error_snippet(result.stderr, result.stdout, 1000)
         return ChatCliResult(response_text="", success=False, error=f"CLI exit {result.returncode}: {err}")
@@ -126,6 +163,56 @@ def execute_claude_chat(task_input, session_dir: str):
     if not raw:
         return ChatCliResult(response_text="", success=False, error="CLI produced no output")
 
+    # stream-json: response is NDJSON, the final `result` event holds the
+    # cost + usage data and ``result.result`` is the assistant's full
+    # answer. Find the LAST non-empty line and parse that (the only line
+    # with subtype="success"). Fall back to legacy single-line json
+    # parse if the line isn't a result envelope.
+    if _stream_enabled:
+        last_line = ""
+        for ln in reversed(raw.splitlines()):
+            if ln.strip():
+                last_line = ln.strip()
+                break
+        try:
+            data = json.loads(last_line)
+            if data.get("type") != "result":
+                # Final non-empty line wasn't the result envelope —
+                # could be a trailing assistant message. Walk back to
+                # find the result event.
+                for ln in reversed(raw.splitlines()):
+                    if not ln.strip():
+                        continue
+                    try:
+                        obj = json.loads(ln)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(obj, dict) and obj.get("type") == "result":
+                        data = obj
+                        break
+            text = data.get("result") or data.get("response") or data.get("content") or data.get("text") or ""
+            usage = data.get("usage") or {}
+            meta = {
+                "platform": "claude_code",
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+                "model": data.get("model"),
+                "claude_session_id": data.get("session_id", ""),
+                "cost_usd": data.get("total_cost_usd", 0),
+            }
+            if not text:
+                # Edge case: no result envelope captured. Return raw so
+                # the user sees something rather than a silent failure.
+                text = raw
+            return ChatCliResult(response_text=text, success=True, metadata=meta)
+        except (json.JSONDecodeError, AttributeError):
+            return ChatCliResult(
+                response_text=raw,
+                success=True,
+                metadata={"platform": "claude_code"},
+            )
+
+    # Legacy single-line `--output-format json` path (flag OFF).
     try:
         data = json.loads(raw)
         text = data.get("result") or data.get("response") or data.get("content") or data.get("text") or raw

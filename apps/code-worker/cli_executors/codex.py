@@ -10,6 +10,8 @@ import json
 import os
 
 import cli_runtime
+from cli_executors import codex_stream_parser
+from session_event_emitter import SessionEventEmitter
 
 
 def execute_codex_chat(task_input, session_dir: str, image_path: str):
@@ -73,13 +75,29 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
     env = os.environ.copy()
     env["CODEX_HOME"] = codex_home
 
-    result = cli_runtime.run_cli_with_heartbeat(
-        cmd,
-        label="Codex",
-        timeout=1500,
-        env=env,
-        cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+    # ---- streaming emitter (plan 2026-05-16 §4.5) ----
+    # codex --json already streams NDJSON; the parser maps each line
+    # to a chunk_kind for live terminal rendering. Emitter is a no-op
+    # when chat_session_id is missing.
+    emitter = SessionEventEmitter(
+        chat_session_id=getattr(task_input, "chat_session_id", "") or "",
+        tenant_id=task_input.tenant_id,
+        platform="codex",
+        attempt=getattr(task_input, "attempt", 1) or 1,
     )
+    on_chunk = codex_stream_parser.build_parser(emitter) if emitter.enabled else None
+
+    try:
+        result = cli_runtime.run_cli_with_heartbeat(
+            cmd,
+            label="Codex",
+            timeout=1500,
+            env=env,
+            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            on_chunk=on_chunk,
+        )
+    finally:
+        emitter.close()
     if result.returncode != 0:
         err = cli_runtime.safe_cli_error_snippet(result.stderr, result.stdout, 2000)
         return ChatCliResult(response_text="", success=False, error=f"CLI exit {result.returncode}: {err}")

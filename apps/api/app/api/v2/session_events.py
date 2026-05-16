@@ -44,6 +44,17 @@ _DEFAULT_REPLAY_LIMIT = 100
 _MAX_REPLAY_LIMIT = 500
 _SUBPROCESS_COALESCE_WINDOW_SECONDS = 5
 _HEARTBEAT_INTERVAL_SECONDS = 15
+# chunk_kinds that must NEVER be dropped by the coalescer's
+# 3-chunk window-truncation. Reasoning / stdout / text can be
+# summarised by tail slice without losing audit value, but
+# tool_use / tool_result / lifecycle answer "what did the
+# agent actually do" — losing one breaks replay (review B3).
+_NEVER_TRUNCATE_KINDS = frozenset({
+    "tool_use",
+    "tool_result",
+    "lifecycle",
+    "lifecycle_error",
+})
 
 
 def _ensure_session_visible(db: Session, session_id: _uuid.UUID, user: User) -> None:
@@ -106,15 +117,31 @@ def _coalesce_subprocess_streams(events: List[Dict[str, Any]]) -> List[Dict[str,
         )
 
         if same_window:
-            # Merge chunk into pending event. Replace the chunks list
-            # rather than mutating in place so the caller's input dicts
-            # are never modified — keeps this helper a pure transformation.
-            new_chunk = (evt.get("payload") or {}).get("chunk", "")
+            # Merge chunk into pending event. Each entry in the chunks
+            # list is now a dict carrying its own `chunk`, `chunk_kind`
+            # and `fd` so the renderer can colour reasoning/tool_use/
+            # tool_result lines correctly on replay (full-CLI-output
+            # rollout 2026-05-16). Old wire shape was a list of strings
+            # — frontend handles both for back-compat during deploy.
+            p = evt.get("payload") or {}
+            new_chunk = {
+                "chunk": p.get("chunk", ""),
+                "chunk_kind": p.get("chunk_kind", "stdout"),
+                "fd": p.get("fd", "stdout"),
+            }
             chunks = list(pending["payload"].get("chunks", [])) + [new_chunk]
             pending["payload"]["chunks"] = chunks
-            # Keep only last 3 chunks to bound the payload
+            # Keep only last 3 chunks to bound the payload, but never
+            # drop tool_use / tool_result / lifecycle evidence — those
+            # are the chunks that explain WHY a turn did what it did
+            # (review B3 / plan 2026-05-16 §5.2). If keeping all of
+            # them blows past 3 we accept the slight payload bloat
+            # rather than dropping audit-critical lines.
             if len(chunks) > 3:
-                pending["payload"]["chunks"] = chunks[-3:]
+                keep = [c for c in chunks if c.get("chunk_kind") in _NEVER_TRUNCATE_KINDS]
+                rest = [c for c in chunks if c.get("chunk_kind") not in _NEVER_TRUNCATE_KINDS]
+                tail_slots = max(0, 3 - len(keep))
+                pending["payload"]["chunks"] = keep + (rest[-tail_slots:] if tail_slots else [])
                 pending["payload"]["chunks_truncated"] = True
             pending["payload"]["coalesced_count"] = (
                 pending["payload"].get("coalesced_count", 1) + 1
@@ -126,11 +153,16 @@ def _coalesce_subprocess_streams(events: List[Dict[str, Any]]) -> List[Dict[str,
             # inside the original payload) don't share references with
             # the caller's input — matches the helper's docstring contract.
             from copy import deepcopy
+            p = evt.get("payload") or {}
             pending = {
                 **evt,
                 "payload": {
-                    **deepcopy(evt.get("payload") or {}),
-                    "chunks": [(evt.get("payload") or {}).get("chunk", "")],
+                    **deepcopy(p),
+                    "chunks": [{
+                        "chunk": p.get("chunk", ""),
+                        "chunk_kind": p.get("chunk_kind", "stdout"),
+                        "fd": p.get("fd", "stdout"),
+                    }],
                     "coalesced_count": 1,
                 },
             }

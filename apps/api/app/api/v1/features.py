@@ -1,14 +1,28 @@
 """API routes for tenant features."""
-from fastapi import APIRouter, Depends
+import uuid as _uuid
+from typing import Dict, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
-from typing import Dict
 
 from app.api.deps import get_db, get_current_user, require_superuser
+from app.core.config import settings
+from app.models.tenant_features import TenantFeatures as TenantFeaturesModel
 from app.models.user import User
 from app.schemas.tenant_features import TenantFeatures, TenantFeaturesUpdate
 from app.services import features as service
 
 router = APIRouter()
+
+
+def _verify_internal_key(
+    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
+) -> None:
+    if not x_internal_key or x_internal_key not in (
+        settings.API_INTERNAL_KEY,
+        settings.MCP_API_KEY,
+    ):
+        raise HTTPException(status_code=401, detail="Invalid internal key")
 
 
 @router.get("", response_model=TenantFeatures)
@@ -64,3 +78,34 @@ def get_limits(
         "monthly_token_limit": {"limit": features.monthly_token_limit},
         "storage_limit_gb": {"limit": features.storage_limit_gb},
     }
+
+
+@router.get("/internal/tenant-features/{tenant_id}", response_model=Dict[str, bool])
+def get_features_internal(
+    tenant_id: _uuid.UUID,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """Worker-side feature-flag lookup. Returns only the boolean columns
+    (defaults baked in when no row exists).
+
+    Used by ``apps/code-worker/tenant_feature_flags.py`` to gate the
+    Claude stream-json rollout (plan §9). Auth via X-Internal-Key only;
+    no user JWT involved.
+    """
+    row = db.query(TenantFeaturesModel).filter(
+        TenantFeaturesModel.tenant_id == tenant_id
+    ).first()
+    if row is None:
+        # No tenant_features row yet — return defaults (all OFF for
+        # gated rollout flags). Cheap and stable.
+        return {}
+    # Project every boolean column onto the response. Includes
+    # ``cli_stream_output`` once the migration adds it.
+    out: Dict[str, bool] = {}
+    for col in row.__table__.columns:  # type: ignore[attr-defined]
+        if col.type.python_type is bool:
+            val = getattr(row, col.name, None)
+            if val is not None:
+                out[col.name] = bool(val)
+    return out

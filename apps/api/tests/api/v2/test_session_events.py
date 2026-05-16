@@ -170,7 +170,7 @@ def test_subprocess_stream_coalescing(session_id_and_tenant, engine):
                 {
                     "sid": sid, "tid": tid, "seq": i,
                     "payload": __import__("json").dumps(
-                        {"platform": "claude_code", "fd": "stdout", "chunk": f"line {i}"}
+                        {"platform": "claude_code", "fd": "stdout", "chunk": f"line {i}", "chunk_kind": "text"}
                     ),
                     # Make all 50 fit inside one 5s window
                     "ts": base_ts + timedelta(milliseconds=i * 50),
@@ -188,8 +188,101 @@ def test_subprocess_stream_coalescing(session_id_and_tenant, engine):
     # Only last 3 chunks kept + truncation flag
     assert len(evt["payload"]["chunks"]) == 3
     assert evt["payload"]["chunks_truncated"] is True
+    # New shape: each chunk is a dict carrying its kind + fd
+    for ch in evt["payload"]["chunks"]:
+        assert isinstance(ch, dict)
+        assert ch.get("chunk_kind") == "text"
+        assert ch.get("fd") == "stdout"
+        assert ch.get("chunk", "").startswith("line ")
     # seq_no should be the LAST in the window (50)
     assert evt["seq_no"] == 50
+
+
+def test_subprocess_stream_coalescing_preserves_chunk_kind(session_id_and_tenant, engine):
+    """Mixed chunk_kinds (reasoning/text/tool_use) must round-trip
+    through the coalescer so the frontend can colour each line."""
+    sid, tid = session_id_and_tenant
+    base_ts = datetime.now(timezone.utc) - timedelta(seconds=2)
+    kinds = ["reasoning", "text", "tool_use"]
+    with engine.begin() as c:
+        for i, kind in enumerate(kinds, start=1):
+            c.execute(
+                text(
+                    "INSERT INTO session_events "
+                    "(session_id, tenant_id, seq_no, event_type, payload, created_at) "
+                    "VALUES (:sid, :tid, :seq, 'cli_subprocess_stream', CAST(:payload AS jsonb), :ts)"
+                ),
+                {
+                    "sid": sid, "tid": tid, "seq": i,
+                    "payload": __import__("json").dumps(
+                        {"platform": "claude_code", "fd": "stdout", "chunk": f"{kind}-line", "chunk_kind": kind}
+                    ),
+                    "ts": base_ts + timedelta(milliseconds=i * 50),
+                },
+            )
+
+    client = _make_client(tid)
+    resp = client.get(f"/api/v2/sessions/{sid}/events?since=0", headers={"Accept": "application/json"})
+    body = resp.json()
+    assert len(body["events"]) == 1
+    chunks = body["events"][0]["payload"]["chunks"]
+    # 3 chunks, exact-window, no truncation
+    assert len(chunks) == 3
+    assert [c["chunk_kind"] for c in chunks] == kinds
+    assert [c["chunk"] for c in chunks] == [f"{k}-line" for k in kinds]
+
+
+def test_subprocess_stream_coalescing_preserves_tool_evidence(session_id_and_tenant, engine):
+    """Coalescer truncation MUST keep tool_use / tool_result / lifecycle
+    chunks even when the window exceeds 3 entries. Dropping those would
+    erase the audit trail of what the agent did (review B3 — never
+    truncate tool evidence)."""
+    sid, tid = session_id_and_tenant
+    base_ts = datetime.now(timezone.utc) - timedelta(seconds=5)
+    # 10 entries: text-text-text-tool_use-text-text-text-tool_result-text-text
+    pattern = [
+        ("text", "intro line"),
+        ("text", "more reasoning"),
+        ("text", "even more"),
+        ("tool_use", "Read /etc/passwd"),
+        ("text", "got back data"),
+        ("reasoning", "thinking…"),
+        ("text", "let me try"),
+        ("tool_result", "exit 0"),
+        ("text", "done"),
+        ("text", "summarising"),
+    ]
+    with engine.begin() as c:
+        for i, (kind, chunk_text) in enumerate(pattern, start=1):
+            c.execute(
+                text(
+                    "INSERT INTO session_events "
+                    "(session_id, tenant_id, seq_no, event_type, payload, created_at) "
+                    "VALUES (:sid, :tid, :seq, 'cli_subprocess_stream', CAST(:payload AS jsonb), :ts)"
+                ),
+                {
+                    "sid": sid, "tid": tid, "seq": i,
+                    "payload": __import__("json").dumps({
+                        "platform": "claude_code", "fd": "stdout",
+                        "chunk": chunk_text, "chunk_kind": kind,
+                    }),
+                    "ts": base_ts + timedelta(milliseconds=i * 50),
+                },
+            )
+
+    client = _make_client(tid)
+    resp = client.get(f"/api/v2/sessions/{sid}/events?since=0", headers={"Accept": "application/json"})
+    body = resp.json()
+    assert len(body["events"]) == 1
+    evt = body["events"][0]
+    assert evt["payload"]["coalesced_count"] == 10
+    chunks = evt["payload"]["chunks"]
+    kept_kinds = [c["chunk_kind"] for c in chunks]
+    # Both tool entries MUST survive truncation.
+    assert "tool_use" in kept_kinds, f"tool_use dropped: {kept_kinds}"
+    assert "tool_result" in kept_kinds, f"tool_result dropped: {kept_kinds}"
+    # Payload was truncated flag still set.
+    assert evt["payload"]["chunks_truncated"] is True
 
 
 def test_subprocess_streams_in_different_windows_dont_coalesce(session_id_and_tenant, engine):

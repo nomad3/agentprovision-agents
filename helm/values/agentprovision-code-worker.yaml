@@ -114,6 +114,12 @@ env:
   # docs/plans/2026-05-16-codex-mcp-tool-access-fix.md.
   - name: CODEX_USE_RMCP_CLIENT
     value: "true"
+  # Stream-output emitter flush cadence (plan
+  # docs/plans/2026-05-16-terminal-full-cli-output.md §6.1). 150 ms
+  # balances terminal-card latency against API publish QPS. Optional;
+  # the worker defaults to the same value if unset.
+  - name: WORKER_STREAM_FLUSH_MS
+    value: "150"
 
 # No autoscaling — single instance
 autoscaling:
