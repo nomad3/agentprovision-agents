@@ -24,6 +24,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+import { FaColumns, FaTimes } from 'react-icons/fa';
 import Layout from '../components/Layout';
 import { getOnboardingStatus } from '../services/onboarding';
 import chatService from '../services/chat';
@@ -73,10 +74,20 @@ const ChatGroupsPane = ({
       <article
         key={group.id}
         className={`ap-card h-100 dcc-thread-card${isFocused ? ' dcc-thread-card-focused' : ''}`}
-        onMouseDownCapture={() => {
-          // Click-to-focus the group. mousedown-capture so the focus
-          // updates *before* any click-handler inside (e.g. textarea
-          // focus or session-row click) runs.
+        onPointerDownCapture={() => {
+          // Click/touch/pen-to-focus the group. PointerDown-capture so
+          // the focus updates *before* any click-handler inside (e.g.
+          // textarea focus or session-row click) runs. Replaces the
+          // mouse-only `onMouseDownCapture` so touch + stylus also
+          // shift focus correctly.
+          if (focusedGroupId !== group.id) setFocusedGroupId(group.id);
+        }}
+        onFocusCapture={() => {
+          // Tab/shift-tab into any focusable child (the chat textarea,
+          // a button) should also refocus this group. Without this,
+          // keyboard users could be typing into pane B while group A
+          // is still marked focused, and a subsequent session-pick
+          // from the sidebar would land in the wrong pane.
           if (focusedGroupId !== group.id) setFocusedGroupId(group.id);
         }}
       >
@@ -97,7 +108,7 @@ const ChatGroupsPane = ({
               title={canSplit ? 'Split right' : `Max ${maxGroups} splits`}
               aria-label="Split right"
             >
-              <span aria-hidden="true">⊟</span>
+              <FaColumns aria-hidden="true" />
             </button>
             {canClose ? (
               <button
@@ -111,7 +122,7 @@ const ChatGroupsPane = ({
                 title="Close split"
                 aria-label="Close split"
               >
-                <span aria-hidden="true">×</span>
+                <FaTimes aria-hidden="true" />
               </button>
             ) : null}
           </div>
@@ -141,6 +152,12 @@ const ChatGroupsPane = ({
       </article>
     );
   };
+
+  // Defensive: handleCloseSplit guards against closing the last pane,
+  // but if some other code path ever empties `editorGroups` we'd hit
+  // `editorGroups[0] === undefined` and crash inside renderGroup. Bail
+  // out cleanly instead.
+  if (n === 0) return null;
 
   if (n <= 1) {
     return (
@@ -197,9 +214,26 @@ const DashboardControlCenter = () => {
   // several side-by-side.
   const selectSessionForFocusedGroup = useCallback(
     (s) => {
-      setEditorGroups((groups) =>
-        groups.map((g) => (g.id === focusedGroupId ? { ...g, sessionId: s?.id ?? null } : g)),
-      );
+      setEditorGroups((groups) => {
+        // Happy path: a group matches the current focused id.
+        const matchIdx = groups.findIndex((g) => g.id === focusedGroupId);
+        if (matchIdx >= 0) {
+          return groups.map((g) =>
+            g.id === focusedGroupId ? { ...g, sessionId: s?.id ?? null } : g,
+          );
+        }
+        // Fallback: focusedGroupId points at a group that no longer
+        // exists (e.g. handleCloseSplit fired but a stale closure
+        // still held the old id). Drop the session into the LAST
+        // group and re-anchor focusedGroupId so subsequent picks land
+        // there too — prevents a silent no-op where the sidebar click
+        // appears to do nothing.
+        if (groups.length === 0) return groups;
+        const lastIdx = groups.length - 1;
+        const targetId = groups[lastIdx].id;
+        setFocusedGroupId(targetId);
+        return groups.map((g, i) => (i === lastIdx ? { ...g, sessionId: s?.id ?? null } : g));
+      });
       setActiveSession(s);
     },
     [focusedGroupId],
@@ -332,6 +366,15 @@ const DashboardControlCenter = () => {
   // provider, command palette, and coalition modal all reference the
   // pane the user is currently working in. Without this, clicking a
   // split would leave activeSession pointing at the original pane.
+  //
+  // INTENTIONAL: this effect mirrors the focused-group session into
+  // `activeSession`. The id-only equality guard
+  // (`activeSession?.id === focused.sessionId`) is what prevents an
+  // infinite re-render loop when `sessions` is re-fetched and arrives
+  // with NEW object references but the same ids — a deep-equality
+  // guard would still fire setActiveSession on every refetch because
+  // the object identity changed, which would in turn re-run any child
+  // effect keyed on activeSession. Keep the comparison by id.
   useEffect(() => {
     const focused = editorGroups.find((g) => g.id === focusedGroupId);
     if (!focused) return;
