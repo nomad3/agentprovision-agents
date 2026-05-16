@@ -33,6 +33,7 @@ import AgentActivityPanel from '../dashboard/AgentActivityPanel';
 import ChatTab from '../dashboard/tabs/ChatTab';
 import TerminalCard from '../dashboard/TerminalCard';
 import CommandPalette from '../dashboard/CommandPalette';
+import TriggerCoalitionModal from '../dashboard/TriggerCoalitionModal';
 import { SessionEventsProvider } from '../dashboard/SessionEventsContext';
 import './DashboardControlCenter.css';
 
@@ -63,6 +64,7 @@ const DashboardControlCenter = () => {
   // Agents and command-palette state for ⌘K jump.
   const [agents, setAgents] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [coalitionOpen, setCoalitionOpen] = useState(false);
 
   // Inline session creation — keeps the user on the dashboard. Was
   // previously navigating to /chat which felt like a page-mode change.
@@ -270,6 +272,12 @@ const DashboardControlCenter = () => {
           onSelectSession={(s) => setActiveSession(s)}
         />
 
+        <TriggerCoalitionModal
+          open={coalitionOpen}
+          onClose={() => setCoalitionOpen(false)}
+          sessionId={activeSession?.id || null}
+        />
+
         {error && (
           <Alert variant="warning" dismissible onClose={() => setError(null)} className="mb-3" style={{ fontSize: 'var(--ap-fs-sm)' }}>
             {error}
@@ -309,14 +317,25 @@ const DashboardControlCenter = () => {
               <div className="ap-card-body dcc-sessions">
                 <div className="d-flex justify-content-between align-items-center mb-2">
                   <strong style={{ fontSize: 'var(--ap-fs-sm)' }}>{t('chat.sessions', 'Sessions')}</strong>
-                  <button
-                    type="button"
-                    className="ap-btn-primary ap-btn-sm"
-                    onClick={handleNewSession}
-                    disabled={creating}
-                  >
-                    + {creating ? t('chat.creating', 'Creating…') : t('chat.new', 'New')}
-                  </button>
+                  <div className="d-flex" style={{ gap: 4 }}>
+                    <button
+                      type="button"
+                      className="ap-btn-secondary ap-btn-sm"
+                      onClick={() => setCoalitionOpen(true)}
+                      disabled={!activeSession}
+                      title="Dispatch an A2A coalition (Propose / Critique / Revise, Plan / Verify, …)"
+                    >
+                      ⚡ A2A
+                    </button>
+                    <button
+                      type="button"
+                      className="ap-btn-primary ap-btn-sm"
+                      onClick={handleNewSession}
+                      disabled={creating}
+                    >
+                      + {creating ? t('chat.creating', 'Creating…') : t('chat.new', 'New')}
+                    </button>
+                  </div>
                 </div>
                 {sessions.length === 0 ? (
                   <p className="text-muted mb-0" style={{ fontSize: 'var(--ap-fs-sm)' }}>
