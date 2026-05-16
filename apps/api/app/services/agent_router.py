@@ -1040,8 +1040,33 @@ def _legacy_chain_walk(
     first_err_class: Optional[str] = None
     attempted: List[str] = []
 
-    for attempt_platform in cli_chain:
+    # Helper for kernel-side event emission. Fail-soft: any publish error
+    # is swallowed (logged via the inner function) — events are observational,
+    # they must never break the dispatch hot path.
+    def _emit(event_type, payload):
+        if not _presence_sid:
+            return
+        try:
+            from app.services.collaboration_events import publish_session_event
+            publish_session_event(
+                _presence_sid,
+                event_type,
+                payload,
+                tenant_id=str(tenant_id) if tenant_id else None,
+            )
+        except Exception:
+            logger.debug("publish_session_event failed for %s (non-fatal)", event_type, exc_info=True)
+
+    _chain_t0 = time.perf_counter()
+    for attempt_idx, attempt_platform in enumerate(cli_chain):
         attempted.append(attempt_platform)
+        _emit("cli_subprocess_started", {
+            "platform": attempt_platform,
+            "attempt": attempt_idx + 1,
+            "chain": cli_chain,
+            "agent_slug": agent_slug,
+        })
+        _sub_t0 = time.perf_counter()
         try:
             response_text, metadata = run_agent_session(
                 db, tenant_id=tenant_id, user_id=user_id,
@@ -1071,6 +1096,13 @@ def _legacy_chain_walk(
                 "CLI attempt raised (no cooldown set) — tenant=%s platform=%s class=%s err=%s",
                 str(tenant_id)[:8], attempt_platform, err_class_local, exc,
             )
+            _emit("cli_subprocess_complete", {
+                "platform": attempt_platform,
+                "attempt": attempt_idx + 1,
+                "latency_ms": int((time.perf_counter() - _sub_t0) * 1000),
+                "error": err_class_local,
+                "error_detail": str(exc)[:240],
+            })
             continue
 
         # Successful response — done. Log chain telemetry to ops logs;
@@ -1092,6 +1124,14 @@ def _legacy_chain_walk(
                     str(tenant_id)[:8], requested_for_summary, served_actual, attempted,
                 )
             metadata = metadata or {}
+            _emit("cli_subprocess_complete", {
+                "platform": served_actual,
+                "attempt": attempt_idx + 1,
+                "latency_ms": int((time.perf_counter() - _sub_t0) * 1000),
+                "token_count": (metadata or {}).get("token_count"),
+                "cost_usd": (metadata or {}).get("cost_usd"),
+                "served_by": served_actual,
+            })
             metadata["routing_summary"] = _build_routing_summary(
                 served_by=served_actual,
                 requested=requested_for_summary,
@@ -1121,9 +1161,30 @@ def _legacy_chain_walk(
             )
             continue
 
+        _emit("cli_subprocess_complete", {
+            "platform": attempt_platform,
+            "attempt": attempt_idx + 1,
+            "latency_ms": int((time.perf_counter() - _sub_t0) * 1000),
+            "error": err_class,
+            "error_detail": (err or "")[:240],
+        })
+
         # Unclassified empty response — don't blast through the tenant's
         # other CLI quotas; let the empty result surface.
         break
+
+    # Final per-chain routing decision: who served, which alternatives
+    # were attempted, why each failed if it did. Lights up the right
+    # pane with a single summary row at the end of the chain.
+    _emit("cli_routing_decision", {
+        "requested": platform or (cli_chain[0] if cli_chain else None),
+        "served_by": (metadata or {}).get("platform") if response_text else None,
+        "attempted": attempted,
+        "chain_length": len(attempted),
+        "fallback_reason": first_err_class if response_text else None,
+        "error_state": None if response_text else "exhausted",
+        "total_latency_ms": int((time.perf_counter() - _chain_t0) * 1000),
+    })
 
     if not response_text:
         metadata = metadata or {}

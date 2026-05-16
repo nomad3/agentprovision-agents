@@ -691,6 +691,7 @@ def _generate_agentic_response(
             cost_usd=meta.get("cost_usd"),
             trajectory_id=meta.get("routing_trajectory_id"),
             tool_groups=tool_groups,
+            chat_session_id=str(session.id),
         )
     except Exception:
         pass
