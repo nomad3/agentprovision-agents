@@ -7,9 +7,9 @@
  * the legacy /chat page and surface here in Phase 2.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import chatService from '../../services/chat';
 import PlanStepper from '../PlanStepper';
+import InlineCliPicker from '../InlineCliPicker';
 import './ChatTab.css';
 
 const ChatTab = ({ tab }) => {
@@ -92,7 +92,7 @@ const ChatTab = ({ tab }) => {
     <div className="ap-chattab">
       <div className="ap-chattab-bar">
         <span className="ap-chattab-bar-title">{tab.title}</span>
-        <Link to="/chat" className="ap-chattab-bar-link">Open in full chat →</Link>
+        <InlineCliPicker />
       </div>
       <PlanStepper sessionId={sessionId} />
       <div className="ap-chattab-thread" ref={threadRef}>
