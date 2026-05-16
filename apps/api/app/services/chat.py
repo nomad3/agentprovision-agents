@@ -325,6 +325,43 @@ def post_user_message(
         sender_phone=sender_phone,
         media_parts=media_parts,
     )
+
+    # Publish chat_message events to the channel-agnostic v2 stream so
+    # the dashboard's AgentActivityPanel + future viewports see the
+    # turn live. Fail-soft: if publish raises, the chat turn itself
+    # still succeeds — events are observational, not load-bearing.
+    # `publish_session_event` opens its own DB session and persists
+    # to `session_events` before publishing to Redis.
+    try:
+        from app.services.collaboration_events import publish_session_event
+        publish_session_event(
+            str(session.id),
+            "chat_message",
+            {
+                "role": "user",
+                "text": content,
+                "message_id": str(user_message.id),
+            },
+            tenant_id=str(session.tenant_id) if session.tenant_id else None,
+        )
+        if assistant_message and assistant_message.content:
+            ctx = assistant_message.context or {}
+            publish_session_event(
+                str(session.id),
+                "chat_message",
+                {
+                    "role": "alpha",
+                    "text": assistant_message.content,
+                    "message_id": str(assistant_message.id),
+                    "served_by": ctx.get("served_by"),
+                    "tokens": ctx.get("token_count"),
+                    "cost_usd": ctx.get("cost_usd"),
+                },
+                tenant_id=str(session.tenant_id) if session.tenant_id else None,
+            )
+    except Exception:
+        logger.exception("post_user_message: publish_session_event failed (non-fatal)")
+
     return user_message, assistant_message
 
 
