@@ -35,7 +35,12 @@
     "test": "react-scripts test",
     "test:ci": "react-scripts test --watchAll=false",
     "test:coverage": "react-scripts test --coverage --watchAll=false",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed",
+    "e2e:debug": "playwright test --debug",
+    "e2e:report": "playwright show-report",
+    "e2e:auth-setup": "playwright test --project=setup"
   },
   "eslintConfig": {
     "extends": [
@@ -64,5 +69,8 @@
         "lines": 20
       }
     }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
   }
 }
