@@ -73,10 +73,15 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
         cli_cwd,
     ]
 
+    # ``--skip-git-repo-check`` must ALWAYS be passed now that ``-C`` may
+    # point at the tenant workspace projects dir (freshly ``mkdir``'d on
+    # first turn, no ``.git`` inside). Without it codex refuses to run
+    # with "not a git repository, are you sure?". Even on the legacy
+    # ``WORKSPACE``-fallback branch this is harmless — codex no-ops the
+    # flag when the cwd IS a git repo. See review B1 on PR #532.
+    cmd.extend(["--skip-git-repo-check"])
     if os.path.isdir(WORKSPACE):
         cmd.extend(["--add-dir", session_dir])
-    else:
-        cmd.extend(["--skip-git-repo-check"])
 
     if image_path:
         cmd.extend(["--image", image_path])

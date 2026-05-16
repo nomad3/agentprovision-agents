@@ -30,11 +30,27 @@ import workflows as wf
 
 # ── shared helpers ───────────────────────────────────────────────────────
 
+# Canonical UUID stand-ins (review I1 added a UUID guard inside
+# ``tenant_workspace_dir`` — non-UUID strings now short-circuit to the
+# fallback). Each is a stable, recognisably-named UUIDv4 so failures
+# still print a human-readable hint about which test owns the value.
+TENANT_UUID = "11111111-1111-4111-8111-111111111111"
+TENANT_X = "22222222-2222-4222-8222-222222222222"
+TENANT_Y = "33333333-3333-4333-8333-333333333333"
+TENANT_Z = "44444444-4444-4444-8444-444444444444"
+TENANT_CLAUDE = "55555555-5555-4555-8555-555555555555"
+TENANT_CODEX = "66666666-6666-4666-8666-666666666666"
+TENANT_GEMINI = "77777777-7777-4777-8777-777777777777"
+TENANT_COPILOT = "88888888-8888-4888-8888-888888888888"
+TENANT_OPENCODE = "99999999-9999-4999-8999-999999999999"
+TENANT_VIS = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
 def _make_input(**overrides):
     base = dict(
         platform="claude_code",
         message="hello",
-        tenant_id="tenant-deadbeef",
+        tenant_id=TENANT_UUID,
         instruction_md_content="",
         mcp_config="",
         image_b64="",
@@ -72,22 +88,22 @@ def fake_workspaces_root(tmp_path, monkeypatch):
 
 class TestResolveCliCwd:
     def test_creates_tenant_projects_session_subdir(self, fake_workspaces_root):
-        out = cli_runtime.tenant_workspace_dir("tenant-x", "sess-abc12345")
+        out = cli_runtime.tenant_workspace_dir(TENANT_X, "sess-abc12345")
         assert out.is_dir()
         # session_id truncated to first 8 chars in the directory name.
         assert out.name == "session-sess-abc"
         assert out.parent.name == "projects"
-        assert out.parent.parent.name == "tenant-x"
+        assert out.parent.parent.name == TENANT_X
 
     def test_session_id_none_uses_shared_projects_root(self, fake_workspaces_root):
-        out = cli_runtime.tenant_workspace_dir("tenant-y", None)
+        out = cli_runtime.tenant_workspace_dir(TENANT_Y, None)
         assert out.name == "projects"
-        assert out.parent.name == "tenant-y"
+        assert out.parent.name == TENANT_Y
 
     def test_resolve_falls_back_when_root_missing(self, monkeypatch, tmp_path):
         # Point WORKSPACES_ROOT at a path that doesn't exist.
         monkeypatch.setattr(cli_runtime, "WORKSPACES_ROOT", Path(tmp_path / "nope"))
-        task = _make_input(tenant_id="t1")
+        task = _make_input(tenant_id=TENANT_UUID)
         out = cli_runtime.resolve_cli_cwd(task, fallback="/fallback/here")
         assert out == "/fallback/here"
 
@@ -97,13 +113,36 @@ class TestResolveCliCwd:
         assert out == "/fallback"
 
     def test_resolve_returns_tenant_projects_session_path(self, fake_workspaces_root):
-        task = _make_input(tenant_id="tenant-z", chat_session_id="abcdef1234")
+        task = _make_input(tenant_id=TENANT_Z, chat_session_id="abcdef1234")
         out = cli_runtime.resolve_cli_cwd(task, fallback="/should-not-use")
         # Path lives under the fake root + tenant + projects + session-XXX.
         assert str(fake_workspaces_root) in out
-        assert "tenant-z" in out
+        assert TENANT_Z in out
         assert "projects" in out
         assert "session-abcdef12" in out
+
+    # ── review I1: UUID guard ───────────────────────────────────────
+    def test_tenant_workspace_dir_rejects_non_uuid(self, fake_workspaces_root):
+        """Non-UUID tenant_id must raise ValueError before mkdir runs."""
+        with pytest.raises(ValueError):
+            cli_runtime.tenant_workspace_dir("../escape", "sess-1")
+        # And the escape sibling must NOT exist on disk.
+        escape = fake_workspaces_root.parent / "escape"
+        assert not escape.exists()
+
+    def test_resolve_falls_back_on_path_traversal_tenant_id(
+        self, fake_workspaces_root,
+    ):
+        """``tenant_id='../escape'`` must collapse to the caller-provided
+        fallback, never to a path outside WORKSPACES_ROOT."""
+        task = _make_input(tenant_id="../escape")
+        out = cli_runtime.resolve_cli_cwd(task, fallback="/safe/fallback")
+        assert out == "/safe/fallback"
+
+    def test_resolve_falls_back_on_garbage_tenant_id(self, fake_workspaces_root):
+        task = _make_input(tenant_id="not-a-uuid-at-all")
+        out = cli_runtime.resolve_cli_cwd(task, fallback="/safe")
+        assert out == "/safe"
 
 
 # ── per-executor cwd assertions ──────────────────────────────────────────
@@ -133,12 +172,12 @@ class TestClaudeChatCwdScoped:
 
         monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", fake_run)
 
-        task = _make_input(tenant_id="t-claude", chat_session_id="ses12345abc")
+        task = _make_input(tenant_id=TENANT_CLAUDE, chat_session_id="ses12345abc")
         out = wf._execute_claude_chat(task, session_dir=str(session_dir))
 
         assert out.success is True, out.error
         cwd = captured["kwargs"]["cwd"]
-        assert "t-claude" in cwd
+        assert TENANT_CLAUDE in cwd
         assert "projects" in cwd
         assert "session-ses12345" in cwd
         env = captured["kwargs"]["env"]
@@ -167,7 +206,7 @@ class TestClaudeChatCwdScoped:
         # exercise the session_dir branch deterministically.
         monkeypatch.setattr(wf.os.path, "isdir", lambda p: p == str(session_dir))
 
-        task = _make_input(tenant_id="t-claude")
+        task = _make_input(tenant_id=TENANT_CLAUDE)
         wf._execute_claude_chat(task, session_dir=str(session_dir))
         cwd = captured["kwargs"]["cwd"]
         # Fallback path = session_dir (legacy /workspace not present in test).
@@ -196,12 +235,12 @@ class TestCodexChatCwdScoped:
         monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", fake_run)
 
         task = _make_input(
-            platform="codex", tenant_id="t-codex", chat_session_id="sess-c0dec0de",
+            platform="codex", tenant_id=TENANT_CODEX, chat_session_id="sess-c0dec0de",
         )
         wf._execute_codex_chat(task, session_dir=str(session_dir), image_path="")
 
         cwd = captured["kwargs"]["cwd"]
-        assert "t-codex" in cwd
+        assert TENANT_CODEX in cwd
         assert "projects" in cwd
         # ``-C <cli_cwd>`` also passed to codex so its project-root logic
         # picks up the tenant dir (otherwise it'd default to legacy WORKSPACE).
@@ -212,6 +251,10 @@ class TestCodexChatCwdScoped:
         assert captured["kwargs"]["env"]["WORKSPACE"] == cwd
         # CODEX_HOME still set (HOME-relative auth lookup unaffected).
         assert "CODEX_HOME" in captured["kwargs"]["env"]
+        # Review B1: ``--skip-git-repo-check`` MUST be present whenever
+        # we're routed to the tenant workspace (which is a freshly
+        # ``mkdir``'d non-git dir). Without it codex refuses to run.
+        assert "--skip-git-repo-check" in captured["cmd"]
 
 
 class TestGeminiChatCwdScoped:
@@ -239,13 +282,13 @@ class TestGeminiChatCwdScoped:
 
         task = _make_input(
             platform="gemini_cli",
-            tenant_id="t-gemini",
+            tenant_id=TENANT_GEMINI,
             chat_session_id="sess-gem11111",
         )
         wf._execute_gemini_chat(task, session_dir=str(session_dir), image_path="")
 
         cwd = captured["kwargs"]["cwd"]
-        assert "t-gemini" in cwd
+        assert TENANT_GEMINI in cwd
         assert "projects" in cwd
         # WORKSPACE env propagated.
         assert captured["kwargs"]["env"]["WORKSPACE"] == cwd
@@ -281,13 +324,13 @@ class TestCopilotChatCwdScoped:
 
         task = _make_input(
             platform="copilot_cli",
-            tenant_id="t-copilot",
+            tenant_id=TENANT_COPILOT,
             chat_session_id="sess-cop11111",
         )
         wf._execute_copilot_chat(task, str(session_dir))
 
         cwd = captured["kwargs"]["cwd"]
-        assert "t-copilot" in cwd
+        assert TENANT_COPILOT in cwd
         assert "projects" in cwd
         assert captured["kwargs"]["env"]["WORKSPACE"] == cwd
         # --add-dir <cli_cwd> appended so Copilot's path-allowlist
@@ -327,7 +370,7 @@ class TestOpencodeChatCliCwdScoped:
 
         task = _make_input(
             platform="opencode",
-            tenant_id="t-opencode",
+            tenant_id=TENANT_OPENCODE,
             chat_session_id="sess-oc1234567",
         )
         out = cli_executors.opencode._execute_opencode_chat_cli(
@@ -335,7 +378,7 @@ class TestOpencodeChatCliCwdScoped:
         )
         assert out.success is True
         cwd = captured["kwargs"]["cwd"]
-        assert "t-opencode" in cwd
+        assert TENANT_OPENCODE in cwd
         assert "projects" in cwd
         assert captured["kwargs"]["env"]["WORKSPACE"] == cwd
 
@@ -356,7 +399,7 @@ class TestWrittenFileVisibleUnderWorkspacesRoot:
     def test_synthetic_write_lands_under_tenant_projects(
         self, fake_workspaces_root,
     ):
-        task = _make_input(tenant_id="tenant-vis", chat_session_id="ses-AAA11111")
+        task = _make_input(tenant_id=TENANT_VIS, chat_session_id="ses-AAA11111")
         cwd = cli_runtime.resolve_cli_cwd(task, fallback="/nope")
         # Simulate a CLI tool writing a plan file inside cwd.
         plan = Path(cwd) / "plan.md"
@@ -366,6 +409,6 @@ class TestWrittenFileVisibleUnderWorkspacesRoot:
         # so we assert the relative-from-root path matches that shape.
         rel = plan.relative_to(fake_workspaces_root)
         parts = rel.parts
-        assert parts[0] == "tenant-vis"
+        assert parts[0] == TENANT_VIS
         assert parts[1] == "projects"
         assert parts[-1] == "plan.md"

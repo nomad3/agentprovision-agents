@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -38,6 +39,18 @@ logger = logging.getLogger(__name__)
 WORKSPACES_ROOT = Path(os.environ.get(
     "WORKSPACES_ROOT", "/var/agentprovision/workspaces"
 ))
+
+# ── tenant_id UUID guard (review I1 on PR #532) ──────────────────────────
+# ``tenant_id`` is interpolated directly into a filesystem path under
+# WORKSPACES_ROOT. Anything that isn't a UUID is treated as adversarial
+# input (e.g. ``../escape``, ``/etc/passwd``) and short-circuited to the
+# fallback path before it ever reaches ``mkdir``. The pattern accepts
+# both the dashed (8-4-4-4-12) and undashed (32-hex) forms so that
+# either canonicalization of the same UUID works.
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?"
+    r"[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$"
+)
 
 
 def tenant_workspace_dir(tenant_id: str, session_id: str | None = None) -> Path:
@@ -63,6 +76,16 @@ def tenant_workspace_dir(tenant_id: str, session_id: str | None = None) -> Path:
     for a tenant (the trade-off: more shareable across turns, but two
     concurrent agents can race on a same-named file).
     """
+    # Reject non-UUID tenant_id before it ever touches the filesystem —
+    # ``"../escape"`` would otherwise resolve to a sibling of
+    # WORKSPACES_ROOT, leaking the CLI subprocess cwd outside the
+    # tenant-isolated subtree. Raising lets ``resolve_cli_cwd`` collapse
+    # any rejected request into the safe caller-provided fallback.
+    # See review I1 on PR #532.
+    if not _UUID_RE.match(str(tenant_id) if tenant_id is not None else ""):
+        raise ValueError(
+            f"tenant_workspace_dir: non-UUID tenant_id={tenant_id!r}"
+        )
     tenant_dir = WORKSPACES_ROOT / str(tenant_id) / "projects"
     if session_id:
         target = tenant_dir / f"session-{str(session_id)[:8]}"
@@ -98,6 +121,16 @@ def resolve_cli_cwd(
     session_id = getattr(task_input, "chat_session_id", "") or None
     try:
         return str(tenant_workspace_dir(tenant_id, session_id))
+    except ValueError as exc:
+        # Non-UUID tenant_id (review I1) — never let an adversarial
+        # tenant_id leak the subprocess cwd outside WORKSPACES_ROOT.
+        # The dashboard tree won't see CLI output for this turn, but
+        # the chat still runs in the safe legacy fallback.
+        logger.warning(
+            "resolve_cli_cwd: rejecting tenant_id=%r (%s); falling back to %s",
+            tenant_id, exc, fallback,
+        )
+        return fallback
     except OSError as exc:
         # Permission / disk-full / readonly-mount — fall back rather
         # than 500 the whole chat turn. The dashboard will just not see

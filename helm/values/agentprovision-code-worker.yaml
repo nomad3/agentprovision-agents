@@ -120,6 +120,16 @@ env:
   # the worker defaults to the same value if unset.
   - name: WORKER_STREAM_FLUSH_MS
     value: "150"
+  # Tenant workspace root (task #259 / review I2 on PR #532). Must match
+  # the api chart's WORKSPACES_ROOT value (helm/values/agentprovision-
+  # api.yaml). The api owns reads via /api/v1/workspace/{tree,file}, the
+  # code-worker owns writes via CLI subprocess cwd
+  # (apps/code-worker/cli_runtime.py::tenant_workspace_dir). Setting this
+  # explicitly prevents silent drift if anyone retunes ``workspaces.mountPath``
+  # below without also updating cli_runtime's default constant.
+  # Mirrored in docker-compose.yml.
+  - name: WORKSPACES_ROOT
+    value: "/var/agentprovision/workspaces"
 
 # No autoscaling — single instance
 autoscaling:
