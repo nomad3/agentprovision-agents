@@ -574,7 +574,12 @@ const DashboardControlCenter = () => {
           // ResizableSplit on every file open/close, which would
           // collapse the FileTreePanel's lazy-loaded expand state.
           const hasRightPane = mode === 'pro' || leftMode === 'files';
-          return (
+          // ── Chat row body. In Pro mode this becomes the top pane of
+          // an outer column-direction ResizableSplit so the user can
+          // drag the divider between chat surface and terminal. In
+          // Simple mode the terminal isn't mounted, so we render the
+          // row standalone with its existing clamped height. ──
+          const chatRow = (
         <div className="dcc-chat-row">
           <ResizableSplit
             key={`chat-row-${mode}-${hasRightPane ? 'r' : 'nr'}`}
@@ -710,16 +715,30 @@ const DashboardControlCenter = () => {
           </ResizableSplit>
         </div>
           );
+          // ── Pro mode: wrap chat-row + TerminalCard in an outer
+          // column-direction ResizableSplit so the divider between
+          // the chat surface and terminal panel is draggable (Phase A
+          // of the VSCode-style terminal redesign). minSizes:
+          // [260, 140] — 260 px keeps the chat usable, 140 px floors
+          // the terminal above zero-height drags. Simple mode skips
+          // the terminal entirely and renders the row standalone. ──
+          if (mode === 'pro') {
+            return (
+              <div className="dcc-outer-col">
+                <ResizableSplit
+                  direction="column"
+                  storageKey="dcc.outerCol.sizes"
+                  defaultSizes={[60, 40]}
+                  minSizes={[260, 140]}
+                >
+                  {chatRow}
+                  <TerminalCard sessionId={activeSession?.id || null} />
+                </ResizableSplit>
+              </div>
+            );
+          }
+          return chatRow;
         })()}
-
-        {/* Phase 2: live terminal output (collapsed by default; auto-opens
-            when alpha runs a CLI subprocess in the active session). Power
-            users get this; simple mode hides it. */}
-        {mode === 'pro' && (
-          <div className="mt-3">
-            <TerminalCard sessionId={activeSession?.id || null} />
-          </div>
-        )}
         </SessionEventsProvider>
 
         {/* Compact navigation tiles at the bottom — moved here from the

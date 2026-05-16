@@ -39,6 +39,15 @@
   height: auto;
 }
 
+/* Tablet-band (768–991 px) disarm: when JS swaps to .rs-stacked but
+   the 767.98 px mobile media query hasn't released the desktop
+   height chain yet, the chat row's `.dcc-outer-col .dcc-chat-row {
+   height: 100% }` rule was force-filling the chat row and squashing
+   the terminal pane to header height. Stacked-mode panes already
+   size to content, so the row should give up its full-height claim
+   the moment we degrade to stacked. */
+.rs-stacked .dcc-chat-row { height: auto; }
+
 .rs-handle {
   /* 6 px wide vertical bar between panes. The track itself is 6 px in
      the grid-template-columns, so the visible bar fills the track
@@ -68,4 +77,32 @@
 .rs-handle:hover::after,
 .rs-handle:active::after {
   background: var(--ap-primary);
+}
+
+/* ── Column direction (vertical split, horizontal handle) ──────── */
+/* When `direction="column"` is passed, panes stack top-to-bottom and
+   the divider is a 6 px horizontal bar dragged on the Y axis. CSS
+   Grid handles the track axis swap via `gridTemplateRows` (set
+   inline by the component); these rules just flip the handle
+   geometry and cursor. */
+
+.rs-root[data-direction="column"] {
+  /* Grid template is set inline on `gridTemplateRows`; nothing extra
+     needed at the root level — width/height/min-height already fit
+     both directions. */
+}
+
+.rs-handle[data-direction="column"] {
+  width: auto;
+  height: 6px;
+  cursor: row-resize;
+}
+
+.rs-handle[data-direction="column"]::after {
+  /* Rotate the inner pill 90° — instead of a vertical strip we want
+     a horizontal strip filling the bar's width. */
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  right: 0;
 }
