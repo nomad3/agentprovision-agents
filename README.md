@@ -22,9 +22,53 @@
   Don't build agents — orchestrate them. AgentProvision routes tasks to existing AI agent platforms (Claude Code, Codex, Gemini CLI, GitHub Copilot CLI), serves 90+ MCP tools, maintains a knowledge graph, auto-scores every response with a local LLM, and learns which platform performs best via RL. Enterprise-grade <b>Agent Lifecycle Management</b> with versioning, audit, rollback, and governance. Each tenant uses their own subscription — zero API credits.
 </p>
 
-> **Latest (2026-04-19 → 2026-05-03):** Skills Marketplace v2 (`_bundled/` + `_tenant/<uuid>/` layout, Claude-Code-format SKILL.md, library_revisions audit), External Agents + A2A v2 (Microsoft Copilot Studio + Azure AI Foundry import, Workflows-as-spine, no `agent_messages` table), Microsoft Teams channel via Graph + `TeamsMonitorWorkflow`, **GitHub Copilot CLI** runtime, autodetect CLI + quota fallback chain, greeting fast-path latency win (~130×–397× on warm path), internal endpoints blocked from public internet (#207), routing transparency footer in chat. See [`docs/changelog/2026-04-19-to-2026-05-03.md`](docs/changelog/2026-04-19-to-2026-05-03.md) for the full digest.
+> **Latest (2026-05-15 → 2026-05-16):** **Alpha Control Center** — `/dashboard` is now a VSCode/Cursor-style IDE shell that replaces the prior separate `/chat` page. Three-pane resizable layout (sessions/files · chat groups · agent activity), horizontal resize handle, docked live terminal, inline CLI picker, ⌘K palette, ⚡ A2A trigger, editor-group splits (up to 4), single shared SSE via `SessionEventsContext`, workspace file tree (tenant + platform scopes) with file viewer, full CLI subprocess output streaming, gated end-of-deploy emergency disk cleanup (PRs #495–#518). The **Alpha CLI is the kernel** — every feature flows through it. See [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md) and [`docs/architecture/alpha_cli_kernel.md`](docs/architecture/alpha_cli_kernel.md).
 >
-> **Previously (2026-04-12 → 2026-04-19):** Agent Lifecycle Management Platform, A2A Collaboration, Luna OS Spatial Workstation, redesigned landing page, security hardening. See [`docs/changelog/2026-04-12-to-2026-04-19.md`](docs/changelog/2026-04-12-to-2026-04-19.md). (Native cpal PTT was designed in #154 but is not currently in the tree.)
+> **Previously (2026-04-19 → 2026-05-03):** Skills Marketplace v2 (`_bundled/` + `_tenant/<uuid>/` layout, Claude-Code-format SKILL.md, library_revisions audit), External Agents + A2A v2 (Microsoft Copilot Studio + Azure AI Foundry import, Workflows-as-spine, no `agent_messages` table), Microsoft Teams channel via Graph + `TeamsMonitorWorkflow`, **GitHub Copilot CLI** runtime, autodetect CLI + quota fallback chain, greeting fast-path latency win (~130×–397× on warm path), internal endpoints blocked from public internet (#207), routing transparency footer in chat. See [`docs/changelog/2026-04-19-to-2026-05-03.md`](docs/changelog/2026-04-19-to-2026-05-03.md) for the full digest.
+>
+> **Earlier (2026-04-12 → 2026-04-19):** Agent Lifecycle Management Platform, A2A Collaboration, Luna OS Spatial Workstation, redesigned landing page, security hardening. See [`docs/changelog/2026-04-12-to-2026-04-19.md`](docs/changelog/2026-04-12-to-2026-04-19.md). (Native cpal PTT was designed in #154 but is not currently in the tree.)
+
+---
+
+## Alpha Control Center — `/dashboard`
+
+The user-facing surface for the platform. Mounted at `/dashboard` (`apps/web/src/pages/DashboardControlCenter.js`) and replaces the prior separate `/chat` page. VSCode/Cursor-style IDE shell — conversation-first, but laid out like an editor.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│ TitleBar · session title · ⚡ A2A · ⌘K · Pro/Simple · user ▾         │
+├────────────┬─────────────────────────────────────┬───────────────────┤
+│ Left card  │ EditorArea (1..4 chat groups)       │ AgentActivityPanel│
+│ Chats │    │ side-by-side splits; focused group  │ live v2 SSE feed  │
+│ Files      │ takes new sessions from left rail   │ (Pro mode only)   │
+├────────────┴─────────────────────────────────────┴───────────────────┤
+│  ⇕  horizontal resize handle                                         │
+├──────────────────────────────────────────────────────────────────────┤
+│  TerminalCard — auto-opens on first cli_subprocess_stream            │
+│  Tabs per CLI: claude_code · codex · gemini_cli · copilot · …         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+| Surface | What |
+|---|---|
+| **Left card modes** | `Chats` (sessions) ↔ `Files` (workspace tree, tenant + platform scopes). Toggle persists in `apControl.leftMode`. |
+| **File tree** | Lazy-loaded. Tenant scope → `/var/agentprovision/workspaces/<tenant_id>/`. Platform scope → `/opt/agentprovision/platform-docs/` (superusers). Backend: `GET /api/v1/workspace/{tree,file}`. |
+| **Editor groups** | Up to 4 chat panes side-by-side, each with its own active session. Focus = 2 px inset brand-primary border. Sidebar click → focused group. |
+| **Inline CLI picker** | Pill widget in the chat thread header writes `tenant_features.default_cli_platform` via `brandingService` — tenant-wide effect. Replaces the old "Open in full chat" link. |
+| **Pro / Simple toggle** | Simple hides AgentActivityPanel + TerminalCard. |
+| **⚡ A2A trigger** | Dispatch Plan/Verify, Propose/Critique/Revise, incident_investigation, etc. patterns. |
+| **⌘K palette** | Unified search across sessions, agents, static nav. |
+| **Live agent activity** | SSE-streamed `cli_subprocess_*`, `cli_routing_decision`, `auto_quality_consensus`, `plan_step_changed`, `subagent_dispatched/response`, `tool_call_*`, `chat_message`. Single shared subscription via `SessionEventsContext` — no per-pane fan-out. |
+| **Live terminal** | Auto-opens on first `cli_subprocess_stream`; tabs per CLI platform; renders the **full transcript** (reasoning, tool calls, edits) — not just start/end. |
+| **Workspace volume** | Named `workspaces` volume in docker-compose; PVC template in `helm/charts/microservice/` guarded by `workspaces.enabled=true` in `helm/values/agentprovision-api.yaml`. 10 GiB default (PR #515). |
+
+Full architecture: [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md). Layout / pane composition / terminal-stream design docs live under [`docs/plans/2026-05-1{5,6}-*.md`](docs/plans/).
+
+### Alpha CLI is the kernel
+
+Every feature flows through `alpha`. Frontend → CLI (kernel) → internal API → MCP tools / memory / RL. The web `/dashboard`, Tauri, WhatsApp, and the `alpha` binary are **viewports**, not implementations. If a new feature can't be expressed as `alpha <verb>`, the design is wrong.
+
+See [`docs/architecture/alpha_cli_kernel.md`](docs/architecture/alpha_cli_kernel.md).
 
 ---
 
@@ -570,6 +614,8 @@ FastAPI · React 18 · Tauri 2.0 (Rust) · Three.js + Framer Motion · PostgreSQ
 | Where | What |
 |-------|------|
 | [`CLAUDE.md`](CLAUDE.md) | Full architecture, API structure, models, services, dev commands, patterns. Source of truth. |
+| [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md) | Alpha Control Center — `/dashboard` IDE shell, panes, height chain, localStorage map |
+| [`docs/architecture/alpha_cli_kernel.md`](docs/architecture/alpha_cli_kernel.md) | "Every feature through Alpha CLI" — design principle, examples, anti-patterns |
 | [`docs/changelog/`](docs/changelog/) | Weekly digests of shipped features |
 | [`docs/plans/`](docs/plans/) | Design docs and implementation plans (per feature, dated) |
 | [`docs/report/`](docs/report/) | Security audits, pentest verifications, system health reports |
@@ -577,7 +623,12 @@ FastAPI · React 18 · Tauri 2.0 (Rust) · Three.js + Framer Motion · PostgreSQ
 | [`docs/cli/README.md`](docs/cli/README.md) | `alpha` CLI reference — login, chat, workflow, memory, skill, integration |
 
 **Recent highlights:**
-- [`docs/changelog/2026-04-19-to-2026-05-03.md`](docs/changelog/2026-04-19-to-2026-05-03.md) — most recent fortnight (Skills v2, External Agents v2, Teams, Copilot CLI runtime, latency)
+- [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md) — Alpha Control Center (`/dashboard`) IDE shell — VSCode-style layout, workspace file tree, inline CLI picker, editor-group splits, single-SSE pattern (2026-05-15 → 2026-05-16, PRs #495–#518)
+- [`docs/plans/2026-05-15-alpha-control-center-ide-shell-design.md`](docs/plans/2026-05-15-alpha-control-center-ide-shell-design.md) — IDE shell design (canonical UI; supersedes /den)
+- [`docs/plans/2026-05-16-dashboard-split-pane-spec-doc-viewer.md`](docs/plans/2026-05-16-dashboard-split-pane-spec-doc-viewer.md) — pane composition + doc viewer
+- [`docs/plans/2026-05-16-terminal-full-cli-output.md`](docs/plans/2026-05-16-terminal-full-cli-output.md) — full CLI transcript in TerminalCard
+- [`docs/plans/2026-05-16-codex-mcp-tool-access-fix.md`](docs/plans/2026-05-16-codex-mcp-tool-access-fix.md) — Codex MCP-over-SSE enablement
+- [`docs/changelog/2026-04-19-to-2026-05-03.md`](docs/changelog/2026-04-19-to-2026-05-03.md) — prior fortnight (Skills v2, External Agents v2, Teams, Copilot CLI runtime, latency)
 - [`docs/changelog/2026-04-12-to-2026-04-19.md`](docs/changelog/2026-04-12-to-2026-04-19.md) — prior week (ALM, A2A, Spatial HUD)
 - [`docs/plans/2026-04-26-external-agents-and-a2a-enhancement-plan.md`](docs/plans/2026-04-26-external-agents-and-a2a-enhancement-plan.md) — External Agents + A2A v2 design
 - [`docs/plans/2026-04-26-skills-fleet-alignment-plan.md`](docs/plans/2026-04-26-skills-fleet-alignment-plan.md) — Skills Marketplace v2
