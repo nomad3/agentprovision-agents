@@ -263,6 +263,16 @@ def _sse_stream(
     carries the full envelope (`event_id`, `seq_no`, etc.). The legacy
     `session:{id}` channel keeps serving v1 consumers untouched.
     """
+    # Emit an initial heartbeat-comment immediately so Cloudflare /
+    # any intermediate proxy flushes the 200 response headers to the
+    # client. Without this, fetch() in the browser hangs at
+    # "connecting" forever when the session has no events to replay
+    # and no live events arrive — the body stays empty and the
+    # response headers never make it through. SSE comments (starting
+    # with ":") are ignored by EventSource consumers but force a
+    # flush, which is exactly what we want here.
+    yield ": connected\n\n"
+
     # Optional replay: emit any missed events first
     if since is not None and since >= 0:
         rows = db.execute(
@@ -286,15 +296,20 @@ def _sse_stream(
             }
             yield f"data: {json.dumps(envelope)}\n\n"
 
-    # Live tail via Redis pub/sub
+    # Live tail via Redis pub/sub. Use get_message(timeout=) instead of
+    # listen() so we wake up regularly to emit heartbeats and keep the
+    # tunnel from idle-timing out — pubsub.listen() blocks indefinitely
+    # if no message arrives, which silenced the keepalive and gave
+    # Cloudflare a 100s read-idle window to drop the response.
     channel = f"session:{session_id}:v2"
     last_heartbeat = time.time()
     try:
         r = redis.Redis.from_url(settings.REDIS_URL, decode_responses=True)
         pubsub = r.pubsub()
         pubsub.subscribe(channel)
-        for message in pubsub.listen():
-            if message["type"] == "message":
+        while True:
+            message = pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
+            if message and message.get("type") == "message":
                 yield f"data: {message['data']}\n\n"
             now = time.time()
             if now - last_heartbeat > _HEARTBEAT_INTERVAL_SECONDS:
