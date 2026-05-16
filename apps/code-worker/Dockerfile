@@ -14,8 +14,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-get update && apt-get install -y gh && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install CLI providers
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @google/gemini-cli opencode-ai @github/copilot
+# Install CLI providers.
+#
+# @openai/codex is pinned to 0.130.0 (2026-05-16) because the rmcp client
+# transport contract is version-sensitive — see
+# ``docs/plans/2026-05-16-codex-mcp-transport-mismatch-research.md``.
+# 0.130.0 honours ``experimental_use_rmcp_client = true`` and POSTs JSON-RPC
+# to the configured StreamableHttp URL. A future Codex release could
+# refactor that surface (rename the flag, drop streamable-HTTP, etc.) and
+# silently break the streamable-HTTP mount in mcp-tools; pinning makes the
+# break a controlled bump-and-test rather than a surprise on image rebuild.
+RUN npm install -g \
+        @anthropic-ai/claude-code \
+        @openai/codex@0.130.0 \
+        @google/gemini-cli \
+        opencode-ai \
+        @github/copilot
 
 # Python deps
 WORKDIR /app
