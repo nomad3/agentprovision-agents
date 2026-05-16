@@ -12,32 +12,30 @@
 -- ramp.
 --
 -- Idempotent — safe to re-run.
+--
+-- History:
+--   2026-05-16  initial UPDATE-only seed
+--   2026-05-16  PR #523: switched to INSERT…ON CONFLICT with
+--               id=gen_random_uuid() to cover tenants with no
+--               tenant_features row yet (review I4).
+--   2026-05-16  PR #524: reverted to UPDATE-only. The INSERT path
+--               hit `rl_settings NOT NULL no default` even though
+--               ON CONFLICT (tenant_id) would have routed to UPDATE
+--               — Postgres validates the candidate INSERT row's
+--               column constraints BEFORE conflict resolution. The
+--               saguilera test tenant always has a features row
+--               (created lazily by `get_or_create_features` on
+--               first auth), so UPDATE-only is sufficient. Tenants
+--               without rows simply land on the default `FALSE`
+--               until their next features access creates the row.
 
 BEGIN;
 
 ALTER TABLE tenant_features
     ADD COLUMN IF NOT EXISTS cli_stream_output BOOLEAN NOT NULL DEFAULT FALSE;
 
--- Seed the saguilera test tenant ON. The user table is keyed on email;
--- the tenant_features row is per-tenant. Cascade through users to
--- find the right tenant_id, then upsert the flag. NO-OP if the user
--- doesn't exist (fresh DB / different env).
---
--- INSERT…ON CONFLICT instead of UPDATE-only (review I4) so tenants
--- whose tenant_features row hasn't been provisioned yet still get
--- the flag flipped on. DISTINCT guards against multi-row email
--- duplicates surfacing the same tenant_id twice.
---
--- `tenant_features.id` is `uuid NOT NULL` with no column-level
--- default — the INSERT must supply one. `gen_random_uuid()` comes
--- from pgcrypto, already loaded on the pgvector/pgvector:pg13 image
--- we ship. Without this column listed, deploy 25968614222 failed
--- with `null value in column "id" violates not-null constraint`.
-INSERT INTO tenant_features (id, tenant_id, cli_stream_output)
-SELECT gen_random_uuid(), u.tenant_id, TRUE
-  FROM (SELECT DISTINCT tenant_id FROM users WHERE email = 'saguilera1608@gmail.com') u
-ON CONFLICT (tenant_id) DO UPDATE
-   SET cli_stream_output = TRUE;
+UPDATE tenant_features SET cli_stream_output = TRUE
+ WHERE tenant_id IN (SELECT tenant_id FROM users WHERE email = 'saguilera1608@gmail.com');
 
 -- Record migration application.
 INSERT INTO _migrations(filename) VALUES ('134_tenant_features_cli_stream_output.sql')
