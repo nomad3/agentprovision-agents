@@ -419,3 +419,184 @@ def test_run_login_spawns_setup_token_not_auth_login(monkeypatch):
     )
     # Subprocess spawn failure → state must be terminal 'failed'.
     assert state.status == "failed"
+
+
+# ── Token redaction in error paths ────────────────────────────────────────
+# Regression net for the leak class PR #533 review flagged: if
+# `claude setup-token` printed the token to stdout and THEN exited
+# non-zero (network hiccup, late CLI assertion, signal mid-write), the
+# last 500 chars of stdout — token included — would land in
+# `state.error` and be serialized back to whichever browser was polling
+# `/claude-auth/status`. Each test below pins one redaction site.
+
+
+def test_redact_oat01_scrubs_token_from_arbitrary_string():
+    """Pure scanner-level test: the redactor must replace any
+    `sk-ant-oat01-…` substring with `<REDACTED>`, leaving surrounding
+    text untouched. No false positives on tokens of other shapes
+    (api-key `sk-ant-api03-…`, console keys), no false negatives on
+    multiple tokens in the same string."""
+    raw = (
+        "Logged in. Token: sk-ant-oat01-realsecrettokenchars123456789. "
+        "Banner: see sk-ant-oat01-anothersecrettoken9876543210 for details. "
+        "API key sk-ant-api03-someotherkey should NOT be touched."
+    )
+    out = ca._redact_oat01(raw)
+    assert "sk-ant-oat01-realsecrettokenchars123456789" not in out
+    assert "sk-ant-oat01-anothersecrettoken9876543210" not in out
+    assert "sk-ant-oat01-<REDACTED>" in out
+    # Non-oat01 prefixes are left alone.
+    assert "sk-ant-api03-someotherkey" in out
+    # Safe on edge inputs.
+    assert ca._redact_oat01("") == ""
+    assert ca._redact_oat01(None) is None
+
+
+def test_humanise_cli_failure_redacts_token_before_truncating():
+    """The 500-char tail slice MUST come AFTER redaction. Otherwise a
+    short stdout buffer that ends with `…<token>\\nexit code 1` would
+    leak the entire token. We confirm the returned message contains
+    the redaction marker and never the literal token."""
+    token = "sk-ant-oat01-" + "X" * 80
+    stdout = (
+        "Generating long-lived OAuth token for Claude Code...\n"
+        f"{token}\n"
+        "Then the CLI hit an unrelated error before exiting cleanly.\n"
+        "exit code 1\n"
+    )
+    out = ca._humanise_cli_failure(stdout)
+    assert token not in out
+    assert "<REDACTED>" in out
+
+
+def test_token_redacted_from_state_error_on_failure(monkeypatch, tmp_path):
+    """End-to-end: simulate the real leak path. `claude setup-token`
+    prints the token then exits 1 BEFORE we read the
+    `state._code_submitted` event — `_run_login` falls through to the
+    "subprocess died while waiting for paste" branch, which feeds the
+    captured stdout into `_humanise_cli_failure` → `state.error`.
+
+    Assert that `state.error` does NOT contain the literal token and
+    DOES contain the redaction marker. This is the regression net for
+    the IMPORTANT #2 finding from PR #533 review.
+    """
+    token = "sk-ant-oat01-" + "Z" * 60
+    # Stdout the fake subprocess will replay line-by-line: first the
+    # verification URL (so `_run_login` advances past the URL-wait
+    # window into the paste-wait loop), then the token, then a final
+    # error line. The fake then exits with returncode=1.
+    scripted_lines = [
+        "Visit this URL to authorize: https://claude.com/oauth/verify?code=abc\n",
+        f"{token}\n",
+        "ERROR: late CLI assertion fired after token print\n",
+    ]
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdin = MagicMock()
+            # Iterating the stdout pipe yields each line, then EOF.
+            self.stdout = iter(scripted_lines)
+            self.returncode = 1
+            self._lines_left = list(scripted_lines)
+            self._dead = False
+
+        def poll(self):
+            # Stay alive until the reader has drained the lines and
+            # the main thread enters the paste-wait loop, then exit
+            # non-zero so the "subprocess died while waiting for
+            # paste" branch fires deterministically.
+            if self._lines_left:
+                return None
+            return self.returncode
+
+        def terminate(self):
+            self._dead = True
+
+        def wait(self, timeout=None):
+            self.returncode = 1
+            return 1
+
+        def kill(self):
+            self._dead = True
+
+    fake_proc = _FakeProc()
+
+    # The reader thread iterates `proc.stdout` directly; wrap the
+    # iterator so each `next()` drains a line from the script.
+    real_iter = iter(scripted_lines)
+
+    class _StdoutPipe:
+        def __iter__(self):
+            return real_iter
+
+    fake_proc.stdout = _StdoutPipe()
+    fake_proc._lines_left = []  # poll() returns 1 immediately after drain
+
+    def fake_popen(cmd, **kwargs):
+        return fake_proc
+
+    monkeypatch.setattr(ca.subprocess, "Popen", fake_popen)
+    # Force the post-exit branch fast — we don't need a 10s URL wait
+    # or a 10-minute paste wait to exercise the leak path.
+    monkeypatch.setattr(ca.time, "sleep", lambda *_: None)
+
+    state = ca.ClaudeLoginState(
+        login_id="x",
+        tenant_id="t",
+        claude_home=str(tmp_path),
+    )
+    mgr = ca.ClaudeAuthManager()
+
+    # Run synchronously — `_run_login` blocks on threading primitives
+    # but with `time.sleep` stubbed to a no-op and the fake proc's
+    # `poll()` returning 1 immediately, both wait loops fall through
+    # within a handful of iterations.
+    runner = threading.Thread(target=mgr._run_login, args=(state,))
+    runner.start()
+    runner.join(timeout=5)
+    assert not runner.is_alive(), "_run_login did not terminate"
+
+    # The CRITICAL assertions: even though the captured stdout contained
+    # the literal token, state.error must not.
+    assert state.status == "failed"
+    assert state.error is not None
+    assert token not in state.error, (
+        f"Token leaked into state.error: {state.error!r}"
+    )
+    assert "sk-ant-oat01-<REDACTED>" in state.error or (
+        # Acceptable alternative: the substring expiry-hint path fired
+        # and produced the canned `_CLI_EXPIRY_MESSAGE`. In that case
+        # the token can't be present either — verified above. Either
+        # outcome proves no leak.
+        state.error == ca._CLI_EXPIRY_MESSAGE
+    )
+
+
+def test_serialize_state_redacts_token_belt_and_suspenders():
+    """If a future code path forgets to redact at the assignment site,
+    `_serialize_state` is the last line of defense before the JSON
+    crosses the wire. Verify it scrubs."""
+    state = ca.ClaudeLoginState(
+        login_id="x",
+        tenant_id="t",
+        status="failed",
+    )
+    token = "sk-ant-oat01-" + "Q" * 50
+    # Bypass the redaction at the assignment site to simulate a future
+    # code path that forgot to scrub.
+    state.error = f"raw leak path: {token}"
+    payload = ca._serialize_state(state)
+    assert token not in payload["error"]
+    assert "<REDACTED>" in payload["error"]
+
+
+# ── _probe_oauth_token_best_effort: name + back-compat alias ──────────────
+
+
+def test_probe_function_has_best_effort_name():
+    """The renamed function exists under the explicit `_best_effort`
+    suffix so call sites and reviewers see the contract at a glance.
+    The short-name alias is preserved so existing tests keep working.
+    """
+    assert hasattr(ca, "_probe_oauth_token_best_effort")
+    assert ca._probe_oauth_token is ca._probe_oauth_token_best_effort
