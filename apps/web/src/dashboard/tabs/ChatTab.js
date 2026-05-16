@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import chatService from '../../services/chat';
+import PlanStepper from '../PlanStepper';
 import './ChatTab.css';
 
 const ChatTab = ({ tab }) => {
@@ -93,6 +94,7 @@ const ChatTab = ({ tab }) => {
         <span className="ap-chattab-bar-title">{tab.title}</span>
         <Link to="/chat" className="ap-chattab-bar-link">Open in full chat →</Link>
       </div>
+      <PlanStepper sessionId={sessionId} />
       <div className="ap-chattab-thread" ref={threadRef}>
         {loading ? (
           <div className="ap-chattab-empty">Loading messages…</div>
