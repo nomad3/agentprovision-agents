@@ -7,6 +7,10 @@
  *   - `.md` → react-markdown (already in deps)
  *   - everything else → <pre> (whitespace-preserved, no highlighting)
  *   - binary files → placeholder; no decode attempt
+ *   - binary + truncated (>256 KiB) → "Binary file (>256 KiB)
+ *     — preview not available" (PR #514 I2: the API returns
+ *     `truncated:true` rather than HTTP 413, so the combined state
+ *     needs an explicit render path)
  *
  * v1 is read-only. Editing / syntax highlighting / drag-drop are
  * follow-up tickets per the task scope.
@@ -80,7 +84,9 @@ const FileViewer = ({ file }) => {
         {err && <div className="fv-status fv-err">{err}</div>}
         {data?.is_binary && (
           <div className="fv-status fv-muted">
-            Binary file ({data.size} bytes) — preview not available.
+            {data.truncated
+              ? 'Binary file (>256 KiB) — preview not available.'
+              : `Binary file (${data.size} bytes) — preview not available.`}
           </div>
         )}
         {!loading && !err && data && !data.is_binary && (

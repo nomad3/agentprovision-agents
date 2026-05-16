@@ -32,6 +32,11 @@ services:
       # /app/cli_orchestrator from the Dockerfile, so we re-mount it here.
       - ./packages/cli_orchestrator:/app/cli_orchestrator:ro
       - hf_cache:/root/.cache/huggingface
+      # Per-tenant workspace storage for the dashboard Files mode.
+      # Survives container rebuilds; see WORKSPACES_ROOT env in
+      # apps/api/app/api/v1/workspace.py. Mirrored in Helm as a PVC
+      # (helm/charts/microservice/templates/workspaces-pvc.yaml).
+      - workspaces:/var/agentprovision/workspaces
     env_file:
       - ./apps/api/.env
     depends_on:
@@ -257,3 +262,5 @@ volumes:
   db_data:
   claude_sessions:
   hf_cache:
+  workspaces:
+

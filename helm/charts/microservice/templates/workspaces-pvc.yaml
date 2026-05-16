@@ -1,0 +1,32 @@
+{{- /*
+PR #514 / B2: per-tenant workspace storage for the dashboard Files mode.
+
+Separate PVC from the generic `.Values.persistence` block so the API
+chart can keep its existing 50Gi datasets volume AND mount an
+independent workspaces volume at /var/agentprovision/workspaces. The
+guard means existing services (which don't set workspaces.enabled)
+are unaffected.
+
+Mirrored in docker-compose.yml as a named `workspaces:` volume.
+*/}}
+{{- if .Values.workspaces.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "microservice.fullname" . }}-workspaces
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+  {{- with .Values.workspaces.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.workspaces.accessModes | nindent 4 }}
+  {{- if .Values.workspaces.storageClass }}
+  storageClassName: {{ .Values.workspaces.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.workspaces.size }}
+{{- end }}

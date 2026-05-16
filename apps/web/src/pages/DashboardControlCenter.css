@@ -258,3 +258,46 @@
 }
 .dcc-activity-card .ap-right-header { padding-left: var(--ap-space-3); padding-right: var(--ap-space-3); }
 .dcc-activity-card .ap-right-row { padding-left: var(--ap-space-3); padding-right: var(--ap-space-3); }
+
+/* ── Files mode: left-panel Chats/Files toggle + viewer body ──── */
+/* PR #514 I5: classes referenced by DashboardControlCenter.js but
+   missing from the stylesheet. Both reuse existing tokens — no
+   hardcoded colors. */
+
+.dcc-left-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-pill);
+  padding: 3px;
+  margin-bottom: var(--ap-space-3);
+  align-self: flex-start;
+}
+.dcc-left-mode-toggle:focus-within {
+  outline: 2px solid var(--ap-primary-ring);
+  outline-offset: 2px;
+}
+/* The pills inside reuse .dcc-mode-pill so visual treatment matches
+   the Simple/Pro toggle. Buttons need their own reset because
+   .dcc-mode-pill is a generic class without button defaults. */
+.dcc-left-mode-toggle .dcc-mode-pill {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+/* File viewer pane occupies the right column when Files mode is
+   active and a file is open. The card body has no padding so the
+   FileViewer can own its own internal layout (header + scroll body).
+   Reset min-height so the card's flex chain isn't clamped at the
+   AgentActivityPanel default (540px). */
+.dcc-file-viewer-body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}

@@ -167,6 +167,21 @@ persistence:
   size: 10Gi
   annotations: {}
 
+# Per-tenant workspace storage (PR #514).
+# Drives the dashboard Files mode (apps/api/app/api/v1/workspace.py).
+# Independent from `persistence` so the API chart can mount both:
+#   persistence  → /app/storage         (datasets, 50Gi)
+#   workspaces   → /var/agentprovision/workspaces (user docs, 10Gi)
+# Off by default; the api values file flips it on for prod.
+workspaces:
+  enabled: false
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  mountPath: /var/agentprovision/workspaces
+  annotations: {}
+
 # Extra volumes
 volumes: []
 volumeMounts: []

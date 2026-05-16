@@ -161,6 +161,10 @@ spec:
             - name: data
               mountPath: {{ .Values.persistence.mountPath | default "/app/storage" }}
             {{- end }}
+            {{- if .Values.workspaces.enabled }}
+            - name: workspaces
+              mountPath: {{ .Values.workspaces.mountPath | default "/var/agentprovision/workspaces" }}
+            {{- end }}
             {{- if .Values.nginxConfig.enabled }}
             - name: nginx-config
               mountPath: /etc/nginx/conf.d/default.conf
@@ -181,6 +185,11 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "microservice.fullname" . }}-data
+        {{- end }}
+        {{- if .Values.workspaces.enabled }}
+        - name: workspaces
+          persistentVolumeClaim:
+            claimName: {{ include "microservice.fullname" . }}-workspaces
         {{- end }}
         {{- if .Values.nginxConfig.enabled }}
         - name: nginx-config
