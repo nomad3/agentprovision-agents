@@ -187,6 +187,7 @@ const Layout = ({ children }) => {
                       as={Link}
                       to={item.path}
                       className={`sidebar-nav-link ${isActive(item.path) ? 'active' : ''}`}
+                      aria-label={item.label}
                     >
                       <Icon className="nav-icon" size={20} />
                       <span className="nav-label">{item.label}</span>

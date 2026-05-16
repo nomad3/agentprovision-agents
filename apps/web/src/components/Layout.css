@@ -280,7 +280,9 @@
  * their layout space — otherwise an 84 px label inside a 52 px nav
  * link overflows and the icon gets clipped by the parent's
  * overflow:hidden. visibility was the bug that left the icons
- * invisible at first paint. */
+ * invisible at first paint. No !important needed — the compound
+ * selector specificity (0,3,1) already wins over the base label
+ * rules. */
 .layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-label,
 .layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-section-title,
 .layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-badge,
@@ -288,7 +290,7 @@
 .layout-container.sidebar-collapsed:not(.sidebar-expanded) .user-email,
 .layout-container.sidebar-collapsed:not(.sidebar-expanded) .user-role,
 .layout-container.sidebar-collapsed:not(.sidebar-expanded) .sidebar-header-actions {
-  display: none !important;
+  display: none;
 }
 
 /* Tight nav padding so the icon centers in the 64 px rail. */
@@ -467,6 +469,25 @@
 
   .content-wrapper {
     padding: 1.5rem 1rem;
+  }
+
+  /* On mobile the sidebar is an off-canvas drawer, not a rail —
+     disarm the collapsed rules so the drawer shows full labels +
+     section headers when the user opens it. PR #512 review #5. */
+  .layout-container.sidebar-collapsed .sidebar-glass {
+    width: 280px;
+  }
+  .layout-container.sidebar-collapsed .main-content {
+    margin-left: 0;
+  }
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-label,
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-section-title,
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-badge,
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .brand-text,
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .user-email,
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .user-role,
+  .layout-container.sidebar-collapsed:not(.sidebar-expanded) .sidebar-header-actions {
+    display: revert;
   }
 }
 
