@@ -35,9 +35,13 @@
   line-height: 1.4;
 }
 
+/* Active pill: solid brand-primary background + white text so contrast
+   is readable on both themes. Previous tint-on-text combo washed out
+   on the light theme — same pattern .dcc-mode-pill.active uses. */
 .ftp-scope-pill.active {
-  background: var(--ap-primary-tint-hi, var(--ap-primary-tint));
-  color: var(--ap-text);
+  background: var(--ap-primary);
+  color: #fff;
+  font-weight: 500;
 }
 
 /* ── Tree body (scrollable inside the parent card) ────────────── */
