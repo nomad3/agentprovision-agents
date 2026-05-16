@@ -151,28 +151,78 @@ COMMUNITY_SKILLS = [
 
 
 def verify_skills(bundled_dir: str = "apps/api/app/skills/_bundled") -> None:
-    """Parse all skill.md files and print a summary table."""
+    """Parse all skill.md files and verify they are executable.
+
+    Checks:
+    - Valid YAML frontmatter
+    - Required fields (name, engine, category)
+    - Executable source exists:
+        markdown  → skill.md body (frontmatter stripped) or explicit script_path
+        python    → script.py (or script_path override)
+        shell     → script.sh (or script_path override)
+        tool      → tool_class defined
+    """
     import glob
+    import os
     import yaml
 
     files = sorted(glob.glob(f"{bundled_dir}/*/skill.md"))
-    print(f"{'Slug':30s} {'Engine':12s} {'Category':20s} {'Source'}")
-    print("-" * 100)
+    errors: list[str] = []
+    print(f"{'Slug':30s} {'Engine':12s} {'Category':20s} {'Exec source':25s} {'Status'}")
+    print("-" * 115)
     for f in files:
+        skill_dir = os.path.dirname(f)
         raw = open(f).read()
-        parts = raw.split("---")
+        parts = raw.split("---", 2)
         if len(parts) < 3:
-            print(f"  ERROR: {f} — invalid frontmatter (missing closing ---)")
+            msg = f"  ERROR: {f} — invalid frontmatter (missing closing ---)"
+            print(msg); errors.append(msg)
             continue
         try:
             meta = yaml.safe_load(parts[1])
+            engine = meta.get("engine", "python")
+            default_script = "skill.md" if engine == "markdown" else "script.py"
+            script_path = meta.get("script_path", default_script)
             source = meta.get("source_repo", "(internal)") or "(internal)"
+
+            # Verify executable source
+            if engine == "markdown":
+                src = os.path.join(skill_dir, script_path)
+                exec_src = script_path if os.path.exists(src) else "skill.md (body)"
+                # skill.md always exists; check body has content after frontmatter
+                body = parts[2].strip()
+                if not body:
+                    raise ValueError("markdown skill has empty body in skill.md")
+                status = "OK"
+            elif engine == "tool":
+                exec_src = meta.get("tool_class", "(missing)")
+                status = "OK" if meta.get("tool_class") else "ERROR: tool_class missing"
+                if "ERROR" in status:
+                    errors.append(f"{f}: {status}")
+            else:
+                src = os.path.join(skill_dir, script_path)
+                exec_src = script_path
+                if os.path.exists(src):
+                    status = "OK"
+                else:
+                    status = f"ERROR: {script_path} not found"
+                    errors.append(f"{f}: {status}")
+
             print(
-                f"{meta['name']:30s} {meta['engine']:12s} {meta['category']:20s} {source}"
+                f"{meta['name']:30s} {engine:12s} {meta['category']:20s} {exec_src:25s} {status}"
             )
         except Exception as e:
-            print(f"  ERROR: {f} — {e}")
+            msg = f"  ERROR: {f} — {e}"
+            print(msg); errors.append(msg)
+
     print(f"\nTotal: {len(files)} skills")
+    if errors:
+        print(f"\n{len(errors)} error(s) found:")
+        for e in errors:
+            print(f"  {e}")
+        raise SystemExit(1)
+    else:
+        print("All skills verified OK.")
 
 
 if __name__ == "__main__":
