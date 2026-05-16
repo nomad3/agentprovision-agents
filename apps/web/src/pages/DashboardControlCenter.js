@@ -25,7 +25,6 @@ import { Alert, Col, Row, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
-import { getDashboardStats } from '../services/analytics';
 import { getOnboardingStatus } from '../services/onboarding';
 import chatService from '../services/chat';
 import agentService from '../services/agent';
@@ -37,24 +36,11 @@ import TriggerCoalitionModal from '../dashboard/TriggerCoalitionModal';
 import { SessionEventsProvider } from '../dashboard/SessionEventsContext';
 import './DashboardControlCenter.css';
 
-const statusDotStyle = (status) => ({
-  width: 8,
-  height: 8,
-  borderRadius: '50%',
-  background:
-    status === 'ok' ? 'var(--ap-success)'
-      : status === 'warning' ? 'var(--ap-warning)'
-        : status === 'error' ? 'var(--ap-danger)'
-          : 'var(--ap-text-muted)',
-  display: 'inline-block',
-});
-
 const DashboardControlCenter = () => {
   const { t } = useTranslation('dashboard');
   const navigate = useNavigate();
 
-  const [dashboardData, setDashboardData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   // Sessions for the embedded chat surface.
@@ -130,21 +116,6 @@ const DashboardControlCenter = () => {
     let cancelled = false;
     (async () => {
       try {
-        const data = await getDashboardStats();
-        if (!cancelled) setDashboardData(data);
-      } catch (e) {
-        if (!cancelled) setError(e?.response?.data?.detail || t('errors.loadStats', 'Failed to load dashboard stats'));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [t]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
         const resp = await chatService.listSessions();
         if (cancelled) return;
         const list = resp.data || [];
@@ -201,37 +172,6 @@ const DashboardControlCenter = () => {
   // Keys live under `system.*` and `system.deployed/sourcesPipelines/rows/vectorStores`
   // in apps/web/src/i18n/locales/{en,es}/dashboard.json. Earlier draft used
   // `cards.*` which doesn't exist in that namespace.
-  const systemItems = [
-    {
-      label: t('system.agents', 'Agents'),
-      value: dashboardData?.agents?.total ?? 0,
-      sub: t('system.deployed', { count: dashboardData?.agents?.deployed ?? 0, defaultValue: '{{count}} deployed' }),
-      status: 'ok',
-    },
-    {
-      label: t('system.integrations', 'Integrations'),
-      value: dashboardData?.integrations?.total ?? 0,
-      sub: t('system.sourcesPipelines', {
-        sources: dashboardData?.integrations?.data_sources ?? 0,
-        pipelines: dashboardData?.integrations?.pipelines ?? 0,
-        defaultValue: '{{sources}} sources · {{pipelines}} pipelines',
-      }),
-      status: 'ok',
-    },
-    {
-      label: t('system.datasets', 'Datasets'),
-      value: dashboardData?.datasets?.total ?? 0,
-      sub: t('system.rows', { count: dashboardData?.datasets?.rows ?? 0, defaultValue: '{{count}} rows' }),
-      status: 'ok',
-    },
-    {
-      label: t('system.memory', 'Memory'),
-      value: dashboardData?.memory?.total ?? 0,
-      sub: t('system.vectorStores', 'vector stores'),
-      status: 'ok',
-    },
-  ];
-
   return (
     <Layout>
       <div className="dcc-container">
@@ -284,24 +224,11 @@ const DashboardControlCenter = () => {
           </Alert>
         )}
 
-        {/* Compact stat strip: 4 numbers as thin chips, no big cards.
-            User feedback: full-width zero-value cards at top were dead
-            weight. They live as a thin chip row now and only catch the
-            eye when numbers are non-zero. */}
-        <div className="dcc-stat-strip">
-          {systemItems.map((item) => (
-            <div className="dcc-stat-chip" key={item.label}>
-              <span style={statusDotStyle(item.status)} />
-              <span className="dcc-stat-chip-label">{item.label}</span>
-              <span className="dcc-stat-chip-value">{item.value}</span>
-            </div>
-          ))}
-          <div className="dcc-stat-chip dcc-stat-chip-activity">
-            <span className="dcc-stat-chip-dot dcc-stat-chip-dot-live" />
-            <span className="dcc-stat-chip-label">Live</span>
-            <span className="dcc-stat-chip-value">15s</span>
-          </div>
-        </div>
+        {/* Stat chips removed per user feedback — they were dead weight
+            when the numbers were 0/0/0/0 and even when populated they
+            didn't earn the prime real estate at the top of the dash.
+            The same data is reachable from /agents, /integrations,
+            /memory; the bottom Quick-tile row links there directly. */}
 
         {/* Merged chat surface: sessions list + active thread + live agent activity */}
         {/* SessionEventsProvider opens ONE SSE connection per active

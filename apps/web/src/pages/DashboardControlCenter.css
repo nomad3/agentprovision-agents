@@ -5,53 +5,11 @@
  */
 
 .dcc-container {
-  max-width: 1280px;
-}
-
-/* ── Compact stat strip (replaces big System Status cards) ─────── */
-
-.dcc-stat-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--ap-space-2);
-  margin: var(--ap-space-3) 0 var(--ap-space-4);
-}
-
-.dcc-stat-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--ap-space-2);
-  background: var(--ap-card-bg);
-  border: 1px solid var(--ap-border);
-  border-radius: var(--ap-radius-pill);
-  padding: 4px 12px;
-  font-size: var(--ap-fs-xs);
-  color: var(--ap-text-muted);
-}
-.dcc-stat-chip-label {
-  font-weight: 500;
-  color: var(--ap-text-muted);
-}
-.dcc-stat-chip-value {
-  font-weight: 600;
-  color: var(--ap-text);
-  background: var(--ap-code-bg);
-  padding: 1px 7px;
-  border-radius: var(--ap-radius-pill);
-}
-.dcc-stat-chip-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ap-success);
-  display: inline-block;
-}
-.dcc-stat-chip-dot-live {
-  animation: dcc-pulse 1.5s ease-in-out infinite;
-}
-@keyframes dcc-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 var(--ap-success-tint); }
-  50%      { box-shadow: 0 0 0 4px var(--ap-success-tint); }
+  /* Fluid container — fills viewport with safe gutters. Was a hard
+     1280 px cap which felt narrow on wide monitors and left dead
+     horizontal space. */
+  max-width: 100%;
+  padding: 0 clamp(8px, 1vw, 24px);
 }
 
 /* ── Quick navigation tiles (compact pill row at bottom) ───────── */
@@ -124,15 +82,22 @@
 }
 
 /* ── Embedded chat thread (center column) ──────────────────────── */
+/* Fluid heights: chat fills the viewport between header and the
+   bottom nav, with sensible min/max guard rails. Replaces the hard
+   540 px box that wasted vertical space on tall monitors and forced
+   a scroll on short laptop screens. */
 
-.dcc-chat-row { min-height: 540px; }
+.dcc-chat-row {
+  min-height: clamp(420px, calc(100vh - 360px), 800px);
+}
 
 .dcc-thread-card { overflow: hidden; }
 .dcc-thread-body {
   padding: 0;
   display: flex;
   flex-direction: column;
-  height: 540px;
+  height: 100%;
+  min-height: clamp(420px, calc(100vh - 360px), 800px);
 }
 .dcc-thread-empty {
   display: flex;
@@ -149,10 +114,39 @@
 /* Inside the dashboard card, the ChatTab component should fill the
    card body rather than its IDE-shell full-height styling. */
 .dcc-thread-body .ap-chattab {
-  height: 540px;
+  height: 100%;
   background: transparent;
 }
 .dcc-thread-body .ap-chattab-bar { padding-left: var(--ap-space-4); }
+
+/* Responsive breakpoints — tablets stack the right pane below the
+   chat, mobiles collapse the sessions list above the chat. */
+
+/* < 1200 px: drop the agent-activity right column under the chat (
+   bootstrap Col lg=3 already wraps on md, this just tightens the
+   height + spacing). */
+@media (max-width: 1199.98px) {
+  .dcc-chat-row .dcc-activity-card {
+    margin-top: var(--ap-space-3);
+  }
+  .dcc-chat-row .dcc-activity-card .ap-right {
+    min-height: 220px;
+  }
+}
+
+/* < 768 px (mobile): single column. Sessions show as a compact
+   horizontal list at top; chat fills the rest of the viewport. */
+@media (max-width: 767.98px) {
+  .dcc-container { padding: 0 var(--ap-space-2); }
+  .dcc-chat-row { min-height: auto; }
+  .dcc-thread-body {
+    min-height: clamp(360px, calc(100vh - 280px), 600px);
+  }
+  .dcc-sessions { padding: var(--ap-space-2); }
+  .dcc-session-list {
+    max-height: 180px;
+  }
+}
 
 /* ── Command palette trigger ───────────────────────────────────── */
 
