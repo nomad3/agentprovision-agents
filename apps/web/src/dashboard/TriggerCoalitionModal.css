@@ -1,0 +1,88 @@
+.tcm-modal .modal-dialog { max-width: 560px; }
+.tcm-modal .modal-content {
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-lg);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+
+.tcm-body {
+  padding: var(--ap-space-5) var(--ap-space-5) var(--ap-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ap-space-2);
+}
+
+.tcm-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: var(--ap-space-2);
+}
+.tcm-title {
+  font-size: var(--ap-fs-lg, 1.05rem);
+  font-weight: 600;
+  color: var(--ap-text);
+}
+.tcm-sub {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+}
+
+.tcm-label {
+  display: block;
+  font-size: var(--ap-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ap-text-muted);
+  margin-top: var(--ap-space-2);
+}
+
+.tcm-textarea,
+.tcm-select {
+  background: var(--ap-page-bg);
+  color: var(--ap-text);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+  padding: var(--ap-space-2) var(--ap-space-3);
+  font-size: var(--ap-fs-sm);
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+}
+.tcm-textarea:focus,
+.tcm-select:focus {
+  border-color: var(--ap-primary);
+  box-shadow: 0 0 0 3px var(--ap-primary-ring);
+}
+
+.tcm-hint {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  margin: 4px 0 0;
+}
+
+.tcm-warning {
+  margin-top: var(--ap-space-2);
+  font-size: var(--ap-fs-sm);
+  color: var(--ap-warning);
+  background: var(--ap-warning-tint);
+  border-radius: var(--ap-radius-md);
+  padding: var(--ap-space-2) var(--ap-space-3);
+}
+.tcm-error {
+  margin-top: var(--ap-space-2);
+  font-size: var(--ap-fs-sm);
+  color: var(--ap-danger);
+  background: var(--ap-danger-tint);
+  border-radius: var(--ap-radius-md);
+  padding: var(--ap-space-2) var(--ap-space-3);
+}
+
+.tcm-actions {
+  display: flex;
+  gap: var(--ap-space-2);
+  justify-content: flex-end;
+  margin-top: var(--ap-space-3);
+}
