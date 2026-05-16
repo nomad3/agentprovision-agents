@@ -7,6 +7,7 @@
  * the legacy /chat page and surface here in Phase 2.
  */
 import { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import chatService from '../../services/chat';
 import PlanStepper from '../PlanStepper';
 import InlineCliPicker from '../InlineCliPicker';
@@ -106,14 +107,26 @@ const ChatTab = ({ tab }) => {
           messages.map((m, idx) => (
             <div key={m.id || idx} className={`ap-chattab-msg ${m.role}`}>
               <div className="ap-chattab-msg-role">{m.role}</div>
-              <div className="ap-chattab-msg-content">{m.content}</div>
+              <div className="ap-chattab-msg-content ap-chattab-markdown">
+                {/* Render assistant/system replies through react-markdown
+                    so pipe-tables, code-fences, bold/italic, headings
+                    etc. surface as real HTML instead of raw `**foo**`
+                    text. User messages render via markdown too — round-
+                    trips fine for plain text and lets users paste
+                    formatted snippets if they choose. Defaults only,
+                    no rehype-raw — keeps the XSS surface narrow. */}
+                <ReactMarkdown>{m.content || ''}</ReactMarkdown>
+              </div>
             </div>
           ))
         )}
         {streaming && (
           <div className="ap-chattab-msg assistant">
             <div className="ap-chattab-msg-role">assistant</div>
-            <div className="ap-chattab-msg-content">{streaming}<span className="ap-chattab-cursor">▍</span></div>
+            <div className="ap-chattab-msg-content ap-chattab-markdown">
+              <ReactMarkdown>{streaming}</ReactMarkdown>
+              <span className="ap-chattab-cursor">▍</span>
+            </div>
           </div>
         )}
       </div>
