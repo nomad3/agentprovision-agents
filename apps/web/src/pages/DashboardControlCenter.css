@@ -8,6 +8,76 @@
   max-width: 1280px;
 }
 
+/* ── Compact stat strip (replaces big System Status cards) ─────── */
+
+.dcc-stat-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ap-space-2);
+  margin: var(--ap-space-3) 0 var(--ap-space-4);
+}
+
+.dcc-stat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-pill);
+  padding: 4px 12px;
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+}
+.dcc-stat-chip-label {
+  font-weight: 500;
+  color: var(--ap-text-muted);
+}
+.dcc-stat-chip-value {
+  font-weight: 600;
+  color: var(--ap-text);
+  background: var(--ap-code-bg);
+  padding: 1px 7px;
+  border-radius: var(--ap-radius-pill);
+}
+.dcc-stat-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ap-success);
+  display: inline-block;
+}
+.dcc-stat-chip-dot-live {
+  animation: dcc-pulse 1.5s ease-in-out infinite;
+}
+@keyframes dcc-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--ap-success-tint); }
+  50%      { box-shadow: 0 0 0 4px var(--ap-success-tint); }
+}
+
+/* ── Quick navigation tiles (compact pill row at bottom) ───────── */
+
+.dcc-quick-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ap-space-2);
+  margin-top: var(--ap-space-4);
+}
+.dcc-quick-tile {
+  background: var(--ap-card-bg);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-pill);
+  padding: 6px 14px;
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.dcc-quick-tile:hover {
+  color: var(--ap-text);
+  border-color: var(--ap-primary);
+}
+
 /* ── Sessions list (left column of the chat surface) ───────────── */
 
 .dcc-sessions { padding: var(--ap-space-3); }

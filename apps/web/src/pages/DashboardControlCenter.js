@@ -24,7 +24,6 @@ import { useEffect, useState } from 'react';
 import { Alert, Col, Row, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import LiveActivityFeed from '../components/dashboard/LiveActivityFeed';
 import Layout from '../components/Layout';
 import { getDashboardStats } from '../services/analytics';
 import { getOnboardingStatus } from '../services/onboarding';
@@ -71,7 +70,13 @@ const DashboardControlCenter = () => {
     if (creating) return;
     setCreating(true);
     try {
-      const resp = await chatService.createSession({});
+      // Default title with timestamp so the user can see at a glance
+      // that this is a fresh session, not an existing one. Without a
+      // title the server's default labelling collides with whatever
+      // session the user typed in last, which looked like "reuse" in
+      // the sidebar.
+      const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const resp = await chatService.createSession({ title: `New session · ${stamp}` });
       setSessions((prev) => [resp.data, ...prev]);
       setActiveSession(resp.data);
     } catch (e) {
@@ -268,57 +273,24 @@ const DashboardControlCenter = () => {
           </Alert>
         )}
 
-        <LiveActivityFeed />
-
-        <div className="ap-section-label">{t('systemStatus')}</div>
-        <Row className="g-3 mb-4">
+        {/* Compact stat strip: 4 numbers as thin chips, no big cards.
+            User feedback: full-width zero-value cards at top were dead
+            weight. They live as a thin chip row now and only catch the
+            eye when numbers are non-zero. */}
+        <div className="dcc-stat-strip">
           {systemItems.map((item) => (
-            <Col md={3} sm={6} key={item.label}>
-              <article className="ap-card h-100">
-                <div className="ap-card-body">
-                  <div className="d-flex align-items-center mb-2" style={{ gap: 6 }}>
-                    <span style={statusDotStyle(item.status)} />
-                    <span style={{ fontSize: 'var(--ap-fs-sm)', color: 'var(--ap-text-muted)', fontWeight: 500 }}>
-                      {item.label}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 'var(--ap-fs-xl)', fontWeight: 600, color: 'var(--ap-text)', lineHeight: 1.2 }}>
-                    {item.value}
-                  </div>
-                  <div style={{ fontSize: 'var(--ap-fs-xs)', color: 'var(--ap-text-muted)', marginTop: 4 }}>
-                    {item.sub}
-                  </div>
-                </div>
-              </article>
-            </Col>
+            <div className="dcc-stat-chip" key={item.label}>
+              <span style={statusDotStyle(item.status)} />
+              <span className="dcc-stat-chip-label">{item.label}</span>
+              <span className="dcc-stat-chip-value">{item.value}</span>
+            </div>
           ))}
-        </Row>
-
-        <div className="ap-section-label">{t('quickAccess')}</div>
-        <Row className="g-3 mb-4">
-          {[
-            { label: t('quick.agentFleet'), desc: t('quick.agentFleetDesc'), path: '/agents' },
-            { label: t('quick.integrations'), desc: t('quick.integrationsDesc'), path: '/integrations' },
-            { label: t('quick.workflows'), desc: t('quick.workflowsDesc'), path: '/workflows' },
-            { label: t('quick.memory', 'Memory'), desc: t('quick.memoryDesc', 'Knowledge graph + episodes'), path: '/memory' },
-          ].map((item) => (
-            <Col md={3} sm={6} key={item.label}>
-              <article
-                className="ap-card h-100"
-                role="button"
-                tabIndex={0}
-                onClick={() => navigate(item.path)}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') navigate(item.path); }}
-                style={{ cursor: 'pointer' }}
-              >
-                <div className="ap-card-body">
-                  <div className="ap-card-title">{item.label}</div>
-                  <p className="ap-card-text">{item.desc}</p>
-                </div>
-              </article>
-            </Col>
-          ))}
-        </Row>
+          <div className="dcc-stat-chip dcc-stat-chip-activity">
+            <span className="dcc-stat-chip-dot dcc-stat-chip-dot-live" />
+            <span className="dcc-stat-chip-label">Live</span>
+            <span className="dcc-stat-chip-value">15s</span>
+          </div>
+        </div>
 
         {/* Merged chat surface: sessions list + active thread + live agent activity */}
         <div className="ap-section-label">{t('chat.title', 'Chat with Alpha')}</div>
@@ -402,10 +374,30 @@ const DashboardControlCenter = () => {
             when alpha runs a CLI subprocess in the active session). Power
             users get this; simple mode hides it. */}
         {mode === 'pro' && (
-          <div className="mt-4">
+          <div className="mt-3">
             <TerminalCard sessionId={activeSession?.id || null} />
           </div>
         )}
+
+        {/* Compact navigation tiles at the bottom — moved here from the
+            top per user feedback (less prime-real-estate noise). */}
+        <div className="dcc-quick-tiles">
+          {[
+            { label: t('quick.agentFleet'), path: '/agents' },
+            { label: t('quick.integrations'), path: '/integrations' },
+            { label: t('quick.workflows'), path: '/workflows' },
+            { label: t('quick.memory', 'Memory'), path: '/memory' },
+          ].map((item) => (
+            <button
+              type="button"
+              key={item.label}
+              className="dcc-quick-tile"
+              onClick={() => navigate(item.path)}
+            >
+              {item.label} →
+            </button>
+          ))}
+        </div>
       </div>
     </Layout>
   );
