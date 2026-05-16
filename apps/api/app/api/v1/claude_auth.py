@@ -1,10 +1,27 @@
 """Claude Code CLI OAuth login flow.
 
-Same pattern as codex_auth.py — spawns `claude auth login`, captures the
-browser verification URL, waits for user to authenticate, then persists
-the resulting OAuth credentials to the encrypted vault.
+Same pattern as codex_auth.py — spawns `claude setup-token`, captures
+the browser verification URL, waits for user to authenticate, then
+persists the resulting long-lived OAuth token (`sk-ant-oat01-…`) to
+the encrypted vault under `credential_key='session_token'`.
+
+Historical note: the original implementation (commit `c54f91b3`,
+2026-04-05) ran `claude auth login --claudeai` instead. That writes
+interactive *subscription session* credentials to `.credentials.json`
+— a different token shape from what `CLAUDE_CODE_OAUTH_TOKEN` accepts.
+Per Anthropic docs, `CLAUDE_CODE_OAUTH_TOKEN` requires the output of
+`claude setup-token` (a long-lived `sk-ant-oat01-…` token the command
+prints to stdout and does NOT save to disk). The salvage glob over
+`CLAUDE_CONFIG_DIR/.credentials.json` was therefore picking up the
+wrong artefact, which Anthropic later rejected with
+`401 Invalid bearer token`. PR #531 unmasked the bug by dropping the
+inherited `ANTHROPIC_API_KEY` fallback. The fix here switches the
+spawned command to `claude setup-token`, captures the token straight
+from stdout, validates the shape, and probes it against Anthropic
+before persisting.
+
+Design: docs/plans/2026-05-16-oauth-reconnect-token-format-mismatch.md
 """
-import glob
 import json
 import logging
 import os
@@ -115,6 +132,128 @@ _CLI_EXPIRY_MESSAGE = (
 )
 
 
+# Matches the long-lived OAuth token `claude setup-token` prints to
+# stdout. The shape is `sk-ant-oat01-` followed by a long
+# url-safe-base64 string (digits, letters, `-`, `_`). We accept any
+# trailing token-character run so we tolerate token-shape changes
+# Anthropic might roll forward (longer tokens, extra segments) while
+# still rejecting clearly-wrong stdout fragments.
+_OAT01_TOKEN_RE = re.compile(r"sk-ant-oat01-[A-Za-z0-9_\-]{20,}")
+
+
+def _extract_oat01_token(stdout: str) -> Optional[str]:
+    """Scan ANSI-stripped subprocess stdout for the long-lived OAuth token.
+
+    `claude setup-token` prints the token on its own line near the
+    end of stdout (after the human-friendly preamble). We return the
+    first match in the entire buffer — there is only ever one token
+    in a successful run. Returns `None` if no token-shaped string is
+    found, which `_run_login` treats as a hard failure rather than
+    falling through to a salvage path.
+    """
+    match = _OAT01_TOKEN_RE.search(stdout)
+    return match.group(0) if match else None
+
+
+def _probe_oauth_token_best_effort(token: str) -> bool:
+    """Best-effort probe of a candidate `sk-ant-oat01-…` token.
+
+    **Contract (read before tightening this function):**
+
+      * This probe is BEST-EFFORT. It runs `claude --version` with the
+        candidate token in env if-and-only-if `claude` is on PATH in
+        the api container. In the production api image it is NOT, so
+        the `FileNotFoundError` branch fires and this function returns
+        `True` without performing any validation. In other words, the
+        probe is effectively a no-op in production.
+
+      * The LOAD-BEARING gate is the shape regex (`_OAT01_TOKEN_RE` +
+        the `_OAT01_PREFIX` check in `_persist_credentials`). That is
+        what actually prevents malformed tokens from reaching the
+        vault. The probe only adds value in dev/test where `claude`
+        is on PATH — it COMPLEMENTS but does NOT REPLACE the shape
+        gate. Do not weaken the shape gate on the assumption that the
+        probe catches anything; in prod, it doesn't.
+
+      * Even where `claude` IS on PATH, `claude --version` does not
+        hit Anthropic. It only validates the token's on-disk shape
+        client-side. Network outages / Anthropic downtime cannot
+        cause this probe to fail.
+
+    Wider failure modes (network down, Anthropic outage, probe hang,
+    unexpected exception) are accepted as "probe passed" since we
+    don't want a transient blip to wedge the login UI when the
+    shape check has already confirmed the token is well-formed.
+
+    Returns True on probe success, missing-CLI (best-effort skip),
+    timeout, or any other unexpected error; False ONLY when the CLI
+    is present, ran to completion, and exited non-zero on this token.
+    """
+    try:
+        result = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=_OAUTH_PROBE_TIMEOUT,
+            env={
+                **{k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"},
+                "CLAUDE_CODE_OAUTH_TOKEN": token,
+            },
+        )
+    except FileNotFoundError:
+        # Claude CLI not installed in this container — we can't probe
+        # but the executor in code-worker will. Don't block persist.
+        # In the production api image this is the branch we hit, which
+        # is why the shape regex is the real defense — see docstring.
+        logger.warning("claude CLI not found for token probe; skipping (best-effort)")
+        return True
+    except subprocess.TimeoutExpired:
+        # Probe hung. Treat as recoverable — most likely an unrelated
+        # CLI bug, not a token issue. Persist and let runtime sort it.
+        logger.warning("claude --version probe timed out; persisting anyway")
+        return True
+    except Exception:
+        logger.exception("claude --version probe raised; persisting anyway")
+        return True
+    return result.returncode == 0
+
+
+# Back-compat alias so existing call sites and tests that reference
+# the short name keep working. New code should call the
+# `_best_effort` name directly so the contract is obvious at the call
+# site (see PR #533 review — the previous name implied a stronger
+# guarantee than the function actually provides in prod).
+_probe_oauth_token = _probe_oauth_token_best_effort
+
+
+# Matches any captured `sk-ant-oat01-…` token in arbitrary text so we
+# can scrub it before that text flows into a user-facing field. Kept
+# separate from `_OAT01_TOKEN_RE` (which gates persistence) because
+# the redaction use case wants greedy + permissive, while the
+# persistence gate wants the strict ≥20-char minimum.
+_OAT01_REDACT_RE = re.compile(r"sk-ant-oat01-[A-Za-z0-9_\-]+")
+
+
+def _redact_oat01(text: str) -> str:
+    """Scrub `sk-ant-oat01-…` tokens from user-facing strings.
+
+    Run on any captured stdout/stderr before it lands in `state.error`
+    or the serialized status response — otherwise a non-zero-exit
+    AFTER a successful token print would leak the token to whichever
+    browser is polling `/claude-auth/status`. The CLI's standard happy
+    path prints the token then exits 0, but a non-zero exit after the
+    print (network hiccup, late CLI assertion, signal, …) is a real
+    failure mode and we must not allow the captured stdout buffer
+    containing the printed token to be echoed back to the user.
+
+    Safe on None / empty / token-free input — returns the input
+    unchanged in those cases.
+    """
+    if not text:
+        return text
+    return _OAT01_REDACT_RE.sub("sk-ant-oat01-<REDACTED>", text)
+
+
 def _humanise_cli_failure(cleaned_output: str) -> str:
     """Map a claude CLI failure dump to a user-friendly message.
 
@@ -122,7 +261,13 @@ def _humanise_cli_failure(cleaned_output: str) -> str:
     users. We pattern-match common cases and return a concise message;
     falls back to the last 500 chars of the raw output for unfamiliar
     failures so we never swallow a useful error silently.
+
+    Token redaction happens FIRST — before the substring scan, before
+    the truncation — so even if a future `_CLI_EXPIRY_HINTS` entry
+    matches a string that included the token, the returned message
+    can never carry it back to the UI.
     """
+    cleaned_output = _redact_oat01(cleaned_output or "")
     haystack = cleaned_output.lower()
     if any(hint in haystack for hint in _CLI_EXPIRY_HINTS):
         return _CLI_EXPIRY_MESSAGE
@@ -177,6 +322,22 @@ def _terminate_and_reap(proc: subprocess.Popen) -> None:
         return
 
 
+# Long-lived OAuth tokens produced by `claude setup-token` always
+# start with this prefix. We fail-closed if the captured stdout
+# doesn't match, rather than persisting a malformed credential that
+# Anthropic will later reject with 401. This was the entire bug class
+# the rewrite is meant to eliminate — better to surface a clear error
+# in the UI than silently store garbage.
+_OAT01_PREFIX = "sk-ant-oat01-"
+
+# How long the post-login probe (`claude --version` with the just-
+# captured token) is allowed to run before we treat the token as
+# unhealthy. Should be near-instant for a well-formed token; tight
+# bound here keeps the UX snappy and prevents a wedged Anthropic
+# endpoint from holding the login state in limbo.
+_OAUTH_PROBE_TIMEOUT = 15
+
+
 @dataclass
 class ClaudeLoginState:
     login_id: str
@@ -198,6 +359,12 @@ class ClaudeLoginState:
     completed_at: Optional[str] = None
     claude_home: Optional[str] = None
     process: Optional[subprocess.Popen] = field(default=None, repr=False, compare=False)
+    # The long-lived `sk-ant-oat01-…` token captured from
+    # `claude setup-token` stdout. Populated by `_run_login` after
+    # subprocess exit, consumed by `_persist_credentials`. Not
+    # serialised over the wire — the UI only sees boolean
+    # `connected` + status flags.
+    captured_token: Optional[str] = field(default=None, repr=False, compare=False)
     # Buffer for stdout the reader thread captures while the
     # subprocess runs. We don't use `proc.communicate()` for the
     # whole lifecycle (it consumes stdin / closes pipes), so we
@@ -311,33 +478,36 @@ class ClaudeAuthManager:
         return state
 
     def _run_login(self, state: ClaudeLoginState) -> None:
-        """Drive the `claude auth login --claudeai` subprocess.
+        """Drive the `claude setup-token` subprocess.
 
-        claude CLI v2.1.140 prints the verification URL on stdout then
-        blocks at the `Paste code here if prompted >` prompt reading
-        from stdin. The previous implementation used
-        `proc.communicate(timeout=5)` to grab the URL, which:
-          (a) consumed the stdin pipe so we could never write to it
-          (b) returned the buffered output via the
-              `TimeoutExpired.output` field — fragile in newer
-              Python / subprocess versions where that attribute can
-              be empty if the process is fully blocked on a read.
-        The result: the subprocess hung forever, the UI never saw the
-        URL, and the deploy state machine wedged.
+        `claude setup-token` is the documented headless path for
+        generating a long-lived `sk-ant-oat01-…` OAuth token suitable
+        for `CLAUDE_CODE_OAUTH_TOKEN`. It:
+          1. Prints a `https://claude.com/…` verification URL.
+          2. Blocks on stdin reading the verification code the user
+             pasted from the browser.
+          3. On success, prints the long-lived token (a single
+             `sk-ant-oat01-…` string) on its last line of stdout, then
+             exits 0. The token is NOT written to any file on disk —
+             it must be captured from stdout.
 
-        Rewrite:
+        Mechanics mirror the previous `auth login --claudeai` flow:
           * Spawn with `stdin=PIPE` so `/submit-code` can write to it.
           * Drain stdout on a background thread, line-by-line, so we
-            can detect the URL without blocking and without closing
-            the stdin pipe.
+            can detect the verification URL without blocking and
+            without closing the stdin pipe.
           * Wait on a `threading.Event` (`state._code_submitted`) for
             the user's paste — set by `/submit-code`.
           * Once the code is written, close stdin to signal EOF and
             let claude CLI finish. `proc.wait(timeout=…)` reaps the
             exit status.
-          * On exit, persist credentials from `CLAUDE_CONFIG_DIR`.
+          * On exit, scan the captured stdout for the
+            `sk-ant-oat01-…` token, store it on
+            `state.captured_token`, then call `_persist_credentials`
+            which probes it against Anthropic before writing to the
+            vault.
         """
-        cmd = ["claude", "auth", "login", "--claudeai"]
+        cmd = ["claude", "setup-token"]
         env = {**os.environ, "CLAUDE_CONFIG_DIR": state.claude_home or ""}
 
         try:
@@ -357,7 +527,11 @@ class ClaudeAuthManager:
             return
         except Exception as exc:
             state.status = "failed"
-            state.error = str(exc)
+            # Belt-and-suspenders redaction — `exc` here is from
+            # `subprocess.Popen` setup which shouldn't contain a token,
+            # but scrub defensively so a future change to the spawn
+            # path can't accidentally leak via this fallthrough.
+            state.error = _redact_oat01(str(exc))
             state.completed_at = datetime.utcnow().isoformat()
             return
 
@@ -480,10 +654,32 @@ class ClaudeAuthManager:
             self._cleanup(state)
             return
 
-        # Drain reader thread so any final lines are in the buffer.
+        # Drain reader thread so any final lines (incl. the printed
+        # token on the last stdout line) are in the buffer.
         reader.join(timeout=2)
 
         if proc.returncode == 0:
+            # ── Extract the long-lived OAuth token from stdout ──
+            # `claude setup-token` prints the `sk-ant-oat01-…` token
+            # on its own line near the end of stdout. We scan ALL
+            # captured output (with ANSI stripped) for a token-shaped
+            # match and fail-closed if none is found — better to
+            # surface a clear error than persist a bogus credential
+            # that 401s on every executor call.
+            cleaned = self._clean_output(_snapshot_buf(state._output_buf))
+            captured = _extract_oat01_token(cleaned)
+            if not captured:
+                state.status = "failed"
+                state.error = (
+                    "Claude CLI exited successfully but no long-lived "
+                    f"`{_OAT01_PREFIX}…` token was printed. The CLI may "
+                    "have rejected the verification code silently — try "
+                    "Connect again."
+                )
+                state.completed_at = datetime.utcnow().isoformat()
+                self._cleanup(state)
+                return
+            state.captured_token = captured
             try:
                 self._persist_credentials(state)
                 state.status = "connected"
@@ -492,7 +688,11 @@ class ClaudeAuthManager:
             except Exception as exc:
                 logger.exception("Failed to persist Claude auth credentials")
                 state.status = "failed"
-                state.error = f"Failed to store credentials: {exc}"
+                # `exc` was raised from `_persist_credentials` which
+                # shouldn't reference the token in any current message,
+                # but redact defensively so any future RuntimeError
+                # that included the token can never reach the UI.
+                state.error = _redact_oat01(f"Failed to store credentials: {exc}")
         elif state.status != "cancelled":
             cleaned = self._clean_output(_snapshot_buf(state._output_buf))
             state.status = "failed"
@@ -599,76 +799,76 @@ class ClaudeAuthManager:
             state.error = "Could not read verification URL from Claude CLI"
 
     def _persist_credentials(self, state: ClaudeLoginState) -> None:
-        """Read OAuth credentials from Claude's config dir and store in vault."""
+        """Persist the captured `sk-ant-oat01-…` token to the vault.
+
+        Replaces the previous salvage-glob over `CLAUDE_CONFIG_DIR`
+        that picked up the wrong artefact from `auth login --claudeai`.
+        Now we take `state.captured_token` directly from the stdout
+        capture in `_run_login`, verify the shape, **probe** it with a
+        best-effort `claude --version` call so dev/test catches a
+        malformed token early, then write it to the vault under the
+        same `credential_key='session_token'` so the executor doesn't
+        need to change.
+
+        **Defense layering (read before changing either layer):**
+
+          1. Shape gate — `_OAT01_PREFIX` startswith + the
+             `_OAT01_TOKEN_RE` extraction in `_run_login`. This is the
+             LOAD-BEARING defense; it runs in every environment
+             including production where `claude` is not on PATH.
+          2. Probe — `_probe_oauth_token_best_effort`. Runs ONLY if
+             `claude` is on PATH (i.e. dev/test). In the prod api
+             container the probe is a no-op (returns True without
+             validating). It complements but does NOT replace the
+             shape gate. See `_probe_oauth_token_best_effort` docstring
+             for the full contract.
+
+        Raises on any failure path — the caller (`_run_login`) catches
+        and surfaces the message to the UI as `state.error`.
+        """
+        token = (state.captured_token or "").strip()
+        if not token.startswith(_OAT01_PREFIX):
+            # Shape gate. `claude setup-token` always prints a token
+            # in this shape on success; anything else (empty string,
+            # stray log line, ANSI noise that survived stripping) is
+            # a bug we want surfaced loudly, not papered over.
+            raise RuntimeError(
+                f"Captured token does not match expected `{_OAT01_PREFIX}…` shape"
+            )
+
+        # ── Best-effort probe of the captured token ──────────────
+        # `claude --version` with the token in env doesn't hit
+        # Anthropic at all — it's a purely client-side shape check
+        # that runs as part of CLI startup when an OAuth token is
+        # supplied. The cheap thing we can do entirely offline is
+        # exec the CLI with the candidate token in env and confirm it
+        # exits 0 — if the token is malformed in a way the CLI itself
+        # detects (truncated, wrong segment count) it surfaces here
+        # rather than at every executor call afterwards.
+        #
+        # IMPORTANT: in the production api container `claude` is not
+        # on PATH, so this probe returns True without doing anything
+        # (see `_probe_oauth_token_best_effort` docstring). The shape
+        # gate above is the real defense in prod.
+        # Resolve through the module-level alias so tests that
+        # `monkeypatch.setattr(ca, "_probe_oauth_token", …)` continue
+        # to intercept the call. Both names resolve to
+        # `_probe_oauth_token_best_effort` — the short name keeps
+        # back-compat, the long name makes the contract obvious to
+        # readers (see `_probe_oauth_token_best_effort` docstring).
+        if not _probe_oauth_token(token):
+            # NB: the CLI did the rejection client-side — `--version`
+            # never contacts Anthropic. Word the message accordingly so
+            # debug reports don't blame an Anthropic outage for what is
+            # actually a token-shape mismatch the CLI caught locally.
+            raise RuntimeError(
+                "Claude CLI rejected the new OAuth token during probe. "
+                "Try Connect again."
+            )
+
         db: Session = SessionLocal()
         try:
             tid = uuid.UUID(state.tenant_id)
-
-            # Claude stores OAuth token in config dir
-            # Look for credentials.json or auth files
-            claude_dir = state.claude_home or ""
-            oauth_token = None
-
-            # Check common credential locations
-            for pattern in [
-                os.path.join(claude_dir, "**", "credentials.json"),
-                os.path.join(claude_dir, "**", "auth.json"),
-                os.path.join(claude_dir, "**", "*.json"),
-            ]:
-                for path in glob.glob(pattern, recursive=True):
-                    try:
-                        with open(path) as f:
-                            data = json.load(f)
-                        # Look for OAuth token fields
-                        token = (
-                            data.get("oauth_token")
-                            or data.get("accessToken")
-                            or data.get("access_token")
-                            or data.get("token")
-                        )
-                        if token:
-                            oauth_token = token
-                            break
-                        # If the file itself is the auth payload, store it whole
-                        if any(k in data for k in ("refresh_token", "expires_at", "session_key")):
-                            oauth_token = json.dumps(data)
-                            break
-                    except (json.JSONDecodeError, IOError):
-                        continue
-
-            if not oauth_token:
-                # Fallback: check claude auth status for the token
-                try:
-                    result = subprocess.run(
-                        ["claude", "auth", "status", "--json"],
-                        capture_output=True, text=True, timeout=10,
-                        env={**os.environ, "CLAUDE_CONFIG_DIR": claude_dir},
-                    )
-                    if result.returncode == 0:
-                        status_data = json.loads(result.stdout.strip().split("\n")[0])
-                        if status_data.get("loggedIn"):
-                            # Store the entire config dir content as the credential
-                            oauth_token = json.dumps(status_data)
-                except Exception:
-                    pass
-
-            if not oauth_token:
-                # Last resort: store all JSON files from the config dir
-                all_files = {}
-                for root, _, files in os.walk(claude_dir):
-                    for fname in files:
-                        if fname.endswith(".json"):
-                            fpath = os.path.join(root, fname)
-                            try:
-                                with open(fpath) as f:
-                                    all_files[fname] = json.load(f)
-                            except Exception:
-                                pass
-                if all_files:
-                    oauth_token = json.dumps(all_files)
-
-            if not oauth_token:
-                raise RuntimeError("No OAuth credentials found after login")
 
             # Find or create integration config
             config = (
@@ -702,13 +902,16 @@ class ClaudeAuthManager:
             # `api_key` row active and confuse cli_session_manager.
             _revoke_other_claude_credentials(db, config.id, tid, keep="session_token")
 
-            # Store the OAuth token
+            # Store the long-lived `sk-ant-oat01-…` token. Key name
+            # (`session_token`) is preserved for backwards-compat
+            # with `cli_executors/claude.py`, which reads this key
+            # and exports it as `CLAUDE_CODE_OAUTH_TOKEN`.
             store_credential(
                 db,
                 integration_config_id=config.id,
                 tenant_id=tid,
                 credential_key="session_token",
-                plaintext_value=oauth_token,
+                plaintext_value=token,
                 credential_type="oauth_token",
             )
 
@@ -805,12 +1008,16 @@ def _tenant_has_claude_credential(db: Session, tenant_id) -> bool:
 
 
 def _serialize_state(state: ClaudeLoginState, connected: bool = False) -> dict:
+    # `state.error` should already be redacted at the assignment sites
+    # (`_humanise_cli_failure` calls `_redact_oat01`). Belt-and-suspenders
+    # here so a future code path that forgets to scrub cannot leak a
+    # captured token to the polling browser via `/claude-auth/status`.
     return {
         "login_id": state.login_id if state else None,
         "status": state.status if state else "idle",
         "verification_url": state.verification_url if state else None,
         "connected": connected or (state.connected if state else False),
-        "error": state.error if state else None,
+        "error": _redact_oat01(state.error) if state and state.error else None,
         # Whether the UI should render the "Paste your code" input.
         # Mirrors `status == 'pending'` but spelled out as a boolean
         # so the UI doesn't have to know the exact state-machine
