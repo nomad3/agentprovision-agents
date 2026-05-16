@@ -60,9 +60,10 @@ class TestPrepareCodexHome:
             session_dir, {"OPENAI_API_KEY": "sk"}, fake_mcp_config_json
         )
         cfg = open(os.path.join(home, "config.toml")).read()
-        # The opt-in is on the very first non-empty line, before any
-        # [projects."..."] section header — Codex's TOML parser will
-        # reject otherwise.
+        # If the flag appeared after a `[section]` header, TOML would
+        # parse it as a key of that section and Codex would silently
+        # ignore the opt-in — the `startswith` assertion is the only
+        # way to catch this.
         assert cfg.startswith("experimental_use_rmcp_client = true")
         # Sanity: the MCP block is still emitted below the flag.
         assert "[mcp_servers.agentprovision]" in cfg
@@ -78,6 +79,37 @@ class TestPrepareCodexHome:
         home = wf._prepare_codex_home(session_dir, {"k": "v"}, "")
         cfg = open(os.path.join(home, "config.toml")).read()
         assert "experimental_use_rmcp_client" not in cfg
+
+    def test_codex_mcp_emits_http_headers_block(self, tmp_path):
+        """Headers from mcp_config_json must survive into the materialized
+        config.toml so rmcp_client can forward X-Tenant-Id + Authorization
+        on every request. Regression guard for the 2026-05-16 plan's open
+        risk #3 — if rmcp drops the headers silently, MCP tool calls
+        arrive at the api without tenant context and silently 404 or
+        cross-tenant, with no log signal."""
+        mcp_config = json.dumps({
+            "mcpServers": {
+                "agentprovision": {
+                    "type": "sse",
+                    "url": "http://mcp-tools:8086/sse",
+                    "headers": {
+                        "X-Tenant-Id": "abc-123",
+                        "X-Internal-Key": "secret",
+                        "Authorization": "Bearer tok-xyz",
+                    },
+                },
+            },
+        })
+        session_dir = str(tmp_path / "t")
+        os.makedirs(session_dir)
+        home = wf._prepare_codex_home(
+            session_dir, {"OPENAI_API_KEY": "sk"}, mcp_config
+        )
+        cfg = open(os.path.join(home, "config.toml")).read()
+        assert "[mcp_servers.agentprovision]" in cfg
+        assert "X-Tenant-Id" in cfg
+        assert "Bearer tok-xyz" in cfg
+        assert "secret" in cfg
 
     def test_omits_rmcp_opt_in_when_feature_flag_off(
         self, tmp_path, fake_mcp_config_json, monkeypatch

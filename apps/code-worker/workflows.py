@@ -1373,6 +1373,16 @@ def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: s
     if mcp_config_json:
         config_lines.extend(_codex_mcp_config_lines(mcp_config_json))
 
+    if mcp_config_json:
+        try:
+            _servers = list(json.loads(mcp_config_json).get("mcpServers", {}).keys())
+        except (TypeError, ValueError, json.JSONDecodeError):
+            _servers = ["<unparseable>"]
+        logger.info(
+            "codex MCP config materialised: rmcp_client=%s servers=%s session=%s",
+            use_rmcp_client, _servers, os.path.basename(session_dir),
+        )
+
     with open(os.path.join(codex_home, "config.toml"), "w") as f:
         f.write("\n".join(config_lines).strip() + "\n")
 
