@@ -128,11 +128,23 @@ def execute_claude_chat(task_input, session_dir: str):
     env = os.environ.copy()
     if kind == "oauth":
         # Subscription-OAuth flow: token is a Bearer for claude.com.
+        # CRITICAL: also drop any inherited ANTHROPIC_API_KEY from the
+        # container env (loaded via env_file: ./apps/api/.env). Claude
+        # Code's auth priority puts ANTHROPIC_API_KEY ahead of
+        # CLAUDE_CODE_OAUTH_TOKEN — so a leftover API key in the
+        # container would silently route the subscription user to the
+        # Console billing path, surfacing as "Credit balance is too
+        # low" even though the OAuth account has quota. Observed
+        # 2026-05-16 after PR #530 recreated code-worker.
         env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+        env.pop("ANTHROPIC_API_KEY", None)
     else:
         # API-key flow (kind == "api_key"): claude CLI honours
         # ANTHROPIC_API_KEY and routes to the Console billing path.
         env["ANTHROPIC_API_KEY"] = token
+        # Defensive: clear any stale OAuth token from the container env
+        # so the per-tenant API key takes effect.
+        env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
 
     # ---- streaming emitter (no-op if flag off / chat_session_id missing) ----
     emitter = SessionEventEmitter(
