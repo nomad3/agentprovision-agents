@@ -39,6 +39,15 @@
   height: auto;
 }
 
+/* Tablet-band (768–991 px) disarm: when JS swaps to .rs-stacked but
+   the 767.98 px mobile media query hasn't released the desktop
+   height chain yet, the chat row's `.dcc-outer-col .dcc-chat-row {
+   height: 100% }` rule was force-filling the chat row and squashing
+   the terminal pane to header height. Stacked-mode panes already
+   size to content, so the row should give up its full-height claim
+   the moment we degrade to stacked. */
+.rs-stacked .dcc-chat-row { height: auto; }
+
 .rs-handle {
   /* 6 px wide vertical bar between panes. The track itself is 6 px in
      the grid-template-columns, so the visible bar fills the track
