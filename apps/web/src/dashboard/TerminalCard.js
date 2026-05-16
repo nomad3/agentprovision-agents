@@ -32,22 +32,45 @@ const TerminalCard = ({ sessionId }) => {
   const [autoOpened, setAutoOpened] = useState(false);
   const scrollRef = useRef(null);
 
-  // Group cli_subprocess_stream events by platform. Each platform gets
-  // its own tab with a tail-only window (last N chunks).
+  // Group lifecycle + per-chunk stream events by platform. Each
+  // platform gets its own tab with a tail-only window. Today
+  // `cli_subprocess_stream` per-chunk events come from the
+  // code-worker side (not yet instrumented — tracked as follow-up);
+  // we render the kernel-emitted lifecycle events
+  // (`cli_subprocess_started` + `cli_subprocess_complete` from
+  // agent_router.py) so the terminal isn't empty between turns.
   const streams = useMemo(() => {
     const byPlatform = new Map();
     for (const env of events) {
       const type = env.type || env.event_type;
-      if (type !== 'cli_subprocess_stream') continue;
       const p = (env.payload || {}).platform || 'cli';
-      const chunk = (env.payload || {}).chunk || '';
+      let line = null;
+      let fd = 'stdout';
+      if (type === 'cli_subprocess_stream') {
+        line = (env.payload || {}).chunk || '';
+        fd = (env.payload || {}).fd || 'stdout';
+      } else if (type === 'cli_subprocess_started') {
+        const pl = env.payload || {};
+        line = `▶ start ${pl.platform || p}  (attempt ${pl.attempt ?? '?'}/${(pl.chain || []).length || '?'})`;
+      } else if (type === 'cli_subprocess_complete') {
+        const pl = env.payload || {};
+        if (pl.error) {
+          line = `✗ end   ${pl.platform || p}  ${pl.latency_ms ?? '?'}ms — ${pl.error}${pl.error_detail ? ': ' + String(pl.error_detail).slice(0, 100) : ''}`;
+          fd = 'stderr';
+        } else {
+          const cost = pl.cost_usd != null ? `  $${Number(pl.cost_usd).toFixed(4)}` : '';
+          const tok = pl.token_count != null ? `  ${pl.token_count}tok` : '';
+          line = `✓ end   ${pl.platform || p}  ${pl.latency_ms ?? '?'}ms${tok}${cost}`;
+        }
+      } else {
+        continue;
+      }
+      if (!line) continue;
+      // Ensure the line ends with a newline so consecutive lines stack
+      // visually in the <pre>.
+      if (!line.endsWith('\n')) line += '\n';
       const arr = byPlatform.get(p) || [];
-      arr.push({
-        seq: env.seq_no,
-        chunk,
-        fd: (env.payload || {}).fd || 'stdout',
-        ts: env.ts,
-      });
+      arr.push({ seq: env.seq_no, chunk: line, fd, ts: env.ts });
       if (arr.length > MAX_LINES_PER_TAB) {
         arr.splice(0, arr.length - MAX_LINES_PER_TAB);
       }
