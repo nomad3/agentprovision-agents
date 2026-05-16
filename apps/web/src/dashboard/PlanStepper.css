@@ -1,0 +1,106 @@
+/* Plan stepper — horizontal step indicator above the chat thread. */
+
+.ap-plan-stepper {
+  padding: var(--ap-space-3) var(--ap-space-4);
+  background: var(--ap-card-bg);
+  border-bottom: 1px solid var(--ap-border);
+}
+
+.ap-plan-stepper-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--ap-space-2);
+}
+.ap-plan-stepper-title {
+  font-size: var(--ap-fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--ap-text-muted);
+}
+.ap-plan-stepper-progress {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  background: var(--ap-primary-tint);
+  padding: 1px 8px;
+  border-radius: var(--ap-radius-pill);
+}
+
+.ap-plan-stepper-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  overflow-x: auto;
+}
+
+.ap-plan-stepper-step {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  flex-shrink: 0;
+  position: relative;
+}
+
+.ap-plan-stepper-step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ap-code-bg);
+  color: var(--ap-text-muted);
+  border: 1px solid var(--ap-border);
+}
+.ap-plan-stepper-step.running .ap-plan-stepper-step-marker {
+  background: var(--ap-primary-tint);
+  color: var(--ap-primary);
+  border-color: var(--ap-primary);
+  animation: ap-plan-stepper-pulse 1.5s ease-in-out infinite;
+}
+.ap-plan-stepper-step.complete .ap-plan-stepper-step-marker {
+  background: var(--ap-success-tint);
+  color: var(--ap-success);
+  border-color: var(--ap-success);
+}
+.ap-plan-stepper-step.failed .ap-plan-stepper-step-marker {
+  background: var(--ap-danger-tint);
+  color: var(--ap-danger);
+  border-color: var(--ap-danger);
+}
+.ap-plan-stepper-step.skipped .ap-plan-stepper-step-marker {
+  background: var(--ap-warning-tint);
+  color: var(--ap-warning);
+  border-color: var(--ap-warning);
+  opacity: 0.7;
+}
+
+@keyframes ap-plan-stepper-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--ap-primary-ring); }
+  50% { box-shadow: 0 0 0 4px var(--ap-primary-ring); }
+}
+
+.ap-plan-stepper-step-label {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text);
+  font-weight: 500;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ap-plan-stepper-step.pending .ap-plan-stepper-step-label,
+.ap-plan-stepper-step.skipped .ap-plan-stepper-step-label {
+  color: var(--ap-text-muted);
+}
+
+.ap-plan-stepper-connector {
+  display: inline-block;
+  width: 24px;
+  height: 1px;
+  background: var(--ap-border);
+}
