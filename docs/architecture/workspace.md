@@ -58,7 +58,7 @@ All three are kernel verbs (HTTP route ≡ `alpha workspace …` subcommand).
 |---|---|---|
 | `alpha workspace tree` | `GET /api/v1/workspace/tree?scope=tenant\|platform&path=…` | Lazy single-directory listing (`{entries: [{name, kind, size}]}`). Dirs first alpha, then files alpha. |
 | `alpha workspace read` | `GET /api/v1/workspace/file?scope=…&path=…` | One file's content. 256 KiB cap → `truncated=true`. Binaries → `{is_binary: true, content: null}`. |
-| `alpha workspace clone` | `POST /api/v1/workspace/clone` *(new, parallel impl agent)* | Clone a user's GitHub repo into `projects/<repo>/`. Runs `git clone` inside `code-worker` via background task. Emits `workspace_repo_cloned` SSE event. |
+| `alpha workspace clone` | `POST /api/v1/workspace/clone` | Clone a user's GitHub repo into `projects/<repo>/`. Runs `git clone` (or `fetch + reset --hard` if the target already exists — idempotent) in a FastAPI `BackgroundTasks` task on the api container, which now shares the same workspaces volume as code-worker. Emits `workspace_repo_cloned` on the `workspace:{tenant_id}` Redis channel for any subscribed UI. The github token comes from the user's `github` integration row via the credential vault; the URL form is `https://<token>@github.com/...` and the token is scrubbed from `.git/config` after a successful clone so a volume snapshot doesn't leak it. |
 
 ### Security boundaries
 
@@ -100,19 +100,20 @@ Web /dashboard  ─click "Clone repo"─▶  POST /api/v1/workspace/clone {owner
                                 │  alpha workspace clone …     │
                                 └──────────────────────────────┘
                                               │
-                                              ▼  background task
-                              git clone inside code-worker
-                              (which now mounts the volume)
+                                              ▼  FastAPI BackgroundTasks
+                              git clone in the api container
+                              (volume is shared with code-worker)
                                               │
                                               ▼
                               writes to /var/agentprovision/workspaces/
                                               <tenant_id>/projects/<repo>/
                                               │
                                               ▼
-                              publish_session_event("workspace_repo_cloned", …)
+                              publish "workspace_repo_cloned" on
+                              Redis channel `workspace:{tenant_id}`
                                               │
                                               ▼
-                              v2 SSE → dashboard tree refresh
+                              (future) SSE → dashboard tree refresh
 ```
 
 Reachable identically from every channel — terminal (`alpha workspace clone owner/repo`), Tauri (Rust shells out), WhatsApp (`/workspace clone owner/repo`), or a leaf agent via MCP. The frontend never invokes `git`; it calls the thin HTTP route that delegates to the same Python entrypoint the `alpha` binary calls.

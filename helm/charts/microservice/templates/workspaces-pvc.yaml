@@ -7,9 +7,16 @@ independent workspaces volume at /var/agentprovision/workspaces. The
 guard means existing services (which don't set workspaces.enabled)
 are unaffected.
 
+Task #247: the same physical volume is now mounted on the code-worker
+deployment so CLI subprocesses (Claude Code / Codex / `git clone` via
+`alpha workspace clone`) can write into the same tree the api reads
+from. Cross-pod sharing requires ReadWriteMany; the code-worker chart
+sets `workspaces.existingClaim` to the api's PVC name so only one
+PVC actually exists — both deployments mount it.
+
 Mirrored in docker-compose.yml as a named `workspaces:` volume.
 */}}
-{{- if .Values.workspaces.enabled }}
+{{- if and .Values.workspaces.enabled (not .Values.workspaces.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -189,7 +189,11 @@ spec:
         {{- if .Values.workspaces.enabled }}
         - name: workspaces
           persistentVolumeClaim:
-            claimName: {{ include "microservice.fullname" . }}-workspaces
+            # Task #247: when `existingClaim` is set, mount that PVC
+            # instead of creating a new one. The api chart creates the
+            # claim; the code-worker chart references it so both pods
+            # mount the same RWX volume.
+            claimName: {{ default (printf "%s-workspaces" (include "microservice.fullname" .)) .Values.workspaces.existingClaim }}
         {{- end }}
         {{- if .Values.nginxConfig.enabled }}
         - name: nginx-config

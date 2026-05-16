@@ -19,7 +19,8 @@ use crate::error::{Error, Result};
 use crate::models::{
     Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, CreateEntityRequest,
     DynamicWorkflow, DynamicWorkflowRun, FileSkill, IntegrationStatus, KnowledgeEntity, Tenant,
-    Token, User, Workflow, WorkflowRun, WorkflowRunRequest,
+    Token, User, Workflow, WorkflowRun, WorkflowRunRequest, WorkspaceCloneRequest,
+    WorkspaceCloneResponse,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
@@ -815,6 +816,22 @@ impl ApiClient {
     pub async fn get_training_run(&self, run_id: &str) -> Result<crate::models::TrainingRun> {
         let req = self.request(Method::GET, &format!("/api/v1/memory/training/{run_id}"))?;
         self.send_json(req).await
+    }
+
+    // ── Workspace clone ─────────────────────────────────────────────
+    // Backs `alpha workspace clone <repo>` — kicks off a server-side
+    // git clone (or fetch + reset for idempotency) into the tenant's
+    // workspace under `projects/<repo>/`. Returns immediately with a
+    // job_id while the clone runs in the API's BackgroundTasks pool.
+
+    /// `POST /api/v1/workspace/clone`
+    pub async fn clone_workspace_repo(
+        &self,
+        repo: &str,
+        branch: Option<&str>,
+    ) -> Result<WorkspaceCloneResponse> {
+        let body = WorkspaceCloneRequest { repo, branch };
+        self.post_json("/api/v1/workspace/clone", &body).await
     }
 }
 

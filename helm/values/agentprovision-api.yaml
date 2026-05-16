@@ -210,11 +210,18 @@ persistence:
 # Mounted at /var/agentprovision/workspaces; matches WORKSPACES_ROOT
 # default in apps/api/app/api/v1/workspace.py and the named volume in
 # docker-compose.yml.
+#
+# Task #247: the volume is now shared with the code-worker deployment
+# so CLI subprocesses (Claude Code / Codex / `alpha workspace clone`)
+# can write into the same tree the api reads from. ReadWriteMany is
+# required for the cross-pod fan-out; the code-worker values file
+# mirrors this block so both PVCs resolve to the same Filestore mount
+# in prod and to the same docker-compose named volume in dev.
 workspaces:
   enabled: true
-  storageClass: standard-rwo
+  storageClass: standard-rwx
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   size: 10Gi
   mountPath: /var/agentprovision/workspaces
 
