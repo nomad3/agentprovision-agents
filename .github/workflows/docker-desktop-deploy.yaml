@@ -231,3 +231,57 @@ jobs:
           docker image prune -f 2>&1 | tail -3 || true
           echo "── Disk after orphan prune ──"
           df -h /System/Volumes/Data | tail -1 || true
+
+      # ── Gated emergency disk cleanup ──
+      # The auto-prune sentinel (PR #476 family) is meant to own
+      # ongoing disk maintenance, but on machines where the launchd
+      # job isn't installed/running, deploys would silently bleed disk
+      # until the next build hits ENOSPC mid-image-export (observed
+      # 2026-05-16: two consecutive deploys failed at "exporting to
+      # image" before this gate was added).
+      #
+      # This step does NOT replace the sentinel; it is a deploy-time
+      # emergency valve that kicks in ONLY when host disk crosses
+      # bands. Below 80% it is a no-op. Between 80-85% it reclaims
+      # build cache (always safe, no BuildKit wedge risk since
+      # build/export are already done). Above 85% it additionally
+      # recycles the code-worker container writable layer (the
+      # historical biggest offender — accumulates CLI session scratch
+      # at /tmp/* inside the container; recreate flushes 20+ GB in
+      # one shot without touching tenant volumes since workspaces
+      # are mounted on the api service).
+      #
+      # Volumes are NEVER pruned here — workspaces, db data, redis
+      # AOF, temporal state all live on volumes. See
+      # docs/plans/docker_disk_full_recovery.md (memory) for the
+      # rationale.
+      - name: Emergency disk cleanup (gated)
+        if: always()
+        run: |
+          set +e
+          DISK_PCT=$(df /System/Volumes/Data | tail -1 | awk '{gsub("%","",$5); print $5}')
+          echo "host disk usage: ${DISK_PCT}%"
+          if [ -z "$DISK_PCT" ]; then
+            echo "could not read disk %; skipping"
+            exit 0
+          fi
+          if [ "$DISK_PCT" -lt 80 ]; then
+            echo "below 80% — no-op"
+            exit 0
+          fi
+          echo "── above 80%: builder prune ──"
+          docker builder prune -af 2>&1 | tail -3 || true
+          if [ "$DISK_PCT" -ge 85 ]; then
+            echo "── above 85%: recycle code-worker writable layer ──"
+            CW_SIZE_KB=$(docker ps -s --filter "name=code-worker" --format "{{.Size}}" \
+              | head -1 | awk '{print $1}' | sed -E 's/[^0-9.]//g' | awk '{print int($1*1024)}')
+            echo "code-worker writable layer ~${CW_SIZE_KB} KB"
+            if [ -n "$CW_SIZE_KB" ] && [ "$CW_SIZE_KB" -gt 5242880 ]; then
+              # >5 GiB — worth recycling
+              docker compose up -d --force-recreate code-worker 2>&1 | tail -5 || true
+            else
+              echo "code-worker layer below 5 GiB threshold; skipping recycle"
+            fi
+          fi
+          echo "── disk after gated cleanup ──"
+          df -h /System/Volumes/Data | tail -1 || true
