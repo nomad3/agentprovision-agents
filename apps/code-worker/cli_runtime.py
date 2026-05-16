@@ -17,12 +17,129 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import subprocess
 import time
+from pathlib import Path
 
 from temporalio import activity
 
 logger = logging.getLogger(__name__)
+
+
+# ── tenant workspace resolution (task #259) ──────────────────────────────
+# Per-tenant persistent workspace directory. Backed by the named
+# ``workspaces`` Docker volume that's bind-mounted on BOTH the api and
+# code-worker containers at ``/var/agentprovision/workspaces`` (PR #530).
+# Anything CLIs write under here appears in the dashboard's FileTreePanel
+# via ``GET /api/v1/workspace/tree`` — that's the whole point of scoping
+# subprocess cwd to this directory instead of the worker's ``/workspace``
+# scratch dir (which is private to the code-worker container).
+WORKSPACES_ROOT = Path(os.environ.get(
+    "WORKSPACES_ROOT", "/var/agentprovision/workspaces"
+))
+
+# ── tenant_id UUID guard (review I1 on PR #532) ──────────────────────────
+# ``tenant_id`` is interpolated directly into a filesystem path under
+# WORKSPACES_ROOT. Anything that isn't a UUID is treated as adversarial
+# input (e.g. ``../escape``, ``/etc/passwd``) and short-circuited to the
+# fallback path before it ever reaches ``mkdir``. The pattern accepts
+# both the dashed (8-4-4-4-12) and undashed (32-hex) forms so that
+# either canonicalization of the same UUID works.
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?"
+    r"[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$"
+)
+
+
+def tenant_workspace_dir(tenant_id: str, session_id: str | None = None) -> Path:
+    """Return the per-tenant projects directory, creating it on demand.
+
+    Layout:
+        WORKSPACES_ROOT / <tenant_id> / projects / [session-XXXXXXXX]
+
+    The ``projects/`` sub-directory mirrors the dashboard's expected
+    layout (api side creates ``docs/plans``, ``memory``, ``projects``
+    skeletons on first read — see ``apps/api/app/api/v1/workspace.py``).
+    Writing CLI output here makes it visible in FileTreePanel.
+
+    Per-session scoping (``session-XXXX``) prevents two concurrent CLI
+    runs for the same tenant from stomping each other's plan files.
+    The first 8 chars of ``chat_session_id`` are used — short enough to
+    keep paths readable, long enough (16 bits of entropy) that
+    collisions inside a single tenant are vanishingly rare.
+
+    When ``session_id`` is empty / None, falls back to the shared
+    ``projects/`` root. Callers can opt out of per-session isolation
+    by passing ``session_id=None`` if they prefer a single shared dir
+    for a tenant (the trade-off: more shareable across turns, but two
+    concurrent agents can race on a same-named file).
+    """
+    # Reject non-UUID tenant_id before it ever touches the filesystem —
+    # ``"../escape"`` would otherwise resolve to a sibling of
+    # WORKSPACES_ROOT, leaking the CLI subprocess cwd outside the
+    # tenant-isolated subtree. Raising lets ``resolve_cli_cwd`` collapse
+    # any rejected request into the safe caller-provided fallback.
+    # See review I1 on PR #532.
+    if not _UUID_RE.match(str(tenant_id) if tenant_id is not None else ""):
+        raise ValueError(
+            f"tenant_workspace_dir: non-UUID tenant_id={tenant_id!r}"
+        )
+    tenant_dir = WORKSPACES_ROOT / str(tenant_id) / "projects"
+    if session_id:
+        target = tenant_dir / f"session-{str(session_id)[:8]}"
+    else:
+        target = tenant_dir
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def resolve_cli_cwd(
+    task_input,
+    fallback: str,
+) -> str:
+    """Resolve the subprocess cwd for a chat CLI executor.
+
+    Prefers the tenant's persistent workspace projects dir (task #259) so
+    files the agent writes appear in the dashboard's FileTreePanel. Falls
+    back to ``fallback`` (typically the worker-private scratch
+    ``session_dir`` or the legacy ``/workspace`` mount) if the workspaces
+    volume isn't mounted — which is the case in pytest, on bare-metal
+    dev, or any deploy that pre-dates PR #530.
+
+    The ``WORKSPACES_ROOT`` parent existing is the signal that the named
+    volume is mounted; we only auto-create the per-tenant subtree below
+    it (never the root itself, since creating it locally would mask the
+    volume mount in docker-compose if the bind hadn't been applied yet).
+    """
+    if not WORKSPACES_ROOT.is_dir():
+        return fallback
+    tenant_id = getattr(task_input, "tenant_id", "") or ""
+    if not tenant_id:
+        return fallback
+    session_id = getattr(task_input, "chat_session_id", "") or None
+    try:
+        return str(tenant_workspace_dir(tenant_id, session_id))
+    except ValueError as exc:
+        # Non-UUID tenant_id (review I1) — never let an adversarial
+        # tenant_id leak the subprocess cwd outside WORKSPACES_ROOT.
+        # The dashboard tree won't see CLI output for this turn, but
+        # the chat still runs in the safe legacy fallback.
+        logger.warning(
+            "resolve_cli_cwd: rejecting tenant_id=%r (%s); falling back to %s",
+            tenant_id, exc, fallback,
+        )
+        return fallback
+    except OSError as exc:
+        # Permission / disk-full / readonly-mount — fall back rather
+        # than 500 the whole chat turn. The dashboard will just not see
+        # the new files; the CLI will still run.
+        logger.warning(
+            "tenant_workspace_dir(%s) failed (%s); falling back to %s",
+            tenant_id, exc, fallback,
+        )
+        return fallback
 
 
 def safe_cli_error_snippet(stderr: str, stdout: str, max_len: int = 800) -> str:

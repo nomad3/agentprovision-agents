@@ -219,6 +219,14 @@ services:
       # 150 ms balances terminal-card latency against API publish QPS.
       # Mirrors helm/values/agentprovision-code-worker.yaml (review I5).
       - WORKER_STREAM_FLUSH_MS=${WORKER_STREAM_FLUSH_MS:-150}
+      # Tenant workspace root (task #259 / review I2 on PR #532). Must
+      # match the api service's WORKSPACES_ROOT — the api owns reads via
+      # /api/v1/workspace/{tree,file}, the code-worker owns writes via
+      # CLI subprocess cwd (see cli_runtime.tenant_workspace_dir). Setting
+      # this explicitly here prevents silent drift if anyone changes the
+      # volume mountPath without also updating cli_runtime's default.
+      # Mirrored in helm/values/agentprovision-code-worker.yaml.
+      - WORKSPACES_ROOT=/var/agentprovision/workspaces
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

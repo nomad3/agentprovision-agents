@@ -119,6 +119,15 @@ def execute_gemini_chat(task_input, session_dir: str, image_path: str):
     if api_key:
         env["GEMINI_API_KEY"] = api_key
 
+    # ── tenant workspace cwd (task #259) ─────────────────────────────────
+    # Gemini's ``.gemini/settings.json`` is HOME-relative (we set HOME to
+    # ``gemini_home`` above), so the only thing the cwd swap affects is
+    # where the CLI resolves relative paths for tool writes — exactly
+    # what we want for files-in-FileTreePanel.
+    _cwd_fallback = WORKSPACE if os.path.isdir(WORKSPACE) else session_dir
+    cli_cwd = cli_runtime.resolve_cli_cwd(task_input, _cwd_fallback)
+    env["WORKSPACE"] = cli_cwd
+
     logger.info("GEMINI_HOME: %s", gemini_home)
     for f in ["oauth_creds.json", "credentials.json", "settings.json", "projects.json", "google_accounts.json"]:
         p = os.path.join(gemini_home, f)
@@ -141,7 +150,7 @@ def execute_gemini_chat(task_input, session_dir: str, image_path: str):
             label="Gemini CLI",
             timeout=1500,
             env=env,
-            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            cwd=cli_cwd,
             on_chunk=on_chunk,
         )
     finally:
