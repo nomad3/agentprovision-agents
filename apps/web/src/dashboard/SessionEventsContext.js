@@ -11,7 +11,10 @@
 import { createContext, useContext } from 'react';
 import { useV2SessionEvents } from './hooks/useV2SessionEvents';
 
-const SessionEventsContext = createContext({ events: [], status: 'idle' });
+// Exported (named + default) so tests can wrap consumers in a custom
+// provider that bypasses the real SSE hook — see
+// apps/web/src/dashboard/__tests__/TerminalPanel.test.js.
+export const SessionEventsContext = createContext({ events: [], status: 'idle' });
 
 export const SessionEventsProvider = ({ sessionId, children }) => {
   const value = useV2SessionEvents(sessionId);
@@ -23,3 +26,5 @@ export const SessionEventsProvider = ({ sessionId, children }) => {
 };
 
 export const useSessionEvents = () => useContext(SessionEventsContext);
+
+export default SessionEventsContext;

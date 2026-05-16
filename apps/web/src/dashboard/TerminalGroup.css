@@ -1,0 +1,85 @@
+/* Single terminal group — tab strip + monospace stream.
+ * Mirrors the look of the legacy TerminalCard body so the visual diff
+ * vs. pre-refactor is zero when only one group is open.
+ */
+
+.tg-card {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+
+/* Focused-group indicator — matches `.dcc-thread-card-focused` from
+ * the chat editor groups. 2 px inset border so layout never shifts on
+ * focus toggle. */
+.tg-card-focused {
+  box-shadow: inset 0 0 0 2px var(--ap-primary);
+}
+
+.tg-tabs {
+  display: flex;
+  gap: 2px;
+  padding: var(--ap-space-2) var(--ap-space-3) 0;
+  background: var(--ap-card-bg-hover, var(--ap-card-bg));
+  border-bottom: 1px solid var(--ap-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.tg-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  background: transparent;
+  border: 0;
+  border-radius: var(--ap-radius-sm) var(--ap-radius-sm) 0 0;
+  padding: 6px var(--ap-space-3);
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  cursor: pointer;
+  font-family: var(--ap-font-mono);
+}
+.tg-tab:hover { color: var(--ap-text); }
+.tg-tab.active {
+  background: var(--ap-code-bg);
+  color: var(--ap-text);
+  border-bottom: 2px solid var(--ap-primary);
+  margin-bottom: -1px;
+}
+.tg-tab-platform { font-weight: 500; }
+.tg-tab-count {
+  font-size: 10px;
+  color: var(--ap-text-muted);
+  background: var(--ap-primary-tint);
+  padding: 1px 6px;
+  border-radius: var(--ap-radius-pill);
+}
+
+.tg-stream {
+  background: var(--ap-code-bg);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--ap-space-3) var(--ap-space-4);
+}
+.tg-pre {
+  font-family: var(--ap-font-mono);
+  font-size: var(--ap-fs-xs);
+  line-height: 1.55;
+  color: var(--ap-text);
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.tg-line { display: inline; }
+.tg-line.stderr { color: var(--ap-danger); }
+
+.tg-empty {
+  padding: var(--ap-space-4) var(--ap-space-5);
+  font-size: var(--ap-fs-sm);
+  color: var(--ap-text-muted);
+  text-align: center;
+}

@@ -31,7 +31,7 @@ import chatService from '../services/chat';
 import agentService from '../services/agent';
 import AgentActivityPanel from '../dashboard/AgentActivityPanel';
 import ChatTab from '../dashboard/tabs/ChatTab';
-import TerminalCard from '../dashboard/TerminalCard';
+import TerminalPanel from '../dashboard/TerminalPanel';
 import CommandPalette from '../dashboard/CommandPalette';
 import TriggerCoalitionModal from '../dashboard/TriggerCoalitionModal';
 import ResizableSplit from '../dashboard/ResizableSplit';
@@ -555,8 +555,8 @@ const DashboardControlCenter = () => {
         {/* Merged chat surface: sessions list + active thread + live agent activity */}
         {/* SessionEventsProvider opens ONE SSE connection per active
             session and shares events/status across ChatTab's PlanStepper,
-            AgentActivityPanel, and TerminalCard. Previously each
-            subscribed independently → 3-4 concurrent SSE connections
+            AgentActivityPanel, and TerminalPanel/TerminalGroup. Previously
+            each subscribed independently → 3-4 concurrent SSE connections
             per session (browser caps at 6 per origin). */}
         <SessionEventsProvider sessionId={activeSession?.id || null}>
         <div className="ap-section-label">{t('chat.title', 'Chat with Alpha')}</div>
@@ -732,7 +732,7 @@ const DashboardControlCenter = () => {
                   minSizes={[260, 140]}
                 >
                   {chatRow}
-                  <TerminalCard sessionId={activeSession?.id || null} />
+                  <TerminalPanel sessionId={activeSession?.id || null} />
                 </ResizableSplit>
               </div>
             );
