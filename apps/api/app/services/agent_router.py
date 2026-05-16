@@ -1041,15 +1041,18 @@ def _legacy_chain_walk(
     attempted: List[str] = []
 
     # Helper for kernel-side event emission. Fail-soft: any publish error
-    # is swallowed (logged via the inner function) — events are observational,
-    # they must never break the dispatch hot path.
+    # is swallowed — events are observational, they must never break the
+    # dispatch hot path. `_legacy_chain_walk` doesn't have `_presence_sid`
+    # in scope (that's the caller's local) so we derive it from
+    # `db_session_memory` here, which IS in scope.
+    _emit_sid = str((db_session_memory or {}).get("chat_session_id", "") or "")
     def _emit(event_type, payload):
-        if not _presence_sid:
+        if not _emit_sid:
             return
         try:
             from app.services.collaboration_events import publish_session_event
             publish_session_event(
-                _presence_sid,
+                _emit_sid,
                 event_type,
                 payload,
                 tenant_id=str(tenant_id) if tenant_id else None,
