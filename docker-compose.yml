@@ -234,6 +234,14 @@ services:
       # bundled (_bundled/) tier is useful from the filesystem here.
       - ./apps/api/app/skills:/library/skills:ro
       - ./apps/api/app/agents:/library/agents:ro
+      # Per-tenant workspace storage shared with the api service. The api
+      # owns reads via /api/v1/workspace/{tree,file}; the code-worker owns
+      # writes via CLI subprocesses (claude code / codex / git clone). Both
+      # services point at the same named volume so subprocess writes from
+      # the worker survive container rebuilds and are visible to the api's
+      # file-tree endpoints without an extra hop. Mirrored in Helm via the
+      # workspaces PVC (helm/values/agentprovision-code-worker.yaml).
+      - workspaces:/var/agentprovision/workspaces
     depends_on:
       - temporal
     restart: unless-stopped

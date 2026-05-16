@@ -173,6 +173,11 @@ persistence:
 #   persistence  → /app/storage         (datasets, 50Gi)
 #   workspaces   → /var/agentprovision/workspaces (user docs, 10Gi)
 # Off by default; the api values file flips it on for prod.
+#
+# Task #247: the code-worker mounts the same volume so CLI subprocess
+# writes are visible to the api's read endpoints. Set `existingClaim`
+# on the code-worker chart to the api chart's PVC name to avoid
+# creating two PVCs that wouldn't actually share storage.
 workspaces:
   enabled: false
   storageClass: ""
@@ -181,6 +186,10 @@ workspaces:
   size: 10Gi
   mountPath: /var/agentprovision/workspaces
   annotations: {}
+  # When set, the deployment mounts this PVC instead of creating a new
+  # one. Used by the code-worker chart to share the api chart's
+  # workspaces PVC. Empty → the chart creates its own PVC.
+  existingClaim: ""
 
 # Extra volumes
 volumes: []

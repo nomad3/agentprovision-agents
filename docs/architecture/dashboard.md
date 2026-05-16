@@ -69,6 +69,12 @@ Lazy-loaded — `GET /api/v1/workspace/tree?scope=<>&path=<>` returns one direct
 
 Workspace volume is provisioned via a named `workspaces` volume in `docker-compose.yml` and a `helm/charts/microservice/templates/workspaces-pvc.yaml` guarded by `workspaces.enabled=true` in `helm/values/agentprovision-api.yaml` (10 GiB default; PR #515).
 
+### Workspace persistence
+
+Both the Files tab and the `code-worker` CLI runtimes share the same per-tenant subtree on the workspaces volume — files Luna writes via memory or via `alpha workspace clone` are visible in the tree on the next refresh, and vice versa. The dashboard's tree is just a read view; **all writes flow through kernel verbs** (`alpha workspace clone` for repos, the recall/record pipeline for memory). Path-segment guards reject `.git/`, `__pycache__/`, etc.; platform scope is superuser-gated; reads cap at 256 KiB.
+
+Full model + endpoint contracts: [`workspace.md`](workspace.md).
+
 ---
 
 ## 3. Editor groups (chat splits)
@@ -213,6 +219,7 @@ These files are owned by parallel streams and should not be edited from docs PRs
 | Topic | Doc |
 |---|---|
 | Alpha CLI kernel principle | [`alpha_cli_kernel.md`](alpha_cli_kernel.md) |
+| Workspace persistence + endpoints | [`workspace.md`](workspace.md) |
 | Three-layer control plane | [`../plans/2026-05-15-alpha-control-plane-design.md`](../plans/2026-05-15-alpha-control-plane-design.md) |
 | IDE shell design (canonical) | [`../plans/2026-05-15-alpha-control-center-ide-shell-design.md`](../plans/2026-05-15-alpha-control-center-ide-shell-design.md) |
 | Pane composition + doc viewer | [`../plans/2026-05-16-dashboard-split-pane-spec-doc-viewer.md`](../plans/2026-05-16-dashboard-split-pane-spec-doc-viewer.md) |

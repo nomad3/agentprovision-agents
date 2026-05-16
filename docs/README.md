@@ -75,6 +75,7 @@ Index for everything inside `docs/`. Source of truth for **architecture** is [`.
 | Architecture | [`../CLAUDE.md`](../CLAUDE.md) |
 | Alpha Control Center dashboard | [`architecture/dashboard.md`](architecture/dashboard.md) |
 | Alpha CLI kernel principle | [`architecture/alpha_cli_kernel.md`](architecture/alpha_cli_kernel.md) |
+| Workspace persistence (volume, endpoints, security) | [`architecture/workspace.md`](architecture/workspace.md) |
 | K8s deployment | [`KUBERNETES_DEPLOYMENT.md`](KUBERNETES_DEPLOYMENT.md) |
 | MCP integration | [`MCP_INTEGRATION.md`](MCP_INTEGRATION.md) |
 | LLM integration | [`LLM_INTEGRATION_README.md`](LLM_INTEGRATION_README.md) |

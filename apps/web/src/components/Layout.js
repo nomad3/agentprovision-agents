@@ -24,7 +24,6 @@ import { useLunaPresence } from '../context/LunaPresenceContext';
 import { useTheme } from '../context/ThemeContext';
 // LunaAvatar removed
 import LunaStateBadge from './luna/LunaStateBadge';
-import NotificationBell from './NotificationBell';
 import './Layout.css';
 
 const _LS_SIDEBAR_PINNED = 'brand.sidebar.pinned';
@@ -153,7 +152,6 @@ const Layout = ({ children }) => {
               >
                 {pinned ? <FaAngleDoubleLeft size={14} /> : <FaAngleDoubleRight size={14} />}
               </button>
-              <NotificationBell />
               <button
                 className="theme-toggle"
                 onClick={toggleTheme}
