@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Badge, Dropdown, Nav, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import {
@@ -14,7 +14,9 @@ import {
   FaRobot as Robot,
   FaSun as SunFill,
   FaPuzzlePiece as PuzzlePiece,
-  FaHeartbeat as HeartbeatFill
+  FaHeartbeat as HeartbeatFill,
+  FaAngleDoubleLeft,
+  FaAngleDoubleRight,
 } from 'react-icons/fa';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
@@ -25,7 +27,29 @@ import LunaStateBadge from './luna/LunaStateBadge';
 import NotificationBell from './NotificationBell';
 import './Layout.css';
 
+const _LS_SIDEBAR_PINNED = 'brand.sidebar.pinned';
+const _readPinned = () => {
+  try { return localStorage.getItem(_LS_SIDEBAR_PINNED) === 'true'; } catch { return false; }
+};
+const _writePinned = (v) => {
+  try { localStorage.setItem(_LS_SIDEBAR_PINNED, String(!!v)); } catch { /* quota */ }
+};
+
 const Layout = ({ children }) => {
+  // Sidebar collapse state. Default collapsed → icon-only ~56 px rail
+  // (VSCode / Cursor / Antigravity pattern). Hovering peeks the full
+  // labels out as an overlay; the pin button locks it open ("pinned").
+  const [pinned, setPinned] = useState(_readPinned);
+  const [hovering, setHovering] = useState(false);
+  const togglePinned = () => {
+    setPinned((prev) => {
+      const next = !prev;
+      _writePinned(next);
+      return next;
+    });
+  };
+  const expanded = pinned || hovering;
+
   const auth = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -104,9 +128,13 @@ const Layout = ({ children }) => {
   };
 
   return (
-    <div className="layout-container">
+    <div className={`layout-container${pinned ? '' : ' sidebar-collapsed'}${expanded ? ' sidebar-expanded' : ''}`}>
       {/* Glassmorphic Sidebar */}
-      <div className="sidebar-glass">
+      <div
+        className="sidebar-glass"
+        onMouseEnter={() => setHovering(true)}
+        onMouseLeave={() => setHovering(false)}
+      >
         <div className="sidebar-header">
           <div className="d-flex align-items-center justify-content-between">
             <Link to="/dashboard" className="brand-link">
@@ -115,7 +143,16 @@ const Layout = ({ children }) => {
                 <LunaStateBadge state={lunaState} size="xs" />
               </div>
             </Link>
-            <div className="d-flex align-items-center gap-1">
+            <div className="d-flex align-items-center gap-1 sidebar-header-actions">
+              <button
+                type="button"
+                className="theme-toggle"
+                onClick={togglePinned}
+                aria-label={pinned ? 'Collapse sidebar' : 'Pin sidebar open'}
+                title={pinned ? 'Collapse sidebar' : 'Pin sidebar open'}
+              >
+                {pinned ? <FaAngleDoubleLeft size={14} /> : <FaAngleDoubleRight size={14} />}
+              </button>
               <NotificationBell />
               <button
                 className="theme-toggle"
