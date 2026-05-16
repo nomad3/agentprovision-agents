@@ -33,6 +33,8 @@ import ChatTab from '../dashboard/tabs/ChatTab';
 import TerminalCard from '../dashboard/TerminalCard';
 import CommandPalette from '../dashboard/CommandPalette';
 import TriggerCoalitionModal from '../dashboard/TriggerCoalitionModal';
+import FileTreePanel from '../dashboard/FileTreePanel';
+import FileViewer from '../dashboard/FileViewer';
 import { SessionEventsProvider } from '../dashboard/SessionEventsContext';
 import './DashboardControlCenter.css';
 
@@ -91,6 +93,24 @@ const DashboardControlCenter = () => {
       try { localStorage.setItem('alpha.dashboard.mode', next); } catch { /* quota */ }
       return next;
     });
+  };
+
+  // Left-panel content toggle: 'chats' (sessions list, default) or
+  // 'files' (workspace tree navigator). Persisted to localStorage so
+  // the preference survives reloads. When 'files', clicking a file in
+  // the tree updates `openFile` which the right column picks up to
+  // render <FileViewer>.
+  const [leftMode, setLeftMode] = useState(() => {
+    try {
+      const v = localStorage.getItem('apControl.leftMode');
+      return v === 'files' ? 'files' : 'chats';
+    } catch { return 'chats'; }
+  });
+  const [openFile, setOpenFile] = useState(null);
+  const switchLeftMode = (next) => {
+    if (next === leftMode) return;
+    setLeftMode(next);
+    try { localStorage.setItem('apControl.leftMode', next); } catch { /* quota */ }
   };
 
   // Onboarding redirect — keeps the same gate the legacy dashboard had.
@@ -242,57 +262,87 @@ const DashboardControlCenter = () => {
           <Col lg={3} md={4}>
             <article className="ap-card h-100">
               <div className="ap-card-body dcc-sessions">
-                <div className="d-flex justify-content-between align-items-center mb-2">
-                  <strong style={{ fontSize: 'var(--ap-fs-sm)' }}>{t('chat.sessions', 'Sessions')}</strong>
-                  <div className="d-flex" style={{ gap: 4 }}>
-                    <button
-                      type="button"
-                      className="ap-btn-secondary ap-btn-sm"
-                      onClick={() => setCoalitionOpen(true)}
-                      disabled={!activeSession}
-                      title="Dispatch an A2A coalition (Propose / Critique / Revise, Plan / Verify, …)"
-                    >
-                      ⚡ A2A
-                    </button>
-                    <button
-                      type="button"
-                      className="ap-btn-primary ap-btn-sm"
-                      onClick={handleNewSession}
-                      disabled={creating}
-                    >
-                      + {creating ? t('chat.creating', 'Creating…') : t('chat.new', 'New')}
-                    </button>
-                  </div>
+                {/* Chats / Files mode toggle — swaps the body of this
+                    card without changing layout. localStorage-backed
+                    so the preference survives reloads. */}
+                <div className="dcc-left-mode-toggle" role="tablist" aria-label="Left panel mode">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={leftMode === 'chats'}
+                    className={`dcc-mode-pill${leftMode === 'chats' ? ' active' : ''}`}
+                    onClick={() => switchLeftMode('chats')}
+                  >
+                    Chats
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={leftMode === 'files'}
+                    className={`dcc-mode-pill${leftMode === 'files' ? ' active' : ''}`}
+                    onClick={() => switchLeftMode('files')}
+                  >
+                    Files
+                  </button>
                 </div>
-                {sessions.length === 0 ? (
-                  <p className="text-muted mb-0" style={{ fontSize: 'var(--ap-fs-sm)' }}>
-                    {t('chat.empty', 'No conversations yet.')}
-                  </p>
-                ) : (
-                  <ul className="dcc-session-list">
-                    {sessions.slice(0, 12).map((s) => (
-                      <li key={s.id}>
+
+                {leftMode === 'chats' ? (
+                  <>
+                    <div className="d-flex justify-content-between align-items-center mb-2">
+                      <strong style={{ fontSize: 'var(--ap-fs-sm)' }}>{t('chat.sessions', 'Sessions')}</strong>
+                      <div className="d-flex" style={{ gap: 4 }}>
                         <button
                           type="button"
-                          className={`dcc-session-row${activeSession?.id === s.id ? ' active' : ''}`}
-                          onClick={() => setActiveSession(s)}
+                          className="ap-btn-secondary ap-btn-sm"
+                          onClick={() => setCoalitionOpen(true)}
+                          disabled={!activeSession}
+                          title="Dispatch an A2A coalition (Propose / Critique / Revise, Plan / Verify, …)"
                         >
-                          <span className="dcc-session-title" title={s.title}>
-                            {s.title || t('chat.untitled', 'Untitled')}
-                          </span>
-                          <span className="dcc-session-meta">
-                            {s.message_count != null ? `${s.message_count} msgs` : ''}
-                          </span>
+                          ⚡ A2A
                         </button>
-                      </li>
-                    ))}
-                  </ul>
+                        <button
+                          type="button"
+                          className="ap-btn-primary ap-btn-sm"
+                          onClick={handleNewSession}
+                          disabled={creating}
+                        >
+                          + {creating ? t('chat.creating', 'Creating…') : t('chat.new', 'New')}
+                        </button>
+                      </div>
+                    </div>
+                    {sessions.length === 0 ? (
+                      <p className="text-muted mb-0" style={{ fontSize: 'var(--ap-fs-sm)' }}>
+                        {t('chat.empty', 'No conversations yet.')}
+                      </p>
+                    ) : (
+                      <ul className="dcc-session-list">
+                        {sessions.slice(0, 12).map((s) => (
+                          <li key={s.id}>
+                            <button
+                              type="button"
+                              className={`dcc-session-row${activeSession?.id === s.id ? ' active' : ''}`}
+                              onClick={() => setActiveSession(s)}
+                            >
+                              <span className="dcc-session-title" title={s.title}>
+                                {s.title || t('chat.untitled', 'Untitled')}
+                              </span>
+                              <span className="dcc-session-meta">
+                                {s.message_count != null ? `${s.message_count} msgs` : ''}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <FileTreePanel onSelect={setOpenFile} />
                 )}
               </div>
             </article>
           </Col>
 
-          <Col lg={mode === 'pro' ? 6 : 9} md={8}>
+          <Col lg={(mode === 'pro' || (leftMode === 'files' && openFile)) ? 6 : 9} md={8}>
             <article className="ap-card h-100 dcc-thread-card">
               <div className="ap-card-body dcc-thread-body">
                 {activeSession ? (
@@ -314,7 +364,20 @@ const DashboardControlCenter = () => {
             </article>
           </Col>
 
-          {mode === 'pro' && (
+          {/* Right column: FileViewer takes precedence over the
+              AgentActivityPanel when the user is in Files mode AND has
+              opened a file. Otherwise the existing pro-mode activity
+              panel renders. This keeps the layout column count stable
+              so the center column doesn't reflow. */}
+          {leftMode === 'files' && openFile ? (
+            <Col lg={3} md={12}>
+              <article className="ap-card h-100 dcc-activity-card">
+                <div className="ap-card-body p-0 dcc-file-viewer-body">
+                  <FileViewer file={openFile} />
+                </div>
+              </article>
+            </Col>
+          ) : (mode === 'pro' && (
             <Col lg={3} md={12}>
               <article className="ap-card h-100 dcc-activity-card">
                 <div className="ap-card-body p-0">
@@ -322,7 +385,7 @@ const DashboardControlCenter = () => {
                 </div>
               </article>
             </Col>
-          )}
+          ))}
         </Row>
 
         {/* Phase 2: live terminal output (collapsed by default; auto-opens

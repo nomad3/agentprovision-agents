@@ -1,0 +1,106 @@
+/* FileTreePanel — Files-mode of the dashboard left card.
+ *
+ * Matches the `.dcc-sessions` / `.dcc-session-row` aesthetic so the
+ * pill toggle at the top of the card can swap between Chats and
+ * Files without the user feeling like they changed apps.
+ */
+
+.ftp-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0; /* allow inner scroll inside a flex parent */
+}
+
+/* ── Scope toggle (Tenant / Platform) ─────────────────────────── */
+.ftp-scope-toggle {
+  display: inline-flex;
+  background: var(--ap-bg-elev-1, transparent);
+  border: 1px solid var(--ap-border);
+  border-radius: 999px;
+  padding: 2px;
+  align-self: flex-start;
+  margin-bottom: var(--ap-space-2);
+}
+
+.ftp-scope-pill {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.ftp-scope-pill.active {
+  background: var(--ap-primary-tint-hi, var(--ap-primary-tint));
+  color: var(--ap-text);
+}
+
+/* ── Tree body (scrollable inside the parent card) ────────────── */
+.ftp-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.ftp-node {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--ap-radius-md);
+  background: transparent;
+  border: 0;
+  color: var(--ap-text);
+  font-size: var(--ap-fs-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.ftp-node:hover { background: var(--ap-primary-tint); }
+
+.ftp-file {
+  font-family: var(--ap-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.ftp-icon {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-xs);
+}
+
+.ftp-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Native <details> open-state arrow rotation. We use a CSS-only
+   indicator since the <summary> already toggles when clicked. */
+.ftp-dir > summary {
+  list-style: none;
+}
+.ftp-dir > summary::-webkit-details-marker {
+  display: none;
+}
+.ftp-dir[open] > summary .ftp-icon {
+  transform: rotate(90deg);
+  transition: transform 120ms ease;
+}
+
+.ftp-status {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  padding: 4px 10px;
+}
+.ftp-err { color: var(--ap-danger, #c00); }
+.ftp-muted { color: var(--ap-text-muted); }
