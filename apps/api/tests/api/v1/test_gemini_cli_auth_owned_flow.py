@@ -146,6 +146,46 @@ def test_build_oauth_creds_blob_matches_gemini_schema():
     assert blob["expiry_date"] > 1_700_000_000_000  # > 2023 in ms
 
 
+def test_build_oauth_creds_blob_includes_client_id_and_secret(monkeypatch):
+    """gemini-cli's `google-auth-library` needs `client_id` +
+    `client_secret` in the persisted credentials so it can refresh the
+    access_token against Google's token endpoint after the initial 1h
+    expiry. The legacy fallback synthesis in
+    `apps/code-worker/workflows.py` already embeds these; the new
+    api-owned flow MUST match or refresh breaks for every tenant.
+
+    The values must come from `_load_gemini_oauth_client()` so that an
+    env-var override or a future bundle-rotation flows through; never
+    hardcode literals.
+    """
+    # Override the loader to known sentinel values so we can assert
+    # straight-through propagation (no rewriting / no leakage of stale
+    # cached values). Wrap in functools.lru_cache so the autouse
+    # fixture's teardown (which calls `.cache_clear()`) still works
+    # after we patched the symbol.
+    import functools as _ft
+
+    sentinel_id = "9999-sentinel.apps.googleusercontent.com"
+    sentinel_secret = "GOCSPX-sentinel-" + "z" * 28
+
+    @_ft.lru_cache(maxsize=1)
+    def _fake_loader():
+        return (sentinel_id, sentinel_secret)
+
+    monkeypatch.setattr(ga, "_load_gemini_oauth_client", _fake_loader)
+    blob = ga._build_oauth_creds_blob(
+        {
+            "access_token": "ya29.test",
+            "refresh_token": "1//refresh-test",
+            "scope": ga.GEMINI_OAUTH_SCOPE,
+            "token_type": "Bearer",
+            "expires_in": 3599,
+        }
+    )
+    assert blob["client_id"] == sentinel_id
+    assert blob["client_secret"] == sentinel_secret
+
+
 # ── start_login: state plumbing ──────────────────────────────────────────
 
 
@@ -445,3 +485,135 @@ def test_exchange_code_for_tokens_raises_with_split_messages_on_4xx(monkeypatch)
     # User-facing message is the actionable, sanitised version.
     assert "authorization code" in err.user_message.lower()
     assert "invalid_grant" not in err.user_message  # raw code not leaked
+
+
+# ── Route layer: RuntimeError → 503 mapping ──────────────────────────────
+
+
+def test_start_login_503_when_bundle_missing(monkeypatch):
+    """When the api container has no `@google/gemini-cli` install AND
+    no env-var override, `_load_gemini_oauth_client` raises RuntimeError.
+    The route layer must translate that to 503 with an operator-friendly
+    message, not let FastAPI surface it as an opaque 500.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import deps
+    from app.api.v1.gemini_cli_auth import router as gemini_router
+
+    user = MagicMock()
+    user.id = uuid.uuid4()
+    user.tenant_id = uuid.UUID(_TENANT)
+    user.is_active = True
+    user.email = "gemini-503-test@example.test"
+
+    # Force the loader to raise the same RuntimeError shape the real
+    # function produces when neither env nor bundle yields a client.
+    # Wrap in lru_cache so the autouse fixture's `cache_clear()`
+    # teardown still finds the attribute.
+    import functools as _ft
+
+    @_ft.lru_cache(maxsize=1)
+    def raising_loader():
+        raise RuntimeError(
+            "Could not locate the @google/gemini-cli OAuth client_id+secret. "
+            "Set GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET env "
+            "vars, or ensure @google/gemini-cli is installed in the api "
+            "container."
+        )
+
+    monkeypatch.setattr(ga, "_load_gemini_oauth_client", raising_loader)
+
+    app = FastAPI()
+    app.include_router(gemini_router, prefix="/api/v1/gemini-auth")
+    app.dependency_overrides[deps.get_db] = lambda: MagicMock()
+    app.dependency_overrides[deps.get_current_active_user] = lambda: user
+
+    client = TestClient(app)
+    resp = client.post("/api/v1/gemini-auth/start")
+    assert resp.status_code == 503, resp.text
+    detail = resp.json().get("detail", "")
+    # Operator-friendly: mentions the package + the env-var override.
+    assert "gemini" in detail.lower()
+    assert "ops" in detail.lower() or "configured" in detail.lower()
+
+
+# ── submit_code: concurrency (race on parallel calls) ────────────────────
+
+
+def test_submit_code_concurrent_calls_serialize(monkeypatch):
+    """Two threads racing /submit-code with the same code MUST only
+    burn the authorization code at Google once. Without holding the
+    lock through the idempotency-check + exchange + persist, both
+    threads would slip past the `state.connected` check and call
+    Google's token endpoint twice. Google would 200 once and
+    `invalid_grant` once — the second tenant would see a spurious
+    failure for a successful login.
+    """
+    import threading
+
+    mgr = _fresh_manager()
+    mgr.start_login(_TENANT)
+
+    captured_writes: list = []
+    _stub_db(monkeypatch, captured_writes)
+
+    exchange_count = {"n": 0}
+    in_flight = threading.Event()
+    release = threading.Event()
+
+    def slow_exchange(code, verifier):
+        # First caller arrives → signals it's in-flight → waits for the
+        # release. Second caller (held at the manager lock) MUST be
+        # blocked from reaching here. If the lock isn't held across the
+        # exchange, the second caller would increment exchange_count.
+        n = exchange_count["n"]
+        exchange_count["n"] = n + 1
+        if n == 0:
+            in_flight.set()
+            # Give the second thread plenty of time to race in. The
+            # release is signalled by the test body before joining.
+            release.wait(timeout=2.0)
+        return {
+            "access_token": "ya29.race",
+            "refresh_token": "1//race",
+            "expires_in": 3599,
+        }
+
+    monkeypatch.setattr(ga, "_exchange_code_for_tokens", slow_exchange)
+
+    results: list = []
+    errors: list = []
+
+    def worker():
+        try:
+            results.append(mgr.submit_code(_TENANT, "RACE_CODE"))
+        except Exception as exc:  # pragma: no cover — defensive
+            errors.append(exc)
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    # Wait until the first exchange is actually running so we know t2
+    # will hit a contended lock, not arrive after t1 finishes.
+    assert in_flight.wait(timeout=2.0), "first exchange never started"
+    t2.start()
+    release.set()
+    t1.join(timeout=5.0)
+    t2.join(timeout=5.0)
+
+    assert not errors, f"workers raised: {errors}"
+    # Exactly ONE exchange happened. The serialisation guarantees the
+    # second submit_code observed status='connected' and short-circuited
+    # via the idempotency branch.
+    assert exchange_count["n"] == 1
+    # Both callers got back a connected state (idempotent return).
+    assert len(results) == 2
+    for r in results:
+        assert r is not None
+        assert r.status == "connected"
+        assert r.connected is True
+    # Vault was written exactly once (3 rows: oauth_creds + oauth_token +
+    # refresh_token), not twice.
+    assert len(captured_writes) == 3

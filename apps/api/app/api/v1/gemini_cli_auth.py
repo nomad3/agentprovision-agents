@@ -262,94 +262,104 @@ class GeminiAuthManager:
         `_serialize_state`. Failures are recorded on the state, not
         raised, so the frontend can render the error inline (mirrors
         the old subprocess flow's contract).
+
+        Concurrency: the entire idempotency-check → exchange → persist
+        sequence is held under `self._lock`. Two parallel /submit-code
+        calls (e.g. user double-click, frontend retry-on-network-blip)
+        would otherwise race past the `state.connected` check and burn
+        the same authorization code at Google twice — only one would
+        win, the other would surface as `invalid_grant`. Google's token
+        endpoint typically replies in <500ms so holding the lock for
+        the full exchange is acceptable.
         """
         with self._lock:
             state = self._by_tenant.get(tenant_id)
-        if not state:
-            return None
+            if not state:
+                return None
 
-        # Idempotent: if we've already connected, don't re-exchange the
-        # code. The frontend can poll /status after success and we want
-        # those polls to be no-ops, not 4xxs.
-        if state.status == "connected" and state.connected:
-            return state
+            # Idempotent: if we've already connected, don't re-exchange
+            # the code. The frontend can poll /status after success and
+            # we want those polls — and any concurrent submit-code
+            # racers — to be no-ops, not 4xxs.
+            if state.status == "connected" and state.connected:
+                return state
 
-        if _is_expired(state):
-            state.status = "failed"
-            state.error = (
-                "Login session expired. Please click Connect again to start a new flow."
-            )
+            if _is_expired(state):
+                state.status = "failed"
+                state.error = (
+                    "Login session expired. Please click Connect again to start a new flow."
+                )
+                state.completed_at = datetime.utcnow().isoformat()
+                return state
+
+            cleaned = (code or "").strip()
+            if not cleaned:
+                state.status = "failed"
+                state.error = "Authorization code is required"
+                return state
+
+            try:
+                tokens = _exchange_code_for_tokens(cleaned, state.code_verifier)
+            except _OAuthExchangeError as exc:
+                # Don't leak the raw Google error blob into the response —
+                # callers may include the user-pasted code in the body.
+                # We DO log it server-side for debugging.
+                logger.warning(
+                    "Gemini OAuth token exchange failed for tenant %s: %s",
+                    state.tenant_id[:8],
+                    exc.safe_message,
+                )
+                state.status = "failed"
+                state.error = exc.user_message
+                state.completed_at = datetime.utcnow().isoformat()
+                return state
+            except Exception as exc:  # network / parsing errors
+                logger.exception(
+                    "Unexpected error exchanging Gemini OAuth code for tenant %s",
+                    state.tenant_id[:8],
+                )
+                state.status = "failed"
+                state.error = f"Token exchange failed: {type(exc).__name__}"
+                state.completed_at = datetime.utcnow().isoformat()
+                return state
+
+            if not tokens.get("refresh_token"):
+                # Without refresh_token the credential is useless after ~1h.
+                # Google withholds refresh_token if the user has previously
+                # granted consent for this client_id and `prompt=consent`
+                # wasn't requested — we DO pass prompt=consent in the
+                # authUrl so this should be rare, but fail loud if it
+                # happens.
+                state.status = "failed"
+                state.error = (
+                    "Google did not return a refresh_token. Please revoke the "
+                    "Gemini Code Assist app from your Google account at "
+                    "https://myaccount.google.com/permissions and try again."
+                )
+                state.completed_at = datetime.utcnow().isoformat()
+                return state
+
+            try:
+                self._persist_creds(state.tenant_id, tokens)
+            except Exception as exc:
+                logger.exception(
+                    "Failed to persist Gemini OAuth tokens for tenant %s",
+                    state.tenant_id[:8],
+                )
+                state.status = "failed"
+                state.error = f"Failed to store credentials: {type(exc).__name__}"
+                state.completed_at = datetime.utcnow().isoformat()
+                return state
+
+            state.status = "connected"
+            state.connected = True
+            state.error = None
             state.completed_at = datetime.utcnow().isoformat()
-            return state
-
-        cleaned = (code or "").strip()
-        if not cleaned:
-            state.status = "failed"
-            state.error = "Authorization code is required"
-            return state
-
-        try:
-            tokens = _exchange_code_for_tokens(cleaned, state.code_verifier)
-        except _OAuthExchangeError as exc:
-            # Don't leak the raw Google error blob into the response —
-            # callers may include the user-pasted code in the body.
-            # We DO log it server-side for debugging.
-            logger.warning(
-                "Gemini OAuth token exchange failed for tenant %s: %s",
+            logger.info(
+                "Gemini CLI credentials persisted for tenant %s",
                 state.tenant_id[:8],
-                exc.safe_message,
             )
-            state.status = "failed"
-            state.error = exc.user_message
-            state.completed_at = datetime.utcnow().isoformat()
             return state
-        except Exception as exc:  # network / parsing errors
-            logger.exception(
-                "Unexpected error exchanging Gemini OAuth code for tenant %s",
-                state.tenant_id[:8],
-            )
-            state.status = "failed"
-            state.error = f"Token exchange failed: {type(exc).__name__}"
-            state.completed_at = datetime.utcnow().isoformat()
-            return state
-
-        if not tokens.get("refresh_token"):
-            # Without refresh_token the credential is useless after ~1h.
-            # Google withholds refresh_token if the user has previously
-            # granted consent for this client_id and `prompt=consent`
-            # wasn't requested — we DO pass prompt=consent in the
-            # authUrl so this should be rare, but fail loud if it
-            # happens.
-            state.status = "failed"
-            state.error = (
-                "Google did not return a refresh_token. Please revoke the "
-                "Gemini Code Assist app from your Google account at "
-                "https://myaccount.google.com/permissions and try again."
-            )
-            state.completed_at = datetime.utcnow().isoformat()
-            return state
-
-        try:
-            self._persist_creds(state.tenant_id, tokens)
-        except Exception as exc:
-            logger.exception(
-                "Failed to persist Gemini OAuth tokens for tenant %s",
-                state.tenant_id[:8],
-            )
-            state.status = "failed"
-            state.error = f"Failed to store credentials: {type(exc).__name__}"
-            state.completed_at = datetime.utcnow().isoformat()
-            return state
-
-        state.status = "connected"
-        state.connected = True
-        state.error = None
-        state.completed_at = datetime.utcnow().isoformat()
-        logger.info(
-            "Gemini CLI credentials persisted for tenant %s",
-            state.tenant_id[:8],
-        )
-        return state
 
     # ── Persistence ─────────────────────────────────────────────────────
 
@@ -541,6 +551,13 @@ def _build_oauth_creds_blob(tokens: dict) -> dict:
     expiry_date (ms since epoch), and optionally id_token. The
     code-worker materialises this verbatim into
     `${HOME}/.gemini/oauth_creds.json`.
+
+    We also include `client_id` and `client_secret` so that when
+    gemini-cli's `google-auth-library` tries to refresh the access
+    token it can call `oauth2.googleapis.com/token` with the matching
+    installed-app client. The legacy subprocess fallback in
+    `apps/code-worker/workflows.py` (`_synthesise_oauth_creds_from_legacy_rows`)
+    embeds these same fields; dropping them here would break refresh.
     """
     now_ms = int(time.time() * 1000)
     expires_in = tokens.get("expires_in")
@@ -549,11 +566,14 @@ def _build_oauth_creds_blob(tokens: dict) -> dict:
         expiry_date = now_ms + int(expires_in * 1000)
     else:
         expiry_date = None
+    client_id, client_secret = _load_gemini_oauth_client()
     blob = {
         "access_token": tokens.get("access_token"),
         "refresh_token": tokens.get("refresh_token"),
         "scope": tokens.get("scope") or GEMINI_OAUTH_SCOPE,
         "token_type": tokens.get("token_type") or "Bearer",
+        "client_id": client_id,
+        "client_secret": client_secret,
     }
     if expiry_date is not None:
         blob["expiry_date"] = expiry_date
@@ -637,7 +657,24 @@ def start_gemini_auth(
     db: Session = Depends(deps.get_db),
     current_user: User = Depends(deps.get_current_active_user),
 ):
-    state = manager.start_login(str(current_user.tenant_id))
+    try:
+        state = manager.start_login(str(current_user.tenant_id))
+    except RuntimeError as exc:
+        # `_load_gemini_oauth_client` raises RuntimeError when neither
+        # env-var overrides nor an installed `@google/gemini-cli` bundle
+        # is available. That's an operator-level config gap — surface
+        # it as 503 with an actionable message instead of an opaque 500.
+        msg = str(exc)
+        if "gemini-cli" in msg.lower() or "client_id" in msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Gemini CLI OAuth client is not configured in the api "
+                    "container (missing @google/gemini-cli install and no "
+                    "GEMINI_OAUTH_CLIENT_ID/SECRET env override) — contact ops."
+                ),
+            )
+        raise
     connected = _tenant_has_gemini_credential(db, current_user.tenant_id)
     return _serialize_state(state, connected=connected)
 
