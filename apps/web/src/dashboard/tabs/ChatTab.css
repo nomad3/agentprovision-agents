@@ -20,12 +20,6 @@
   color: var(--ap-text);
   font-weight: 500;
 }
-.ap-chattab-bar-link {
-  color: var(--ap-primary);
-  text-decoration: none;
-  font-size: var(--ap-fs-xs);
-}
-.ap-chattab-bar-link:hover { text-decoration: underline; }
 
 .ap-chattab-thread {
   flex: 1;

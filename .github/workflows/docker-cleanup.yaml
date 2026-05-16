@@ -20,8 +20,19 @@ jobs:
       - name: Prune build cache (keep last 10GB)
         run: docker builder prune -f --keep-storage 10GB 2>/dev/null || true
 
-      - name: Prune unused volumes
-        run: docker volume prune -f 2>/dev/null || true
+      # NOTE: `docker volume prune` was removed (PR #517 review).
+      # Named volumes mounted by running compose services are never
+      # "unused" so the prune was a no-op in steady state, but if a
+      # service crashed and detached mid-prune we'd risk losing tenant
+      # workspaces / db data / redis AOF / temporal state. The
+      # docker-desktop-deploy.yaml "Emergency disk cleanup (gated)"
+      # step now owns higher-pressure bands (80%+ builder prune,
+      # 90%+ session-aware code-worker recycle); volumes stay
+      # untouched on this cron. If we ever need volume reclamation
+      # it should be a deliberate, named-volume-aware script, not a
+      # blanket prune.
+      - name: Prune build cache (extra, deploy-step backstop)
+        run: docker builder prune -af 2>/dev/null || true
 
       - name: Aggressive cleanup if low disk
         run: |

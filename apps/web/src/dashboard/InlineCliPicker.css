@@ -3,9 +3,13 @@
    (palette trigger, mode toggle). */
 
 .inline-cli-picker {
+  /* Padding + radius match `.dcc-palette-trigger` so the pill sits
+     visually flush with its row neighbours in the dashboard header. */
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--ap-space-2);
+  padding: 4px var(--ap-space-2);
+  border-radius: var(--ap-radius-md);
   font-size: var(--ap-fs-xs);
   color: var(--ap-text-muted);
 }
@@ -42,6 +46,11 @@
 
 .inline-cli-picker-saving {
   color: var(--ap-text-muted);
+}
+
+.inline-cli-picker-saved {
+  color: var(--ap-success, #2da44e);
+  font-weight: 600;
 }
 
 .inline-cli-picker-error {
