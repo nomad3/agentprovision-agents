@@ -1,0 +1,98 @@
+/* FileViewer — read-only file preview pane. */
+
+.fv-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.fv-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: var(--ap-space-2) var(--ap-space-3);
+  border-bottom: 1px solid var(--ap-border);
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+}
+
+.fv-scope {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--ap-primary-tint);
+  color: var(--ap-text);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.fv-path {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ap-text);
+  font-family: var(--ap-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.fv-flag {
+  background: var(--ap-warning-tint, #fffbe6);
+  color: var(--ap-warning, #a86b00);
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.fv-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ap-space-3);
+}
+
+.fv-status {
+  font-size: var(--ap-fs-sm);
+  color: var(--ap-text-muted);
+  padding: var(--ap-space-2);
+}
+.fv-err { color: var(--ap-danger, #c00); }
+.fv-muted { color: var(--ap-text-muted); }
+
+.fv-pre {
+  margin: 0;
+  font-size: var(--ap-fs-sm);
+  font-family: var(--ap-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ap-text);
+}
+
+.fv-markdown {
+  font-size: var(--ap-fs-sm);
+  color: var(--ap-text);
+  line-height: 1.55;
+}
+.fv-markdown h1,
+.fv-markdown h2,
+.fv-markdown h3 {
+  margin-top: var(--ap-space-3);
+  margin-bottom: var(--ap-space-2);
+}
+.fv-markdown pre {
+  background: var(--ap-bg-elev-1, var(--ap-primary-tint));
+  padding: var(--ap-space-2);
+  border-radius: var(--ap-radius-md);
+  overflow-x: auto;
+}
+.fv-markdown code {
+  font-family: var(--ap-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.95em;
+}
+.fv-markdown a { color: var(--ap-primary, #2563eb); }
+
+.fv-empty {
+  padding: var(--ap-space-3);
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+}
