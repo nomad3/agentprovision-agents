@@ -36,6 +36,35 @@ def tool_mapping():
     return get_tool_mapping()
 
 
+# ---------------------------------------------------------------------------
+# CLI platform autodetect — used by the chat-header InlineCliPicker so it
+# only offers Auto + CLIs the tenant has actually connected, instead of
+# hardcoding all five options like it did at first ship (PR #517).
+# ---------------------------------------------------------------------------
+
+@router.get("/connected-clis")
+def list_connected_clis(
+    db: Session = Depends(deps.get_db),
+    current_user: User = Depends(deps.get_current_active_user),
+):
+    """Return the CLI platforms this tenant has connected (i.e. has
+    usable credentials for, in the resolver's sense).
+
+    Matches the backend resolver's notion of a "connected CLI" — same
+    set that ``cli_platform_resolver._connected_clis`` would consider
+    usable for routing. Order follows ``_DEFAULT_PRIORITY`` so the UI
+    dropdown can offer entries in the same order the backend would
+    actually try them.
+
+    Shape: ``{"connected": ["claude_code", "codex", ...]}``.
+    ``opencode`` is always included (it's the local floor — never
+    requires credentials) so a fresh tenant with zero subscriptions
+    still gets a sensible list, not an empty array.
+    """
+    from app.services.cli_platform_resolver import connected_clis_for_tenant
+    return {"connected": connected_clis_for_tenant(db, current_user.tenant_id)}
+
+
 @router.post("/import/chatgpt", status_code=201)
 async def import_chatgpt_history(
     file: UploadFile = File(...),

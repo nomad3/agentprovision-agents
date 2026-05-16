@@ -36,6 +36,11 @@ const integrationConfigService = {
   geminiCliAuthSubmitCode: (code) => api.post('/gemini-cli-auth/submit-code', { code }),
   geminiCliAuthCancel: () => api.post('/gemini-cli-auth/cancel'),
   geminiCliAuthDisconnect: () => api.post('/gemini-cli-auth/disconnect'),
+  // Returns { connected: ["claude_code", ...] } for the current tenant
+  // — the resolver-aligned list of CLIs the InlineCliPicker filters
+  // its dropdown against. See apps/api/app/api/v1/integrations.py
+  // GET /connected-clis for the contract.
+  listConnectedClis: () => api.get('/integrations/connected-clis'),
 };
 
 export default integrationConfigService;

@@ -264,6 +264,25 @@ def _connected_clis(db: Session, tenant_id: uuid.UUID) -> tuple[set[str], bool]:
     return available, True
 
 
+def connected_clis_for_tenant(db: Session, tenant_id: uuid.UUID) -> List[str]:
+    """Return the CLIs this tenant has usable credentials for, ordered by
+    the resolver's default chain priority.
+
+    Public wrapper around ``_connected_clis`` for callers that just want
+    the sorted list (e.g. the ``/integrations/connected-clis`` API used
+    by the chat-header InlineCliPicker dropdown). The returned order
+    matches ``_DEFAULT_PRIORITY`` so a UI offering these options shows
+    them in the same order the backend would try them.
+
+    On a transient DB error (``query_ok=False``), the underlying helper
+    returns just ``{"opencode"}``; we surface that as ``["opencode"]``
+    rather than guessing — the local floor is the only thing we can
+    guarantee will route in that case.
+    """
+    available, _query_ok = _connected_clis(db, tenant_id)
+    return [cli for cli in _DEFAULT_PRIORITY if cli in available]
+
+
 def resolve_cli_chain(
     db: Session,
     tenant_id: uuid.UUID,

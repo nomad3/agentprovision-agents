@@ -8,13 +8,27 @@ jest.mock('../../services/branding', () => ({
   },
 }));
 
+jest.mock('../../services/integrationConfigService', () => ({
+  __esModule: true,
+  default: {
+    listConnectedClis: jest.fn(),
+  },
+}));
+
 const { brandingService } = require('../../services/branding');
+const integrationConfigService = require('../../services/integrationConfigService').default;
 
 describe('InlineCliPicker', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     brandingService.getFeatures.mockResolvedValue({ default_cli_platform: null });
     brandingService.updateFeatures.mockResolvedValue({});
+    // Default: every CLI connected so existing tests behave the way
+    // they did before the filter shipped. Individual tests below
+    // narrow this when they want to assert filtering behaviour.
+    integrationConfigService.listConnectedClis.mockResolvedValue({
+      data: { connected: ['claude_code', 'codex', 'gemini_cli', 'copilot_cli'] },
+    });
   });
 
   test('renders nothing while getFeatures is pending', async () => {
@@ -108,6 +122,39 @@ describe('InlineCliPicker', () => {
     expect(
       await screen.findByText(/Could not load tenant default CLI/i),
     ).toBeInTheDocument();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // Connected-CLI filter — backend returns a subset, dropdown shrinks.
+  // (Auto is always offered; opencode is intentionally hidden — it's
+  // the routing floor, not a user-pickable target.)
+  // ──────────────────────────────────────────────────────────────────
+  test('only Auto + connected CLIs are shown when API returns a subset', async () => {
+    integrationConfigService.listConnectedClis.mockResolvedValue({
+      data: { connected: ['codex', 'opencode'] },
+    });
+    render(<InlineCliPicker />);
+    const select = await screen.findByLabelText(/Tenant default CLI platform/i);
+    // The dropdown's <option> labels = Auto + Codex only. No Claude
+    // Code, Gemini CLI, or Copilot CLI because they weren't returned.
+    const labels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(labels).toEqual(['Auto', 'Codex']);
+  });
+
+  test('falls back to all CLI options when listConnectedClis rejects', async () => {
+    // Suppress the console.warn the picker emits on failure so the
+    // test output stays clean.
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    integrationConfigService.listConnectedClis.mockRejectedValue(new Error('500'));
+    render(<InlineCliPicker />);
+    const select = await screen.findByLabelText(/Tenant default CLI platform/i);
+    const labels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    // 5xx → graceful degrade to the pre-filter behaviour: every CLI
+    // option still rendered so a user with a failing endpoint isn't
+    // stuck on Auto-only.
+    expect(labels).toEqual(['Auto', 'Claude Code', 'Codex', 'Gemini CLI', 'Copilot CLI']);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
