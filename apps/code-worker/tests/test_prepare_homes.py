@@ -110,6 +110,14 @@ class TestPrepareCodexHome:
         assert "X-Tenant-Id" in cfg
         assert "Bearer tok-xyz" in cfg
         assert "secret" in cfg
+        # 2026-05-16 transport-mismatch fix: the SSE URL must have
+        # been rewritten onto the ``/mcp/`` streamable-HTTP mount,
+        # and the transport key flipped to streamable_http. rmcp
+        # doesn't speak SSE — leaving ``/sse`` in the config makes
+        # the worker POST onto a GET-only route (405).
+        assert 'url = "http://mcp-tools:8086/mcp/"' in cfg
+        assert 'transport = "streamable_http"' in cfg
+        assert 'transport = "sse"' not in cfg
 
     def test_omits_rmcp_opt_in_when_feature_flag_off(
         self, tmp_path, fake_mcp_config_json, monkeypatch

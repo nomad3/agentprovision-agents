@@ -147,12 +147,14 @@ class TestCodexMcpConfigLines:
         text = "\n".join(lines)
         assert "[mcp_servers.agentprovision]" in text
         assert "[mcp_servers.github]" in text
-        # Default transport is SSE — see the fix in
-        # _codex_mcp_config_lines for the bug history. Previously
-        # this hardcoded streamable_http which mcp-tools / FastMCP
-        # doesn't speak, causing tools to be silently undiscoverable
-        # from Codex while Gemini worked on the same config.
-        assert 'transport = "sse"' in text
+        # 2026-05-16 transport-mismatch fix: Codex's rmcp client only
+        # speaks stdio + streamable_http (no SSE variant). The shared
+        # MCP config emits ``"type": "sse"`` for Claude/Gemini; the
+        # Codex emitter rewrites that to streamable_http so rmcp's
+        # POST hits the streamable-HTTP mount instead of the GET-only
+        # ``/sse`` route (which returns 405 and tears down the worker).
+        assert 'transport = "streamable_http"' in text
+        assert 'transport = "sse"' not in text
         # Headers from the fixture should be carried as an inline table.
         assert '"X-Tenant-Id" = "abc"' in text
 
@@ -166,27 +168,40 @@ class TestCodexMcpConfigLines:
         assert "[mcp_servers.a]" in text
         assert "http_headers" not in text
 
-    def test_honours_explicit_sse_type(self):
-        """The shared MCP config emits `"type": "sse"` (see
-        cli_session_manager._build_mcp_config). Codex must read it
-        and emit transport="sse" — not the previous hardcoded
-        streamable_http."""
+    def test_sse_type_rewrites_url_and_transport(self):
+        """The shared MCP config emits ``"type": "sse"`` + a URL ending
+        in ``/sse`` (see cli_session_manager._build_mcp_config). For
+        Codex we must rewrite BOTH: ``transport = "streamable_http"``
+        and the URL onto the ``/mcp/`` mount, otherwise rmcp's POST
+        lands on the GET-only ``/sse`` route → 405 → worker tears
+        down. Regression guard for
+        docs/plans/2026-05-16-codex-mcp-transport-mismatch-research.md."""
         cfg = json.dumps({
-            "mcpServers": {"agentprovision": {"type": "sse", "url": "http://mcp:8086/sse"}}
-        })
-        text = "\n".join(wf._codex_mcp_config_lines(cfg))
-        assert 'transport = "sse"' in text
-        assert 'transport = "streamable_http"' not in text
-
-    def test_honours_explicit_streamable_http_type(self):
-        """A future tenant could ship an external MCP server that
-        actually speaks streamable_http. The mapping must forward
-        the choice through rather than always coercing to SSE."""
-        cfg = json.dumps({
-            "mcpServers": {"external": {"type": "streamable_http", "url": "http://external"}}
+            "mcpServers": {
+                "agentprovision": {
+                    "type": "sse",
+                    "url": "http://mcp-tools:8086/sse",
+                }
+            }
         })
         text = "\n".join(wf._codex_mcp_config_lines(cfg))
         assert 'transport = "streamable_http"' in text
+        assert 'transport = "sse"' not in text
+        assert 'url = "http://mcp-tools:8086/mcp/"' in text
+        # The legacy SSE URL must NOT leak through.
+        assert '"http://mcp-tools:8086/sse"' not in text
+
+    def test_honours_explicit_streamable_http_type(self):
+        """A tenant connector can ship an external MCP server that
+        speaks streamable_http natively. The URL stays as-is (no SSE
+        rewrite) — only SSE source entries get rerouted onto the
+        in-cluster ``/mcp/`` mount."""
+        cfg = json.dumps({
+            "mcpServers": {"external": {"type": "streamable_http", "url": "http://external/api"}}
+        })
+        text = "\n".join(wf._codex_mcp_config_lines(cfg))
+        assert 'transport = "streamable_http"' in text
+        assert 'url = "http://external/api"' in text
 
     def test_unknown_type_passes_through(self):
         """Forward-compat: a future MCP transport keyword shouldn't
@@ -197,6 +212,34 @@ class TestCodexMcpConfigLines:
         })
         text = "\n".join(wf._codex_mcp_config_lines(cfg))
         assert 'transport = "websocket"' in text
+
+
+# ── _rewrite_sse_to_streamable_http_url ─────────────────────────────────
+
+class TestRewriteSseToStreamableHttpUrl:
+    def test_strips_sse_suffix_and_substitutes_mcp(self):
+        assert (
+            wf._rewrite_sse_to_streamable_http_url("http://mcp-tools:8086/sse")
+            == "http://mcp-tools:8086/mcp/"
+        )
+
+    def test_tolerates_trailing_slash(self):
+        assert (
+            wf._rewrite_sse_to_streamable_http_url("http://mcp-tools:8086/sse/")
+            == "http://mcp-tools:8086/mcp/"
+        )
+
+    def test_leaves_external_urls_untouched(self):
+        """Tenant-connector URLs may live at any path. The rewriter
+        only fires when the URL ends in ``/sse`` — anything else
+        passes through verbatim."""
+        assert (
+            wf._rewrite_sse_to_streamable_http_url("https://example.com/api/v1/mcp")
+            == "https://example.com/api/v1/mcp"
+        )
+
+    def test_empty_string_is_safe(self):
+        assert wf._rewrite_sse_to_streamable_http_url("") == ""
 
 
 # ── _extract_codex_last_message / _extract_codex_metadata ────────────────

@@ -1401,40 +1401,40 @@ def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: s
 def _codex_mcp_config_lines(mcp_config_json: str) -> list[str]:
     """Convert the shared MCP JSON config into Codex config.toml entries.
 
-    User-reported bug (2026-05-12): Codex couldn't access most MCP
-    tools while Gemini could. Root cause: this function hardcoded
-    `transport = "streamable_http"` regardless of what the source
-    config said. The shared MCP config (built by
-    `cli_session_manager._build_mcp_config()`) emits
-    `"type": "sse"` because mcp-tools / FastMCP only serves the SSE
-    transport (`apps/mcp-server/src/mcp_serve.py:18` runs
-    `mcp.run(transport="sse")`). Codex spoke streamable_http to an
-    SSE-only server → handshake failed silently → ~zero tools
-    discovered. Gemini's `_prepare_gemini_home` (~line 1474) just
-    pass-through the `mcpServers` dict including the `type: "sse"`
-    key, which Gemini honours — that's why Gemini worked but Codex
-    didn't on the SAME tenant config.
+    History:
 
-    Fix: honour the source config's transport hint. Map the
-    .claude.json-style `type` field to Codex's `transport` toml
-    value. Falls back to `"sse"` because that's what the current
-    in-cluster mcp-tools serves (and matches the value
-    `_build_mcp_config` writes today). Per-server entries that
-    explicitly request `streamable_http` in the source config still
-    get it — keeps us forward-compatible if FastMCP grows
-    streamable-http support OR if a tenant adds an external MCP
-    server that speaks it.
+    * **2026-05-12** — bug: this helper hardcoded
+      ``transport = "streamable_http"`` regardless of the source. The
+      shared MCP config (built by
+      ``cli_session_manager._build_mcp_config()``) emits ``"type":
+      "sse"`` for the in-cluster ``agentprovision`` server, so Codex
+      spoke the wrong protocol and discovered zero tools while Gemini
+      worked on the same config. Fix: honour the source's ``type`` and
+      map it through to Codex's ``transport`` key.
 
-    Follow-up (2026-05-16): the transport-string fix above was
-    necessary but NOT sufficient. Codex CLI's built-in MCP client
-    only handles stdio; SSE / streamable_http entries are silently
-    dropped unless the top-level ``experimental_use_rmcp_client =
-    true`` flag is set in config.toml. That opt-in is now emitted by
-    ``_prepare_codex_home`` whenever a non-empty MCP config is
-    materialised (gated by env-var ``CODEX_USE_RMCP_CLIENT`` for
-    rollback). Without that flag, the [mcp_servers.*] sections this
-    helper writes would still be inert. See
-    ``docs/plans/2026-05-16-codex-mcp-tool-access-fix.md``.
+    * **2026-05-16 (first attempt — PR #516)** — even with the right
+      transport string, Codex CLI's built-in MCP client only handles
+      stdio. SSE / streamable_http entries are silently dropped unless
+      the top-level ``experimental_use_rmcp_client = true`` flag is set
+      in ``config.toml``. ``_prepare_codex_home`` now emits that flag
+      (gated by env-var ``CODEX_USE_RMCP_CLIENT`` for rollback).
+
+    * **2026-05-16 (this change — transport mismatch fix)** — turning
+      on the rmcp client surfaced the *next* layer: rmcp implements
+      only ``Stdio`` and ``StreamableHttp`` — there is no SSE variant
+      in ``McpServerTransportConfig`` upstream. A ``transport = "sse"``
+      TOML key is silently dropped by serde's untagged enum; rmcp's
+      ``StreamableHttp`` transport then POSTs JSON-RPC to whatever URL
+      it was given. Our ``/sse`` route is GET-only → 405 → rmcp worker
+      tears down. Server-side fix: mount streamable-HTTP alongside
+      legacy SSE on the same mcp-tools container (see
+      ``apps/mcp-server/src/mcp_serve.py::build_app``). Client-side fix
+      (here): when emitting a Codex entry for an SSE-flavoured server,
+      rewrite the URL from ``…/sse`` to ``…/mcp/`` AND emit
+      ``transport = "streamable_http"`` so the TOML is honest about
+      what rmcp is actually going to speak. Claude Code and Gemini
+      configs are untouched — they keep using ``/sse``. See
+      ``docs/plans/2026-05-16-codex-mcp-transport-mismatch-research.md``.
     """
     data = json.loads(mcp_config_json)
     servers = data.get("mcpServers") or {}
@@ -1442,12 +1442,15 @@ def _codex_mcp_config_lines(mcp_config_json: str) -> list[str]:
     for server_name, config in servers.items():
         if not isinstance(config, dict):
             continue
-        # Map .claude.json `type` field → Codex `transport`. Accept
-        # the existing Claude vocabulary (`sse` / `http` /
-        # `streamable_http`) plus a passthrough for anything else.
+        # Map .claude.json `type` field → Codex `transport`. The rmcp
+        # client only speaks stdio + streamable-HTTP, so SSE-flavoured
+        # source entries are rewritten to streamable_http and routed at
+        # the parent server's ``/mcp/`` mount (see mcp_serve.build_app).
         raw_type = (config.get("type") or "sse").lower()
+        url = str(config.get("url") or "")
         if raw_type in ("sse", "http-sse"):
-            transport = "sse"
+            transport = "streamable_http"
+            url = _rewrite_sse_to_streamable_http_url(url)
         elif raw_type in ("http", "streamable_http", "streamable-http"):
             transport = "streamable_http"
         else:
@@ -1455,12 +1458,35 @@ def _codex_mcp_config_lines(mcp_config_json: str) -> list[str]:
         lines.append("")
         lines.append(f"[mcp_servers.{server_name}]")
         lines.append(f'transport = "{_toml_escape(transport)}"')
-        if config.get("url"):
-            lines.append(f'url = "{_toml_escape(str(config["url"]))}"')
+        if url:
+            lines.append(f'url = "{_toml_escape(url)}"')
         headers = config.get("headers") or {}
         if headers:
             lines.append(f"http_headers = {_toml_inline_table(headers)}")
     return lines
+
+
+def _rewrite_sse_to_streamable_http_url(url: str) -> str:
+    """Rewrite an in-cluster SSE URL onto the streamable-HTTP mount.
+
+    The mcp-tools server (FastMCP) exposes BOTH transports on the same
+    port: legacy SSE at ``/sse`` (+ ``/messages/``) for Claude/Gemini,
+    streamable-HTTP at ``/mcp/`` for Codex's rmcp client. The shared
+    MCP config emits the SSE URL (because that's what Claude+Gemini
+    need); for Codex we strip the ``/sse`` suffix and substitute
+    ``/mcp/``.
+
+    Idempotent + safe on URLs that don't end in ``/sse`` — an external
+    MCP server (tenant connector) might be served at any path. External
+    streamable-HTTP servers go through the ``elif`` branch above and
+    never hit this rewriter.
+    """
+    if not url:
+        return url
+    trimmed = url.rstrip("/")
+    if trimmed.endswith("/sse"):
+        return trimmed[: -len("/sse")] + "/mcp/"
+    return url
 
 
 def _toml_inline_table(values: dict) -> str:
