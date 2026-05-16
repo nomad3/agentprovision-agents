@@ -64,6 +64,17 @@ The user-facing surface for the platform. Mounted at `/dashboard` (`apps/web/src
 
 Full architecture: [`docs/architecture/dashboard.md`](docs/architecture/dashboard.md). Layout / pane composition / terminal-stream design docs live under [`docs/plans/2026-05-1{5,6}-*.md`](docs/plans/).
 
+### Workspace persistence
+
+Every tenant gets a durable filesystem subtree mounted into both the `api` and `code-worker` services. Files Luna writes (memory, plans, project notes) survive container restarts, image rebuilds, and deploys — and the dashboard Files tab + `alpha workspace …` verbs share the same view of disk.
+
+- Named volume `agentprovision-agents_workspaces` mounted at `/var/agentprovision/workspaces` on **both** `api` and (post PR #517) `code-worker`. Per-tenant subdirectory `/<tenant_id>/` is auto-seeded on first `GET /api/v1/workspace/tree` with `docs/plans/`, `memory/`, `projects/`, and a starter `README.md`.
+- Persists across `docker compose restart`, image rebuilds, deploys, and node reboots. Only `docker volume rm` (or `kubectl delete pvc`) wipes it — **never** `docker volume prune`. Production-path Helm PVC at `helm/charts/microservice/templates/workspaces-pvc.yaml`, 10 GiB default, gated on `workspaces.enabled=true`.
+- Three kernel verbs: `alpha workspace tree`, `alpha workspace read`, `alpha workspace clone` (new — 2026-05-16, parallel impl). Each maps 1:1 to a thin `/api/v1/workspace/…` route; path-segment guards reject `.git/`, `__pycache__/`, etc. even on direct access; platform scope is superuser-gated; 256 KiB read cap.
+- `alpha workspace clone owner/repo` runs `git clone` inside `code-worker` and emits a `workspace_repo_cloned` SSE event the dashboard tree picks up. Memory + workstation ↔ cloud sync is tracked as task #256.
+
+Full doc: [`docs/architecture/workspace.md`](docs/architecture/workspace.md).
+
 ### Alpha CLI is the kernel
 
 Every feature flows through `alpha`. Frontend → CLI (kernel) → internal API → MCP tools / memory / RL. The web `/dashboard`, Tauri, WhatsApp, and the `alpha` binary are **viewports**, not implementations. If a new feature can't be expressed as `alpha <verb>`, the design is wrong.
