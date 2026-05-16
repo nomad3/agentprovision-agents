@@ -19,6 +19,30 @@ Anti-patterns to reject: per-component SSE subscriptions; Tauri Rust talking dir
 
 Full principle + examples: [`docs/architecture/alpha_cli_kernel.md`](docs/architecture/alpha_cli_kernel.md).
 
+## Workspace model — durable per-tenant filesystem
+
+The kernel's canonical "seed a tenant's project tree" verb is `alpha workspace clone <owner/repo>`. Everything else flows from one named Docker volume / Helm PVC mounted into **both** `api` and `code-worker`, so every CLI worker, the dashboard tree, and the SPA Files mode see the **same bytes**.
+
+```
+/var/agentprovision/workspaces/<tenant_id>/
+  ├── README.md      (auto-seeded on first _resolve_root() call)
+  ├── docs/plans/
+  ├── memory/        ← Luna's memory files live here; durable across sessions
+  └── projects/<repo>/   ← populated by alpha workspace clone
+```
+
+- **Volume**: named `agentprovision-agents_workspaces` (docker-compose) / `helm/charts/microservice/templates/workspaces-pvc.yaml` (Helm, 10 GiB default, gated on `workspaces.enabled=true`). Override env: `WORKSPACES_ROOT`. Mounts at `/var/agentprovision/workspaces` on `api` and `code-worker`.
+- **Persistence**: survives container restarts, image rebuilds, deploys, node reboots. Wiped **only** by `docker volume rm` / `kubectl delete pvc`. `docker volume prune` is forbidden — `docker-cleanup.yaml` is image+builder-only.
+- **Kernel verbs** (each = thin HTTP route delegating to the same Python entrypoint the `alpha` binary calls):
+  - `alpha workspace tree`  → `GET /api/v1/workspace/tree?scope=tenant|platform&path=…`
+  - `alpha workspace read`  → `GET /api/v1/workspace/file?scope=…&path=…`  (256 KiB cap, binary detection)
+  - `alpha workspace clone` → `POST /api/v1/workspace/clone` (background `git clone` inside `code-worker`; emits `workspace_repo_cloned` SSE)
+- **Security guards** (all three endpoints): tenant root jail via `Path.resolve()` + `relative_to()`; hidden-segment rejection (`.git/`, `__pycache__/`, `.env`, `node_modules/`, `.venv/`, `venv/` — even on direct access like `?path=.git/HEAD`); `scope=platform` is superuser-only + extension allow-listed; v1 is read-only (the clone writer validates target stays under `projects/<repo>/`). See `apps/api/app/api/v1/workspace.py`.
+- **Memory durability**: when Luna writes `memory/<topic>.md` it is durable. Sessions read it back on the next turn via the recall pipeline.
+- **Workstation ↔ cloud sync**: tracked separately as task #256 (backlog).
+
+Full doc: [`docs/architecture/workspace.md`](docs/architecture/workspace.md).
+
 ## Project Overview
 
 AgentProvision is a **memory-first, Kubernetes-native** AI agent orchestration platform. Routes tasks across four CLI runtimes (**Claude Code, Codex, Gemini CLI, GitHub Copilot CLI**) via Temporal workflows, with autodetect + quota-fallback chaining (#245) and per-tenant default selectable in `tenant_features.default_cli_platform`. Agents are governed via the ALM platform, tools are served via **MCP** (90+ tools), and the platform learns which runtime performs best per task type via RL. Deployed on **Rancher Desktop K8s** with **Cloudflare Tunnel** (in-cluster pod) serving `agentprovision.com`.

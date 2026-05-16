@@ -66,6 +66,36 @@ Web /dashboard  ──HTTP──▶  GET /api/v1/workspace/tree?scope=tenant&pat
 
 Same verb is reachable from the terminal (`alpha workspace tree --scope tenant /docs`), Tauri (Rust shells out), WhatsApp (`/workspace tree …`), and an MCP leaf (`read_workspace_file` tool). Adding a new scope (e.g. shared-team) means adding one kernel verb — every viewport gets it.
 
+### 3.1.1 Workspace clone — write verb on the same volume
+
+`alpha workspace clone <owner/repo>` is the canonical kernel-routed way to seed a tenant's project tree.
+
+```
+Web /dashboard  ──HTTP──▶  POST /api/v1/workspace/clone {owner, repo}
+                                        │
+                                        ▼
+                          ┌──────────────────────────────┐
+                          │  alpha workspace clone …     │
+                          └──────────────────────────────┘
+                                        │  background task
+                                        ▼
+                          git clone inside code-worker
+                          (mounts the same /var/agentprovision/workspaces volume)
+                                        │
+                                        ▼
+                          /var/agentprovision/workspaces/<tenant_id>/projects/<repo>/
+                                        │
+                                        ▼
+                          publish_session_event("workspace_repo_cloned", …)
+                                        │
+                                        ▼
+                          v2 SSE  →  dashboard tree refresh
+```
+
+Note the loop: the `code-worker` mounts the **same** named volume as `api`, so the clone shows up in the dashboard tree (which reads via `api`) without any cross-service file copy. The frontend never invokes `git`. Identical reachability from terminal (`alpha workspace clone …`), Tauri, WhatsApp, and MCP leaves.
+
+Full model: [`workspace.md`](workspace.md).
+
 ### 3.2 Chat send
 
 The dashboard chat-input box does not write to PostgreSQL. It calls:
@@ -140,5 +170,6 @@ Avoid these. If you see them in a PR, reject and route through the CLI.
 | Three-layer control plane | [`../plans/2026-05-15-alpha-control-plane-design.md`](../plans/2026-05-15-alpha-control-plane-design.md) |
 | IDE shell design | [`../plans/2026-05-15-alpha-control-center-ide-shell-design.md`](../plans/2026-05-15-alpha-control-center-ide-shell-design.md) |
 | Dashboard architecture | [`dashboard.md`](dashboard.md) |
+| Workspace persistence + endpoints | [`workspace.md`](workspace.md) |
 | `alpha` CLI reference | [`../cli/README.md`](../cli/README.md) |
 | Leaf-agent inbound (MCP) | memory: `leaf_agent_inbound_via_mcp.md` |
