@@ -69,11 +69,17 @@ def score_and_log_async(
     tool_groups: list = None,
     entity_count: int = 0,
     prompt_tokens: int = 0,
+    chat_session_id: Optional[str] = None,
 ):
     """Fire-and-forget: score response quality and log RL reward.
 
     Call this AFTER returning the response to the user.
     Runs in background thread — never blocks the response.
+
+    `chat_session_id` (optional): when supplied, the scorer also emits
+    an `auto_quality_consensus` event to the v2 session_events stream
+    so the dashboard's AgentActivityPanel can show the score / council
+    verdict live. No-op when omitted.
     """
     threading.Thread(
         target=lambda: asyncio.run(_score_and_log(
@@ -84,6 +90,7 @@ def score_and_log_async(
             rollout_experiment_id, rollout_arm,
             routing_trajectory_id,
             agent_tier, tool_groups or [], entity_count, prompt_tokens,
+            chat_session_id,
         )),
         daemon=True,
     ).start()
@@ -110,6 +117,7 @@ async def _score_and_log(
     tool_groups: list = None,
     entity_count: int = 0,
     prompt_tokens: int = 0,
+    chat_session_id: Optional[str] = None,
 ):
     """Score the response with multi-dimensional rubric + consensus council, log as RL reward."""
     logger.info("Auto-quality scorer: starting for tenant %s (platform=%s, model=%s)", str(tenant_id)[:8], platform, QUALITY_MODEL)
@@ -207,6 +215,31 @@ async def _score_and_log(
         consensus.approved_count, consensus.total_reviewers,
         platform,
     )
+
+    # Emit the scoring outcome to the v2 session events stream so the
+    # dashboard's AgentActivityPanel renders the council verdict + score
+    # alongside the assistant's reply. Fail-soft: scorer is observational,
+    # publish errors must not break the RL logging path below.
+    if chat_session_id:
+        try:
+            from app.services.collaboration_events import publish_session_event
+            publish_session_event(
+                str(chat_session_id),
+                "auto_quality_consensus",
+                {
+                    "score": int(score),
+                    "adjusted_score": int(adjusted_score),
+                    "reward": round(float(reward), 3),
+                    "consensus_passed": bool(consensus.passed),
+                    "approved_count": int(consensus.approved_count),
+                    "total_reviewers": int(consensus.total_reviewers),
+                    "platform": platform,
+                    "agent_slug": agent_slug,
+                },
+                tenant_id=str(tenant_id) if tenant_id else None,
+            )
+        except Exception:
+            logger.debug("publish auto_quality_consensus failed (non-fatal)", exc_info=True)
 
     # Derive mood from quality scores and update presence
     try:
