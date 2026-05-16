@@ -107,6 +107,13 @@ env:
     value: "temporal:7233"
   - name: CLAUDE_CODE_MODEL
     value: "sonnet"
+  # Codex CLI MCP opt-in: enable the experimental Rust MCP client so
+  # SSE / streamable_http entries in config.toml are honoured. Default
+  # "true"; flip to "false" via Helm override to disable the rmcp path
+  # without a code revert. See workflows.py::_prepare_codex_home and
+  # docs/plans/2026-05-16-codex-mcp-tool-access-fix.md.
+  - name: CODEX_USE_RMCP_CLIENT
+    value: "true"
 
 # No autoscaling — single instance
 autoscaling:

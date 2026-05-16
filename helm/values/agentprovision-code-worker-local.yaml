@@ -46,6 +46,9 @@ configMap:
     TEMPORAL_NAMESPACE: "default"
     API_BASE_URL: "http://api"
     CLAUDE_CODE_MODEL: "sonnet"
+    # Codex CLI MCP opt-in (see workflows.py::_prepare_codex_home).
+    # Set "false" to disable the rmcp_client path.
+    CODEX_USE_RMCP_CLIENT: "true"
     OPENCODE_OLLAMA_URL: "http://host.docker.internal:11434/v1"
     OPENCODE_MODEL: "gemma4"
     GIT_BRANCH: "main"
