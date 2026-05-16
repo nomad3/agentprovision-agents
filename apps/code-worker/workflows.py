@@ -1331,20 +1331,44 @@ def _fetch_claude_credential(tenant_id: str) -> Optional[tuple]:
 
 
 def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: str) -> str:
-    """Materialize tenant-scoped CODEX_HOME with auth.json and MCP config.toml."""
+    """Materialize tenant-scoped CODEX_HOME with auth.json and MCP config.toml.
+
+    2026-05-16 incident: Codex still couldn't discover MCP tools after the
+    2026-05-12 transport-string fix. Root cause was that Codex CLI's
+    default built-in MCP client only supports stdio-launched servers; SSE
+    / streamable-HTTP entries are silently ignored unless the top-level
+    ``experimental_use_rmcp_client = true`` opt-in is present in
+    config.toml. We now emit that flag (gated by the
+    ``CODEX_USE_RMCP_CLIENT`` env var, defaulting to ``true``) whenever
+    a non-empty ``mcp_config_json`` is materialised — the standalone
+    code-execution path at ``_execute_codex_code_task`` passes ``""`` and
+    therefore stays a no-op. See
+    ``docs/plans/2026-05-16-codex-mcp-tool-access-fix.md``.
+    """
     codex_home = os.path.join(session_dir, ".codex")
     os.makedirs(codex_home, exist_ok=True)
 
     with open(os.path.join(codex_home, "auth.json"), "w") as f:
         json.dump(auth_payload, f)
 
-    config_lines = [
+    # ── top-level Codex config keys (must precede any [section]) ──────
+    use_rmcp_client = os.environ.get("CODEX_USE_RMCP_CLIENT", "true").lower() == "true"
+    config_lines: list[str] = []
+    if mcp_config_json and use_rmcp_client:
+        # Opt in to the Rust MCP client so SSE / streamable_http
+        # ``[mcp_servers.*]`` entries below are actually honoured.
+        # Without this, the default stdio-only client silently drops
+        # them and Codex reports zero MCP tools.
+        config_lines.append("experimental_use_rmcp_client = true")
+        config_lines.append("")
+
+    config_lines.extend([
         f'[projects."{WORKSPACE if os.path.isdir(WORKSPACE) else session_dir}"]',
         'trust_level = "trusted"',
         "",
         f'[projects."{session_dir}"]',
         'trust_level = "trusted"',
-    ]
+    ])
 
     if mcp_config_json:
         config_lines.extend(_codex_mcp_config_lines(mcp_config_json))
@@ -1381,6 +1405,17 @@ def _codex_mcp_config_lines(mcp_config_json: str) -> list[str]:
     get it — keeps us forward-compatible if FastMCP grows
     streamable-http support OR if a tenant adds an external MCP
     server that speaks it.
+
+    Follow-up (2026-05-16): the transport-string fix above was
+    necessary but NOT sufficient. Codex CLI's built-in MCP client
+    only handles stdio; SSE / streamable_http entries are silently
+    dropped unless the top-level ``experimental_use_rmcp_client =
+    true`` flag is set in config.toml. That opt-in is now emitted by
+    ``_prepare_codex_home`` whenever a non-empty MCP config is
+    materialised (gated by env-var ``CODEX_USE_RMCP_CLIENT`` for
+    rollback). Without that flag, the [mcp_servers.*] sections this
+    helper writes would still be inert. See
+    ``docs/plans/2026-05-16-codex-mcp-tool-access-fix.md``.
     """
     data = json.loads(mcp_config_json)
     servers = data.get("mcpServers") or {}

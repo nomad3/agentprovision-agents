@@ -203,6 +203,11 @@ services:
       - TEMPORAL_ADDRESS=temporal:7233
       - API_BASE_URL=http://api:8000
       - CLAUDE_CODE_MODEL=${CLAUDE_CODE_MODEL:-sonnet}
+      # Codex CLI MCP opt-in for the experimental Rust MCP client.
+      # Required for SSE / streamable_http MCP servers to be honoured.
+      # See apps/code-worker/workflows.py::_prepare_codex_home and
+      # docs/plans/2026-05-16-codex-mcp-tool-access-fix.md.
+      - CODEX_USE_RMCP_CLIENT=${CODEX_USE_RMCP_CLIENT:-true}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-ghp_placeholder}
       - OPENCODE_OLLAMA_URL=http://host.docker.internal:11434/v1
       - OPENCODE_MODEL=${OPENCODE_MODEL:-gemma4}

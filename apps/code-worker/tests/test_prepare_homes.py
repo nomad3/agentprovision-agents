@@ -45,6 +45,59 @@ class TestPrepareCodexHome:
         cfg = open(os.path.join(home, "config.toml")).read()
         assert "[mcp_servers" not in cfg
 
+    def test_emits_rmcp_opt_in_when_mcp_config_present(
+        self, tmp_path, fake_mcp_config_json
+    ):
+        """2026-05-16 fix: Codex CLI silently ignores SSE/streamable_http
+        MCP servers unless the top-level
+        ``experimental_use_rmcp_client = true`` flag is set in
+        ``config.toml``. The flag MUST appear before any ``[section]``
+        header (TOML grammar requires top-level keys precede sections).
+        See docs/plans/2026-05-16-codex-mcp-tool-access-fix.md."""
+        session_dir = str(tmp_path / "t")
+        os.makedirs(session_dir)
+        home = wf._prepare_codex_home(
+            session_dir, {"OPENAI_API_KEY": "sk"}, fake_mcp_config_json
+        )
+        cfg = open(os.path.join(home, "config.toml")).read()
+        # The opt-in is on the very first non-empty line, before any
+        # [projects."..."] section header — Codex's TOML parser will
+        # reject otherwise.
+        assert cfg.startswith("experimental_use_rmcp_client = true")
+        # Sanity: the MCP block is still emitted below the flag.
+        assert "[mcp_servers.agentprovision]" in cfg
+
+    def test_omits_rmcp_opt_in_when_mcp_config_empty(self, tmp_path):
+        """Empty mcp_config_json means there's nothing for the rmcp
+        client to talk to — emitting the opt-in would just be noise
+        (and is also the contract the standalone code-execution
+        callsite in ``_execute_codex_code_task`` relies on staying a
+        no-op)."""
+        session_dir = str(tmp_path / "t")
+        os.makedirs(session_dir)
+        home = wf._prepare_codex_home(session_dir, {"k": "v"}, "")
+        cfg = open(os.path.join(home, "config.toml")).read()
+        assert "experimental_use_rmcp_client" not in cfg
+
+    def test_omits_rmcp_opt_in_when_feature_flag_off(
+        self, tmp_path, fake_mcp_config_json, monkeypatch
+    ):
+        """Rollback lever: setting ``CODEX_USE_RMCP_CLIENT=false``
+        suppresses the opt-in even with a non-empty MCP config, so we
+        can disable the rmcp_client path via Helm values without a
+        code revert if it regresses."""
+        monkeypatch.setenv("CODEX_USE_RMCP_CLIENT", "false")
+        session_dir = str(tmp_path / "t")
+        os.makedirs(session_dir)
+        home = wf._prepare_codex_home(
+            session_dir, {"k": "v"}, fake_mcp_config_json
+        )
+        cfg = open(os.path.join(home, "config.toml")).read()
+        assert "experimental_use_rmcp_client" not in cfg
+        # The MCP section is still emitted — only the rmcp opt-in is
+        # gated by the flag.
+        assert "[mcp_servers.agentprovision]" in cfg
+
 
 # ── _prepare_gemini_home_apikey ─────────────────────────────────────────
 
