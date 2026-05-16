@@ -1,37 +1,60 @@
-"""Gemini CLI OAuth login flow.
+"""Gemini CLI OAuth login flow — api-owned PKCE redirect exchange.
 
-Same pattern as codex_auth.py and claude_auth.py — spawns `gemini` in a
-tenant-scoped HOME directory with NO_BROWSER=true, captures the verification
-URL from stdout via a pty, exposes it via API, and waits for the user to
-paste back the auth code. Persists the resulting OAuth credentials to the
-encrypted vault.
+The previous implementation spawned a `gemini` subprocess in a tenant-
+scoped temp `HOME` with `NO_BROWSER=true`, captured the verification URL
+from a pty, and forwarded the user-pasted authorization code back to the
+subprocess via the pty master. The gemini subprocess then internally
+called Google's token endpoint with a PKCE `code_verifier` that lived
+only in the subprocess's memory.
 
-Why this is needed:
-- Gemini CLI's Cloud Code Private API requires a token issued by Gemini's
-  own OAuth client (681255809395-...), NOT our platform's client (553113309640-...).
-- A refresh_token is bound to the OAuth client that issued it — cross-client
-  refresh fails with "unauthorized_client".
-- Therefore the only way to get a working Gemini CLI token is to run the
-  Gemini CLI auth flow itself, which uses its built-in client_id.
+That path had four independent concurrency hazards (subprocess retry
+loop with codeVerifier rotation, two-thread pty reader race, frontend
+poll vs submit-code interleaving, user think-time vs. authcode TTL),
+ALL of which surfaced as the same opaque failure: gemini-cli's
+`FatalAuthenticationError` (exit code 41) after `maxRetries=2` failed
+`authWithUserCode` calls. Two tenants hit it on 2026-05-16; the wider
+class of failures is structural, not bug-of-the-week.
+
+This module owns the OAuth dance end-to-end:
+
+  1. `/start` generates a PKCE `code_verifier` + `code_challenge`, builds
+     a Google authUrl using the same client_id + scopes + redirect_uri
+     gemini-cli embeds, and returns the URL. NO subprocess, no pty, no
+     tenant temp HOME.
+  2. `/submit-code` receives the user-pasted authorization code, exchanges
+     it directly against `https://oauth2.googleapis.com/token`, builds an
+     `oauth_creds.json`-shaped blob, and persists the access_token +
+     refresh_token to the encrypted vault. The code-worker (which is
+     where `gemini` actually runs for chat turns) reads the vault and
+     materialises `${HOME}/.gemini/oauth_creds.json` before exec.
+
+Refresh tokens are issued by Google's OAuth client `681255809395-…`
+(gemini-cli's installed-app client). They are bound to that client_id —
+that's why a refresh token minted by our platform-wide OAuth client
+won't work for the gemini-cli code path. By driving the auth flow with
+the gemini client_id ourselves we preserve that invariant without
+needing the subprocess at all.
+
+Design: docs/plans/2026-05-16-gemini-cli-oauth-exitcode-41.md
 """
-import errno
-import fcntl
+import base64
+import functools
+import glob
+import hashlib
 import json
 import logging
 import os
-import pty
 import re
-import select
-import shutil
-import subprocess
-import tempfile
+import secrets
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -47,24 +70,141 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-ANSI_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-URL_RE = re.compile(r"https://accounts\.google\.com/o/oauth2/[^\s]+")
+
+# ── Gemini-CLI OAuth constants ───────────────────────────────────────────
+#
+# The api MUST use the SAME OAuth client (client_id + client_secret) that
+# gemini-cli embeds, because Google binds refresh_tokens to the issuing
+# client. If we used a platform-owned client, the refresh_token we mint
+# here would be rejected when the code-worker later refreshes it inside
+# the actual `gemini` subprocess during a chat turn.
+#
+# The gemini-cli client_id + client_secret + redirect_uri are baked into
+# the published `@google/gemini-cli` npm bundle (visible verbatim in
+# `chunk-7VVHSNDQ.js` and in upstream source at
+# `packages/core/src/code_assist/oauth2.ts`). Google documents this as
+# the "installed application" client model — the secret is ceremonial,
+# not a real secret. We deliberately do NOT check these values into git:
+# instead we read them at runtime from the installed gemini-cli bundle
+# in the api container (so we stay in sync if Google rotates the client),
+# with optional env-var overrides for non-container test envs.
+GEMINI_OAUTH_REDIRECT_URI = "https://codeassist.google.com/authcode"
+GEMINI_OAUTH_SCOPE = (
+    "https://www.googleapis.com/auth/cloud-platform "
+    "https://www.googleapis.com/auth/userinfo.email "
+    "https://www.googleapis.com/auth/userinfo.profile"
+)
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
+# How long a /start state lives before /submit-code stops accepting it.
+# Google's authorization codes are short-lived (~minutes); we cap the
+# server-side state lifetime at 10 minutes to match.
+LOGIN_TTL_SECONDS = 600
+
+# httpx timeout for the token exchange. Generous; Google usually replies
+# in <500ms.
+TOKEN_EXCHANGE_TIMEOUT = 15.0
+
+
+# ── Gemini-CLI client_id/secret discovery ────────────────────────────────
+#
+# Strategy (in order):
+#   1. Env-var overrides — `GEMINI_OAUTH_CLIENT_ID` and
+#      `GEMINI_OAUTH_CLIENT_SECRET`. Used by unit tests and any future
+#      tenant-specific override.
+#   2. Scan the installed `@google/gemini-cli` npm bundle on disk and
+#      pull the constants Google ships in the published JavaScript. The
+#      api container's Dockerfile already installs the package; the
+#      shipped bundle is the canonical source-of-truth for the values
+#      we need to match.
+#   3. Hard fail with a clear error — we refuse to pretend to start a
+#      flow we know will reject the user's code at the exchange step.
+
+# Common install paths for `@google/gemini-cli` npm bundle, in priority
+# order. The Linux path matches the apt-installed `npm` global location
+# inside the api container; the macOS path matches Homebrew for local
+# dev. NPM_PREFIX from the env wins over both.
+_GEMINI_BUNDLE_SEARCH_PATHS = (
+    os.environ.get("GEMINI_CLI_BUNDLE_DIR"),
+    "/usr/local/lib/node_modules/@google/gemini-cli/bundle",
+    "/usr/lib/node_modules/@google/gemini-cli/bundle",
+    "/opt/homebrew/lib/node_modules/@google/gemini-cli/bundle",
+)
+
+_GEMINI_CLIENT_ID_RE = re.compile(
+    r'(?P<v>\d{4,}-[a-z0-9]+\.apps\.googleusercontent\.com)'
+)
+# Google's "installed application" client secrets are always
+# `GOCSPX-` + a 28-char url-safe-ish trailing run.
+_GEMINI_CLIENT_SECRET_RE = re.compile(r'GOCSPX-[A-Za-z0-9_\-]{20,}')
+
+
+@functools.lru_cache(maxsize=1)
+def _load_gemini_oauth_client() -> Tuple[str, str]:
+    """Return (client_id, client_secret) for the gemini-cli OAuth client.
+
+    Lookup precedence:
+      * env overrides → use them
+      * scan installed bundle → extract from the shipped JS chunks
+      * raise — never silently pick a wrong client
+
+    Cached: bundle parsing on first call only.
+    """
+    env_id = os.environ.get("GEMINI_OAUTH_CLIENT_ID")
+    env_secret = os.environ.get("GEMINI_OAUTH_CLIENT_SECRET")
+    if env_id and env_secret:
+        return env_id, env_secret
+
+    for base in _GEMINI_BUNDLE_SEARCH_PATHS:
+        if not base or not os.path.isdir(base):
+            continue
+        for chunk in sorted(glob.glob(os.path.join(base, "chunk-*.js"))):
+            try:
+                with open(chunk, "r", encoding="utf-8", errors="ignore") as f:
+                    text = f.read()
+            except OSError:
+                continue
+            # Only consider chunks that mention the gemini code-assist
+            # endpoint — otherwise we'll match an unrelated client_id
+            # from a vendored dependency.
+            if "cloudcode-pa.googleapis.com" not in text and "codeassist.google.com" not in text:
+                continue
+            id_match = _GEMINI_CLIENT_ID_RE.search(text)
+            secret_match = _GEMINI_CLIENT_SECRET_RE.search(text)
+            if id_match and secret_match:
+                return id_match.group("v"), secret_match.group(0)
+
+    raise RuntimeError(
+        "Could not locate the @google/gemini-cli OAuth client_id+secret. "
+        "Set GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET env "
+        "vars, or ensure @google/gemini-cli is installed in the api "
+        "container."
+    )
+
+
+# ── State machine ────────────────────────────────────────────────────────
 
 
 @dataclass
 class GeminiLoginState:
+    """Per-tenant in-memory OAuth dance state.
+
+    Lives only until `/submit-code` succeeds or the TTL expires. The
+    PKCE `code_verifier` is the sensitive bit — never logged, never
+    serialised to the response.
+    """
+
     login_id: str
     tenant_id: str
-    status: str = "starting"
+    code_verifier: str = field(repr=False, compare=False)
+    state_token: str = field(repr=False, compare=False)
     verification_url: Optional[str] = None
+    status: str = "pending"
     error: Optional[str] = None
     connected: bool = False
     started_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
     completed_at: Optional[str] = None
-    gemini_home: Optional[str] = None
-    process: Optional[subprocess.Popen] = field(default=None, repr=False, compare=False)
-    pty_fd: Optional[int] = field(default=None, repr=False, compare=False)
-    output_buffer: str = field(default="", repr=False, compare=False)
 
 
 class GeminiAuthManager:
@@ -77,27 +217,31 @@ class GeminiAuthManager:
             return self._by_tenant.get(tenant_id)
 
     def start_login(self, tenant_id: str) -> GeminiLoginState:
+        """Mint a fresh PKCE-backed Google authUrl for this tenant.
+
+        Always replaces any existing in-memory state — if the user
+        re-clicks "Connect" after starting a flow we don't want to
+        hand them the stale URL whose code_verifier may be older than
+        the authorization code Google is about to issue.
+        """
+        login_id = str(uuid.uuid4())
+        # 64 bytes of entropy → 86-char base64url string. Well above
+        # Google's 43-char PKCE minimum.
+        code_verifier = secrets.token_urlsafe(64)
+        code_challenge = _pkce_challenge(code_verifier)
+        state_token = secrets.token_hex(32)
+        auth_url = _build_auth_url(code_challenge, state_token)
+
+        state = GeminiLoginState(
+            login_id=login_id,
+            tenant_id=tenant_id,
+            code_verifier=code_verifier,
+            state_token=state_token,
+            verification_url=auth_url,
+            status="pending",
+        )
         with self._lock:
-            existing = self._by_tenant.get(tenant_id)
-            if existing and existing.status in {"starting", "pending"} and existing.process:
-                return existing
-
-            if existing and existing.process and existing.process.poll() is None:
-                try:
-                    existing.process.terminate()
-                except Exception:
-                    logger.debug("Failed to terminate previous Gemini auth process", exc_info=True)
-
-            login_id = str(uuid.uuid4())
-            gemini_home = tempfile.mkdtemp(prefix=f"gemini-auth-{tenant_id[:8]}-")
-            state = GeminiLoginState(
-                login_id=login_id,
-                tenant_id=tenant_id,
-                gemini_home=gemini_home,
-            )
             self._by_tenant[tenant_id] = state
-
-        threading.Thread(target=self._run_login, args=(state,), daemon=True).start()
         return state
 
     def cancel_login(self, tenant_id: str) -> Optional[GeminiLoginState]:
@@ -105,186 +249,128 @@ class GeminiAuthManager:
             state = self._by_tenant.get(tenant_id)
         if not state:
             return None
-
-        if state.process and state.process.poll() is None:
-            try:
-                state.process.terminate()
-            except Exception:
-                logger.debug("Failed to terminate Gemini auth process", exc_info=True)
-
         state.status = "cancelled"
         state.error = "Login cancelled"
         state.completed_at = datetime.utcnow().isoformat()
         return state
 
     def submit_code(self, tenant_id: str, code: str) -> Optional[GeminiLoginState]:
-        """Pipe an auth code into the running gemini process via its pty."""
+        """Exchange the user-pasted authorization code for OAuth tokens.
+
+        Returns the (mutated) GeminiLoginState. The caller is responsible
+        for translating the state into the response shape via
+        `_serialize_state`. Failures are recorded on the state, not
+        raised, so the frontend can render the error inline (mirrors
+        the old subprocess flow's contract).
+        """
         with self._lock:
             state = self._by_tenant.get(tenant_id)
-        if not state or not state.pty_fd:
+        if not state:
             return None
-        try:
-            os.write(state.pty_fd, (code.strip() + "\n").encode("utf-8"))
-        except Exception as exc:
-            logger.warning("Failed to write code to gemini pty: %s", exc)
-            state.error = f"Failed to submit code: {exc}"
+
+        # Idempotent: if we've already connected, don't re-exchange the
+        # code. The frontend can poll /status after success and we want
+        # those polls to be no-ops, not 4xxs.
+        if state.status == "connected" and state.connected:
+            return state
+
+        if _is_expired(state):
             state.status = "failed"
+            state.error = (
+                "Login session expired. Please click Connect again to start a new flow."
+            )
+            state.completed_at = datetime.utcnow().isoformat()
+            return state
+
+        cleaned = (code or "").strip()
+        if not cleaned:
+            state.status = "failed"
+            state.error = "Authorization code is required"
+            return state
+
+        try:
+            tokens = _exchange_code_for_tokens(cleaned, state.code_verifier)
+        except _OAuthExchangeError as exc:
+            # Don't leak the raw Google error blob into the response —
+            # callers may include the user-pasted code in the body.
+            # We DO log it server-side for debugging.
+            logger.warning(
+                "Gemini OAuth token exchange failed for tenant %s: %s",
+                state.tenant_id[:8],
+                exc.safe_message,
+            )
+            state.status = "failed"
+            state.error = exc.user_message
+            state.completed_at = datetime.utcnow().isoformat()
+            return state
+        except Exception as exc:  # network / parsing errors
+            logger.exception(
+                "Unexpected error exchanging Gemini OAuth code for tenant %s",
+                state.tenant_id[:8],
+            )
+            state.status = "failed"
+            state.error = f"Token exchange failed: {type(exc).__name__}"
+            state.completed_at = datetime.utcnow().isoformat()
+            return state
+
+        if not tokens.get("refresh_token"):
+            # Without refresh_token the credential is useless after ~1h.
+            # Google withholds refresh_token if the user has previously
+            # granted consent for this client_id and `prompt=consent`
+            # wasn't requested — we DO pass prompt=consent in the
+            # authUrl so this should be rare, but fail loud if it
+            # happens.
+            state.status = "failed"
+            state.error = (
+                "Google did not return a refresh_token. Please revoke the "
+                "Gemini Code Assist app from your Google account at "
+                "https://myaccount.google.com/permissions and try again."
+            )
+            state.completed_at = datetime.utcnow().isoformat()
+            return state
+
+        try:
+            self._persist_creds(state.tenant_id, tokens)
+        except Exception as exc:
+            logger.exception(
+                "Failed to persist Gemini OAuth tokens for tenant %s",
+                state.tenant_id[:8],
+            )
+            state.status = "failed"
+            state.error = f"Failed to store credentials: {type(exc).__name__}"
+            state.completed_at = datetime.utcnow().isoformat()
+            return state
+
+        state.status = "connected"
+        state.connected = True
+        state.error = None
+        state.completed_at = datetime.utcnow().isoformat()
+        logger.info(
+            "Gemini CLI credentials persisted for tenant %s",
+            state.tenant_id[:8],
+        )
         return state
 
-    def _run_login(self, state: GeminiLoginState) -> None:
-        # Pre-create .gemini directory with settings.json (oauth-personal)
-        # and projects.json so gemini doesn't fail before reaching auth.
-        gemini_dir = os.path.join(state.gemini_home or "", ".gemini")
-        os.makedirs(gemini_dir, exist_ok=True)
-        with open(os.path.join(gemini_dir, "settings.json"), "w") as f:
-            json.dump({
-                "security": {
-                    "auth": {"selectedType": "oauth-personal"}
-                }
-            }, f, indent=2)
-        with open(os.path.join(gemini_dir, "projects.json"), "w") as f:
-            json.dump({"projects": {}}, f, indent=2)
+    # ── Persistence ─────────────────────────────────────────────────────
 
-        # Spawn gemini in a pty so isInteractive() returns true.
-        # NO_BROWSER=true forces it into the authWithUserCode flow which
-        # prints a verification URL and waits for the user to paste a code.
-        env = {
-            **os.environ,
-            "HOME": state.gemini_home or "",
-            "NO_BROWSER": "true",
-            "TERM": "xterm-256color",
-        }
-        # Drop project vars so it doesn't try Code Assist enterprise validation
-        for k in ("GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_PROJECT_ID", "GEMINI_PROJECT_ID"):
-            env.pop(k, None)
+    def _persist_creds(self, tenant_id: str, tokens: dict) -> None:
+        """Write the oauth_creds.json blob + per-field rows to the vault.
 
-        try:
-            master_fd, slave_fd = pty.openpty()
-            proc = subprocess.Popen(
-                ["gemini"],
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                env=env,
-                close_fds=True,
-            )
-            os.close(slave_fd)
-            # Make master_fd non-blocking
-            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
-            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-        except FileNotFoundError:
-            state.status = "failed"
-            state.error = "Gemini CLI not found on the API service"
-            state.completed_at = datetime.utcnow().isoformat()
-            self._cleanup_state_home(state)
-            return
-        except Exception as exc:
-            state.status = "failed"
-            state.error = str(exc)
-            state.completed_at = datetime.utcnow().isoformat()
-            self._cleanup_state_home(state)
-            return
+        Three rows are written:
+          * `oauth_creds`   — the full JSON blob in gemini's
+            `oauth_creds.json` shape. The code-worker materialises this
+            to `${HOME}/.gemini/oauth_creds.json` before spawning gemini.
+          * `oauth_token`   — bare access_token for convenience consumers
+            (mirrors the legacy `_fetch_integration_credentials` reader).
+          * `refresh_token` — bare refresh_token for the same reason.
 
-        state.process = proc
-        state.pty_fd = master_fd
-
-        # Read output for up to 30 seconds, looking for the verification URL
-        deadline = time.time() + 30
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                break
-            try:
-                ready, _, _ = select.select([master_fd], [], [], 0.5)
-                if master_fd in ready:
-                    chunk = os.read(master_fd, 4096).decode("utf-8", errors="replace")
-                    state.output_buffer += chunk
-            except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.EIO):
-                    logger.warning("Error reading gemini pty: %s", e)
-                    break
-                continue
-
-            cleaned = self._clean_output(state.output_buffer)
-            url_match = URL_RE.search(cleaned)
-            if url_match and not state.verification_url:
-                state.verification_url = url_match.group(0)
-                state.status = "pending"
-                logger.info("Gemini auth URL captured for tenant %s", state.tenant_id[:8])
-                # Don't break — keep reading in background to capture the
-                # post-code-submission output
-
-        if state.status == "starting":
-            state.status = "failed"
-            state.error = "Failed to capture verification URL from Gemini CLI within 30s"
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-            self._cleanup_state_home(state)
-            state.completed_at = datetime.utcnow().isoformat()
-            return
-
-        # Continue reading output in the background while waiting for code submission
-        threading.Thread(target=self._read_until_done, args=(state,), daemon=True).start()
-
-    def _read_until_done(self, state: GeminiLoginState) -> None:
-        """Drain pty output until oauth_creds.json appears or the process exits.
-
-        gemini-cli's NO_BROWSER auth writes oauth_creds.json the moment the
-        auth code is exchanged for tokens, but the process keeps running
-        (it drops into its REPL). We must watch for the file rather than
-        waiting for proc to exit.
+        store_credential() upserts (revokes-then-inserts) by
+        credential_key, so re-running this is idempotent w.r.t. the
+        vault — each row points at the most recent successful auth.
         """
-        deadline = time.time() + 600  # 10 minute window for user to paste code
-        proc = state.process
-        master_fd = state.pty_fd
-        if not proc or master_fd is None:
-            return
+        creds_blob = _build_oauth_creds_blob(tokens)
+        creds_json = json.dumps(creds_blob, indent=2)
 
-        creds_path = os.path.join(state.gemini_home or "", ".gemini", "oauth_creds.json")
-
-        while time.time() < deadline:
-            if proc.poll() is not None:
-                break
-            if os.path.exists(creds_path):
-                # Give the file a moment to be fully flushed
-                time.sleep(0.3)
-                break
-            try:
-                ready, _, _ = select.select([master_fd], [], [], 1.0)
-                if master_fd in ready:
-                    chunk = os.read(master_fd, 4096).decode("utf-8", errors="replace")
-                    state.output_buffer += chunk
-            except OSError as e:
-                if e.errno not in (errno.EAGAIN, errno.EIO):
-                    break
-                continue
-
-        if os.path.exists(creds_path):
-            try:
-                self._persist_creds(state.tenant_id, creds_path)
-                state.status = "connected"
-                state.connected = True
-                state.error = None
-                logger.info("Gemini CLI credentials persisted for tenant %s", state.tenant_id[:8])
-            except Exception as exc:
-                logger.exception("Failed to persist Gemini oauth_creds.json")
-                state.status = "failed"
-                state.error = f"Failed to store credentials: {exc}"
-        elif state.status not in {"cancelled", "connected"}:
-            state.status = "failed"
-            cleaned = self._clean_output(state.output_buffer)
-            state.error = cleaned[-500:] if cleaned else "Gemini auth flow did not produce credentials"
-
-        state.completed_at = datetime.utcnow().isoformat()
-        if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-            except Exception:
-                pass
-        self._cleanup_state_home(state)
-
-    def _persist_creds(self, tenant_id: str, creds_path: str) -> None:
         db: Session = SessionLocal()
         try:
             tid = uuid.UUID(tenant_id)
@@ -311,11 +397,6 @@ class GeminiAuthManager:
                 db.commit()
                 db.refresh(config)
 
-            with open(creds_path) as f:
-                creds_json = f.read()
-            creds = json.loads(creds_json)
-
-            # Store the full oauth_creds.json blob
             store_credential(
                 db,
                 integration_config_id=config.id,
@@ -324,46 +405,164 @@ class GeminiAuthManager:
                 plaintext_value=creds_json,
                 credential_type="oauth_token",
             )
-            # Also store individual fields for convenience (the code-worker
-            # reads these via _fetch_integration_credentials)
-            if creds.get("access_token"):
+            if tokens.get("access_token"):
                 store_credential(
                     db,
                     integration_config_id=config.id,
                     tenant_id=tid,
                     credential_key="oauth_token",
-                    plaintext_value=creds["access_token"],
+                    plaintext_value=tokens["access_token"],
                     credential_type="oauth_token",
                 )
-            if creds.get("refresh_token"):
+            if tokens.get("refresh_token"):
                 store_credential(
                     db,
                     integration_config_id=config.id,
                     tenant_id=tid,
                     credential_key="refresh_token",
-                    plaintext_value=creds["refresh_token"],
+                    plaintext_value=tokens["refresh_token"],
                     credential_type="oauth_token",
                 )
         finally:
             db.close()
 
-    @staticmethod
-    def _ensure_text(output: Optional[object]) -> str:
-        if isinstance(output, bytes):
-            return output.decode("utf-8", errors="ignore")
-        return output or ""
-
-    @staticmethod
-    def _clean_output(output: Optional[object]) -> str:
-        return ANSI_RE.sub("", GeminiAuthManager._ensure_text(output))
-
-    @staticmethod
-    def _cleanup_state_home(state: GeminiLoginState) -> None:
-        if state.gemini_home and os.path.isdir(state.gemini_home):
-            shutil.rmtree(state.gemini_home, ignore_errors=True)
-
 
 manager = GeminiAuthManager()
+
+
+# ── PKCE + URL helpers ───────────────────────────────────────────────────
+
+
+def _pkce_challenge(verifier: str) -> str:
+    """RFC 7636 S256 code challenge = base64url(SHA256(verifier)), no padding."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _build_auth_url(code_challenge: str, state_token: str) -> str:
+    client_id, _ = _load_gemini_oauth_client()
+    params = {
+        "client_id": client_id,
+        "redirect_uri": GEMINI_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope": GEMINI_OAUTH_SCOPE,
+        "access_type": "offline",
+        "code_challenge_method": "S256",
+        "code_challenge": code_challenge,
+        "state": state_token,
+        # Force the consent screen so Google always returns a fresh
+        # refresh_token. Without this, repeated logins for the same
+        # google account may omit refresh_token.
+        "prompt": "consent",
+    }
+    return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
+
+
+def _is_expired(state: GeminiLoginState) -> bool:
+    try:
+        started = datetime.fromisoformat(state.started_at)
+    except (TypeError, ValueError):
+        return False
+    return (datetime.utcnow() - started).total_seconds() > LOGIN_TTL_SECONDS
+
+
+# ── Token exchange ──────────────────────────────────────────────────────
+
+
+class _OAuthExchangeError(Exception):
+    """Raised when Google's token endpoint rejects the code.
+
+    Carries TWO messages: `safe_message` for server logs (includes the
+    raw error_description), and `user_message` for the API response
+    (sanitised — never includes the user-pasted code or raw Google
+    response). The split exists because the api response goes back
+    through the frontend and may end up in browser screenshots / shared
+    bug reports.
+    """
+
+    def __init__(self, safe_message: str, user_message: str):
+        super().__init__(safe_message)
+        self.safe_message = safe_message
+        self.user_message = user_message
+
+
+def _exchange_code_for_tokens(code: str, code_verifier: str) -> dict:
+    """POST authorization code + verifier to Google's token endpoint.
+
+    Returns the parsed JSON response on success. Raises
+    `_OAuthExchangeError` for any 4xx (bad code, expired code,
+    verifier mismatch) and lets network/5xx errors propagate.
+    """
+    client_id, client_secret = _load_gemini_oauth_client()
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "code_verifier": code_verifier,
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "redirect_uri": GEMINI_OAUTH_REDIRECT_URI,
+    }
+    with httpx.Client(timeout=TOKEN_EXCHANGE_TIMEOUT) as client:
+        resp = client.post(
+            GOOGLE_TOKEN_URL,
+            data=payload,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    if resp.status_code >= 400:
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {"raw": resp.text[:500]}
+        error_code = body.get("error") if isinstance(body, dict) else None
+        description = body.get("error_description") if isinstance(body, dict) else None
+        safe = f"{resp.status_code} {error_code or 'unknown'}: {description or body}"
+        if error_code == "invalid_grant":
+            user_msg = (
+                "Google rejected the authorization code (it may have expired "
+                "or already been used). Click Connect to start a new flow."
+            )
+        elif error_code == "invalid_request":
+            user_msg = (
+                "Google rejected the request as malformed. Make sure you "
+                "pasted ONLY the code shown on codeassist.google.com — not "
+                "the whole URL."
+            )
+        else:
+            user_msg = f"Google rejected the code ({error_code or resp.status_code})."
+        raise _OAuthExchangeError(safe, user_msg)
+    return resp.json()
+
+
+def _build_oauth_creds_blob(tokens: dict) -> dict:
+    """Shape tokens into gemini-cli's `oauth_creds.json` schema.
+
+    gemini-cli's `google-auth-library` writes a Credentials object with
+    these keys: access_token, refresh_token, scope, token_type,
+    expiry_date (ms since epoch), and optionally id_token. The
+    code-worker materialises this verbatim into
+    `${HOME}/.gemini/oauth_creds.json`.
+    """
+    now_ms = int(time.time() * 1000)
+    expires_in = tokens.get("expires_in")
+    expiry_date: Optional[int]
+    if isinstance(expires_in, (int, float)) and expires_in > 0:
+        expiry_date = now_ms + int(expires_in * 1000)
+    else:
+        expiry_date = None
+    blob = {
+        "access_token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
+        "scope": tokens.get("scope") or GEMINI_OAUTH_SCOPE,
+        "token_type": tokens.get("token_type") or "Bearer",
+    }
+    if expiry_date is not None:
+        blob["expiry_date"] = expiry_date
+    if tokens.get("id_token"):
+        blob["id_token"] = tokens["id_token"]
+    return blob
+
+
+# ── Response serialisation + DB-truth helper ─────────────────────────────
 
 
 def _serialize_state(state: Optional[GeminiLoginState], connected: bool = False) -> dict:
@@ -426,6 +625,9 @@ def _tenant_has_gemini_credential(db: Session, tenant_id: uuid.UUID) -> bool:
     return credential is not None
 
 
+# ── Routes ───────────────────────────────────────────────────────────────
+
+
 class SubmitCodeBody(BaseModel):
     code: str
 
@@ -436,11 +638,6 @@ def start_gemini_auth(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     state = manager.start_login(str(current_user.tenant_id))
-    # Wait briefly for the URL to appear in the output
-    for _ in range(60):
-        if state.status in {"pending", "failed", "connected"} or state.verification_url:
-            break
-        time.sleep(0.5)
     connected = _tenant_has_gemini_credential(db, current_user.tenant_id)
     return _serialize_state(state, connected=connected)
 
@@ -515,14 +712,7 @@ def disconnect_gemini_auth(
 
     # Reset in-memory manager state for this tenant
     with manager._lock:
-        state = manager._by_tenant.get(str(tid))
-        if state:
-            if state.process and state.process.poll() is None:
-                try:
-                    state.process.terminate()
-                except Exception:
-                    pass
-            manager._by_tenant.pop(str(tid), None)
+        manager._by_tenant.pop(str(tid), None)
 
     return {
         "status": "idle",
