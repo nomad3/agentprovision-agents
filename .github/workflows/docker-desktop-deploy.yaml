@@ -231,3 +231,90 @@ jobs:
           docker image prune -f 2>&1 | tail -3 || true
           echo "── Disk after orphan prune ──"
           df -h /System/Volumes/Data | tail -1 || true
+
+      # ── Gated emergency disk cleanup ──
+      # The auto-prune sentinel (PR #476 family) is meant to own
+      # ongoing disk maintenance, but on machines where the launchd
+      # job isn't installed/running, deploys would silently bleed disk
+      # until the next build hits ENOSPC mid-image-export (observed
+      # 2026-05-16: two consecutive deploys failed at "exporting to
+      # image" before this gate was added).
+      #
+      # This step does NOT replace the sentinel; it is a deploy-time
+      # emergency valve that kicks in ONLY when host disk crosses
+      # bands. Below 80% it is a no-op. Between 80-85% it reclaims
+      # build cache (always safe, no BuildKit wedge risk since
+      # build/export are already done). Above 85% it additionally
+      # recycles the code-worker container writable layer (the
+      # historical biggest offender — accumulates CLI session scratch
+      # at /tmp/* inside the container; recreate flushes 20+ GB in
+      # one shot without touching tenant volumes since workspaces
+      # are mounted on the api service).
+      #
+      # Volumes are NEVER pruned here — workspaces, db data, redis
+      # AOF, temporal state all live on volumes. See
+      # docs/plans/docker_disk_full_recovery.md (memory) for the
+      # rationale.
+      - name: Emergency disk cleanup (gated)
+        if: always()
+        run: |
+          set +e
+          DISK_PCT=$(df /System/Volumes/Data | tail -1 | awk '{gsub("%","",$5); print $5}')
+          echo "host disk usage: ${DISK_PCT}%"
+          if [ -z "$DISK_PCT" ]; then
+            echo "could not read disk %; skipping"
+            exit 0
+          fi
+          if [ "$DISK_PCT" -lt 80 ]; then
+            echo "below 80% — no-op"
+            exit 0
+          fi
+          echo "── above 80%: builder prune ──"
+          # `if: always()` keeps the builder-prune running even after a
+          # failed deploy — that's the most valuable case, since failed
+          # exporter-to-image runs leave the largest BuildKit garbage
+          # behind. Code-worker recycle below is gated more tightly so
+          # we don't kill active CLI subprocesses mid-session.
+          docker builder prune -af 2>&1 | tail -3 || true
+          if [ "$DISK_PCT" -ge 90 ]; then
+            echo "── above 90%: consider recycling code-worker writable layer ──"
+            # Unit-aware parse of `docker ps -s` Size column. The raw
+            # value is e.g. "24.7GB (virtual 30.1GB)" — the earlier
+            # implementation stripped the suffix and treated "24.7" as
+            # KB, so the threshold check never fired. Switch on the
+            # unit suffix and convert to KB explicitly. Log the raw
+            # string so on-call can debug if the parse ever misses.
+            CW_RAW=$(docker ps -s --filter "name=code-worker" --format "{{.Size}}" | head -1 | awk '{print $1}')
+            echo "code-worker raw size: '$CW_RAW'"
+            CW_NUM=$(echo "$CW_RAW" | sed -E 's/[^0-9.]//g')
+            CW_UNIT=$(echo "$CW_RAW" | sed -E 's/[0-9.]//g')
+            case "$CW_UNIT" in
+              GB|GiB) CW_SIZE_KB=$(awk -v n="$CW_NUM" 'BEGIN{print int(n*1024*1024)}') ;;
+              MB|MiB) CW_SIZE_KB=$(awk -v n="$CW_NUM" 'BEGIN{print int(n*1024)}') ;;
+              kB|KB|KiB) CW_SIZE_KB=$(awk -v n="$CW_NUM" 'BEGIN{print int(n)}') ;;
+              B|"") CW_SIZE_KB=$(awk -v n="$CW_NUM" 'BEGIN{print int(n/1024)}') ;;
+              *) CW_SIZE_KB=0 ;;
+            esac
+            echo "parsed code-worker size: ${CW_SIZE_KB} KB (threshold 5242880)"
+            if [ -n "$CW_SIZE_KB" ] && [ "$CW_SIZE_KB" -gt 5242880 ]; then
+              # >5 GiB — worth recycling, BUT only if no CLI subprocess
+              # is currently running. force-recreate would kill in-flight
+              # claude/codex/gemini sessions and surface as a chat failure
+              # to the user; we'd rather defer the cleanup one deploy
+              # cycle than corrupt an active session.
+              ACTIVE_CLI_COUNT=$(docker exec agentprovision-agents-code-worker-1 \
+                sh -c "pgrep -f 'claude|codex|gemini' | wc -l" 2>/dev/null || echo 0)
+              # Strip any whitespace from `wc -l` output before integer compare.
+              ACTIVE_CLI_COUNT=$(echo "$ACTIVE_CLI_COUNT" | tr -d ' ')
+              echo "active CLI processes in code-worker: ${ACTIVE_CLI_COUNT}"
+              if [ "${ACTIVE_CLI_COUNT:-0}" -gt 0 ]; then
+                echo "active CLIs running — skipping code-worker recycle to avoid killing in-flight sessions"
+              else
+                docker compose up -d --force-recreate code-worker 2>&1 | tail -5 || true
+              fi
+            else
+              echo "code-worker layer below 5 GiB threshold; skipping recycle"
+            fi
+          fi
+          echo "── disk after gated cleanup ──"
+          df -h /System/Volumes/Data | tail -1 || true

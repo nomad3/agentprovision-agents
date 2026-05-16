@@ -200,8 +200,37 @@ const DashboardControlCenter = () => {
   // the effects below). When the user clicks a session in the sidebar
   // it updates the *focused* group, not all groups, so split chats can
   // diverge intentionally.
-  const [editorGroups, setEditorGroups] = useState([{ id: 'g0', sessionId: null }]);
-  const [focusedGroupId, setFocusedGroupId] = useState('g0');
+  //
+  // Persisted to localStorage so the layout survives navigation off
+  // /dashboard and back. Without this the user lost split-pane state
+  // every time they popped over to Integrations / Memory / Agents.
+  const [editorGroups, setEditorGroups] = useState(() => {
+    try {
+      const raw = localStorage.getItem('apControl.editorGroups');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0
+          && parsed.every((g) => g && typeof g.id === 'string')) {
+          return parsed.slice(0, MAX_EDITOR_GROUPS);
+        }
+      }
+    } catch { /* corrupt; fall through */ }
+    return [{ id: 'g0', sessionId: null }];
+  });
+  const [focusedGroupId, setFocusedGroupId] = useState(() => {
+    try {
+      return localStorage.getItem('apControl.focusedGroupId') || 'g0';
+    } catch { return 'g0'; }
+  });
+  // Mirror editorGroups + focusedGroupId into localStorage. Saving on
+  // every state mutation is fine — these are tiny arrays (max 4
+  // groups) and writes are async on modern browsers.
+  useEffect(() => {
+    try { localStorage.setItem('apControl.editorGroups', JSON.stringify(editorGroups)); } catch { /* quota */ }
+  }, [editorGroups]);
+  useEffect(() => {
+    try { localStorage.setItem('apControl.focusedGroupId', focusedGroupId); } catch { /* quota */ }
+  }, [focusedGroupId]);
 
   // Agents and command-palette state for ⌘K jump.
   const [agents, setAgents] = useState([]);
@@ -328,7 +357,27 @@ const DashboardControlCenter = () => {
       return v === 'files' ? 'files' : 'chats';
     } catch { return 'chats'; }
   });
-  const [openFile, setOpenFile] = useState(null);
+  // openFile survives navigation so the user lands back on the same
+  // doc when they return to /dashboard. Stored object shape:
+  // { path: string, scope: 'tenant'|'platform' }.
+  const [openFile, setOpenFile] = useState(() => {
+    try {
+      const raw = localStorage.getItem('apControl.openFile');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.path === 'string'
+        && (parsed.scope === 'tenant' || parsed.scope === 'platform')) {
+        return parsed;
+      }
+    } catch { /* corrupt */ }
+    return null;
+  });
+  useEffect(() => {
+    try {
+      if (openFile) localStorage.setItem('apControl.openFile', JSON.stringify(openFile));
+      else localStorage.removeItem('apControl.openFile');
+    } catch { /* quota */ }
+  }, [openFile]);
   const switchLeftMode = (next) => {
     if (next === leftMode) return;
     setLeftMode(next);
