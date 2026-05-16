@@ -103,14 +103,32 @@
   height: clamp(360px, calc(100vh - 520px), 520px);
   align-items: stretch; /* explicit; Bootstrap row default */
 }
-/* `[class*="col-"]` catches col-12 / col-md-8 / col-lg-6 etc.;
-   `.col` (no suffix) doesn't match the attribute pattern so it
-   needs its own selector. */
+/* The chat row used to be a Bootstrap Row+Cols; it's now a
+   `<ResizableSplit>` whose `.rs-pane` children are already
+   `height: 100%`. The legacy `[class*="col-"]` selectors below are
+   kept dormant (they no longer match anything in the row) but
+   harmless in case anything else inside still uses Bootstrap cols. */
 .dcc-chat-row > [class*="col-"],
 .dcc-chat-row > .col {
   height: 100%;
 }
 .dcc-chat-row .ap-card { height: 100%; display: flex; flex-direction: column; }
+/* The middle pane has a wrapper div so it can host either a single
+   card or a nested ResizableSplit. The wrapper has to fill its grid
+   track on the height axis. */
+.dcc-thread-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.dcc-thread-pane > .rs-root,
+.dcc-thread-pane > .ap-card {
+  flex: 1;
+  min-height: 0;
+}
 /* Scope the inner-card overflow hidden to thread + activity ONLY —
    the sessions card has its own inner-scroll list (.dcc-session-list)
    that breaks if its parent body is overflow:hidden + shorter than
@@ -125,13 +143,74 @@
    .dcc-session-list owns the scroll. Adding overflow:hidden to the
    parent broke 12+ session row clipping in the previous attempt. */
 
-.dcc-thread-card { overflow: hidden; }
+.dcc-thread-card { overflow: hidden; position: relative; }
+/* Focus indicator on the active editor-group card. 2 px inset brand
+   primary border so it doesn't shift layout — the existing card
+   border stays in place underneath. */
+.dcc-thread-card-focused {
+  box-shadow: inset 0 0 0 2px var(--ap-primary);
+}
+/* Header strip inside each thread card with title + split/close
+   icon buttons (VSCode editor-group toolbar). */
+.dcc-thread-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ap-space-2);
+  padding: 6px var(--ap-space-3);
+  border-bottom: 1px solid var(--ap-border);
+  flex-shrink: 0;
+  min-height: 36px;
+}
+.dcc-thread-header-title {
+  font-size: var(--ap-fs-sm);
+  font-weight: 500;
+  color: var(--ap-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.dcc-thread-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.dcc-thread-iconbtn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--ap-radius-sm);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--ap-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  font-family: inherit;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.dcc-thread-iconbtn:hover {
+  background: var(--ap-primary-tint);
+  color: var(--ap-text);
+  border-color: var(--ap-border);
+}
+.dcc-thread-iconbtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .dcc-thread-body {
   padding: 0;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  flex: 1;
 }
 .dcc-thread-empty {
   display: flex;
