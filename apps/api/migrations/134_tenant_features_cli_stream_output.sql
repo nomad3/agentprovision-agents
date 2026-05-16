@@ -27,10 +27,15 @@ ALTER TABLE tenant_features
 -- whose tenant_features row hasn't been provisioned yet still get
 -- the flag flipped on. DISTINCT guards against multi-row email
 -- duplicates surfacing the same tenant_id twice.
-INSERT INTO tenant_features (tenant_id, cli_stream_output)
-SELECT DISTINCT tenant_id, TRUE
-  FROM users
- WHERE email = 'saguilera1608@gmail.com'
+--
+-- `tenant_features.id` is `uuid NOT NULL` with no column-level
+-- default — the INSERT must supply one. `gen_random_uuid()` comes
+-- from pgcrypto, already loaded on the pgvector/pgvector:pg13 image
+-- we ship. Without this column listed, deploy 25968614222 failed
+-- with `null value in column "id" violates not-null constraint`.
+INSERT INTO tenant_features (id, tenant_id, cli_stream_output)
+SELECT gen_random_uuid(), u.tenant_id, TRUE
+  FROM (SELECT DISTINCT tenant_id FROM users WHERE email = 'saguilera1608@gmail.com') u
 ON CONFLICT (tenant_id) DO UPDATE
    SET cli_stream_output = TRUE;
 
