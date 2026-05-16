@@ -64,6 +64,24 @@ const DashboardControlCenter = () => {
   const [agents, setAgents] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
+  // Inline session creation — keeps the user on the dashboard. Was
+  // previously navigating to /chat which felt like a page-mode change.
+  const [creating, setCreating] = useState(false);
+  const handleNewSession = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const resp = await chatService.createSession({});
+      setSessions((prev) => [resp.data, ...prev]);
+      setActiveSession(resp.data);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('createSession failed:', e);
+    } finally {
+      setCreating(false);
+    }
+  };
+
   // Binary mode toggle: 'simple' hides the terminal card and the live
   // agent activity panel; 'pro' shows everything. Persisted to
   // localStorage; default is 'simple' for first-touch users.
@@ -310,8 +328,13 @@ const DashboardControlCenter = () => {
               <div className="ap-card-body dcc-sessions">
                 <div className="d-flex justify-content-between align-items-center mb-2">
                   <strong style={{ fontSize: 'var(--ap-fs-sm)' }}>{t('chat.sessions', 'Sessions')}</strong>
-                  <button type="button" className="ap-btn-primary ap-btn-sm" onClick={() => navigate('/chat')}>
-                    + {t('chat.new', 'New')}
+                  <button
+                    type="button"
+                    className="ap-btn-primary ap-btn-sm"
+                    onClick={handleNewSession}
+                    disabled={creating}
+                  >
+                    + {creating ? t('chat.creating', 'Creating…') : t('chat.new', 'New')}
                   </button>
                 </div>
                 {sessions.length === 0 ? (
@@ -350,8 +373,13 @@ const DashboardControlCenter = () => {
                 ) : (
                   <div className="dcc-thread-empty">
                     <p>{t('chat.pickPrompt', 'Pick a session or start a new one to chat with Alpha.')}</p>
-                    <button type="button" className="ap-btn-primary ap-btn-sm" onClick={() => navigate('/chat')}>
-                      + {t('chat.new', 'New session')}
+                    <button
+                      type="button"
+                      className="ap-btn-primary ap-btn-sm"
+                      onClick={handleNewSession}
+                      disabled={creating}
+                    >
+                      + {creating ? t('chat.creating', 'Creating…') : t('chat.new', 'New session')}
                     </button>
                   </div>
                 )}
