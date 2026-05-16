@@ -36,7 +36,13 @@ _MAX_LIMIT = 500
 def _verify_internal_key(
     x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
 ):
-    if x_internal_key not in (settings.API_INTERNAL_KEY, settings.MCP_API_KEY):
+    # Guard against the "empty header matches an unset/empty setting"
+    # case — if API_INTERNAL_KEY or MCP_API_KEY is "" or None, the
+    # `in` tuple would accept a missing header.
+    if not x_internal_key or x_internal_key not in (
+        settings.API_INTERNAL_KEY,
+        settings.MCP_API_KEY,
+    ):
         raise HTTPException(status_code=401, detail="Invalid internal key")
 
 

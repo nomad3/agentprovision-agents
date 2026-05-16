@@ -33,6 +33,7 @@ import AgentActivityPanel from '../dashboard/AgentActivityPanel';
 import ChatTab from '../dashboard/tabs/ChatTab';
 import TerminalCard from '../dashboard/TerminalCard';
 import CommandPalette from '../dashboard/CommandPalette';
+import { SessionEventsProvider } from '../dashboard/SessionEventsContext';
 import './DashboardControlCenter.css';
 
 const statusDotStyle = (status) => ({
@@ -146,13 +147,15 @@ const DashboardControlCenter = () => {
         if (cancelled) return;
         const list = resp.data || [];
         setSessions(list);
-        if (list.length && !activeSession) setActiveSession(list[0]);
+        // Use the functional setter so a session the user *just*
+        // created via handleNewSession isn't clobbered by list[0] if
+        // the initial list-fetch resolves after createSession.
+        if (list.length) setActiveSession((cur) => cur ?? list[0]);
       } catch {
         // Non-fatal; the dashboard still renders the widgets.
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Agents feed the command palette. Fail-soft — palette still works
@@ -293,6 +296,12 @@ const DashboardControlCenter = () => {
         </div>
 
         {/* Merged chat surface: sessions list + active thread + live agent activity */}
+        {/* SessionEventsProvider opens ONE SSE connection per active
+            session and shares events/status across ChatTab's PlanStepper,
+            AgentActivityPanel, and TerminalCard. Previously each
+            subscribed independently → 3-4 concurrent SSE connections
+            per session (browser caps at 6 per origin). */}
+        <SessionEventsProvider sessionId={activeSession?.id || null}>
         <div className="ap-section-label">{t('chat.title', 'Chat with Alpha')}</div>
         <Row className="g-3 dcc-chat-row">
           <Col lg={3} md={4}>
@@ -378,6 +387,7 @@ const DashboardControlCenter = () => {
             <TerminalCard sessionId={activeSession?.id || null} />
           </div>
         )}
+        </SessionEventsProvider>
 
         {/* Compact navigation tiles at the bottom — moved here from the
             top per user feedback (less prime-real-estate noise). */}

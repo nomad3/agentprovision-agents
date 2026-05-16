@@ -20,13 +20,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FaTerminal, FaChevronDown, FaChevronRight } from 'react-icons/fa';
-import { useV2SessionEvents } from './hooks/useV2SessionEvents';
+import { useSessionEvents } from './SessionEventsContext';
 import './TerminalCard.css';
 
 const MAX_LINES_PER_TAB = 500;
 
 const TerminalCard = ({ sessionId }) => {
-  const { events, status } = useV2SessionEvents(sessionId);
+  const { events, status } = useSessionEvents();
   const [open, setOpen] = useState(false);
   const [activePlatform, setActivePlatform] = useState(null);
   const [autoOpened, setAutoOpened] = useState(false);
