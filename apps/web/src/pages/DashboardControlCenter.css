@@ -89,12 +89,31 @@
    both visible" — the chat still scrolls its own thread internally. */
 
 /* FIXED row height so a long chat thread doesn't push the terminal
-   below the fold — the thread scrolls internally inside
-   .ap-chattab-thread. min-height was the bug: it's a floor, not a
-   ceiling. height: <clamp> gives both a floor AND a ceiling. */
+   below the fold. The thread scrolls internally inside
+   .ap-chattab-thread.
+   The chain of `height: 100%` only works if every ancestor in the
+   chain has an explicit height — Bootstrap's `<Col>` is height:auto
+   by default, so we force the Cols inside this row to stretch (the
+   Row's `align-items: stretch` is the Bootstrap default). The cards
+   themselves get `height: 100%` so they fill the col, and
+   `.dcc-thread-body` (height:100%) fills the card. Without this
+   chain, a tall chat thread blew past the row height and pushed the
+   terminal off-screen. */
 .dcc-chat-row {
   height: clamp(360px, calc(100vh - 520px), 520px);
+  align-items: stretch;
 }
+.dcc-chat-row > [class*="col-"],
+.dcc-chat-row > .col,
+.dcc-chat-row > .col-lg-3,
+.dcc-chat-row > .col-lg-6,
+.dcc-chat-row > .col-md-4,
+.dcc-chat-row > .col-md-8,
+.dcc-chat-row > .col-md-12 {
+  height: 100%;
+}
+.dcc-chat-row .ap-card { height: 100%; display: flex; flex-direction: column; }
+.dcc-chat-row .ap-card-body { flex: 1; min-height: 0; overflow: hidden; }
 
 .dcc-thread-card { overflow: hidden; }
 .dcc-thread-body {
@@ -102,6 +121,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
 }
 .dcc-thread-empty {
   display: flex;
