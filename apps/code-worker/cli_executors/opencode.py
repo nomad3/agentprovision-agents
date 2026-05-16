@@ -115,7 +115,8 @@ def execute_opencode_chat(task_input, session_dir: str):
 
 def _execute_opencode_chat_cli(task_input, session_dir: str):
     """Fallback: Execute opencode turn via CLI subprocess."""
-    from workflows import ChatCliResult
+    from workflows import ChatCliResult, WORKSPACE
+    import os
     import subprocess
 
     prompt = task_input.message
@@ -123,9 +124,20 @@ def _execute_opencode_chat_cli(task_input, session_dir: str):
         context_prefix = f"[Context: tenant_id={task_input.tenant_id}]\n\n"
         prompt = context_prefix + prompt
 
+    # ── tenant workspace cwd (task #259) ─────────────────────────────────
+    # Even on the CLI fallback path, scope cwd to the tenant's persistent
+    # workspace projects dir so any files OpenCode writes via tools land
+    # in the shared ``workspaces`` volume and show in FileTreePanel.
+    _cwd_fallback = WORKSPACE if os.path.isdir(WORKSPACE) else session_dir
+    cli_cwd = cli_runtime.resolve_cli_cwd(task_input, _cwd_fallback)
+    env = {**os.environ, "WORKSPACE": cli_cwd}
+
     cmd = ["opencode", "run", "-p", prompt, "-y", "--output-format", "json"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300,
+            cwd=cli_cwd, env=env,
+        )
         if result.returncode != 0:
             err = cli_runtime.safe_cli_error_snippet(result.stderr, result.stdout, 1000)
             return ChatCliResult(

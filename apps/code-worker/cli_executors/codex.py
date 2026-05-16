@@ -51,6 +51,15 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
     if task_input.instruction_md_content.strip():
         prompt = f"{task_input.instruction_md_content.strip()}\n\n# User Request\n\n{task_input.message}"
 
+    # ── tenant workspace cwd (task #259) ─────────────────────────────────
+    # Codex's ``-C <dir>`` is the project root + cwd. Point both at the
+    # tenant's persistent workspace projects dir so plan files land in
+    # the shared ``workspaces`` volume and appear in FileTreePanel.
+    # ``CODEX_HOME`` is HOME-relative (~/.codex) and unaffected by cwd —
+    # we keep the explicit env var below for the auth blob.
+    _cwd_fallback = WORKSPACE if os.path.isdir(WORKSPACE) else session_dir
+    cli_cwd = cli_runtime.resolve_cli_cwd(task_input, _cwd_fallback)
+
     output_path = os.path.join(session_dir, "codex-last-message.txt")
     cmd = [
         "codex",
@@ -61,7 +70,7 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
         output_path,
         "--dangerously-bypass-approvals-and-sandbox",
         "-C",
-        WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+        cli_cwd,
     ]
 
     if os.path.isdir(WORKSPACE):
@@ -74,6 +83,7 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
 
     env = os.environ.copy()
     env["CODEX_HOME"] = codex_home
+    env["WORKSPACE"] = cli_cwd
 
     # ---- streaming emitter (plan 2026-05-16 §4.5) ----
     # codex --json already streams NDJSON; the parser maps each line
@@ -93,7 +103,7 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
             label="Codex",
             timeout=1500,
             env=env,
-            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            cwd=cli_cwd,
             on_chunk=on_chunk,
         )
     finally:

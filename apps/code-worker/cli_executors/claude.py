@@ -146,6 +146,21 @@ def execute_claude_chat(task_input, session_dir: str):
         # so the per-tenant API key takes effect.
         env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
 
+    # ── tenant workspace cwd (task #259) ─────────────────────────────────
+    # Scope the subprocess cwd to the tenant's persistent workspace
+    # projects dir so files Claude writes via the Write/Edit tools land
+    # in the named ``workspaces`` volume that's shared with the api
+    # container — and therefore appear in the dashboard's FileTreePanel.
+    # Falls back to the legacy ``WORKSPACE`` (=/workspace) or session_dir
+    # when the volume isn't mounted (tests, bare-metal dev).
+    _cwd_fallback = WORKSPACE if os.path.isdir(WORKSPACE) else session_dir
+    cli_cwd = cli_runtime.resolve_cli_cwd(task_input, _cwd_fallback)
+    env["WORKSPACE"] = cli_cwd
+    # Also let Claude see the tenant workspace as an --add-dir so it
+    # treats files there as in-scope for Read/Edit.
+    if cli_cwd != _cwd_fallback:
+        cmd.extend(["--add-dir", cli_cwd])
+
     # ---- streaming emitter (no-op if flag off / chat_session_id missing) ----
     emitter = SessionEventEmitter(
         chat_session_id=getattr(task_input, "chat_session_id", "") or "",
@@ -161,7 +176,7 @@ def execute_claude_chat(task_input, session_dir: str):
             label="Claude Code",
             timeout=1500,
             env=env,
-            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            cwd=cli_cwd,
             on_chunk=on_chunk,
         )
     finally:

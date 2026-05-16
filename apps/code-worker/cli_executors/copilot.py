@@ -106,6 +106,17 @@ def execute_copilot_chat(task_input, session_dir: str):
     # on detection).
     env.setdefault("CI", "1")
 
+    # ── tenant workspace cwd (task #259) ─────────────────────────────────
+    # Run Copilot with cwd inside the tenant's persistent workspace so
+    # files it writes via tool calls land in the named ``workspaces``
+    # volume and surface in the dashboard's FileTreePanel. Also push the
+    # tenant workspace into --add-dir so Copilot treats it as in-scope.
+    _cwd_fallback = WORKSPACE if os.path.isdir(WORKSPACE) else session_dir
+    cli_cwd = cli_runtime.resolve_cli_cwd(task_input, _cwd_fallback)
+    env["WORKSPACE"] = cli_cwd
+    if cli_cwd != _cwd_fallback:
+        cmd.extend(["--add-dir", cli_cwd])
+
     # ---- streaming emitter (plan 2026-05-16 §2.4) ----
     # Copilot CLI uses passthrough — terminal sees the raw JSONL stream.
     emitter = SessionEventEmitter(
@@ -121,7 +132,7 @@ def execute_copilot_chat(task_input, session_dir: str):
             label="Copilot CLI",
             timeout=1500,
             env=env,
-            cwd=WORKSPACE if os.path.isdir(WORKSPACE) else session_dir,
+            cwd=cli_cwd,
             on_chunk=on_chunk,
         )
     finally:
