@@ -69,3 +69,31 @@
 .rs-handle:active::after {
   background: var(--ap-primary);
 }
+
+/* ── Column direction (vertical split, horizontal handle) ──────── */
+/* When `direction="column"` is passed, panes stack top-to-bottom and
+   the divider is a 6 px horizontal bar dragged on the Y axis. CSS
+   Grid handles the track axis swap via `gridTemplateRows` (set
+   inline by the component); these rules just flip the handle
+   geometry and cursor. */
+
+.rs-root[data-direction="column"] {
+  /* Grid template is set inline on `gridTemplateRows`; nothing extra
+     needed at the root level — width/height/min-height already fit
+     both directions. */
+}
+
+.rs-handle[data-direction="column"] {
+  width: auto;
+  height: 6px;
+  cursor: row-resize;
+}
+
+.rs-handle[data-direction="column"]::after {
+  /* Rotate the inner pill 90° — instead of a vertical strip we want
+     a horizontal strip filling the bar's width. */
+  top: 2px;
+  bottom: 2px;
+  left: 0;
+  right: 0;
+}

@@ -116,6 +116,25 @@
   height: clamp(360px, calc(100vh - 520px), 520px);
   align-items: stretch; /* explicit; Bootstrap row default */
 }
+/* ── Outer column split (Pro mode only): chat-row over terminal ──
+   When the chat row sits inside the outer column ResizableSplit
+   (PR Phase A of the VSCode-style terminal redesign), the row no
+   longer owns the height clamp — the outer wrapper does. The row
+   fills its grid cell, the inner ResizableSplit fills the row, and
+   the terminal card fills the second grid cell. Height chain:
+       .dcc-outer-col (clamp)
+         → .rs-root (100%)
+           → .rs-pane (100%)
+             → .dcc-chat-row (100%)  ← override clamp above
+               → .ap-card (100%)                                 */
+.dcc-outer-col {
+  height: clamp(600px, calc(100vh - 220px), calc(100vh - 200px));
+  min-height: 0;
+}
+.dcc-outer-col .dcc-chat-row {
+  height: 100%;
+  min-height: 0;
+}
 /* The chat row used to be a Bootstrap Row+Cols; it's now a
    `<ResizableSplit>` whose `.rs-pane` children are already
    `height: 100%`. The legacy `[class*="col-"]` selectors below are
@@ -272,7 +291,8 @@
   .dcc-chat-row,
   .dcc-chat-row > [class*="col-"],
   .dcc-chat-row > .col,
-  .dcc-chat-row .ap-card {
+  .dcc-chat-row .ap-card,
+  .dcc-outer-col {
     height: auto;
   }
   .dcc-chat-row .dcc-thread-card {
