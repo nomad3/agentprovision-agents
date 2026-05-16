@@ -1,0 +1,107 @@
+/* Multi-pane terminal panel.
+ *
+ * Layout chain (outer column ResizableSplit → terminal pane →
+ * `.tp-card` → `.tp-body` → ResizableSplit (or single) → TerminalGroup
+ * `.tg-card`) needs every link at `height: 100%; min-height: 0` so
+ * the inner <pre> can overflow-scroll. Without min-height:0 the inner
+ * grid pane reports its content height and overflows the outer card.
+ */
+
+.tp-card {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Header strip with collapse, title, status badge, group/line count,
+ * split + close buttons. Reuses `.dcc-thread-iconbtn` for the buttons
+ * so the visual matches the chat editor-group toolbar.
+ */
+.tp-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  padding: 6px var(--ap-space-3) 6px var(--ap-space-2);
+  background: transparent;
+  color: var(--ap-text);
+  font-family: inherit;
+  font-size: var(--ap-fs-sm);
+  border-bottom: 1px solid transparent;
+  flex-shrink: 0;
+  min-height: 36px;
+}
+.tp-card.open .tp-header { border-bottom-color: var(--ap-border); }
+
+/* Collapse chevron uses the .dcc-thread-iconbtn body but is smaller
+ * (matches the existing tc-header chevron). */
+.tp-header-collapse {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ap-text-muted);
+  border-radius: var(--ap-radius-sm);
+}
+.tp-header-collapse:hover { background: var(--ap-primary-tint); color: var(--ap-text); }
+
+.tp-header-icon { color: var(--ap-text-muted); }
+.tp-header-title {
+  font-weight: 500;
+  margin-right: var(--ap-space-2);
+}
+
+.tp-header-status {
+  font-size: var(--ap-fs-xs);
+  font-weight: 500;
+}
+.tp-header-status-open { color: var(--ap-success); }
+.tp-header-status-connecting { color: var(--ap-text-muted); }
+.tp-header-status-reconnecting { color: var(--ap-warning); }
+.tp-header-status-unauthorized { color: var(--ap-warning); }
+.tp-header-status-error { color: var(--ap-danger); }
+.tp-header-status-idle { color: var(--ap-text-muted); }
+
+.tp-header-badge {
+  font-size: var(--ap-fs-xs);
+  color: var(--ap-text-muted);
+  background: var(--ap-primary-tint);
+  padding: 2px 8px;
+  border-radius: var(--ap-radius-pill);
+}
+
+/* Push the action buttons to the right edge. */
+.tp-header-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* Body fills the rest of the card; inner ResizableSplit (or single
+ * group) inherits the height chain through `min-height: 0`. */
+.tp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.tp-single,
+.tp-mobile-single {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.tp-single > .tg-card,
+.tp-mobile-single > .tg-card {
+  flex: 1;
+}
