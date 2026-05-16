@@ -418,6 +418,12 @@ pub struct WorkspaceCloneRequest<'a> {
     pub repo: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub branch: Option<&'a str>,
+    /// Overwrite a dirty re-clone target. The CLI wraps this in a
+    /// confirmation prompt; the FE empty-state surfaces it as a
+    /// "force overwrite" toggle. Default false → the server returns
+    /// 409 when the target has unstaged changes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub force: bool,
 }
 
 /// Response for `POST /api/v1/workspace/clone`. ``status`` is

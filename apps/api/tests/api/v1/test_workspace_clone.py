@@ -135,16 +135,20 @@ def test_clone_happy_path_calls_git_clone(workspaces_root: Path):
     assert body["target_path"].endswith("projects/agentprovision-agents")
 
     # Subprocess must have been invoked with a `git clone` containing
-    # the token-bearing URL and the resolved target path. The first
-    # call is the clone (no existing dir).
+    # the resolved target path. After the B1 fix the token is passed
+    # via `-c http.extraHeader` instead of embedded in the URL.
     assert run.called
     args_seen = [c.args[0] if c.args else c.kwargs.get("args") for c in run.call_args_list]
-    clone_calls = [a for a in args_seen if isinstance(a, list) and a[:2] == ["git", "clone"]]
+    clone_calls = [
+        a for a in args_seen
+        if isinstance(a, list) and "clone" in a and a[0] == "git"
+    ]
     assert clone_calls, f"expected a `git clone` invocation, got: {args_seen}"
     clone_argv = clone_calls[0]
-    # URL must embed the token and point at github.com
+    # URL must NOT embed the token; B1 routes the token through a
+    # header instead.
     url = clone_argv[-2]
-    assert url.startswith("https://ghs_testtoken123@github.com/nomad3/agentprovision-agents.git"), url
+    assert url == "https://github.com/nomad3/agentprovision-agents.git", url
     target_arg = clone_argv[-1]
     assert target_arg.endswith("projects/agentprovision-agents"), target_arg
     assert tenant in target_arg
@@ -164,7 +168,7 @@ def test_clone_with_branch_passes_branch_flag(workspaces_root: Path):
     assert r.status_code == 200
     clone_argv = next(
         c.args[0] for c in run.call_args_list
-        if c.args and isinstance(c.args[0], list) and c.args[0][:2] == ["git", "clone"]
+        if c.args and isinstance(c.args[0], list) and "clone" in c.args[0] and c.args[0][0] == "git"
     )
     assert "--branch" in clone_argv
     assert clone_argv[clone_argv.index("--branch") + 1] == "release/1.2"
@@ -194,12 +198,13 @@ def test_clone_idempotent_runs_fetch_reset(workspaces_root: Path):
     assert r.status_code == 200, r.text
 
     cmds_seen = [c.args[0] for c in run.call_args_list if c.args and isinstance(c.args[0], list)]
-    # No `git clone` should have been issued.
-    assert not any(c[:2] == ["git", "clone"] for c in cmds_seen), cmds_seen
+    # No `git clone` should have been issued — the refresh path takes
+    # `fetch + reset` instead.
+    assert not any("clone" in c and c[0] == "git" for c in cmds_seen), cmds_seen
     # `git fetch` and `git reset --hard origin/main` should both appear.
-    assert any(c[:2] == ["git", "fetch"] for c in cmds_seen), cmds_seen
+    assert any("fetch" in c and c[0] == "git" for c in cmds_seen), cmds_seen
     assert any(
-        c[:3] == ["git", "reset", "--hard"] and c[-1] == "origin/main"
+        "reset" in c and "--hard" in c and c[-1] == "origin/main"
         for c in cmds_seen
     ), cmds_seen
 
@@ -297,7 +302,7 @@ def test_clone_uses_caller_tenant_not_body(workspaces_root: Path):
     assert r.status_code == 200, r.text
     clone_argv = next(
         c.args[0] for c in run.call_args_list
-        if c.args and isinstance(c.args[0], list) and c.args[0][:2] == ["git", "clone"]
+        if c.args and isinstance(c.args[0], list) and "clone" in c.args[0] and c.args[0][0] == "git"
     )
     target_arg = clone_argv[-1]
     assert tenant in target_arg, target_arg
@@ -309,3 +314,233 @@ def test_clone_rejects_user_without_tenant(workspaces_root: Path):
     client = _client_for(user)
     r = client.post("/api/v1/workspace/clone", json={"repo": "owner/name"})
     assert r.status_code == 400, r.text
+
+
+# ── PR #530 review fixes ─────────────────────────────────────────────
+
+
+def test_clone_uses_http_extra_header_not_url_token(workspaces_root: Path):
+    """B1: the token must travel as a per-invocation ``-c
+    http.extraHeader=...`` flag, NEVER embedded in the clone URL.
+
+    Locks in the fix that prevents .git/FETCH_HEAD, .git/logs/HEAD,
+    .git/packed-refs from absorbing the token after the clone.
+    """
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = _fake_user(tenant_id=tenant)
+    client = _client_for(user, github_token="ghs_secret_xyz")
+
+    with patch("subprocess.run") as run:
+        run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+        r = client.post("/api/v1/workspace/clone", json={"repo": "owner/name"})
+    assert r.status_code == 200, r.text
+
+    clone_calls = [
+        c.args[0] for c in run.call_args_list
+        if c.args and isinstance(c.args[0], list) and "clone" in c.args[0]
+    ]
+    assert clone_calls, "expected a git clone invocation"
+    argv = clone_calls[0]
+
+    # The clone URL itself must NEVER carry the token.
+    url = argv[-2]
+    assert url == "https://github.com/owner/name.git", url
+    assert "ghs_secret_xyz" not in url
+
+    # The token must be in a `-c http.extraHeader=Authorization: bearer …`
+    # flag instead.
+    joined = " ".join(argv)
+    assert "http.extraHeader=Authorization: bearer ghs_secret_xyz" in joined, joined
+
+
+def test_clone_409_when_target_dirty(workspaces_root: Path):
+    """B2: re-clone path must refuse to clobber a dirty worktree
+    unless `force=true` is in the body. We verify the failure event
+    fires (the endpoint returns 200 because it dispatches to
+    BackgroundTasks)."""
+    tenant = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    user = _fake_user(tenant_id=tenant)
+
+    # Pre-create the target with a `.git/` so we take the refresh path.
+    target = workspaces_root / tenant / "projects" / "name"
+    (target / ".git").mkdir(parents=True)
+
+    client = _client_for(user)
+
+    published: list[tuple[str, dict]] = []
+
+    def _capture(tenant_id, event_type, payload):
+        published.append((event_type, payload))
+
+    from app.api.v1 import workspace as workspace_mod
+    workspace_mod._publish_workspace_event = _capture
+
+    def _run(cmd, *args, **kwargs):
+        # `git status --porcelain` → dirty stdout (any non-empty bytes).
+        if isinstance(cmd, list) and "status" in cmd and "--porcelain" in cmd:
+            return MagicMock(returncode=0, stdout=b" M README.md\n", stderr=b"")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with patch("subprocess.run", side_effect=_run) as run:
+        r = client.post(
+            "/api/v1/workspace/clone",
+            json={"repo": "owner/name", "branch": "main"},
+        )
+    assert r.status_code == 200, r.text
+
+    # No `git fetch` / `reset` should have been issued — we bailed
+    # after the status check.
+    cmds = [c.args[0] for c in run.call_args_list if c.args and isinstance(c.args[0], list)]
+    assert not any("fetch" in c for c in cmds), cmds
+    assert not any("reset" in c for c in cmds), cmds
+
+    failures = [p for (ev, p) in published if ev == "workspace_repo_clone_failed"]
+    assert failures, f"expected a clone-failed event, got {published}"
+    assert "dirty" in failures[0]["error"].lower()
+
+
+def test_clone_force_true_overwrites_dirty_target(workspaces_root: Path):
+    """B2 (companion): with `force=true` the re-clone proceeds past
+    the dirty check and runs `fetch + reset`."""
+    tenant = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    user = _fake_user(tenant_id=tenant)
+    target = workspaces_root / tenant / "projects" / "name"
+    (target / ".git").mkdir(parents=True)
+
+    client = _client_for(user)
+
+    def _run(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and "status" in cmd and "--porcelain" in cmd:
+            return MagicMock(returncode=0, stdout=b" M README.md\n", stderr=b"")
+        return MagicMock(returncode=0, stdout=b"", stderr=b"")
+
+    with patch("subprocess.run", side_effect=_run) as run:
+        r = client.post(
+            "/api/v1/workspace/clone",
+            json={"repo": "owner/name", "branch": "main", "force": True},
+        )
+    assert r.status_code == 200, r.text
+    cmds = [c.args[0] for c in run.call_args_list if c.args and isinstance(c.args[0], list)]
+    assert any("fetch" in c for c in cmds), cmds
+    assert any(c[:3] == ["git", "-C", str(target)] and "reset" in c for c in cmds), cmds
+
+
+def test_concurrent_clone_returns_409(workspaces_root: Path):
+    """B3: a second clone request for the same (tenant, repo) while a
+    previous one is in flight must 409."""
+    tenant = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    user = _fake_user(tenant_id=tenant)
+    client = _client_for(user)
+
+    from app.api.v1 import workspace as workspace_mod
+
+    # First call grabs the lock (returns True), second fails (False).
+    workspace_mod._acquire_clone_lock = MagicMock(side_effect=[False])
+
+    with patch("subprocess.run") as run:
+        r = client.post("/api/v1/workspace/clone", json={"repo": "owner/name"})
+    assert r.status_code == 409, r.text
+    assert "in flight" in r.json()["detail"].lower()
+    assert not run.called
+
+
+def test_clone_413_when_quota_exceeded(workspaces_root: Path):
+    """I2: per-tenant disk budget gate."""
+    tenant = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    user = _fake_user(tenant_id=tenant)
+    client = _client_for(user)
+
+    from app.api.v1 import workspace as workspace_mod
+
+    workspace_mod._tenant_workspace_bytes = MagicMock(return_value=2 * 1024**3)
+
+    with patch("subprocess.run") as run:
+        r = client.post("/api/v1/workspace/clone", json={"repo": "owner/name"})
+    assert r.status_code == 413, r.text
+    assert "quota" in r.json()["detail"].lower()
+    assert not run.called
+
+
+@pytest.mark.parametrize(
+    "bad_branch",
+    [
+        "refs/heads/main",
+        "a..b",
+        "-flag-like",
+        "branch.lock",
+        "branch@{1}",
+    ],
+)
+def test_clone_rejects_branch_via_check_ref_format(
+    workspaces_root: Path, bad_branch: str
+):
+    """I7: branch validation defers to `git check-ref-format` to catch
+    git-illegal names the cheap regex would otherwise allow."""
+    tenant = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+    user = _fake_user(tenant_id=tenant)
+    client = _client_for(user)
+    r = client.post(
+        "/api/v1/workspace/clone",
+        json={"repo": "owner/name", "branch": bad_branch},
+    )
+    assert r.status_code == 400, f"branch={bad_branch!r} got {r.status_code}: {r.text}"
+
+
+# ── I5: integration test that exercises the real token resolver ──────
+
+
+@pytest.mark.integration
+def test_resolve_github_token_reads_real_integration_row(workspaces_root: Path):
+    """I5: catches column-name drift on IntegrationConfig +
+    encryption-vault contract changes by exercising the resolver end-
+    to-end against a real DB-backed row.
+
+    Requires Postgres (UUID + JSONB types don't compile on sqlite);
+    skipped automatically when DATABASE_URL points at sqlite so the
+    default unit run doesn't crash on collection.
+    """
+    pytest.importorskip("sqlalchemy")
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.core.config import settings
+
+    if settings.DATABASE_URL.startswith("sqlite"):
+        pytest.skip("requires Postgres (UUID/JSONB types)")
+
+    from app.db.base import Base
+    from app.models.integration_config import IntegrationConfig
+    from app.models.tenant import Tenant
+    from app.api.v1 import workspace as workspace_mod
+
+    engine = create_engine(settings.DATABASE_URL, future=True)
+    Base.metadata.create_all(engine, checkfirst=True)
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    db = SessionLocal()
+    try:
+        tenant_id = uuid.uuid4()
+        tenant = Tenant(id=tenant_id, name="github-token-test")
+        db.add(tenant)
+        db.flush()
+
+        # Patch the vault decrypt to return a deterministic token so
+        # we exercise the resolver's column lookup without depending
+        # on real encryption key material.
+        with patch(
+            "app.api.v1.workspace.retrieve_credentials_for_skill",
+            return_value={"oauth_token": "ghs_e2e_token"},
+        ):
+            cfg = IntegrationConfig(
+                tenant_id=tenant_id,
+                integration_name="github",
+                enabled=True,
+            )
+            db.add(cfg)
+            db.commit()
+
+            token = workspace_mod._resolve_github_token(db, tenant_id)
+            assert token == "ghs_e2e_token"
+    finally:
+        db.rollback()
+        db.close()

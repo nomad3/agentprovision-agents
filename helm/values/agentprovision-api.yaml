@@ -217,9 +217,16 @@ persistence:
 # required for the cross-pod fan-out; the code-worker values file
 # mirrors this block so both PVCs resolve to the same Filestore mount
 # in prod and to the same docker-compose named volume in dev.
+#
+# storageClass is intentionally empty: the operator MUST set it to a
+# cluster-appropriate RWX class before applying. Known values:
+#   - GKE Filestore: `standard-rwx`
+#   - EKS:           `efs-sc`
+#   - AKS:           `azurefile-csi-premium`
+# Local docker-compose ignores this entirely.
 workspaces:
   enabled: true
-  storageClass: standard-rwx
+  storageClass: ""
   accessModes:
     - ReadWriteMany
   size: 10Gi

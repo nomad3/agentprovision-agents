@@ -829,8 +829,9 @@ impl ApiClient {
         &self,
         repo: &str,
         branch: Option<&str>,
+        force: bool,
     ) -> Result<WorkspaceCloneResponse> {
-        let body = WorkspaceCloneRequest { repo, branch };
+        let body = WorkspaceCloneRequest { repo, branch, force };
         self.post_json("/api/v1/workspace/clone", &body).await
     }
 }

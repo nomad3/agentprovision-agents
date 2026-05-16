@@ -10,6 +10,8 @@
 //! token, kicks off the clone in BackgroundTasks, and returns a
 //! job_id immediately.
 
+use std::io::IsTerminal;
+
 use clap::{Args, Subcommand};
 
 use crate::context::Context;
@@ -42,6 +44,19 @@ pub struct CloneArgs {
     /// branch resolution.
     #[arg(long, value_name = "BRANCH")]
     pub branch: Option<String>,
+
+    /// Overwrite local changes when re-cloning into a dirty target.
+    /// Without this flag the server refuses (409) so users can't lose
+    /// uncommitted work. The CLI prompts for confirmation before
+    /// propagating `force=true` in interactive runs; `--yes` skips
+    /// the prompt for scripted callers.
+    #[arg(long)]
+    pub force: bool,
+
+    /// Skip the dirty-overwrite confirmation prompt. Pair with
+    /// `--force` for non-interactive automation.
+    #[arg(long)]
+    pub yes: bool,
 }
 
 pub async fn dispatch(cmd: WorkspaceCommand, ctx: Context) -> anyhow::Result<()> {
@@ -51,9 +66,25 @@ pub async fn dispatch(cmd: WorkspaceCommand, ctx: Context) -> anyhow::Result<()>
 }
 
 async fn clone(args: CloneArgs, ctx: Context) -> anyhow::Result<()> {
+    // Interactive confirmation before propagating `force=true` — keeps
+    // a stray `--force` from silently destroying local edits. Non-tty
+    // / `--yes` callers skip the prompt.
+    if args.force && !args.yes && std::io::stdin().is_terminal() {
+        eprintln!(
+            "[alpha] --force will discard any local changes in the target. Continue? [y/N]"
+        );
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        let answer = answer.trim().to_lowercase();
+        if answer != "y" && answer != "yes" {
+            output::info("aborted.");
+            return Ok(());
+        }
+    }
+
     let resp = ctx
         .client
-        .clone_workspace_repo(&args.repo, args.branch.as_deref())
+        .clone_workspace_repo(&args.repo, args.branch.as_deref(), args.force)
         .await?;
 
     if ctx.json {

@@ -122,7 +122,55 @@ Adding a sibling verb (e.g. `alpha workspace pull`) means one kernel handler —
 
 ---
 
-## 6. References
+## 6. Operator migration: orphaned code-worker PVC
+
+When PR #514 first landed the code-worker had its own `workspaces.enabled=true`
+block in `helm/values/agentprovision-code-worker.yaml` and the chart provisioned
+a **separate** PVC for it. PR #530 switches the code-worker to
+`existingClaim: agentprovision-api-workspaces` so both deployments mount the
+same PVC.
+
+If you upgraded across this boundary the old code-worker PVC is **orphaned**
+(still bound, still consuming Filestore quota, no longer mounted). Migrate any
+data the old worker wrote before deleting it:
+
+```bash
+# Spin up a transient pod that mounts BOTH PVCs and rsyncs across.
+kubectl run pvc-migrate --rm -it --restart=Never \
+  --image=alpine \
+  --overrides='{
+    "spec": {
+      "containers": [{
+        "name": "pvc-migrate",
+        "image": "alpine",
+        "command": ["sh","-c","apk add --no-cache rsync && rsync -av /old/ /new/ && sleep 1"],
+        "volumeMounts": [
+          {"name":"old","mountPath":"/old"},
+          {"name":"new","mountPath":"/new"}
+        ]
+      }],
+      "volumes": [
+        {"name":"old","persistentVolumeClaim":{"claimName":"<OLD-CODE-WORKER-PVC>"}},
+        {"name":"new","persistentVolumeClaim":{"claimName":"agentprovision-api-workspaces"}}
+      ]
+    }
+  }'
+
+# Verify, then reclaim quota:
+kubectl delete pvc <OLD-CODE-WORKER-PVC>
+```
+
+Local docker-compose deployments are unaffected — the named volume
+`agentprovision-agents_workspaces` was already shared.
+
+The `storageClass` for the api chart's PVC is intentionally empty by default
+(I3 fix on PR #530). Operators must set it explicitly: `standard-rwx` on GKE,
+`efs-sc` on EKS, `azurefile-csi-premium` on AKS, etc. The chart will refuse
+to render the PVC until a class is set.
+
+---
+
+## 7. References
 
 | Topic | Doc |
 |---|---|

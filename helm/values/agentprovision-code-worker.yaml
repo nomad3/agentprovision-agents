@@ -137,8 +137,11 @@ tmpDirs:
 # `alpha workspace clone`). Both deployments mount the same PVC at the
 # same path so subprocess writes are immediately visible to the file-
 # tree endpoints. ReadWriteMany is required because the api and code-
-# worker run as separate pods; storageClass picks up the cluster's RWX
-# class (default: standard-rwx for GKE Filestore).
+# worker run as separate pods. The `existingClaim` setting below points
+# this deployment at the api chart's PVC — the api chart owns the
+# `storageClass` choice (intentionally empty default; operator sets
+# `standard-rwx` for GKE, `efs-sc` for EKS, `azurefile-csi-premium`
+# for AKS, etc).
 #
 # Mirrored in docker-compose.yml — the code-worker service mounts the
 # shared `workspaces` named volume at the same path.
