@@ -7,7 +7,9 @@ the tests focus on:
 
   - 200 with the expected shape for a tenant with one CLI connected,
     and the response respects the resolver's chain priority order
-  - 200 with just ``["opencode"]`` for a fresh tenant (local floor)
+  - 200 with an empty list for a fresh tenant — ``opencode`` (the
+    routing floor) is excluded from the public response so the UI
+    contract stays clean
   - 401 without an Authorization header (auth gate)
 """
 from __future__ import annotations
@@ -97,8 +99,9 @@ def _make_client(user, *, monkeypatch, connected_map):
 
 def test_returns_codex_when_only_codex_connected(monkeypatch):
     """A tenant with only the codex integration plugged in gets back
-    ``["codex", "opencode"]`` — codex first (resolver priority), the
-    local floor included so the dropdown still has a baseline option."""
+    ``["codex"]`` — opencode (the local-Gemma routing floor) is excluded
+    from the public response because it's not a user-pickable option in
+    the InlineCliPicker dropdown."""
     user = _fake_user("11111111-1111-1111-1111-111111111111")
     connected_map = {
         "codex": {"connected": True},
@@ -111,24 +114,54 @@ def test_returns_codex_when_only_codex_connected(monkeypatch):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "connected" in body
-    assert body["connected"] == ["codex", "opencode"]
+    assert body["connected"] == ["codex"]
+    assert "opencode" not in body["connected"]
 
 
 # ---------------------------------------------------------------------------
-# 200 — fresh tenant (no integrations) → opencode floor only
+# 200 — fresh tenant (no integrations) → empty list, no opencode leak
 # ---------------------------------------------------------------------------
 
 
-def test_returns_only_opencode_floor_for_fresh_tenant(monkeypatch):
-    """A tenant with zero integrations should still get ``["opencode"]``
-    — the local-Gemma 4 floor is always available so the UI doesn't
-    end up with an Auto-only dropdown and no other affordance."""
+def test_fresh_tenant_returns_empty_list_no_opencode_leak(monkeypatch):
+    """A tenant with zero integrations should get back an empty list.
+
+    ``opencode`` is the routing floor and still resolves internally, but
+    the public response must NOT include it — surfacing it would create
+    a contract mismatch with the frontend's ``CLI_OPTIONS`` (which
+    doesn't list opencode, so it would be silently stripped client-side).
+    Test asserts both the exact shape and a defensive "not in list"
+    check to make the intent loud."""
     user = _fake_user("22222222-2222-2222-2222-222222222222")
     client = _make_client(user, monkeypatch=monkeypatch, connected_map={})
 
     r = client.get("/api/v1/integrations/connected-clis")
     assert r.status_code == 200, r.text
-    assert r.json() == {"connected": ["opencode"]}
+    assert r.json() == {"connected": []}
+    assert "opencode" not in r.json()["connected"]
+
+
+# ---------------------------------------------------------------------------
+# 200 — opencode is excluded even when other CLIs are also connected
+# ---------------------------------------------------------------------------
+
+
+def test_opencode_excluded_when_other_clis_present(monkeypatch):
+    """Tenant has codex connected; opencode is forced into the resolver's
+    ``available`` set as the always-on local floor. The public response
+    should be ``["codex"]`` only — opencode never appears in the UI
+    list, regardless of what else is connected."""
+    user = _fake_user("44444444-4444-4444-4444-444444444444")
+    connected_map = {
+        "codex": {"connected": True},
+    }
+    client = _make_client(user, monkeypatch=monkeypatch, connected_map=connected_map)
+
+    r = client.get("/api/v1/integrations/connected-clis")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["connected"] == ["codex"]
+    assert "opencode" not in body["connected"]
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +189,10 @@ def test_returned_order_matches_resolver_priority(monkeypatch):
     r = client.get("/api/v1/integrations/connected-clis")
     assert r.status_code == 200, r.text
     body = r.json()
-    # gemini_cli before copilot_cli before claude_code before opencode.
-    assert body["connected"] == ["gemini_cli", "copilot_cli", "claude_code", "opencode"]
+    # gemini_cli before copilot_cli before claude_code; opencode is
+    # excluded from the public response (routing floor, not user-pickable).
+    assert body["connected"] == ["gemini_cli", "copilot_cli", "claude_code"]
+    assert "opencode" not in body["connected"]
 
 
 # ---------------------------------------------------------------------------

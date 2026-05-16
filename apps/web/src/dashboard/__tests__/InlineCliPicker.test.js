@@ -159,6 +159,37 @@ describe('InlineCliPicker', () => {
     warnSpy.mockRestore();
   });
 
+  // ──────────────────────────────────────────────────────────────────
+  // Stale selection — tenant's stored CLI is no longer connected.
+  // The select.value must still match the stored value so React state
+  // and DOM stay in sync; otherwise the browser silently displays Auto
+  // while state says claude_code and saves keep writing the old CLI.
+  // ──────────────────────────────────────────────────────────────────
+  test('selected CLI no longer connected still renders as an option', async () => {
+    brandingService.getFeatures.mockResolvedValue({
+      default_cli_platform: 'claude_code',
+    });
+    // Backend says only codex is connected — claude_code is the stale
+    // tenant choice that should still appear (with a "(disconnected)"
+    // suffix) so the <select> value resolves to a real <option>.
+    integrationConfigService.listConnectedClis.mockResolvedValue({
+      data: { connected: ['codex'] },
+    });
+    render(<InlineCliPicker />);
+    const select = await screen.findByLabelText(/Tenant default CLI platform/i);
+    // Direct DOM access mirrors the pattern used by the sibling tests
+    // above — Testing Library has no first-class option-list helper, so
+    // walking ``<option>`` nodes is the least-bad readout.
+    // eslint-disable-next-line testing-library/no-node-access
+    const labels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    // Order: Auto, then CLI_OPTIONS order (claude_code is first in
+    // CLI_OPTIONS, codex second). claude_code is tagged "(disconnected)".
+    expect(labels).toEqual(['Auto', 'Claude Code (disconnected)', 'Codex']);
+    // Crucially: the stored value is preserved on the select element
+    // so the user's choice isn't silently shadowed by Auto.
+    expect(select.value).toBe('claude_code');
+  });
+
   test('each instance gets a unique id (split-pane safe)', async () => {
     render(<InlineCliPicker />);
     render(<InlineCliPicker />);

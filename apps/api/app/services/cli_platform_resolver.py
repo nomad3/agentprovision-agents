@@ -265,22 +265,30 @@ def _connected_clis(db: Session, tenant_id: uuid.UUID) -> tuple[set[str], bool]:
 
 
 def connected_clis_for_tenant(db: Session, tenant_id: uuid.UUID) -> List[str]:
-    """Return the CLIs this tenant has usable credentials for, ordered by
-    the resolver's default chain priority.
+    """Returns CLIs that are user-pickable AND currently connected.
 
-    Public wrapper around ``_connected_clis`` for callers that just want
-    the sorted list (e.g. the ``/integrations/connected-clis`` API used
-    by the chat-header InlineCliPicker dropdown). The returned order
-    matches ``_DEFAULT_PRIORITY`` so a UI offering these options shows
-    them in the same order the backend would try them.
+    Excludes ``opencode`` (the local-Gemma routing floor) — that's not a
+    user choice. The internal ``_connected_clis`` still includes it for
+    routing in ``resolve_cli_chain``; this public helper drops it because
+    it's only used by the ``/integrations/connected-clis`` API powering
+    the chat-header InlineCliPicker dropdown, where surfacing the routing
+    floor as a selectable option would create a contract mismatch (the
+    frontend's ``CLI_OPTIONS`` doesn't list it, so it would be silently
+    stripped client-side — a rot-prone setup).
+
+    Ordering matches ``_DEFAULT_PRIORITY`` so a UI offering these
+    options shows them in the same order the backend would try them.
 
     On a transient DB error (``query_ok=False``), the underlying helper
-    returns just ``{"opencode"}``; we surface that as ``["opencode"]``
-    rather than guessing — the local floor is the only thing we can
-    guarantee will route in that case.
+    returns just ``{"opencode"}``; after the exclusion that surfaces as
+    ``[]`` — the public list is empty rather than guessing, and the UI
+    is expected to fall back to its all-options view.
     """
     available, _query_ok = _connected_clis(db, tenant_id)
-    return [cli for cli in _DEFAULT_PRIORITY if cli in available]
+    return [
+        cli for cli in _DEFAULT_PRIORITY
+        if cli in available and cli != "opencode"
+    ]
 
 
 def resolve_cli_chain(

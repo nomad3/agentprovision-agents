@@ -132,11 +132,27 @@ const InlineCliPicker = () => {
   const selectValue = current || AUTO_VALUE;
   // null → endpoint failed/pending: show every option so a 5xx never
   // strands the user. Array → filter to just the connected CLIs the
-  // backend confirmed (opencode is intentionally excluded from the UI
-  // here — it's the routing floor, not a user-pickable target).
+  // backend confirmed (opencode is intentionally excluded from the API
+  // response — it's the routing floor, not a user-pickable target).
+  //
+  // ALWAYS include the tenant's stored ``current`` value even if it's
+  // no longer in connectedClis. Otherwise the <select> value points at
+  // a non-existent <option> and the browser silently displays the first
+  // option (Auto) while React state still says claude_code — a hidden
+  // mismatch where the user sees "Auto" but saves still write the old
+  // CLI. The stale option is tagged "(disconnected)" so the user has a
+  // visible hint that the choice is no longer wired up.
+  const staleSet = new Set();
   const visibleOptions = connectedClis === null
     ? CLI_OPTIONS
-    : CLI_OPTIONS.filter((opt) => connectedClis.includes(opt.value));
+    : CLI_OPTIONS.filter((opt) => {
+        if (connectedClis.includes(opt.value)) return true;
+        if (opt.value === current) {
+          staleSet.add(opt.value);
+          return true;
+        }
+        return false;
+      });
 
   return (
     <div
@@ -154,7 +170,9 @@ const InlineCliPicker = () => {
       >
         <option value={AUTO_VALUE}>Auto</option>
         {visibleOptions.map((opt) => (
-          <option key={opt.value} value={opt.value}>{opt.label}</option>
+          <option key={opt.value} value={opt.value}>
+            {staleSet.has(opt.value) ? `${opt.label} (disconnected)` : opt.label}
+          </option>
         ))}
       </select>
       {saving && <span className="inline-cli-picker-saving">…</span>}
