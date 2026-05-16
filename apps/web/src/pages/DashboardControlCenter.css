@@ -38,7 +38,20 @@
 
 /* ── Sessions list (left column of the chat surface) ───────────── */
 
-.dcc-sessions { padding: var(--ap-space-3); }
+/* The body needs an explicit flex-column chain so FileTreePanel's
+   `.ftp-tree { flex: 1; overflow-y: auto }` actually clips against
+   the card height. Without `display: flex; min-height: 0` here the
+   tree grows past the card and the user has no way to scroll long
+   lists (observed 2026-05-16 on the Platform-scope tree). The
+   Chats-mode session list owns its own `.dcc-session-list` scroll
+   via `max-height`, so this chain is harmless to it. */
+.dcc-sessions {
+  padding: var(--ap-space-3);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
 
 .dcc-session-list {
   list-style: none;
