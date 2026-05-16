@@ -73,11 +73,21 @@
   color: var(--ap-text);
   line-height: 1.55;
 }
+/* Scale headings down. Browser defaults (h1=2em, h2=1.5em) feel
+   enormous inside the narrow right pane. Bias toward "dense docs
+   reading" sizes — closer to the chat thread typography so the
+   page feels visually consistent. */
+.fv-markdown h1 { font-size: 1.25rem; font-weight: 600; }
+.fv-markdown h2 { font-size: 1.1rem;  font-weight: 600; }
+.fv-markdown h3 { font-size: 1rem;    font-weight: 600; }
+.fv-markdown h4 { font-size: 0.95rem; font-weight: 600; }
 .fv-markdown h1,
 .fv-markdown h2,
-.fv-markdown h3 {
+.fv-markdown h3,
+.fv-markdown h4 {
   margin-top: var(--ap-space-3);
   margin-bottom: var(--ap-space-2);
+  line-height: 1.3;
 }
 .fv-markdown pre {
   background: var(--ap-bg-elev-1, var(--ap-primary-tint));
