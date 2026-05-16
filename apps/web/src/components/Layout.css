@@ -244,6 +244,60 @@
   margin-left: 280px;
   min-height: 100vh;
   background: linear-gradient(180deg, rgba(240, 245, 250, 0.6) 0%, rgba(240, 245, 250, 0.8) 100%);
+  transition: margin-left 180ms ease;
+}
+
+/* ── Icon-rail collapse mode (VSCode / Cursor / Antigravity) ────
+ * When `.layout-container.sidebar-collapsed` is set:
+ *   - sidebar-glass shrinks to 64 px (just enough for icons + status)
+ *   - main-content's left margin matches (frees real estate)
+ *   - brand text + nav labels + section headers hide
+ *   - user dropdown collapses to the avatar only
+ *
+ * When the user hovers the rail OR pins it open, the
+ * `.sidebar-expanded` class flips the rail back to 280 px AS AN
+ * OVERLAY (z-index above content, content doesn't shift). That way
+ * the chat surface doesn't reflow as the rail breathes.
+ */
+.layout-container.sidebar-collapsed .sidebar-glass {
+  width: 64px;
+  transition: width 180ms ease;
+}
+.layout-container.sidebar-collapsed .main-content {
+  margin-left: 64px;
+}
+.layout-container.sidebar-collapsed.sidebar-expanded .sidebar-glass {
+  width: 280px;
+  box-shadow: 8px 0 32px rgba(0, 0, 0, 0.25);
+}
+/* When peeking, do NOT push the content — the rail overlays it. */
+.layout-container.sidebar-collapsed.sidebar-expanded .main-content {
+  margin-left: 64px;
+}
+
+/* Hide labels / headers when collapsed AND not expanded. Use opacity
+ * + visibility for a smooth fade rather than a hard cut. */
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-label,
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-section-title,
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-badge,
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .brand-text,
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .user-email,
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .user-role,
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .sidebar-header-actions {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Center the icon in collapsed nav links. */
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .sidebar-nav-link {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+.layout-container.sidebar-collapsed:not(.sidebar-expanded) .nav-section-header {
+  padding: 0;
+  height: 4px;
 }
 
 .content-wrapper {
