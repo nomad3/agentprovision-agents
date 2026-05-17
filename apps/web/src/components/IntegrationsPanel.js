@@ -267,9 +267,12 @@ const IntegrationsPanel = () => {
     return () => clearInterval(interval);
   }, [codexAuthState?.status, fetchData]);
 
-  // Poll Claude auth status while login is pending
+  // Poll Claude auth status while login is pending.
+  // `submitting` is included: after user pastes the code, the server-side
+  // PKCE exchange can take a few seconds; without polling, the
+  // "Finishing OAuth handshake…" alert lingers until manual refresh.
   useEffect(() => {
-    if (!['starting', 'pending'].includes(claudeAuthState?.status)) return undefined;
+    if (!['starting', 'pending', 'submitting'].includes(claudeAuthState?.status)) return undefined;
 
     const interval = setInterval(async () => {
       try {
@@ -294,9 +297,11 @@ const IntegrationsPanel = () => {
     return () => clearInterval(interval);
   }, [claudeAuthState?.status, fetchData]);
 
-  // Poll Gemini CLI auth status while login is pending
+  // Poll Gemini CLI auth status while login is pending.
+  // Includes `submitting` so the "Finishing handshake" UI clears once
+  // the api-owned PKCE exchange completes server-side.
   useEffect(() => {
-    if (!['starting', 'pending'].includes(geminiCliAuthState?.status)) return undefined;
+    if (!['starting', 'pending', 'submitting'].includes(geminiCliAuthState?.status)) return undefined;
 
     const interval = setInterval(async () => {
       try {
