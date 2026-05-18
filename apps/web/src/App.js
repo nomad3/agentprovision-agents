@@ -1,45 +1,58 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import { initMarketingAnalytics } from './services/marketingAnalytics';
+import React, { createContext, lazy, Suspense, useContext, useEffect, useState } from 'react';
 import { Navigate, Route, BrowserRouter as Router, Routes, useNavigate } from 'react-router-dom';
-import { ToastProvider } from './components/common';
+import { LoadingSpinner, ToastProvider } from './components/common';
 import ProtectedRoute from './components/ProtectedRoute';
 import { LunaPresenceProvider } from './context/LunaPresenceContext';
 import { ThemeProvider } from './context/ThemeContext';
-import LandingPage from './LandingPage';
-import AlphaLandingPage from './AlphaLandingPage';
-// Agent Kits removed - using ADK for agent configuration
-import AgentDetailPage from './pages/AgentDetailPage';
-import AgentsPage from './pages/AgentsPage';
-import FleetHealthPage from './pages/FleetHealthPage';
-import CostInsightsPage from './pages/CostInsightsPage';
-import CoalitionReplayPage from './pages/CoalitionReplayPage';
-import TenantHealthPage from './pages/TenantHealthPage';
-import AgentWizardPage from './pages/AgentWizardPage';
-import BrandingPage from './pages/BrandingPage';
-import ChatPage from './pages/ChatPage';
-import DashboardControlCenter from './pages/DashboardControlCenter';
-import DashboardLegacyPage from './pages/DashboardLegacyPage';
-import DeviceLoginPage from './pages/DeviceLoginPage';
-// DatasetsPage and DataSourcesPage merged into IntegrationsPage
-import DeploymentsPage from './pages/DeploymentsPage';
-import IntegrationsPage from './pages/IntegrationsPage';
-import LoginPage from './pages/LoginPage';
-import MemoryPage from './pages/MemoryPage';
-import NotebooksPage from './pages/NotebooksPage';
-import OnboardingPage from './pages/OnboardingPage';
-import RegisterPage from './pages/RegisterPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
-import SettingsPage from './pages/SettingsPage';
-import TeamsPage from './pages/TeamsPage';
-import TenantsPage from './pages/TenantsPage';
-import ToolsPage from './pages/ToolsPage';
-import VectorStoresPage from './pages/VectorStoresPage';
-import SkillsPage from './pages/SkillsPage';
-import WorkflowsPage from './pages/WorkflowsPage';
-import WorkflowBuilder from './components/workflows/WorkflowBuilder';
-import LearningPage from './pages/LearningPage';
+import { initMarketingAnalytics } from './services/marketingAnalytics';
 import api from './services/api';
 import authService from './services/auth';
+
+// ── Critical-path routes (kept eager) ──
+// LandingPage + AlphaLandingPage render at "/" before auth and dictate
+// LCP for cold marketing-site visitors; LoginPage is the next click on
+// the auth funnel. DashboardControlCenter is the post-login default and
+// is prefetched after first paint (see hot-route prefetch below) rather
+// than lazy-split, to keep the login→dashboard transition instant.
+import LandingPage from './LandingPage';
+import AlphaLandingPage from './AlphaLandingPage';
+import LoginPage from './pages/LoginPage';
+import DashboardControlCenter from './pages/DashboardControlCenter';
+
+// ── Lazy-loaded route pages ──
+// Each becomes its own webpack chunk loaded on navigation. The
+// webpackChunkName magic comment gives each chunk a stable filename so
+// the edge cache (PR #565) can serve them with `immutable` headers
+// across releases that don't touch the page.
+// Agent Kits removed - using ADK for agent configuration
+const AgentDetailPage = lazy(() => import(/* webpackChunkName: "agent-detail" */ './pages/AgentDetailPage'));
+const AgentsPage = lazy(() => import(/* webpackChunkName: "agents" */ './pages/AgentsPage'));
+const FleetHealthPage = lazy(() => import(/* webpackChunkName: "fleet-health" */ './pages/FleetHealthPage'));
+const CostInsightsPage = lazy(() => import(/* webpackChunkName: "cost-insights" */ './pages/CostInsightsPage'));
+const CoalitionReplayPage = lazy(() => import(/* webpackChunkName: "coalition-replay" */ './pages/CoalitionReplayPage'));
+const TenantHealthPage = lazy(() => import(/* webpackChunkName: "tenant-health" */ './pages/TenantHealthPage'));
+const AgentWizardPage = lazy(() => import(/* webpackChunkName: "agent-wizard" */ './pages/AgentWizardPage'));
+const BrandingPage = lazy(() => import(/* webpackChunkName: "branding" */ './pages/BrandingPage'));
+const ChatPage = lazy(() => import(/* webpackChunkName: "chat" */ './pages/ChatPage'));
+const DashboardLegacyPage = lazy(() => import(/* webpackChunkName: "dashboard-legacy" */ './pages/DashboardLegacyPage'));
+const DeviceLoginPage = lazy(() => import(/* webpackChunkName: "device-login" */ './pages/DeviceLoginPage'));
+// DatasetsPage and DataSourcesPage merged into IntegrationsPage
+const DeploymentsPage = lazy(() => import(/* webpackChunkName: "deployments" */ './pages/DeploymentsPage'));
+const IntegrationsPage = lazy(() => import(/* webpackChunkName: "integrations" */ './pages/IntegrationsPage'));
+const MemoryPage = lazy(() => import(/* webpackChunkName: "memory" */ './pages/MemoryPage'));
+const NotebooksPage = lazy(() => import(/* webpackChunkName: "notebooks" */ './pages/NotebooksPage'));
+const OnboardingPage = lazy(() => import(/* webpackChunkName: "onboarding" */ './pages/OnboardingPage'));
+const RegisterPage = lazy(() => import(/* webpackChunkName: "register" */ './pages/RegisterPage'));
+const ResetPasswordPage = lazy(() => import(/* webpackChunkName: "reset-password" */ './pages/ResetPasswordPage'));
+const SettingsPage = lazy(() => import(/* webpackChunkName: "settings" */ './pages/SettingsPage'));
+const TeamsPage = lazy(() => import(/* webpackChunkName: "teams" */ './pages/TeamsPage'));
+const TenantsPage = lazy(() => import(/* webpackChunkName: "tenants" */ './pages/TenantsPage'));
+const ToolsPage = lazy(() => import(/* webpackChunkName: "tools" */ './pages/ToolsPage'));
+const VectorStoresPage = lazy(() => import(/* webpackChunkName: "vector-stores" */ './pages/VectorStoresPage'));
+const SkillsPage = lazy(() => import(/* webpackChunkName: "skills" */ './pages/SkillsPage'));
+const WorkflowsPage = lazy(() => import(/* webpackChunkName: "workflows" */ './pages/WorkflowsPage'));
+const WorkflowBuilder = lazy(() => import(/* webpackChunkName: "workflow-builder" */ './components/workflows/WorkflowBuilder'));
+const LearningPage = lazy(() => import(/* webpackChunkName: "learning" */ './pages/LearningPage'));
 
 // Create an Auth Context
 const AuthContext = createContext(null);
@@ -130,6 +143,11 @@ function App() {
         <AuthProvider>
           <LunaPresenceProvider>
             <ToastProvider>
+              {/* Suspense fallback covers the brief window between
+                  navigation and the lazy chunk's network fetch. Most
+                  lazy chunks are <50 KB gzipped so the spinner is
+                  usually a single frame on a warm connection. */}
+              <Suspense fallback={<LoadingSpinner fullScreen text="Loading…" />}>
               <Routes>
                 {/* Root: alpha.agentprovision.com renders the CLI
                     landing; agentprovision.com renders the main one.
@@ -209,6 +227,7 @@ function App() {
                 <Route path="/settings/branding" element={<ProtectedRoute><BrandingPage /></ProtectedRoute>} />
                 <Route path="/branding" element={<ProtectedRoute><BrandingPage /></ProtectedRoute>} />
               </Routes>
+              </Suspense>
             </ToastProvider>
           </LunaPresenceProvider>
         </AuthProvider>
