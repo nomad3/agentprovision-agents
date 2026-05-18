@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -51,6 +52,19 @@ _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?"
     r"[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$"
 )
+
+# ── legacy HOME location for one-shot .gemini/ rescue (task #267) ───────
+# Pre-PR-#540, per-tenant gemini OAuth blobs lived under
+# ``/home/codeworker/st_sessions/<tenant>/.gemini/``. With HOME now
+# redirected to ``<workspaces_root>/<tenant>/home/``, the CLI looks for
+# ``oauth_creds.json`` in the new location and existing tenants are
+# effectively logged out on the first post-deploy chat turn. The first
+# call to ``tenant_home_dir`` for a tenant whose new HOME doesn't exist
+# yet copies the legacy ``.gemini/`` tree across so the OAuth tokens
+# survive. Override via env var for tests.
+_LEGACY_SESSIONS_ROOT = Path(os.environ.get(
+    "LEGACY_SESSIONS_ROOT", "/home/codeworker/st_sessions"
+))
 
 
 def tenant_workspace_dir(tenant_id: str, session_id: str | None = None) -> Path:
@@ -93,6 +107,105 @@ def tenant_workspace_dir(tenant_id: str, session_id: str | None = None) -> Path:
         target = tenant_dir
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def tenant_home_dir(tenant_id: str) -> Path:
+    """Return the per-tenant persistent HOME directory, creating it on demand.
+
+    Layout:
+        WORKSPACES_ROOT / <tenant_id> / home /
+
+    Phase 1 of task #267 — the code-worker writable layer grows from
+    ``/home/codeworker/st_sessions/<tenant>/.local`` and ``.cache``
+    (per-tenant Python/Node package installs). Once it saturates the
+    Docker Desktop VM disk, CI api builds silently fail with ``apt-get
+    exit 100``. Moving the growth source onto the workspaces named volume
+    (which lives on the host disk, not the VM overlay) eliminates that
+    failure mode.
+
+    Reuses the same WORKSPACES_ROOT + UUID guard as ``tenant_workspace_dir``
+    so the two helpers can never disagree on what "this tenant's
+    directory" means. The 0o700 mode is paranoia — the volume is already
+    mounted only inside the code-worker container, but per-tenant
+    credential blobs (e.g. ``.gemini/oauth_creds.json``) should not be
+    world-readable even inside the container in case sandboxed CLIs land
+    here in the future.
+    """
+    if not _UUID_RE.match(str(tenant_id) if tenant_id is not None else ""):
+        raise ValueError(
+            f"tenant_home_dir: non-UUID tenant_id={tenant_id!r}"
+        )
+    home = WORKSPACES_ROOT / str(tenant_id) / "home"
+    # Track whether we're materialising this tenant's HOME for the first
+    # time — that's the trigger for the one-shot legacy .gemini/ rescue
+    # below (review B2 on PR #540).
+    freshly_created = not home.exists()
+    home.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if freshly_created:
+        _rescue_legacy_gemini_home(tenant_id, home)
+    return home
+
+
+def _rescue_legacy_gemini_home(tenant_id: str, new_home: Path) -> None:
+    """One-shot copy of legacy ``.gemini/`` into the new tenant HOME.
+
+    Pre-PR-#540, gemini OAuth blobs lived at
+    ``/home/codeworker/st_sessions/<tenant>/.gemini/``. After this PR,
+    HOME redirects to ``<workspaces_root>/<tenant>/home/`` and the CLI
+    can no longer find the OAuth tokens — every existing tenant gets
+    logged out on the first post-deploy chat turn.
+
+    Mitigation (review B2 on PR #540): on the FIRST materialisation of a
+    tenant's new HOME, copy the legacy ``.gemini/`` tree across and
+    re-tighten secret-file modes. Only ``.gemini/`` is rescued — the
+    growth sources we're escaping (``.local/``, ``.cache/``) stay
+    behind on the legacy path.
+
+    Best-effort: any error (legacy path missing, perms, copytree race)
+    is logged and swallowed. The chat turn still runs; the worst case
+    is the user re-runs ``/gemini-cli-auth`` to re-OAuth.
+    """
+    legacy_gemini = _LEGACY_SESSIONS_ROOT / str(tenant_id) / ".gemini"
+    if not legacy_gemini.is_dir():
+        return
+    new_gemini = new_home / ".gemini"
+    if new_gemini.exists():
+        # Another concurrent tenant_home_dir() call beat us to the
+        # rescue — leave whatever it materialised alone.
+        return
+    try:
+        shutil.copytree(legacy_gemini, new_gemini)
+    except OSError as exc:
+        logger.warning(
+            "_rescue_legacy_gemini_home(%s): copytree failed (%s); "
+            "user may need to re-run /gemini-cli-auth",
+            tenant_id, exc,
+        )
+        return
+    # Tighten modes on the copies: refresh tokens are 0o600, everything
+    # else under .gemini/ is 0o644 (was potentially 0o600 in the source,
+    # but the new HOME lives on a shared volume mount — explicit modes
+    # are safer than inherited ones).
+    _SECRETS = {"oauth_creds.json", "credentials.json", "google_accounts.json"}
+    for dirpath, _dirnames, filenames in os.walk(new_gemini):
+        for fname in filenames:
+            fpath = Path(dirpath) / fname
+            try:
+                if fname in _SECRETS:
+                    os.chmod(fpath, 0o600)
+                else:
+                    os.chmod(fpath, 0o644)
+            except OSError:
+                # Best-effort — log via logger.debug since this is a
+                # mode tighten, not a correctness failure.
+                logger.debug(
+                    "_rescue_legacy_gemini_home(%s): chmod %s failed",
+                    tenant_id, fpath, exc_info=True,
+                )
+    logger.info(
+        "_rescue_legacy_gemini_home(%s): copied legacy .gemini/ into %s",
+        tenant_id, new_gemini,
+    )
 
 
 def resolve_cli_cwd(

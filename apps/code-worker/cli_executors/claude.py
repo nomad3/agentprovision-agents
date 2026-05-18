@@ -26,12 +26,15 @@ single-line `--output-format json` shape.
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import cli_runtime
 from cli_executors import claude_stream_parser
 from session_event_emitter import SessionEventEmitter
 from tenant_feature_flags import is_enabled as _feature_enabled
+
+logger = logging.getLogger(__name__)
 
 
 def execute_claude_chat(task_input, session_dir: str):
@@ -160,6 +163,21 @@ def execute_claude_chat(task_input, session_dir: str):
     # treats files there as in-scope for Read/Edit.
     if cli_cwd != _cwd_fallback:
         cmd.extend(["--add-dir", cli_cwd])
+
+    # ── tenant HOME on workspaces volume (task #267 Phase 1) ────────────
+    # Redirect HOME onto the persistent workspaces volume so per-tenant
+    # ``.local/`` / ``.cache/`` / package installs don't grow the
+    # code-worker writable layer (root cause of the 2026-05-04 &
+    # 2026-05-17 disk-full incidents). Non-UUID tenant_id falls back to
+    # the container's default HOME — same defensive shape as
+    # ``resolve_cli_cwd``.
+    try:
+        env["HOME"] = str(cli_runtime.tenant_home_dir(task_input.tenant_id))
+    except (ValueError, OSError) as exc:
+        logger.warning(
+            "tenant_home_dir(%s) failed (%s); HOME falls back to container default",
+            task_input.tenant_id, exc,
+        )
 
     # ---- streaming emitter (no-op if flag off / chat_session_id missing) ----
     emitter = SessionEventEmitter(

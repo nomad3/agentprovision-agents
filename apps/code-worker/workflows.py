@@ -1566,7 +1566,7 @@ def _extract_codex_metadata(raw_output: str) -> dict:
     return metadata
 
 
-def _prepare_gemini_home(session_dir: str, auth_payload: dict, mcp_config_json: str) -> str:
+def _prepare_gemini_home(home_dir: str, auth_payload: dict, mcp_config_json: str) -> str:
     """Materialize tenant-scoped GEMINI_HOME for Gemini CLI 0.37.1+.
 
     Writes the exact files that gemini-cli reads on disk:
@@ -1580,8 +1580,13 @@ def _prepare_gemini_home(session_dir: str, auth_payload: dict, mcp_config_json: 
     Gemini CLI wrote them when the user authenticated. Do NOT inject
     our platform's client_id — the refresh_token is bound to Gemini CLI's
     own client_id (681255809395-...) and refresh will fail otherwise.
+
+    ``home_dir`` is the per-tenant HOME (task #267) — was named
+    ``session_dir`` historically when this wrote into worker-private
+    scratch; renamed to reflect that the .gemini/ tree now lives on the
+    persistent workspaces volume mounted on both api and code-worker.
     """
-    gemini_home = os.path.join(session_dir, ".gemini")
+    gemini_home = os.path.join(home_dir, ".gemini")
     os.makedirs(gemini_home, exist_ok=True)
 
     # If we have the full oauth_creds blob, write it as-is (preserves
@@ -1625,18 +1630,28 @@ def _prepare_gemini_home(session_dir: str, auth_payload: dict, mcp_config_json: 
 
     # Write the credentials file with the exact filename Gemini CLI 0.37.1 reads.
     # Older versions read credentials.json — write both for safety.
+    # chmod 0o600: now that .gemini/ lives on the persistent workspaces
+    # volume mounted on both api and code-worker, default 0o644 from
+    # `open(..., "w")` would leave refresh tokens world-readable inside
+    # the container. Tighten to owner-only (review B1 on PR #540).
     for fname in ("oauth_creds.json", "credentials.json"):
-        with open(os.path.join(gemini_home, fname), "w") as f:
+        path = os.path.join(gemini_home, fname)
+        with open(path, "w") as f:
             json.dump(oauth_creds, f, indent=2)
+        os.chmod(path, 0o600)
 
     # Pre-create projects.json (avoids rename ENOENT errors on startup)
     with open(os.path.join(gemini_home, "projects.json"), "w") as f:
         json.dump({"projects": {}}, f, indent=2)
 
-    # Pre-set the active Google account
+    # Pre-set the active Google account — same 0o600 treatment as
+    # oauth_creds.json: the email is PII and the file sits next to the
+    # OAuth blob, so apply matching mode (review B1 on PR #540).
     active_email = auth_payload.get("email") or "user@gemini"
-    with open(os.path.join(gemini_home, "google_accounts.json"), "w") as f:
+    google_accounts_path = os.path.join(gemini_home, "google_accounts.json")
+    with open(google_accounts_path, "w") as f:
         json.dump({"active": active_email, "old": []}, f, indent=2)
+    os.chmod(google_accounts_path, 0o600)
 
     # settings.json with selectedType: oauth-personal so the CLI doesn't
     # prompt for an auth method on first run. Avoid `enforcedType` — it
@@ -1692,10 +1707,16 @@ def _prepare_copilot_home(session_dir: str, mcp_config_json: str) -> str:
     return copilot_dir
 
 
-def _prepare_gemini_home_apikey(session_dir: str, mcp_config_json: str) -> str:
+def _prepare_gemini_home_apikey(home_dir: str, mcp_config_json: str) -> str:
 
-    """Minimal GEMINI_HOME for API key auth — no credentials.json needed."""
-    gemini_home = os.path.join(session_dir, ".gemini")
+    """Minimal GEMINI_HOME for API key auth — no credentials.json needed.
+
+    ``home_dir`` is the per-tenant HOME (task #267) — was named
+    ``session_dir`` historically; renamed for parity with
+    ``_prepare_gemini_home`` now that .gemini/ lives on the persistent
+    workspaces volume.
+    """
+    gemini_home = os.path.join(home_dir, ".gemini")
     os.makedirs(gemini_home, exist_ok=True)
 
     projects_path = os.path.join(gemini_home, "projects.json")
