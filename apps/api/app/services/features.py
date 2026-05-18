@@ -30,17 +30,45 @@ def create_features(
     return features
 
 
+# Fields that affect billing / plan limits / removed branding — only
+# superusers may change these. Everything else (default_cli_platform,
+# rl toggles, github_primary_account, etc.) is a tenant-scoped UX
+# preference any tenant member can set.
+_SUPERUSER_ONLY_FIELDS = frozenset({
+    "max_agents",
+    "max_agent_groups",
+    "monthly_token_limit",
+    "storage_limit_gb",
+    "plan_type",
+    "hide_agentprovision_branding",
+})
+
+
 def update_features(
     db: Session,
     tenant_id: uuid.UUID,
-    features_in: TenantFeaturesUpdate
+    features_in: TenantFeaturesUpdate,
+    *,
+    is_superuser: bool = False,
 ) -> Optional[TenantFeatures]:
-    """Update tenant features."""
+    """Update tenant features.
+
+    `is_superuser=False` (default) silently drops any attempt to touch
+    plan-limit fields. The PUT /features endpoint is called by the
+    InlineCliPicker, which only ever sends `default_cli_platform`, so a
+    silent drop is safer than a 403 that would block the legitimate
+    tenant-preference change.
+    """
     features = get_features(db, tenant_id)
     if not features:
         return None
 
     update_data = features_in.model_dump(exclude_unset=True)
+    if not is_superuser:
+        update_data = {
+            k: v for k, v in update_data.items()
+            if k not in _SUPERUSER_ONLY_FIELDS
+        }
     for field, value in update_data.items():
         setattr(features, field, value)
 

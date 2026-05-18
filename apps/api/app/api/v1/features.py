@@ -39,18 +39,27 @@ def get_features(
 def update_features(
     features_in: TenantFeaturesUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_superuser),
+    current_user: User = Depends(get_current_user),
 ):
     """Update current tenant's feature flags.
 
-    Admin-only — these are tenant-global settings (default CLI platform,
-    GitHub primary account, plan limits) that affect every member's
-    experience. Was previously gated by ``get_current_user`` with a
-    docstring claim of "admin only in production"; the gate is now real.
+    Any authenticated tenant member can change tenant-scoped preferences
+    (default_cli_platform, github_primary_account, cpa_export_format,
+    rl_enabled/rl_settings, cli_orchestrator_enabled, the *_enabled
+    feature toggles). Plan/billing limits (max_agents, max_agent_groups,
+    monthly_token_limit, storage_limit_gb, plan_type,
+    hide_agentprovision_branding) remain superuser-only and are filtered
+    server-side rather than rejecting the whole request — that lets the
+    InlineCliPicker save the user's CLI choice without ever needing to
+    learn about plan-limit fields.
     """
-    # Ensure features exist
     service.get_or_create_features(db, current_user.tenant_id)
-    features = service.update_features(db, current_user.tenant_id, features_in)
+    features = service.update_features(
+        db,
+        current_user.tenant_id,
+        features_in,
+        is_superuser=bool(getattr(current_user, "is_superuser", False)),
+    )
     return features
 
 
