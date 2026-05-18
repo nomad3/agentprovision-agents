@@ -111,20 +111,33 @@ def _write_audio_to_shared_volume(audio_bytes: bytes) -> str:
     return path
 
 
+# Singleton Temporal client. Lazy, async-safe (asyncio.Lock guards the
+# double-check). The prior try/except NameError variant was dead code
+# because _client was bound to None at module scope — every call returned
+# None and the downstream `client.start_workflow(...)` exploded with
+# AttributeError on NoneType.
+_client = None  # type: Optional["temporalio.client.Client"]
+_client_lock = asyncio.Lock()
+
+
 async def _get_client():
-    """Connect to Temporal. Cached lazily to avoid a per-call handshake."""
-    from temporalio.client import Client
+    """Connect to Temporal. Cached on first successful call.
 
+    Double-checked locking: the fast path returns the cached client
+    without acquiring the lock; concurrent first-callers serialise on
+    the lock and only one actually runs ``Client.connect``.
+    """
     global _client
-    try:
+    if _client is not None:
         return _client
-    except NameError:
-        pass
-    _client = await Client.connect(settings.TEMPORAL_ADDRESS)  # type: ignore[arg-type]
+    async with _client_lock:
+        if _client is None:
+            from temporalio.client import Client
+
+            _client = await Client.connect(
+                settings.TEMPORAL_ADDRESS,  # type: ignore[arg-type]
+            )
     return _client
-
-
-_client = None  # populated by _get_client on first call
 
 
 async def _start_workflow(audio_path: str) -> str:
