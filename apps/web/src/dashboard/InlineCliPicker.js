@@ -39,6 +39,7 @@ const CLI_OPTIONS = [
   { value: 'kimi_k2', label: 'Kimi K2' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'glm', label: 'GLM (Zhipu)' },
+  { value: 'aider', label: 'Aider' },
 ];
 
 // How long the "saved ✓" affordance stays on screen after a successful

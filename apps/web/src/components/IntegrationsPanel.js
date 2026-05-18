@@ -33,6 +33,7 @@ import {
   FaSlack,
   FaTasks,
   FaTerminal,
+  FaTools,
   FaTimesCircle,
   FaToggleOff,
   FaToggleOn,
@@ -64,6 +65,7 @@ const ICON_MAP = {
   FaRobot: FaRobot,
   FaTerminal: FaTerminal,
   FaCloud: FaCloud,
+  FaTools: FaTools,
 };
 
 // Color accents per skill for visual distinction
@@ -85,6 +87,7 @@ const SKILL_COLORS = {
   kimi_k2: '#7C3AED',
   deepseek: '#1c64f2',
   glm: '#3b82f6',
+  aider: '#dc2626',
 };
 
 // Pinned order for the integration card grid. Anything not listed gets pushed
@@ -104,6 +107,7 @@ const INTEGRATION_ORDER = [
   'kimi_k2',
   'deepseek',
   'glm',
+  'aider',
   'gmail',
   'google_calendar',
   'google_drive',

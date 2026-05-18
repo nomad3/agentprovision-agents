@@ -37,6 +37,18 @@ RUN npm install -g \
         opencode-ai \
         @github/copilot
 
+# Aider (Wave 2c) ships on PyPI as ``aider-chat``, NOT npm — it's a
+# Python CLI binary published by paul-gauthier@github (Apache 2.0). The
+# binary lands on $PATH as ``aider``. Version is pinned because Aider
+# releases ~weekly and minor releases occasionally rename flags or shift
+# stdout formatting (the executor's stdout parser depends on the banner
+# / footer shape). Bump deliberately, not by accident on image rebuild.
+#
+# TODO: 0.65.0 is the Wave-2c rollout pin; bump to a current Aider
+# release in a follow-up PR once the executor's stdout parser is
+# re-verified against the newer banner/footer shape.
+RUN pip install --no-cache-dir aider-chat==0.65.0
+
 # Python deps
 WORKDIR /app
 # Phase 1.5: build context is the repo root (see docker-compose.yml). All
