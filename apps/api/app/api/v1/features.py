@@ -5,7 +5,12 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, get_current_user, require_superuser
+from app.api.deps import (
+    get_db,
+    get_current_user,
+    get_current_active_user,
+    require_superuser,
+)
 from app.core.config import settings
 from app.models.tenant_features import TenantFeatures as TenantFeaturesModel
 from app.models.user import User
@@ -39,18 +44,25 @@ def get_features(
 def update_features(
     features_in: TenantFeaturesUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_superuser),
+    current_user: User = Depends(get_current_active_user),
 ):
-    """Update current tenant's feature flags.
+    """Update tenant features.
 
-    Admin-only — these are tenant-global settings (default CLI platform,
-    GitHub primary account, plan limits) that affect every member's
-    experience. Was previously gated by ``get_current_user`` with a
-    docstring claim of "admin only in production"; the gate is now real.
+    Any active tenant member can change a small allowlist of
+    user-preference fields (see ``_MEMBER_WRITABLE_FIELDS`` in the
+    service). Every other field — including the tenant-wide ``*_enabled``
+    toggles, ``active_llm_provider``, and plan/billing limits — remains
+    superuser-only and is silently dropped from a non-superuser PUT
+    payload rather than rejecting the whole request. The drop is logged
+    at WARNING so audit and on-call can see elevation probes.
     """
-    # Ensure features exist
     service.get_or_create_features(db, current_user.tenant_id)
-    features = service.update_features(db, current_user.tenant_id, features_in)
+    features = service.update_features(
+        db,
+        current_user.tenant_id,
+        features_in,
+        is_superuser=bool(current_user.is_superuser),
+    )
     return features
 
 

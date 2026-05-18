@@ -1,10 +1,28 @@
 """Feature flags service for tenant feature management."""
-from sqlalchemy.orm import Session
-from typing import Optional
+import logging
 import uuid
+from typing import Optional
+
+from sqlalchemy.orm import Session
 
 from app.models.tenant_features import TenantFeatures
 from app.schemas.tenant_features import TenantFeaturesCreate, TenantFeaturesUpdate
+
+logger = logging.getLogger(__name__)
+
+
+# Default-deny allowlist of fields any active tenant member may set on
+# their own tenant. Everything else (the ``*_enabled`` toggles,
+# ``active_llm_provider``, plan/billing limits, removed branding) stays
+# superuser-only and is silently dropped from a non-superuser update.
+_MEMBER_WRITABLE_FIELDS = frozenset({
+    "default_cli_platform",
+    "github_primary_account",
+    "cpa_export_format",
+    "rl_enabled",
+    "rl_settings",
+    "cli_orchestrator_enabled",
+})
 
 
 def get_features(db: Session, tenant_id: uuid.UUID) -> Optional[TenantFeatures]:
@@ -33,14 +51,38 @@ def create_features(
 def update_features(
     db: Session,
     tenant_id: uuid.UUID,
-    features_in: TenantFeaturesUpdate
+    features_in: TenantFeaturesUpdate,
+    *,
+    is_superuser: bool = False,
 ) -> Optional[TenantFeatures]:
-    """Update tenant features."""
+    """Update tenant features.
+
+    With ``is_superuser=False`` (default) only the
+    ``_MEMBER_WRITABLE_FIELDS`` allowlist is honored — any other field
+    in ``features_in`` is silently dropped. Silent so the PUT can still
+    succeed for the member's intended preference change instead of a
+    422 that blocks unrelated payloads. The dropped fields are logged
+    at WARNING so audit / on-call can see elevation probes.
+    """
     features = get_features(db, tenant_id)
     if not features:
         return None
 
     update_data = features_in.model_dump(exclude_unset=True)
+    if not is_superuser:
+        dropped = sorted(
+            k for k in update_data if k not in _MEMBER_WRITABLE_FIELDS
+        )
+        if dropped:
+            logger.warning(
+                "update_features: dropped superuser-only fields %s for tenant=%s",
+                dropped,
+                tenant_id,
+            )
+            update_data = {
+                k: v for k, v in update_data.items()
+                if k in _MEMBER_WRITABLE_FIELDS
+            }
     for field, value in update_data.items():
         setattr(features, field, value)
 
