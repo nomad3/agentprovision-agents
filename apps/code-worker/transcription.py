@@ -99,15 +99,21 @@ def transcribe_audio_path(path: str) -> Optional[str]:
 class TranscribeAudioInput:
     """Input for ``TranscribeAudioWorkflow``.
 
-    Exactly one of ``audio_path`` or ``audio_b64`` must be set. ``audio_path``
-    is preferred — it points at a file on the shared ``workspaces`` volume
-    that both api and code-worker mount at ``/var/agentprovision/workspaces``.
-    ``audio_b64`` is a fallback for very small clips where shipping the bytes
-    inline through Temporal is cheaper than a disk round-trip.
+    ``audio_path`` is the ONLY transport. It points at a file on the
+    shared ``workspaces`` volume that both api and code-worker mount at
+    ``/var/agentprovision/workspaces``. The api writes the upload there
+    (``apps/api/app/services/transcription_client.py``) and the activity
+    reads + unlinks it after transcription.
+
+    Inline-bytes transport (the previous ``audio_b64`` field) was
+    intentionally removed: Temporal's default payload limit is 2 MB and a
+    25 MB audio clip base64-encodes to ~33 MB, which Temporal rejects.
+    Keeping the field dormant was a footgun — no caller actually set it,
+    and shipping it would have failed at the worker boundary instead of
+    at the api request boundary.
     """
 
     audio_path: str = ""
-    audio_b64: str = ""
     # Caller cleanup contract: when True the activity unlinks ``audio_path``
     # after transcription succeeds or fails. Default True because the
     # canonical caller (apps/api/app/services/transcription_client.py) owns
@@ -156,10 +162,6 @@ def transcribe_audio_activity(input: TranscribeAudioInput) -> TranscribeAudioRes
         transcript: Optional[str] = None
         if input.audio_path:
             transcript = transcribe_audio_path(input.audio_path)
-        elif input.audio_b64:
-            import base64
-
-            transcript = transcribe_audio_bytes(base64.b64decode(input.audio_b64))
         else:
             logger.warning("transcribe_audio_activity called with empty input")
 

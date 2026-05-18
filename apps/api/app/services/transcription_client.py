@@ -154,10 +154,10 @@ async def _start_workflow(audio_path: str) -> str:
     workflow_id = f"transcribe-{uuid.uuid4().hex}"
 
     # Use string workflow name + plain-dict input so the api doesn't need to
-    # import the dataclass definition from apps/code-worker.
+    # import the dataclass definition from apps/code-worker. audio_b64 was
+    # removed from the input dataclass — see TranscribeAudioInput docstring.
     payload = {
         "audio_path": audio_path,
-        "audio_b64": "",
         "delete_after": True,
     }
 
