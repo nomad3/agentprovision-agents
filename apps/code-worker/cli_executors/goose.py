@@ -23,9 +23,20 @@ suite:
 
 Invocation:
 
-    goose session --resume <session_id> \\
+    goose run --session-id <id> --resume \\
         --provider <provider> --model <model> \\
-        -t "<prompt>"
+        --text "<prompt>"
+
+``goose run`` is the upstream headless one-shot command (verified against
+``crates/goose-cli/src/cli.rs`` on aaif-goose/goose@main). It accepts
+``--provider`` / ``--model`` (``ModelOptions``) and ``--text`` / ``-t``
+(``InputOptions``). The interactive ``goose session`` subcommand does
+NOT accept ``--text``/``--provider``/``--model``; that's why earlier
+revisions of this executor returned empty stdout. ``--resume`` is a bool
+flag (not a value-taker); the session id is supplied separately via
+``--session-id <ID>``. When no session id is present we pass
+``--no-session`` so Goose doesn't allocate a persistent session for a
+one-shot turn.
 
 We resume per session_id when one is provided so multi-turn chat keeps
 context inside Goose's own session store (rooted under
@@ -63,27 +74,41 @@ _DEFAULT_MODEL = os.environ.get("GOOSE_MODEL", "claude-3-5-sonnet-latest")
 # When the tenant has a matching integration credential stored under
 # any of these names we propagate it into Goose's process env so the
 # Rust binary picks it up without us touching its config files.
+#
+# Trimmed (Wave 2d review I3) to the verified single-``api_key`` set
+# from upstream Goose — drops providers (Bedrock/Vertex/Azure) that need
+# multi-field credentialing the goose integration card can't supply.
 _PROVIDER_KEY_ENV: dict[str, tuple[str, ...]] = {
     "anthropic": ("ANTHROPIC_API_KEY",),
     "openai": ("OPENAI_API_KEY",),
+    "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "deepseek": ("DEEPSEEK_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
     "groq": ("GROQ_API_KEY",),
     "databricks": ("DATABRICKS_TOKEN",),
-    "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-    "openrouter": ("OPENROUTER_API_KEY",),
     "ollama": (),  # local, no key
+    "xai": ("XAI_API_KEY",),
 }
 
 
 def _write_mcp_config(goose_config_dir: str, mcp_config: str) -> None:
     """Materialise the tenant's MCP source list into Goose's auto-discovery file.
 
-    Goose reads ``~/.config/goose/mcp.json`` at startup and registers
-    every server it finds there. ``task_input.mcp_config`` is already
-    formatted as Claude-Code-style MCP JSON ({"mcpServers": {...}});
-    Goose accepts the same shape, so the materialisation is a direct
-    write. We always overwrite — the file is fully derived from the
-    tenant's current integrations, so stale entries between turns
-    aren't a concern.
+    ``task_input.mcp_config`` is already formatted as Claude-Code-style
+    MCP JSON ({"mcpServers": {...}}); we drop that blob at
+    ``~/.config/goose/mcp.json``. We always overwrite — the file is
+    fully derived from the tenant's current integrations, so stale
+    entries between turns aren't a concern.
+
+    TODO(Wave 2d review I5): upstream Goose documents its MCP source
+    list as an ``extensions:`` block in ``~/.config/goose/config.yaml``
+    rather than a separate ``mcp.json`` (per
+    block.github.io/goose/docs/getting-started/using-extensions/).
+    Some Goose versions also accept a sibling ``mcp.json``, but that's
+    not verified from this worktree (no network access at edit time).
+    If a smoke test shows MCP servers don't surface inside Goose, swap
+    this writer to emit a translated ``extensions:`` YAML block instead
+    — same input shape, different on-disk target.
     """
     os.makedirs(goose_config_dir, exist_ok=True)
     target = os.path.join(goose_config_dir, "mcp.json")
@@ -180,15 +205,18 @@ def execute_goose_chat(task_input, session_dir: str):
         )
 
     # ── command shape ────────────────────────────────────────────────────
-    # ``goose session --resume <id>`` re-binds to an existing session
-    # when one is supplied so multi-turn chat keeps context inside
-    # Goose's own store. Falling back to a fresh session is fine — the
-    # next turn supplies the session_id and resumes.
+    # ``goose run`` is the headless one-shot command (interactive
+    # ``goose session`` doesn't accept --text/--provider/--model — see
+    # module docstring). ``--resume`` is a bool flag; the session id is
+    # passed via ``--session-id <ID>``. No session id → ``--no-session``
+    # so Goose doesn't allocate a persistent session for a one-shot.
     session_id = (getattr(task_input, "session_id", "") or "").strip()
-    cmd = ["goose", "session"]
+    cmd = ["goose", "run"]
     if session_id:
-        cmd += ["--resume", session_id]
-    cmd += ["--provider", provider, "--model", model, "-t", prompt]
+        cmd += ["--session-id", session_id, "--resume"]
+    else:
+        cmd += ["--no-session"]
+    cmd += ["--provider", provider, "--model", model, "--text", prompt]
 
     env = os.environ.copy()
     env["HOME"] = tenant_home
@@ -218,16 +246,27 @@ def execute_goose_chat(task_input, session_dir: str):
     env["WORKSPACE"] = cli_cwd
 
     # ── streaming emitter ────────────────────────────────────────────────
-    # No dedicated stream parser yet (Wave 2d scope) — emitter receives
-    # stdout/stderr chunks verbatim and the Den surfaces them as raw
-    # terminal output. A future ``goose_stream_parser`` can plug in
-    # without touching this call site.
+    # No dedicated stream parser yet (Wave 2d scope) — but we still wire
+    # a pass-through ``on_chunk`` that surfaces each raw stdout/stderr
+    # line as ``chunk_kind="text"`` so the Den terminal at least shows
+    # live output rather than a frozen prompt. When a proper
+    # ``goose_stream_parser`` lands it can swap in here without touching
+    # the call site.
     emitter = SessionEventEmitter(
         chat_session_id=getattr(task_input, "chat_session_id", "") or "",
         tenant_id=task_input.tenant_id,
         platform="goose",
         attempt=getattr(task_input, "attempt", 1) or 1,
     )
+
+    def _passthrough_chunk(chunk: str, fd: str = "stdout") -> None:
+        if not chunk:
+            return
+        try:
+            emitter.emit_chunk(chunk_kind="text", chunk=chunk, fd=fd)
+        except Exception:  # noqa: BLE001 — emitter failures must never break the chat turn
+            logger.debug("goose emitter.emit_chunk failed", exc_info=True)
+
     try:
         result = cli_runtime.run_cli_with_heartbeat(
             cmd,
@@ -235,7 +274,7 @@ def execute_goose_chat(task_input, session_dir: str):
             timeout=1500,
             env=env,
             cwd=cli_cwd,
-            on_chunk=None,
+            on_chunk=_passthrough_chunk,
         )
     finally:
         emitter.close()

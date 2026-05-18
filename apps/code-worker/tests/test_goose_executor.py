@@ -11,12 +11,13 @@ What's covered:
     exception path).
   * Empty vault payload → still produces the friendly message.
   * Happy path: provider + model + api_key from the vault flow into the
-    command + env, prompt is forwarded via ``-t``, stdout is returned.
+    command + env, prompt is forwarded via ``--text``, stdout is returned.
   * Instruction prepend: ``instruction_md_content`` is concatenated
-    above the user message before being passed to ``-t``.
+    above the user message before being passed to ``--text``.
   * Per-turn model override via ``task_input.model``.
-  * Session resume: ``--resume <session_id>`` is appended when the
-    chat session id is present, omitted when blank.
+  * Session resume: ``--session-id <id> --resume`` (bool flag) when the
+    chat session id is present, ``--no-session`` when blank — matches
+    the upstream ``goose run`` CLI surface.
   * Tool-error stderr lines surface in ``metadata.tools_called``.
   * MCP config materialisation: tenant ``mcp_config`` lands in
     ``~/.config/goose/mcp.json`` under the tenant HOME redirect.
@@ -158,11 +159,15 @@ class TestExecuteGooseChat:
         assert out.metadata["platform"] == "goose"
         assert out.metadata["provider"] == "anthropic"
         assert out.metadata["model"] == "claude-3-5-haiku-20241022"
-        # Command shape
-        assert captured["cmd"][:2] == ["goose", "session"]
-        assert "-t" in captured["cmd"]
-        # No session_id → --resume omitted
-        assert "--resume" not in captured["cmd"]
+        # Command shape — ``goose run`` is the headless one-shot
+        # subcommand (NOT ``goose session``, which is interactive and
+        # ignores --text/--provider/--model).
+        assert captured["cmd"][:2] == ["goose", "run"]
+        assert "--text" in captured["cmd"]
+        # No session_id → ``--no-session`` (don't allocate a persistent
+        # session for a one-shot turn).
+        assert "--no-session" in captured["cmd"]
+        assert "--session-id" not in captured["cmd"]
         # Provider-specific env var is set
         assert captured["env"].get("ANTHROPIC_API_KEY") == "sk-ant-FAKE"
         # Telemetry opt-out
@@ -197,7 +202,7 @@ class TestExecuteGooseChat:
             ),
             session_dir=str(tmp_path),
         )
-        t_idx = captured["cmd"].index("-t")
+        t_idx = captured["cmd"].index("--text")
         prompt = captured["cmd"][t_idx + 1]
         assert "You are a careful agent." in prompt
         assert "do the thing" in prompt
@@ -231,8 +236,10 @@ class TestExecuteGooseChat:
         assert captured["cmd"][m_idx + 1] == "gpt-4o-mini"
 
     def test_session_resume_when_session_id_present(self, monkeypatch, tmp_path, wf):
-        """A non-empty ``session_id`` appends ``--resume <id>`` to the
-        command so Goose re-binds to its existing session store."""
+        """A non-empty ``session_id`` adds ``--session-id <id> --resume``
+        (bool flag, NOT value-taking) so ``goose run`` re-binds to the
+        existing session store. ``--no-session`` MUST NOT appear when
+        we're resuming."""
         monkeypatch.setattr(
             wf, "_fetch_integration_credentials",
             lambda i, t: {"provider": "anthropic"},
@@ -254,9 +261,14 @@ class TestExecuteGooseChat:
             _make_input(session_id="sess-xyz-123"),
             session_dir=str(tmp_path),
         )
-        assert "--resume" in captured["cmd"]
-        r_idx = captured["cmd"].index("--resume")
-        assert captured["cmd"][r_idx + 1] == "sess-xyz-123"
+        # --session-id <id> appears, immediately followed by the bool
+        # --resume flag (no value).
+        assert "--session-id" in captured["cmd"]
+        s_idx = captured["cmd"].index("--session-id")
+        assert captured["cmd"][s_idx + 1] == "sess-xyz-123"
+        assert captured["cmd"][s_idx + 2] == "--resume"
+        # No --no-session when resuming.
+        assert "--no-session" not in captured["cmd"]
 
     def test_tool_error_metadata_captured(self, monkeypatch, tmp_path, wf):
         """Stderr ``Error executing tool X: Y`` → ``metadata.tools_called``

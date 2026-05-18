@@ -338,7 +338,8 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         "credentials": [
             {"key": "provider", "label": "Provider", "type": "text", "required": True,
              "help": "Which LLM provider Goose talks to. One of: anthropic, openai, "
-                     "google, groq, databricks, openrouter, ollama. Default: anthropic."},
+                     "google, deepseek, openrouter, groq, databricks, ollama, xai. "
+                     "Default: anthropic."},
             {"key": "api_key", "label": "Provider API Key", "type": "password", "required": False,
              "help": "API key for the chosen provider. Optional if the operator has "
                      "wired a shared key into the worker container env. For ``ollama`` "

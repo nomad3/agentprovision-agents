@@ -46,6 +46,14 @@ RUN npm install -g \
 # under Block's AAIF org). curl --location follows the redirect so the
 # canonical block/goose URL keeps working in CI; if the redirect ever
 # breaks, the resolved URL is on aaif-goose/goose at the same path.
+#
+# TODO(Wave 2d review I6): pin GOOSE_SHA256 to the v1.34.1 tarball
+# digest so a compromised release artifact can't silently land in the
+# image. Deferred — sha256 wasn't computable from the worktree at
+# review time (no network access). Once captured, switch the RUN to:
+#   ARG GOOSE_SHA256=<digest>
+#   RUN curl ... && echo "${GOOSE_SHA256}  /tmp/goose.tar.bz2" \
+#       | sha256sum -c - && tar ...
 ARG GOOSE_VERSION=v1.34.1
 RUN curl -fsSL --retry 3 --location \
         -o /tmp/goose.tar.bz2 \
@@ -53,7 +61,12 @@ RUN curl -fsSL --retry 3 --location \
     tar -xjf /tmp/goose.tar.bz2 -C /usr/local/bin && \
     rm /tmp/goose.tar.bz2 && \
     chmod +x /usr/local/bin/goose && \
-    goose --version
+    goose --version && \
+    # Wave 2d B1 build-time contract guard — fail the image build if
+    # upstream goose drops the ``--text`` flag on ``goose run``. The
+    # executor depends on this surface; a drift here would silently
+    # break every Goose chat turn at runtime.
+    goose run --help 2>&1 | grep -q -- --text
 
 # Python deps
 WORKDIR /app
