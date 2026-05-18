@@ -766,8 +766,9 @@ class WhatsAppService:
             elif media_bytes and media_type == "audio":
                 # Audio (voice notes): transcribe locally with Whisper first
                 try:
-                    from app.services.media_utils import transcribe_audio_bytes, build_media_parts
-                    transcript = transcribe_audio_bytes(media_bytes)
+                    from app.services.media_utils import build_media_parts
+                    from app.services.transcription_client import transcribe_bytes_sync
+                    transcript = transcribe_bytes_sync(media_bytes)
                     if transcript:
                         logger.info(f"Whisper transcript ({len(transcript)} chars) for {sender_phone}")
                         doc_text = transcript

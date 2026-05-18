@@ -46,9 +46,13 @@ grpcio>=1.62.0
 # grpcio-tools is build-time only (proto compilation) — installed separately
 # in the Dockerfile builder stage to avoid the protobuf <7 vs >=7 conflict
 # with neonize.
-openai-whisper
-soundfile
-librosa
+# Audio transcription deps (openai-whisper, soundfile, librosa) moved to
+# apps/code-worker per the api-image-diet plan
+# (docs/plans/2026-05-18-docker-image-shrink-and-latency.md). The api
+# dispatches transcription jobs to the ``agentprovision-code`` Temporal
+# queue and either awaits the result synchronously for short clips or
+# returns a job id for clients to poll. Removed openai-whisper, soundfile,
+# librosa (≈2 GB of CUDA + ML wheels) here.
 slowapi>=0.1.9
 # MCP client SDK — used by external_agent_adapter._dispatch_mcp_sse to talk
 # to remote MCP servers (Claude Code / Gemini / Cursor skills) over SSE.
