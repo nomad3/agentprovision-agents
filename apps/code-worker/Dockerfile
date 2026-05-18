@@ -1,8 +1,11 @@
 FROM python:3.11-slim
 
-# Install system deps: git, gh CLI, Node.js 22, bzip2 (for Goose tarball)
+# Install system deps: git, gh CLI, Node.js 22, bzip2 + libgomp1
+# (Goose binary links libgomp.so.1 dynamically; slim image lacks it and
+# the binary fails with "error while loading shared libraries" → exit
+# 127 at `goose --version` → image build aborts).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl gnupg ca-certificates socat bzip2 && \
+    git curl gnupg ca-certificates socat bzip2 libgomp1 && \
     # Node.js 22
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
