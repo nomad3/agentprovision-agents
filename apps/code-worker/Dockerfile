@@ -67,9 +67,21 @@ RUN pip install --no-cache-dir aider-chat==0.65.0
 #   RUN curl ... && echo "${GOOSE_SHA256}  /tmp/goose.tar.bz2" \
 #       | sha256sum -c - && tar ...
 ARG GOOSE_VERSION=v1.34.1
-RUN curl -fsSL --retry 3 --location \
+# TARGETARCH is auto-injected by BuildKit (amd64 | arm64). The original
+# Wave 2d ship hardcoded the x86_64 tarball, which SIGABRT'd at
+# `goose --version` on the ARM-based self-hosted M-series Mac runner
+# (linux/arm64 image). Map BuildKit's TARGETARCH to goose's release
+# triple suffix so the same Dockerfile produces a working image on
+# both arches.
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        amd64) GOOSE_TRIPLE="x86_64-unknown-linux-gnu" ;; \
+        arm64) GOOSE_TRIPLE="aarch64-unknown-linux-gnu" ;; \
+        *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL --retry 3 --location \
         -o /tmp/goose.tar.bz2 \
-        "https://github.com/block/goose/releases/download/${GOOSE_VERSION}/goose-x86_64-unknown-linux-gnu.tar.bz2" && \
+        "https://github.com/block/goose/releases/download/${GOOSE_VERSION}/goose-${GOOSE_TRIPLE}.tar.bz2" && \
     tar -xjf /tmp/goose.tar.bz2 -C /usr/local/bin && \
     rm /tmp/goose.tar.bz2 && \
     chmod +x /usr/local/bin/goose && \
