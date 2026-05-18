@@ -413,7 +413,11 @@ def build_memory_context(
         return base_context
 
     # --- Step 1: Embed user message ---
-    query_embedding = embedding_service.embed_text(user_message, task_type="RETRIEVAL_QUERY")
+    # Use try_embed_text so we keep the pre-existing best-effort contract
+    # (returns ``None`` instead of raising) when the Rust embedding-service
+    # is unreachable. The Python sentence-transformers fallback was removed
+    # in the api-image-diet PR — see embedding_service.py module docstring.
+    query_embedding = embedding_service.try_embed_text(user_message, task_type="RETRIEVAL_QUERY")
 
     # Fallback to keyword-based recall if embedding model is not loaded
     if query_embedding is None:

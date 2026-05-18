@@ -1,8 +1,19 @@
 """Embedding service — generate, store, and search vector embeddings.
 
-Uses Rust gRPC service (fastembed/ONNX) for local, API-key-free embedding 
-generation. All functions are module-level, matching the service pattern 
+Uses Rust gRPC service (fastembed/ONNX) for local, API-key-free embedding
+generation. All functions are module-level, matching the service pattern
 used elsewhere.
+
+The pre-2026-05-18 build kept a ``sentence-transformers`` Python fallback
+in-process for the case where the Rust ``embedding-service`` was
+unreachable. Per the api-image-diet plan
+(``docs/plans/2026-05-18-docker-image-shrink-and-latency.md``) and the
+existing ``embedding_system.md`` memory note, the fallback was never
+load-bearing in prod and dragged ~600 MB of torch wheels into the api
+image. It's been removed: callers now see ``EmbeddingServiceUnavailable``
+when the Rust service is down. Best-effort embedding sites already
+treated ``None`` as a soft failure and continue to do so — the new
+exception is caught and converted at those call sites.
 """
 import logging
 import os
@@ -17,6 +28,16 @@ from sqlalchemy.orm import Session
 from app.models.embedding import Embedding
 
 logger = logging.getLogger(__name__)
+
+
+class EmbeddingServiceUnavailable(RuntimeError):
+    """Raised when the Rust embedding-service is unreachable.
+
+    Callers that already treated ``None`` from ``embed_text`` as a soft
+    failure should catch this and continue with the same code path —
+    convenience helpers below do the catch for them. New callers should
+    surface this loudly: a degraded embedding service is a real outage.
+    """
 
 _grpc_channel = None
 _grpc_stub = None
@@ -106,106 +127,122 @@ _intent_cache: list | None = None
 # Core: embed text
 # ------------------------------------------------------------------
 
-# Module-level model cache for Python fallback
-_local_model = None
-
 
 def embed_text(
     text_content: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
 ) -> Optional[List[float]]:
-    """Generate a 768-dim embedding for *text_content* via Rust gRPC (hot path) or local Python (fallback)."""
-    global _local_model
-    
-    # 1. Try Rust gRPC (Fastest)
-    stub = _get_grpc_stub()
-    if stub:
-        try:
-            from app.generated import embedding_pb2
-            # Map Python task types to Proto task types
-            rust_task = "search_document"
-            if task_type == "RETRIEVAL_QUERY":
-                rust_task = "search_query"
-            
-            req = embedding_pb2.EmbedRequest(
-                text=text_content[:_MAX_INPUT_CHARS],
-                task_type=rust_task
-            )
-            resp = stub.Embed(req, timeout=5.0)  # Shorter timeout for faster fallback
-            return list(resp.vector)
-        except Exception as e:
-            global _grpc_stub, _grpc_channel
-            _grpc_stub = None
-            _grpc_channel = None
-            logger.debug("Rust embedding failed, falling back to Python: %s", e)
+    """Generate a 768-dim embedding for *text_content* via the Rust gRPC service.
 
-    # 2. Local Python Fallback (Reliability)
+    Raises ``EmbeddingServiceUnavailable`` when the Rust service is
+    unreachable. Returns ``None`` only when the service returned a null
+    vector (today only seen on empty input). The previous Python
+    sentence-transformers fallback was removed in PR feat/api-image-diet-phase-a
+    to take ~600 MB of torch wheels off the api image — see the module
+    docstring for context.
+    """
+    stub = _get_grpc_stub()
+    if not stub:
+        raise EmbeddingServiceUnavailable(
+            "Rust embedding-service (EMBEDDING_SERVICE_URL) is unreachable"
+        )
+
     try:
-        if _local_model is None:
-            from sentence_transformers import SentenceTransformer
-            _local_model = SentenceTransformer(
-                "nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True
-            )
-        
-        # nomic-embed-text-v1.5 requires prefix
-        prefix = "search_document: "
+        from app.generated import embedding_pb2
+
+        # Map Python task types to Proto task types
+        rust_task = "search_document"
         if task_type == "RETRIEVAL_QUERY":
-            prefix = "search_query: "
-            
-        vector = _local_model.encode(prefix + text_content[:_MAX_INPUT_CHARS], normalize_embeddings=True)
-        return vector.tolist()
+            rust_task = "search_query"
+
+        req = embedding_pb2.EmbedRequest(
+            text=text_content[:_MAX_INPUT_CHARS],
+            task_type=rust_task,
+        )
+        resp = stub.Embed(req, timeout=5.0)
+        return list(resp.vector)
     except Exception as e:
-        logger.error("All embedding paths failed: %s", e)
-        return None
+        # Force lazy reconnect on the next call so we don't keep a dead stub.
+        global _grpc_stub, _grpc_channel
+        _grpc_stub = None
+        _grpc_channel = None
+        logger.error("Rust embedding call failed: %s", e)
+        raise EmbeddingServiceUnavailable(
+            f"Rust embedding-service call failed: {e}"
+        ) from e
 
 
 def embed_batch(
     texts: List[str],
     task_type: str = "RETRIEVAL_DOCUMENT",
 ) -> List[Optional[List[float]]]:
-    """Generate embeddings for a list of strings in bulk via Rust gRPC (hot path) or local Python (fallback)."""
+    """Generate embeddings for a list of strings in bulk via the Rust gRPC service.
+
+    Raises ``EmbeddingServiceUnavailable`` when the service is down. See
+    ``embed_text`` for the rationale on dropping the Python fallback.
+    """
     if not texts:
         return []
 
-    # 1. Try Rust gRPC
     stub = _get_grpc_stub()
-    if stub:
-        try:
-            from app.generated import embedding_pb2
-            rust_task = "search_document"
-            if task_type == "RETRIEVAL_QUERY":
-                rust_task = "search_query"
-            
-            req = embedding_pb2.EmbedBatchRequest(
-                texts=[t[:_MAX_INPUT_CHARS] for t in texts],
-                task_type=rust_task
-            )
-            resp = stub.EmbedBatch(req, timeout=30.0)
-            return [list(r.vector) for r in resp.results]
-        except Exception as e:
-            global _grpc_stub, _grpc_channel
-            _grpc_stub = None
-            _grpc_channel = None
-            logger.debug("Rust batch embedding failed, falling back to Python: %s", e)
+    if not stub:
+        raise EmbeddingServiceUnavailable(
+            "Rust embedding-service (EMBEDDING_SERVICE_URL) is unreachable"
+        )
 
-    # 2. Local Python Fallback
     try:
-        global _local_model
-        if _local_model is None:
-            from sentence_transformers import SentenceTransformer
-            _local_model = SentenceTransformer(
-                "nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True
-            )
-        
-        prefix = "search_document: "
+        from app.generated import embedding_pb2
+
+        rust_task = "search_document"
         if task_type == "RETRIEVAL_QUERY":
-            prefix = "search_query: "
-            
-        prefixed_texts = [prefix + t[:_MAX_INPUT_CHARS] for t in texts]
-        vectors = _local_model.encode(prefixed_texts, normalize_embeddings=True)
-        return [v.tolist() for v in vectors]
+            rust_task = "search_query"
+
+        req = embedding_pb2.EmbedBatchRequest(
+            texts=[t[:_MAX_INPUT_CHARS] for t in texts],
+            task_type=rust_task,
+        )
+        resp = stub.EmbedBatch(req, timeout=30.0)
+        return [list(r.vector) for r in resp.results]
     except Exception as e:
-        logger.error("All batch embedding paths failed: %s", e)
+        global _grpc_stub, _grpc_channel
+        _grpc_stub = None
+        _grpc_channel = None
+        logger.error("Rust batch embedding call failed: %s", e)
+        raise EmbeddingServiceUnavailable(
+            f"Rust embedding-service batch call failed: {e}"
+        ) from e
+
+
+# ------------------------------------------------------------------
+# Best-effort helpers — for callers that already treated ``None`` from
+# the old fallback as a soft failure (knowledge backfill, attachment
+# embedding on the chat hot path, etc). Catches
+# ``EmbeddingServiceUnavailable`` and returns ``None`` so we don't have
+# to retrofit try/except into every call site.
+# ------------------------------------------------------------------
+
+
+def try_embed_text(
+    text_content: str,
+    task_type: str = "RETRIEVAL_DOCUMENT",
+) -> Optional[List[float]]:
+    """Same as ``embed_text`` but returns ``None`` instead of raising."""
+    try:
+        return embed_text(text_content, task_type=task_type)
+    except EmbeddingServiceUnavailable as exc:
+        logger.warning("Embedding service unavailable for embed_text: %s", exc)
+        return None
+
+
+def try_embed_batch(
+    texts: List[str],
+    task_type: str = "RETRIEVAL_DOCUMENT",
+) -> List[Optional[List[float]]]:
+    """Same as ``embed_batch`` but returns a list of ``None`` instead of raising."""
+    try:
+        return embed_batch(texts, task_type=task_type)
+    except EmbeddingServiceUnavailable as exc:
+        logger.warning("Embedding service unavailable for embed_batch: %s", exc)
         return [None] * len(texts)
 
 
@@ -221,8 +258,14 @@ def embed_and_store(
     text_content: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
 ) -> Optional[Embedding]:
-    """Embed *text_content* and upsert the row in the embeddings table."""
-    vector = embed_text(text_content, task_type=task_type)
+    """Embed *text_content* and upsert the row in the embeddings table.
+
+    Best-effort by design: backfill jobs, attachment hot paths and
+    knowledge ingestion all expect ``None`` when embedding is impossible
+    (Rust service down, empty text). Uses ``try_embed_text`` so the
+    caller doesn't have to wrap every call in a try/except.
+    """
+    vector = try_embed_text(text_content, task_type=task_type)
     if vector is None:
         return None
 
@@ -266,8 +309,15 @@ def search_similar(
     query_text: str,
     limit: int = 10,
 ) -> List[Dict]:
-    """Return the *limit* most similar embeddings to *query_text*."""
-    vector = embed_text(query_text, task_type="RETRIEVAL_QUERY")
+    """Return the *limit* most similar embeddings to *query_text*.
+
+    Returns an empty list when the embedding service is unavailable —
+    matches the pre-2026-05-18 contract where ``embed_text`` returned
+    ``None`` on failure. Callers that NEED to differentiate "no results"
+    from "embedding service down" should call ``embed_text`` directly
+    and handle ``EmbeddingServiceUnavailable``.
+    """
+    vector = try_embed_text(query_text, task_type="RETRIEVAL_QUERY")
     if vector is None:
         return []
 
@@ -442,11 +492,15 @@ def match_intent(message: str) -> dict:
     """Embed message and cosine-match against cached intent vectors."""
     if not _intent_cache:
         return None
-    
-    msg_vec = embed_text(message, task_type="RETRIEVAL_QUERY")
+
+    # Best-effort: when the embedding-service is down we fall back to the
+    # default agent dispatch path (no intent match) — same as the previous
+    # ``embed_text returned None`` behaviour.
+    msg_vec = try_embed_text(message, task_type="RETRIEVAL_QUERY")
     if msg_vec is None:
         return None
-        
+
+
     try:
         msg_vec = np.array(msg_vec)
         best_match = None

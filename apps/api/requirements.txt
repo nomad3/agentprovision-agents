@@ -38,9 +38,12 @@ twilio>=9.3.0
 segno
 pdfplumber>=0.10.0
 pgvector>=0.3.6
-# sentence-transformers for local fallback when embedding-service is down
-sentence-transformers
-einops
+# sentence-transformers fallback was removed in PR feat/api-image-diet-phase-a
+# (docs/plans/2026-05-18-docker-image-shrink-and-latency.md). The Rust
+# embedding-service (apps/embedding-service) is now the only embedding
+# path; callers handle ``EmbeddingServiceUnavailable`` (or use the
+# ``try_embed_*`` helpers) when the service is unreachable. Removed
+# sentence-transformers + einops (~600 MB of torch wheels) here.
 protobuf>=7.34.1
 grpcio>=1.62.0
 # grpcio-tools is build-time only (proto compilation) — installed separately
