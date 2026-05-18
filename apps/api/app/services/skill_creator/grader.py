@@ -16,13 +16,18 @@ because the label always names the model that produced the verdicts.
 Failure model
 -------------
 
-The grader is allowed to fail on individual expectations without failing the
-whole call. When the LLM returns garbled output for one expectation, that
-expectation is marked ``passed=false`` with a ``reasoning`` field that names
-the parsing failure. The aggregate ``score`` then reflects the partial pass
-rate honestly. A wholesale failure (LLM unavailable, all expectations
-unparseable) raises ``GraderError`` so the caller can return a 503 instead of
-a misleading 0% score.
+Phase 1 treats grader output as all-or-nothing: if the LLM returns at least
+one well-formed verdict, the grader pairs each expectation with its verdict
+(missing ids default to ``passed=false`` with a "did not return a verdict"
+reasoning, which is a per-expectation fallback) and returns a partial-pass
+result. If the LLM returns NO parseable verdicts at all — unavailable,
+garbled output, empty response — the grader raises ``GraderError`` so the
+caller can return a 503 instead of a misleading "all failed" 200.
+
+Per-expectation parsing fallback (e.g. one verdict's JSON is malformed →
+mark just that one failed without raising) is a future enhancement. It
+would require a schema change to carry parse-error reasons per expectation
+and is deferred to a later phase.
 """
 
 from __future__ import annotations
@@ -336,10 +341,11 @@ def grade(
                 verdicts[str(item["id"])] = item
 
     if not verdicts:
-        # The grader produced nothing usable — but we still got at least one
-        # well-formed expectation in. Mark every expectation failed with a
-        # reasoning that names the grader-outage, AND raise so the endpoint
-        # returns 503 instead of a misleading "all failed" 200.
+        # The grader produced no parseable verdicts AT ALL — outage,
+        # empty response, or fully unparseable JSON. Raise so the endpoint
+        # returns 503 instead of a misleading "all failed" 200. Per-
+        # expectation parsing fallback (one bad verdict among many) is a
+        # future enhancement; see the module docstring.
         logger.warning(
             "grader: no verdicts parsed for tenant=%s session=%s",
             tenant_id, session_id,
