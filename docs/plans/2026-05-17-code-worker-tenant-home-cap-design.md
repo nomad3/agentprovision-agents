@@ -98,6 +98,34 @@ A tenant could now grow `home/` indefinitely. Add a soft cap:
 Quota check is best-effort; if it can't bring the dir under budget,
 it logs an OPS_ALERT event but doesn't block the chat turn.
 
+### Open risk for Phase 2 — concurrent ``pip install --user`` race
+
+Two concurrent CLI invocations for the same tenant (e.g. two parallel
+Codex turns triggered by an A2A coalition, or a chat turn that overlaps
+with a scheduled job) will both see the same
+``<workspaces_root>/<tenant>/home/.local/`` and both honour
+``$HOME`` for ``pip install --user`` writes. ``pip``'s install is
+**not atomic across concurrent invocations** — two parallel
+``pip install foo`` calls can interleave their ``dist-info`` writes and
+leave the site-packages tree in a half-installed state, surfacing as
+import errors on the next turn.
+
+Phase 2 mitigations to evaluate (pick one, this PR ships neither):
+
+- **Per-tenant lock**: ``fcntl.flock`` on
+  ``<tenant>/home/.install.lock`` around each CLI invocation that
+  could trigger an install. Cheap, but serialises legitimate
+  concurrent CLI traffic for the same tenant.
+- **Accept the race**: the recovery path (next invocation re-installs)
+  costs ~5-30 s. If observed corruption rate is ~1 %, that may be
+  cheaper than locking 99 % of clean invocations. Re-evaluate once
+  Phase 2 quota walker has metrics on real-world concurrent-turn
+  frequency.
+
+No code in this PR — Phase 1 keeps the scope to the HOME redirect.
+Flagged here so Phase 2 doesn't ship a quota walker that papers over a
+pip-install corruption symptom.
+
 ## Migration
 
 1. **Build path** — compose + Helm: mount workspaces volume on

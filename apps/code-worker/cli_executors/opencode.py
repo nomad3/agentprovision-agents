@@ -137,8 +137,11 @@ def _execute_opencode_chat_cli(task_input, session_dir: str):
     # recycles AND don't grow the code-worker writable layer.
     try:
         env["HOME"] = str(cli_runtime.tenant_home_dir(task_input.tenant_id))
-    except (ValueError, OSError):
-        pass
+    except (ValueError, OSError) as exc:
+        logger.warning(
+            "tenant_home_dir(%s) failed (%s); HOME falls back to container default",
+            task_input.tenant_id, exc,
+        )
 
     cmd = ["opencode", "run", "-p", prompt, "-y", "--output-format", "json"]
     try:

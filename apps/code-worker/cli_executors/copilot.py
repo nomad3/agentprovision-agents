@@ -10,11 +10,14 @@ function body.
 from __future__ import annotations
 
 import json
+import logging
 import os
 
 import cli_runtime
 from cli_executors import passthrough_stream_parser
 from session_event_emitter import SessionEventEmitter
+
+logger = logging.getLogger(__name__)
 
 
 def execute_copilot_chat(task_input, session_dir: str):
@@ -125,8 +128,11 @@ def execute_copilot_chat(task_input, session_dir: str):
     # writable layer.
     try:
         env["HOME"] = str(cli_runtime.tenant_home_dir(task_input.tenant_id))
-    except (ValueError, OSError):
-        pass
+    except (ValueError, OSError) as exc:
+        logger.warning(
+            "tenant_home_dir(%s) failed (%s); HOME falls back to container default",
+            task_input.tenant_id, exc,
+        )
 
     # ---- streaming emitter (plan 2026-05-16 §2.4) ----
     # Copilot CLI uses passthrough — terminal sees the raw JSONL stream.

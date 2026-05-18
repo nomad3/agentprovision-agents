@@ -55,7 +55,11 @@ def execute_gemini_chat(task_input, session_dir: str, image_path: str):
     # don't mount WORKSPACES_ROOT.
     try:
         tenant_home = str(cli_runtime.tenant_home_dir(task_input.tenant_id))
-    except (ValueError, OSError):
+    except (ValueError, OSError) as exc:
+        logger.warning(
+            "tenant_home_dir(%s) failed (%s); HOME falls back to session_dir=%s",
+            task_input.tenant_id, exc, session_dir,
+        )
         tenant_home = session_dir
     if api_key:
         # API key auth — no OAuth, no ADC, just set GEMINI_API_KEY env var
