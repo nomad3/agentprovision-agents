@@ -8,9 +8,10 @@ prod — code-worker is a separate container).
 
 What this test validates:
 
-  - Each of the 7 adapters (claude_code, codex, gemini_cli, copilot_cli,
-    opencode, qwen_code, shell) implements ``ProviderAdapter``
-    structurally: name + preflight + run + classify_error.
+  - Each of the adapters (aider, claude_code, codex, gemini_cli,
+    copilot_cli, kimi_k2, opencode, qwen_code, shell) implements
+    ``ProviderAdapter`` structurally: name + preflight + run +
+    classify_error.
 
   - Each adapter's signature matches the documented contract.
 
@@ -33,10 +34,14 @@ from cli_orchestrator.adapters.base import (
 )
 from cli_orchestrator.status import Status
 
+from cli_orchestrator_adapters.aider import AiderAdapter
 from cli_orchestrator_adapters.claude_code import ClaudeCodeAdapter
 from cli_orchestrator_adapters.codex import CodexAdapter
 from cli_orchestrator_adapters.copilot_cli import CopilotCliAdapter
 from cli_orchestrator_adapters.gemini_cli import GeminiCliAdapter
+from cli_orchestrator_adapters.deepseek import DeepSeekAdapter
+from cli_orchestrator_adapters.glm import GlmAdapter
+from cli_orchestrator_adapters.goose import GooseAdapter
 from cli_orchestrator_adapters.kimi_k2 import KimiK2Adapter
 from cli_orchestrator_adapters.opencode import OpencodeAdapter
 from cli_orchestrator_adapters.qwen_code import QwenCodeAdapter
@@ -44,11 +49,15 @@ from cli_orchestrator_adapters.shell import ShellAdapter
 
 
 ADAPTER_FACTORIES = [
+    ("aider", AiderAdapter),
     ("claude_code", ClaudeCodeAdapter),
     ("codex", CodexAdapter),
     ("copilot_cli", CopilotCliAdapter),
     ("gemini_cli", GeminiCliAdapter),
+    ("glm", GlmAdapter),
+    ("goose", GooseAdapter),
     ("kimi_k2", KimiK2Adapter),
+    ("deepseek", DeepSeekAdapter),
     ("opencode", OpencodeAdapter),
     ("qwen_code", QwenCodeAdapter),
     ("shell", ShellAdapter),
@@ -105,11 +114,15 @@ def test_adapter_imports_do_not_drag_workflows():
 
     before = set(sys.modules.keys())
     importlib.import_module("cli_orchestrator_adapters")
+    importlib.import_module("cli_orchestrator_adapters.aider")
     importlib.import_module("cli_orchestrator_adapters.claude_code")
     importlib.import_module("cli_orchestrator_adapters.codex")
     importlib.import_module("cli_orchestrator_adapters.gemini_cli")
     importlib.import_module("cli_orchestrator_adapters.copilot_cli")
+    importlib.import_module("cli_orchestrator_adapters.glm")
+    importlib.import_module("cli_orchestrator_adapters.goose")
     importlib.import_module("cli_orchestrator_adapters.kimi_k2")
+    importlib.import_module("cli_orchestrator_adapters.deepseek")
     importlib.import_module("cli_orchestrator_adapters.opencode")
     importlib.import_module("cli_orchestrator_adapters.qwen_code")
     importlib.import_module("cli_orchestrator_adapters.shell")

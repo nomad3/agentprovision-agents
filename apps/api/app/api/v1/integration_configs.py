@@ -286,10 +286,44 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         ],
     },
     # NOTE: Direct-API LLM cards (`anthropic_llm`, `gemini_llm`) were
-    # removed. The platform routes chat agents through CLI OAuth
-    # subscriptions only — Claude Code, Gemini CLI, GitHub Copilot CLI,
-    # Codex CLI — not raw API keys. The AI Models tab in the UI handles
-    # any remaining provider-key flows.
+    # removed for the chat path — chat agents routed through CLI OAuth
+    # subscriptions (Claude Code, Gemini CLI, GitHub Copilot CLI, Codex
+    # CLI). The cards below (``aider``, ``kimi_k2``) are BYOK API-key
+    # surfaces for CLI-binary integrations that don't have an OAuth
+    # subscription path — they coexist with the subscription cards
+    # rather than replacing them. The AI Models tab in the UI handles
+    # any remaining provider-key flows outside this registry.
+    "aider": {
+        # Wave 2c of the CLI integration catalog (#272). Aider
+        # (https://aider.chat — paul-gauthier/aider, Apache 2.0) is a
+        # Python CLI binary (``pip install aider-chat``) that wraps
+        # LiteLLM and pair-programs against any single-API-key provider.
+        # The executor lives in ``apps/code-worker/cli_executors/aider.py``
+        # and derives the right env var name (ANTHROPIC_API_KEY,
+        # OPENAI_API_KEY, etc.) from the ``model`` slug. Multi-credential
+        # providers (Bedrock / Azure / Ollama) are NOT supported by this
+        # card — they need dedicated cards in a future wave.
+        "display_name": "Aider",
+        "description": (
+            "Connect Aider with a provider API key. Supported providers: "
+            "Anthropic, OpenAI, DeepSeek, Google (Gemini), Moonshot (Kimi), "
+            "Zhipu (GLM), Mistral, Cohere, Groq. Pick a model slug below "
+            "and paste the matching provider key. Calls are billed against "
+            "the provider account you choose, not against us."
+        ),
+        "icon": "FaTools",
+        "auth_type": "api_key",
+        "credentials": [
+            {"key": "model", "label": "Model", "type": "text", "required": True,
+             "help": "LiteLLM-style slug. Examples: anthropic/claude-3-5-sonnet-20241022, "
+                     "openai/gpt-4o, deepseek/deepseek-chat, gemini/gemini-2.0-flash. "
+                     "Defaults to anthropic/claude-3-5-sonnet-20241022."},
+            {"key": "api_key", "label": "Aider API Key", "type": "password", "required": True,
+             "help": "API key for the provider matching your model slug above. "
+                     "anthropic/* → Anthropic console key; openai/* → OpenAI console key; "
+                     "deepseek/* → DeepSeek console key; etc. Aider is BYOK to any LiteLLM-supported provider."},
+        ],
+    },
     "kimi_k2": {
         # Moonshot AI's Kimi K2 coding-tuned model — Wave 1c Lane B
         # (Apache 2.0 weights, commercial resale permitted; see
@@ -317,6 +351,87 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
              "help": "Defaults to https://api.moonshot.ai/v1. Set to https://api.moonshot.cn/v1 for the Chinese-region tier."},
             {"key": "model", "label": "Model", "type": "text", "required": False,
              "help": "Defaults to kimi-k2-0905-preview. Override only if Moonshot publishes a newer coding-tuned variant."},
+        ],
+    },
+    "deepseek": {
+        # DeepSeek V3 / DeepSeek R1 coding + reasoning models — Wave 2a
+        # Lane B (MIT-licensed weights, commercial resale permitted; see
+        # ``docs/plans/2026-05-18-cli-integration-catalog.md``). The
+        # executor talks to DeepSeek's OpenAI-compatible HTTP endpoint
+        # directly from ``cli_executors/deepseek.py`` — there is no
+        # local CLI binary. Default base URL is
+        # ``https://api.deepseek.com/v1`` (the hosted DeepSeek service);
+        # self-hosters can point ``base_url`` at any OpenAI-compatible
+        # endpoint serving the MIT weights.
+        "display_name": "DeepSeek",
+        "description": (
+            "Connect your DeepSeek API key for DeepSeek-V3 / DeepSeek-R1. "
+            "Calls are billed against your DeepSeek account."
+        ),
+        "icon": "FaRobot",
+        "auth_type": "manual",
+        "credentials": [
+            {"key": "api_key", "label": "DeepSeek API Key", "type": "password", "required": True,
+             "help": "DEEPSEEK_API_KEY from https://platform.deepseek.com/api_keys."},
+            {"key": "base_url", "label": "Base URL", "type": "text", "required": False,
+             "help": "Defaults to https://api.deepseek.com/v1. Override only if pointing at a self-hosted DeepSeek deployment serving the MIT-licensed weights."},
+            {"key": "model", "label": "Model", "type": "text", "required": False,
+             "help": "Defaults to deepseek-chat (V3.5 coding-tuned). Set to deepseek-reasoner for the R1 chain-of-thought variant."},
+        ],
+    },
+    "glm": {
+        # Zhipu AI's GLM-4.6 coding-tuned model — Wave 2b Lane B
+        # (Apache 2.0 weights, commercial resale permitted; see
+        # ``docs/plans/2026-05-18-cli-integration-catalog.md``). The
+        # executor talks to Zhipu's OpenAI-compatible BigModel HTTP
+        # endpoint directly from ``cli_executors/glm.py`` — there is no
+        # local CLI binary involved (Zhipu's developer CLI is not a
+        # runtime dependency). Default base URL is
+        # ``https://open.bigmodel.cn/api/paas/v4``.
+        "display_name": "GLM (Zhipu AI)",
+        "description": (
+            "Connect your Zhipu API key for GLM-4.6. "
+            "Calls are billed against your Zhipu BigModel account."
+        ),
+        "icon": "FaCloud",
+        "auth_type": "manual",
+        "credentials": [
+            {"key": "api_key", "label": "Zhipu API Key", "type": "password", "required": True,
+             "help": "ZHIPU_API_KEY from https://open.bigmodel.cn/usercenter/apikeys."},
+            {"key": "base_url", "label": "Base URL", "type": "text", "required": False,
+             "help": "Defaults to https://open.bigmodel.cn/api/paas/v4. Override only for a self-hosted Zhipu-compatible gateway."},
+            {"key": "model", "label": "Model", "type": "text", "required": False,
+             "help": "Defaults to glm-4.6. Override to pin glm-4-air / glm-4-flash for cheaper tiers."},
+        ],
+    },
+    "goose": {
+        # Wave 2d — Goose (Block) joins the catalog as an Apache-2.0
+        # Rust binary baked into the code-worker image. MCP-native:
+        # Goose auto-discovers MCP servers from
+        # ``~/.config/goose/mcp.json`` and the executor materialises
+        # the tenant's existing MCP source list there at chat time.
+        # BYOK to any provider — the tenant picks which provider Goose
+        # talks to (Anthropic, OpenAI, Databricks, Ollama, …) plus the
+        # API key for that provider, and Goose handles the rest.
+        "display_name": "Goose",
+        "description": (
+            "Connect Goose, Block's open-source agent CLI. MCP-native, "
+            "BYOK to any provider."
+        ),
+        "icon": "FaFeather",
+        "auth_type": "api_key",
+        "credentials": [
+            {"key": "provider", "label": "Provider", "type": "text", "required": True,
+             "help": "Which LLM provider Goose talks to. One of: anthropic, openai, "
+                     "google, deepseek, openrouter, groq, databricks, ollama, xai. "
+                     "Default: anthropic."},
+            {"key": "api_key", "label": "Provider API Key", "type": "password", "required": False,
+             "help": "API key for the chosen provider. Optional if the operator has "
+                     "wired a shared key into the worker container env. For ``ollama`` "
+                     "(local), leave blank."},
+            {"key": "model", "label": "Model", "type": "text", "required": False,
+             "help": "Override the default model for the chosen provider. Default: "
+                     "claude-3-5-sonnet-latest (anthropic)."},
         ],
     },
 }

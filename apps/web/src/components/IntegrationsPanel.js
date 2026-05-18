@@ -13,10 +13,12 @@ import {
   FaBook,
   FaCalendar,
   FaCheckCircle,
+  FaCloud,
   FaCog,
   FaEnvelope,
   FaGithub,
   FaGoogle,
+  FaFeather,
   FaKey,
   FaLink,
   FaLinkedin,
@@ -32,6 +34,7 @@ import {
   FaSlack,
   FaTasks,
   FaTerminal,
+  FaTools,
   FaTimesCircle,
   FaToggleOff,
   FaToggleOn,
@@ -62,6 +65,9 @@ const ICON_MAP = {
   FaPalette: FaPalette,
   FaRobot: FaRobot,
   FaTerminal: FaTerminal,
+  FaCloud: FaCloud,
+  FaTools: FaTools,
+  FaFeather: FaFeather,
 };
 
 // Color accents per skill for visual distinction
@@ -81,6 +87,10 @@ const SKILL_COLORS = {
   higgsfield: '#FF6B35',
   qwen_code: '#6C2EB7',
   kimi_k2: '#7C3AED',
+  deepseek: '#1c64f2',
+  glm: '#3b82f6',
+  aider: '#dc2626',
+  goose: '#10B981',
 };
 
 // Pinned order for the integration card grid. Anything not listed gets pushed
@@ -98,6 +108,10 @@ const INTEGRATION_ORDER = [
   'higgsfield',
   'qwen_code',
   'kimi_k2',
+  'deepseek',
+  'glm',
+  'aider',
+  'goose',
   'gmail',
   'google_calendar',
   'google_drive',

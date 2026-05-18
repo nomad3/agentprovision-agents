@@ -391,6 +391,56 @@ def test_chain_kimi_k2_cooldown_respected(monkeypatch):
     assert "claude_code" in chain
 
 
+# ── Goose (Wave 2d) ──────────────────────────────────────────────────
+
+
+def test_chain_goose_via_integration(monkeypatch):
+    """A tenant with the Goose integration connected gets goose in the
+    resolver chain. Mirrors the 1:1 integration → CLI mapping the other
+    BYOK CLIs use."""
+    _stub_connected(monkeypatch, {"goose"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
+    assert "goose" in chain
+    assert chain[-1] == "opencode"
+
+
+def test_goose_ranks_below_subscription_clis_and_byok_alternates(monkeypatch):
+    """With every CLI connected, goose sits below qwen_code / kimi_k2
+    (the established BYOK alternates) and above the opencode floor.
+    Locks in the Wave 2d ranking — a future re-shuffle must be an
+    explicit edit to _DEFAULT_PRIORITY."""
+    _stub_connected(
+        monkeypatch,
+        {"gemini_cli", "codex", "github", "claude_code", "qwen_code", "kimi_k2", "goose"},
+    )
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
+    assert chain.index("goose") > chain.index("kimi_k2")
+    assert chain.index("goose") < chain.index("opencode")
+
+
+def test_goose_explicit_preference_wins_when_available(monkeypatch):
+    """An agent with preferred_cli=goose AND the goose integration wired
+    leads the chain ahead of any other connected CLIs."""
+    _stub_connected(monkeypatch, {"goose", "claude_code", "github"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform="goose")
+    assert chain[0] == "goose"
+    # Default-priority fallbacks still appear after.
+    assert "claude_code" in chain
+    assert "copilot_cli" in chain
+
+
+def test_goose_not_connected_message_classifies_as_missing_credential():
+    """The worker-side not-connected message for goose MUST classify as
+    ``missing_credential`` so the orchestrator chain-walks past goose
+    WITHOUT a 10-minute cooldown. Quick reconnect → next chat turn picks
+    it up; a cooldown would mask that."""
+    msg = (
+        "Goose is not connected. "
+        "Please connect your Goose account in Settings → Integrations."
+    )
+    assert r.classify_error(msg) == "missing_credential"
+
+
 def test_kimi_k2_not_connected_message_classifies_as_missing_credential():
     """The worker-side not-connected message for kimi_k2 (returned both
     by ``_fetch_integration_credentials`` 404 path and the executor's
@@ -406,5 +456,185 @@ def test_kimi_k2_not_connected_message_classifies_as_missing_credential():
     msg = (
         "Kimi K2 is not connected. "
         "Please connect your Moonshot account in Settings → Integrations."
+    )
+    assert r.classify_error(msg) == "missing_credential"
+
+
+# ── DeepSeek (Wave 2a Lane B) ────────────────────────────────────────
+
+
+def test_chain_deepseek_via_integration(monkeypatch):
+    """A tenant with the DeepSeek integration connected gets deepseek
+    in the resolver chain. Mirrors the kimi-via-integration test for
+    the simpler 1:1 integration mapping."""
+    _stub_connected(monkeypatch, {"deepseek"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
+    assert "deepseek" in chain
+    assert chain[-1] == "opencode"
+
+
+def test_chain_deepseek_explicit_platform_wins(monkeypatch):
+    """An agent with preferred_cli=deepseek leads the chain when the
+    integration is wired, ahead of any other connected CLIs."""
+    _stub_connected(monkeypatch, {"deepseek", "claude_code", "github"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform="deepseek")
+    assert chain[0] == "deepseek"
+    # Default-priority fallbacks still appear after.
+    assert "claude_code" in chain
+    assert "copilot_cli" in chain
+
+
+def test_connected_clis_for_tenant_surfaces_deepseek(monkeypatch):
+    """``connected_clis_for_tenant`` (the public list driving the
+    InlineCliPicker) MUST include deepseek when wired — NOT hidden the
+    way opencode is."""
+    _stub_connected(monkeypatch, {"deepseek"})
+    listed = r.connected_clis_for_tenant(None, uuid.uuid4())
+    assert "deepseek" in listed
+    assert "opencode" not in listed
+
+
+def test_chain_deepseek_cooldown_respected(monkeypatch):
+    """A quota'd deepseek is filtered from the chain just like the
+    other CLIs (only opencode is exempt from cooldown)."""
+    tid = uuid.uuid4()
+    _stub_connected(monkeypatch, {"deepseek", "claude_code"})
+    r.mark_cooldown(tid, "deepseek", reason="quota")
+    chain = r.resolve_cli_chain(None, tid, explicit_platform="deepseek")
+    assert "deepseek" not in chain
+    assert "claude_code" in chain
+
+
+def test_deepseek_not_connected_message_classifies_as_missing_credential():
+    """The worker-side not-connected message for deepseek (returned
+    both by ``_fetch_integration_credentials`` 404 path and the
+    executor's empty-api-key path) MUST be classified as
+    ``missing_credential`` so the orchestrator chain-walks past
+    deepseek WITHOUT a 10-minute cooldown. A quick reconnect should be
+    picked up on the next chat turn, not masked by cooldown.
+
+    Hits the ``please connect your`` arm of the chain-walker regex in
+    ``packages/cli_orchestrator/classifier.py``."""
+    msg = (
+        "DeepSeek is not connected. "
+        "Please connect your DeepSeek account in Settings → Integrations."
+    )
+    assert r.classify_error(msg) == "missing_credential"
+
+
+# ── GLM (Wave 2b Lane B) ─────────────────────────────────────────────
+
+
+def test_chain_glm_via_integration(monkeypatch):
+    """A tenant with the Zhipu GLM integration connected gets glm in
+    the resolver chain. Mirrors the kimi_k2-via-integration piggy-back
+    test for the simpler 1:1 integration mapping."""
+    _stub_connected(monkeypatch, {"glm"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
+    assert "glm" in chain
+    assert chain[-1] == "opencode"
+
+
+def test_chain_glm_explicit_platform_wins(monkeypatch):
+    """An agent with preferred_cli=glm leads the chain when the
+    integration is wired, ahead of any other connected CLIs."""
+    _stub_connected(monkeypatch, {"glm", "claude_code", "github"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform="glm")
+    assert chain[0] == "glm"
+    # Default-priority fallbacks still appear after.
+    assert "claude_code" in chain
+    assert "copilot_cli" in chain
+
+
+def test_connected_clis_for_tenant_surfaces_glm(monkeypatch):
+    """``connected_clis_for_tenant`` (the public list driving the
+    InlineCliPicker) MUST include glm when wired — NOT hidden the
+    way opencode is."""
+    _stub_connected(monkeypatch, {"glm"})
+    listed = r.connected_clis_for_tenant(None, uuid.uuid4())
+    assert "glm" in listed
+    # opencode stays hidden — it's the routing floor, not user-pickable.
+    assert "opencode" not in listed
+
+
+def test_glm_not_connected_message_classifies_as_missing_credential():
+    """The worker-side not-connected message for glm (returned both
+    by ``_fetch_integration_credentials`` 404 path and the executor's
+    empty-api-key path) MUST be classified as ``missing_credential``
+    so the orchestrator chain-walks past glm WITHOUT a 10-minute
+    cooldown. Quick reconnect should be picked up on the next chat
+    turn, not masked by cooldown."""
+    msg = (
+        "GLM (Zhipu AI) is not connected. "
+        "Please connect your Zhipu account in Settings → Integrations."
+    )
+    assert r.classify_error(msg) == "missing_credential"
+
+
+# ── Aider (Wave 2c) ──────────────────────────────────────────────────
+
+
+def test_chain_aider_via_integration(monkeypatch):
+    """A tenant with the Aider integration connected gets ``aider`` in
+    the resolver chain. Mirrors the kimi_k2 1:1 integration mapping —
+    Aider has no piggy-back paths because it's BYOK to any provider."""
+    _stub_connected(monkeypatch, {"aider"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
+    assert "aider" in chain
+    assert chain[-1] == "opencode"
+    # The established CLIs must NOT appear because their creds aren't wired.
+    assert set(chain).isdisjoint({"claude_code", "codex", "gemini_cli", "copilot_cli"})
+
+
+def test_aider_ranks_below_subscription_and_byok_clis(monkeypatch):
+    """With every CLI connected, ``aider`` sits below the four
+    established subscription CLIs AND below qwen_code / kimi_k2 (the
+    earlier BYOK alternates), and above the opencode floor. Locks in
+    the Wave 2c ranking decision so a future re-shuffle is an explicit
+    edit, not an accident."""
+    _stub_connected(
+        monkeypatch,
+        {"gemini_cli", "codex", "github", "claude_code", "qwen_code", "kimi_k2", "aider"},
+    )
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform=None)
+    assert chain.index("aider") > chain.index("claude_code")
+    assert chain.index("aider") > chain.index("kimi_k2")
+    assert chain.index("aider") < chain.index("opencode")
+
+
+def test_chain_aider_explicit_platform_wins(monkeypatch):
+    """An agent with preferred_cli=aider leads the chain when the
+    integration is wired, ahead of any other connected CLIs."""
+    _stub_connected(monkeypatch, {"aider", "claude_code"})
+    chain = r.resolve_cli_chain(None, uuid.uuid4(), explicit_platform="aider")
+    assert chain[0] == "aider"
+    assert "claude_code" in chain
+    assert chain.index("aider") < chain.index("claude_code")
+
+
+def test_chain_aider_cooldown_respected(monkeypatch):
+    """A quota'd Aider is filtered from the chain just like the other
+    CLIs (only opencode is exempt from cooldown). Mirrors the kimi_k2 /
+    qwen_code cooldown contract."""
+    tid = uuid.uuid4()
+    _stub_connected(monkeypatch, {"aider", "claude_code"})
+    r.mark_cooldown(tid, "aider", reason="quota")
+    chain = r.resolve_cli_chain(None, tid, explicit_platform="aider")
+    assert "aider" not in chain
+    assert "claude_code" in chain
+
+
+def test_aider_not_connected_message_classifies_as_missing_credential():
+    """The worker-side not-connected message for ``aider`` MUST be
+    classified as ``missing_credential`` so the orchestrator chain-walks
+    past Aider WITHOUT a 10-minute cooldown. A quick reconnect should
+    be picked up on the next chat turn, not masked by cooldown.
+
+    Mirrors the kimi_k2 regression test — the friendly message has to
+    hit one of the alternation branches in
+    ``packages/cli_orchestrator/classifier.py``."""
+    msg = (
+        "Aider is not connected. "
+        "Please connect your Aider account in Settings → Integrations."
     )
     assert r.classify_error(msg) == "missing_credential"
