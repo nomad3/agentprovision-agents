@@ -7,8 +7,9 @@ Covers:
     fractional score; missing verdicts default to ``passed=False``.
   * Wholesale grader outage raises ``GraderError`` (caller turns it into
     a 503 — not a misleading 0% pass).
-  * ``_resolve_grader_model`` honors the tenant's ``default_cli_platform``
-    and falls back to opencode otherwise.
+  * Phase 1: ``grader_model`` is always the local Gemma tag, regardless
+    of tenant preference (Phase 4 will wire per-tenant routing through
+    agent_router).
 """
 
 import os
@@ -26,8 +27,8 @@ from app.services.skill_creator.grader import (
     Expectation,
     GraderError,
     GradingResult,
+    _DEFAULT_LOCAL_MODEL_TAG,
     _extract_json,
-    _resolve_grader_model,
     _summarize_outputs,
     _validate_expectations,
     grade,
@@ -130,55 +131,12 @@ def test_summarize_outputs_lists_files(tmp_path):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# _resolve_grader_model
+# grader_model label
+#
+# Phase 1: always the local Gemma tag, regardless of tenant or db arg.
+# Phase 4 will wire per-tenant routing; until then any test that wants
+# to verify "the label is honest" asserts on _DEFAULT_LOCAL_MODEL_TAG.
 # ──────────────────────────────────────────────────────────────────────────
-
-
-class _FakeFeatures:
-    def __init__(self, platform):
-        self.default_cli_platform = platform
-
-
-class _FakeDB:
-    """Minimal stand-in for sqlalchemy.Session for the tenant_features query."""
-
-    def __init__(self, platform):
-        self._platform = platform
-
-    def query(self, _model):
-        return self
-
-    def filter(self, *_args, **_kw):
-        return self
-
-    def first(self):
-        if self._platform is None:
-            return None
-        return _FakeFeatures(self._platform)
-
-
-def test_resolve_model_uses_tenant_default():
-    db = _FakeDB("claude_code")
-    assert _resolve_grader_model(db, uuid.uuid4()) == "claude-3-5-sonnet-latest"
-
-
-def test_resolve_model_falls_back_to_opencode():
-    db = _FakeDB(None)
-    assert _resolve_grader_model(db, uuid.uuid4()) == "gemma3:4b"
-
-
-def test_resolve_model_unknown_platform_falls_back():
-    db = _FakeDB("imaginary_cli")
-    assert _resolve_grader_model(db, uuid.uuid4()) == "gemma3:4b"
-
-
-def test_resolve_model_tolerates_db_error():
-    class _BoomDB:
-        def query(self, _model):
-            raise RuntimeError("db down")
-
-    # Falls back to opencode rather than raising — chat must keep working.
-    assert _resolve_grader_model(_BoomDB(), uuid.uuid4()) == "gemma3:4b"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -336,13 +294,22 @@ def test_grade_grader_returns_garbage_raises():
             )
 
 
-def test_grade_records_tenant_default_model_label():
+def test_grade_records_local_model_label_regardless_of_tenant():
+    """Phase 1: the recorded ``grader_model`` is literally what
+    local_inference was called with — no per-tenant label rewriting.
+    Phase 4 will switch this when agent_router dispatch lands.
+    """
     expectations = [{"id": "e1", "description": "Has greeting"}]
     fake = _verdicts_json(
         {"id": "e1", "passed": True, "reasoning": "Says hello."},
     )
 
-    db = _FakeDB("claude_code")
+    # An arbitrary db stand-in to prove the function doesn't consult it
+    # for label resolution anymore.
+    class _UnusedDB:
+        def query(self, *_a, **_kw):
+            raise AssertionError("db should not be queried in Phase 1")
+
     with patch("app.services.local_inference.generate_sync", return_value=fake):
         result = grade(
             transcript="Hello!",
@@ -350,10 +317,11 @@ def test_grade_records_tenant_default_model_label():
             expectations=expectations,
             tenant_id=uuid.uuid4(),
             session_id=uuid.uuid4(),
-            db=db,
+            db=_UnusedDB(),
         )
 
-    assert result.grader_model == "claude-3-5-sonnet-latest"
+    assert result.grader_model == _DEFAULT_LOCAL_MODEL_TAG
+    assert result.grader_model == "gemma3:4b"
 
 
 def test_grade_outputs_dir_included_in_summary(tmp_path):

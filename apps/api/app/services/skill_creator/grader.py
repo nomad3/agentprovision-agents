@@ -3,18 +3,15 @@
 Given a transcript + outputs directory + a list of expectations, produces a
 ``GradingResult`` matching ``grading.json`` from ``docs/skill-creator/schemas.md``.
 
-The grader dispatches to the LLM configured for the tenant (their
-``default_cli_platform``) by mapping the platform name to a concrete model id
-and calling through the existing local-inference fast path. The lookup mirrors
-the resolution pattern in ``apps/api/app/services/agent_router.py`` so the
-grader honors the same per-tenant model selection that chat turns use.
-
-For Phase 1 the grader does NOT actually shell out to the tenant's CLI binary
-— it calls ``local_inference.generate_sync`` with the resolved model id. That
-is the same path the auto-quality scorer + classify_task_type use, and it
-already handles availability, timeouts, and retries. Phase 4+ may add a CLI
-dispatch path when the description optimizer needs the live triggering surface
-(see open question #5 in the design doc).
+Phase 1 grades every run on the local Ollama floor (``gemma3:4b``) regardless
+of the tenant's ``default_cli_platform``. The ``grader_model`` field on the
+result records *literally* what ``local_inference.generate_sync`` was called
+with — that's the contract reproducibility relies on. Routing the grader
+through ``agent_router`` so each tenant grades on their preferred CLI is
+deferred to Phase 4 (see open question #5 in the design doc); when it lands
+the recorded ``grader_model`` will switch from the local tag to whatever the
+CLI dispatch actually invoked, and re-grades will be honestly comparable
+because the label always names the model that produced the verdicts.
 
 Failure model
 -------------
@@ -98,69 +95,21 @@ class GraderError(RuntimeError):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Platform → model id resolution
+# Grader model
 #
-# Maps the tenant's ``default_cli_platform`` (the same enum honored by
-# agent_router and cli_platform_resolver) onto the model id the grader should
-# label its output with AND ask local_inference to use. Phase 1 collapses
-# every CLI platform onto the local Ollama floor because:
-#
-#   * Phase 1 doesn't ship the CLI dispatch path (see module docstring).
-#   * Every CLI platform's "default" hosted model is acceptable as a grader;
-#     we just need to RECORD which one the tenant asked for so a re-grade
-#     against the same tenant with a different default is reproducible.
-#
-# When Phase 4+ wires in actual CLI dispatch, this table flips to "spawn the
-# CLI subprocess and parse its stdout"; the recorded ``grader_model`` is
-# stable across that change because we already record the CLI's identity.
+# Phase 1 always grades on the local Ollama floor. The ``grader_model``
+# field on every result records *literally* what the grader called —
+# no per-tenant label rewriting. Phase 4 will replace this constant with
+# an ``agent_router`` dispatch that picks per tenant; the label will then
+# come from the dispatched CLI's actual model id, so re-grade reproducibility
+# is preserved because the label always matches the engine that voted.
 # ──────────────────────────────────────────────────────────────────────────
 
-
-_PLATFORM_TO_MODEL_LABEL = {
-    "claude_code": "claude-3-5-sonnet-latest",
-    "codex": "gpt-4o",
-    "gemini_cli": "gemini-1.5-pro-latest",
-    "copilot_cli": "gpt-4o",
-    "qwen_code": "qwen2.5-coder:32b",
-    "kimi_k2": "moonshot-v1-32k",
-    "deepseek": "deepseek-chat",
-    "glm": "glm-4-flash",
-    "aider": "claude-3-5-sonnet-latest",
-    "goose": "claude-3-5-sonnet-latest",
-    "opencode": "gemma3:4b",
-}
 
 # Local Ollama tag the grader actually calls in Phase 1. Cheap to swap to a
 # stronger local model later; we keep it small here so grader latency is
 # bounded on the dev machine.
 _DEFAULT_LOCAL_MODEL_TAG = "gemma3:4b"
-
-
-def _resolve_grader_model(db, tenant_id: uuid.UUID) -> str:
-    """Return the model label to record on the grading payload.
-
-    Reads ``tenant_features.default_cli_platform`` exactly like
-    ``agent_router._init_platform``. Falls back to opencode (local Gemma)
-    when the tenant has no preference set — same floor as the chat path.
-    """
-    try:
-        # Late import — keeps the module import light and avoids a cycle
-        # with TenantFeatures during test collection.
-        from app.models.tenant_features import TenantFeatures
-
-        features = (
-            db.query(TenantFeatures)
-            .filter(TenantFeatures.tenant_id == tenant_id)
-            .first()
-        )
-        platform = getattr(features, "default_cli_platform", None) if features else None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("grader: tenant_features lookup failed: %s", exc)
-        platform = None
-
-    if platform and platform in _PLATFORM_TO_MODEL_LABEL:
-        return _PLATFORM_TO_MODEL_LABEL[platform]
-    return _PLATFORM_TO_MODEL_LABEL["opencode"]
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -329,9 +278,9 @@ def grade(
         run_id: Foreign key into ``skill_eval_runs.id``. Echoed in the
             result. Defaults to empty string so callers grading ad-hoc
             transcripts (CLI / unit-test use) aren't forced to invent one.
-        db: SQLAlchemy session for the tenant_features lookup. Optional —
-            when None, the grader uses the local-Gemma floor as the model
-            label (same fallback the chat path takes).
+        db: SQLAlchemy session, kept on the signature for Phase 4 routing
+            but currently unused. Phase 1 grades every run on the local
+            ``gemma3:4b`` floor regardless of tenant preference.
 
     Returns:
         GradingResult mirroring ``docs/skill-creator/schemas.md``::
@@ -350,14 +299,10 @@ def grade(
         return _empty_result(
             eval_id=eval_id,
             run_id=run_id,
-            grader_model=_resolve_grader_model(db, tenant_id) if db is not None else _PLATFORM_TO_MODEL_LABEL["opencode"],
+            grader_model=_DEFAULT_LOCAL_MODEL_TAG,
         )
 
-    grader_model_label = (
-        _resolve_grader_model(db, tenant_id)
-        if db is not None
-        else _PLATFORM_TO_MODEL_LABEL["opencode"]
-    )
+    grader_model_label = _DEFAULT_LOCAL_MODEL_TAG
 
     outputs_summary = _summarize_outputs(outputs_dir)
     prompt = _build_grader_prompt(transcript, outputs_summary, cleaned)
@@ -427,7 +372,10 @@ def grade(
         graded_at=datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         grader_model=grader_model_label,
         score=round(score, 4),
-        passed=score == 1.0,
+        # ``passed`` derives from the per-expectation verdicts, not the
+        # aggregate score — same outcome semantically (1.0 iff all pass)
+        # but immune to float-rounding edge cases and clearer to readers.
+        passed=all(g.passed for g in graded),
         expectations=graded,
     )
 

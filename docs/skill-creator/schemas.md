@@ -142,7 +142,7 @@ Output of the grader (Phase 1, this PR). Lives at
   "eval_id": "eval-001",
   "run_id": "0d9c…",
   "graded_at": "2026-05-18T14:23:15Z",
-  "grader_model": "claude-3-5-sonnet-20241022",
+  "grader_model": "gemma3:4b",
   "score": 0.6667,
   "passed": false,
   "expectations": [
@@ -174,7 +174,7 @@ Field | Type | Required | Meaning
 `eval_id` | string | yes | Foreign key into `evals.json::evals[].id`.
 `run_id` | string (UUID) | yes | Foreign key into `skill_eval_runs.id`.
 `graded_at` | string (RFC 3339) | yes | UTC. When the grader finished.
-`grader_model` | string | yes | Provider-namespaced model id used to grade. Recorded so the same eval can be re-graded with a stronger model later for forensics.
+`grader_model` | string | yes | Literal model id the grader called — the value passed to ``local_inference.generate_sync``. Phase 1 always grades on the local ``gemma3:4b`` floor regardless of tenant preference; Phase 4 wires per-tenant routing through ``agent_router`` and the label will then name the CLI-dispatched model. Recorded so a re-grade is forensically comparable to the run that produced it.
 `score` | number | yes | Fraction of expectations passed: `count(passed=true) / len(expectations)`. Range `[0, 1]`. Producer computes.
 `passed` | bool | yes | `true` iff every expectation passed (`score == 1.0`). Producer computes.
 `expectations` | array<GradedExpectation> | yes | One entry per expectation, in input order. Same length as input.
