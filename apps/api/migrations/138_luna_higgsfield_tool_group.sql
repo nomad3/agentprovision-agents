@@ -34,7 +34,10 @@ SET tool_groups = (
         ELSE tool_groups || '["higgsfield"]'::jsonb
     END
 )
-WHERE name = 'Luna' OR name ILIKE 'luna%';
+-- Tightened prefix match: bare `luna%` over-matched names like
+-- "LunarTask", "lunaria", "LunaBot-old". Only canonical Luna copies
+-- ("Luna", "luna-aremko", "Luna v2", etc.) should pick up the group.
+WHERE name = 'Luna' OR name ILIKE 'luna-%' OR name ILIKE 'luna %';
 
 -- Self-record so re-applying this migration on a fresh DB is a clean no-op.
 INSERT INTO _migrations(filename) VALUES ('138_luna_higgsfield_tool_group.sql')
