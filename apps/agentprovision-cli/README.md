@@ -1,10 +1,21 @@
 # alpha
 
-`alpha` — the AgentProvision CLI. Single-binary client for the AgentProvision platform: login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / GitHub Copilot CLI) from your terminal.
+`alpha` — the AgentProvision CLI. Single-binary client for the AgentProvision platform: login, chat, run workflows, and orchestrate agents (Claude Code / Codex / Gemini CLI / GitHub Copilot CLI / OpenCode) from your terminal.
 
 The CLI is the orchestrator-of-CLIs: every command you run flows through the agentprovision.com control plane, which dispatches to the right runtime (Temporal workflows, MCP tool calls, A2A coalitions) under the hood.
 
-Plan: [`docs/plans/2026-05-09-agentprovision-cli-design.md`](../../docs/plans/2026-05-09-agentprovision-cli-design.md).
+Current shipped version: **v0.7.5** (2026-05-18). Three primary delegation patterns:
+
+- `alpha chat send "..."` — short turns over SSE, default agent.
+- `alpha run --fanout <cli> "..." --background` — durable, Temporal-backed, resumable from any host. Real dispatch shipped today in PR #573 (single-provider end-to-end; multi-provider + `--providers` fallback chain queued).
+- `alpha review start "<ref>" --clis a,b,c` — cross-CLI consensus loop (PR #574). Shipped, with the threading-bug workaround documented in [`docs/cli/troubleshooting.md`](../../docs/cli/troubleshooting.md).
+
+Docs:
+- New users: [`docs/cli/getting-started.md`](../../docs/cli/getting-started.md)
+- Full reference: [`docs/cli/README.md`](../../docs/cli/README.md)
+- Known issues: [`docs/cli/troubleshooting.md`](../../docs/cli/troubleshooting.md)
+- Delegation-pattern design: [`docs/plans/2026-05-18-alpha-cli-delegation-pattern.md`](../../docs/plans/2026-05-18-alpha-cli-delegation-pattern.md)
+- Original design plan: [`docs/plans/2026-05-09-agentprovision-cli-design.md`](../../docs/plans/2026-05-09-agentprovision-cli-design.md)
 
 ## Install
 

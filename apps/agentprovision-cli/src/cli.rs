@@ -66,8 +66,12 @@ pub enum Command {
     /// chains (`--providers claude,codex,opencode`), and background
     /// execution (`--background` + later `alpha watch <id>`).
     ///
-    /// Phase 1 prototype — see
-    /// docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md.
+    /// Real Temporal dispatch is LIVE for `--fanout <cli>`
+    /// (single-provider, PR #573). Multi-provider `--fanout a,b,c`
+    /// returns child outputs as a raw list (council adjudication
+    /// queued). `--providers` and plain `alpha run "..."` still hit
+    /// the Phase-1 synthetic stub — see
+    /// docs/plans/2026-05-18-alpha-cli-delegation-pattern.md Phase 3.
     Run(run::RunArgs),
 
     /// Tail an in-flight task's status from any machine. Pairs with
