@@ -32,8 +32,11 @@
 --   * `chat_job_events.kind` is constrained to the four taxonomy values
 --     in the design doc (chunk / tool_use / tool_result / lifecycle).
 --     Extending requires touching this migration + the emitter; that's
---     intentional friction — silently-added kinds break the SSE replay
---     parser.
+--     intentional friction — an unknown kind fails the INSERT with a
+--     `chat_job_events_kind_check` CHECK violation, aborting the
+--     transaction with a 500. The Python helper guards in advance
+--     (ValueError) so the failure is observable client-side, not
+--     "silent drop" as an earlier draft of this comment claimed.
 --
 --   * Retention is owned by a janitor (separate PR / cron), not by a
 --     TTL trigger. Janitor sweep: DELETE WHERE finished_at IS NOT NULL

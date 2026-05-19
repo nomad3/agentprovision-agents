@@ -289,11 +289,26 @@ def append_event(
 ) -> int:
     """Append a row to chat_job_events; returns the allocated seq.
 
+    .. warning::
+        Caller MUST pass a **dedicated** ``Session`` (e.g.
+        ``SessionLocal()``), NOT a request-scoped ``db`` from
+        ``Depends(get_db)``. This helper issues ``db.commit()`` mid-
+        function, which would commit any pending work the request
+        handler had open on its own transaction. Workers already do
+        this correctly via ``wdb = SessionLocal()``; the SSE / GET
+        request paths must NOT call ``append_event`` directly.
+
     Seq allocation uses the same advisory-lock pattern as session_events
     (mig 133): `pg_advisory_xact_lock(hashtext(job_id))` serialises
     per-job inserts within a single transaction so the
     `COALESCE(MAX(seq), 0) + 1` read is consistent. The (job_id, seq)
     PK is the safety net if a future caller forgets the lock.
+
+    Invalid ``kind`` raises ValueError *here* (cheap pre-flight). Note
+    that even if the Python guard were skipped, the DB's
+    ``chat_job_events_kind_check`` CHECK constraint would fail the
+    INSERT with a 500 — the constraint failure surfaces as a
+    transaction-aborting error, not a silent skip (IMPORTANT #7).
     """
     if kind not in EVENT_KINDS:
         raise ValueError(f"invalid event kind: {kind!r}; allowed={EVENT_KINDS}")
@@ -303,6 +318,10 @@ def append_event(
     # release it.
     db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": str(job_id)})
 
+    # COALESCE(MAX(seq), 0) + 1 always returns exactly one row (even
+    # when chat_job_events has zero rows for this job_id), so the
+    # ``if next_seq_row else 1`` fallback the first draft carried is
+    # dead. Trust the aggregate (NIT #9).
     next_seq_row = db.execute(
         text(
             """
@@ -313,7 +332,7 @@ def append_event(
         ),
         {"jid": str(job_id)},
     ).fetchone()
-    seq = int(next_seq_row[0]) if next_seq_row else 1
+    seq = int(next_seq_row[0])
 
     db.execute(
         text(
