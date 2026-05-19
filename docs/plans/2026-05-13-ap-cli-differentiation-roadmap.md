@@ -1,8 +1,13 @@
 # `alpha` CLI differentiation roadmap
 
-**Date:** 2026-05-13
+**Date:** 2026-05-13 (status updated 2026-05-18)
 **Author:** Claude (sonnet) at user request
-**Status:** Design — awaiting review
+**Status:** Phase 1 shipped. **Phase 2 partially shipped** as of
+2026-05-18: durable `alpha run --fanout <cli>` real dispatch (PR #573),
+multi-LLM fanout with raw-list aggregation (council/all adjudication
+queued), and cross-CLI consensus reviews via `alpha review` (PR #574).
+See [`2026-05-18-alpha-cli-delegation-pattern.md`](2026-05-18-alpha-cli-delegation-pattern.md)
+for the consolidated shipped-vs-queued matrix.
 **Branch:** `docs/cli-differentiation-roadmap`
 
 ## TL;DR
@@ -404,6 +409,12 @@ progress without waiting for the full eight-command surface.
 This phase alone is **the entire competitive moat** vs leaf CLIs. Everything
 after is depth.
 
+**Phase 1 status (2026-05-18):** SHIPPED. CLI surfaces all live; real
+Temporal dispatch wired for the `--fanout <cli>` path in PR #573.
+Plain `alpha run "..."` and `alpha run --providers a,b,c` still hit
+the Phase-1 synthetic stub — closing those out is the top of Phase 3
+in the delegation-pattern doc.
+
 ### Phase 2 (Weeks 3–4) — Memory + governance
 
 - **Ship:** `alpha recall`, `alpha remember`, `alpha policy show`, policy enforcement
@@ -411,6 +422,14 @@ after is depth.
 - **Backend:** None new — wrappers around existing endpoints
 - **Demo:** "I asked the agent to drop the prod DB. It blocked me, asked
   for approval, and gave me a task ID to resume from when approved."
+
+**Phase 2 status (2026-05-18):** MOSTLY SHIPPED. `alpha recall`,
+`alpha remember`, and `alpha policy show` are live in v0.7.5. Policy
+enforcement inside `alpha run` rides on the existing
+`agent_policies` table + `human_approval` workflow step. Cross-CLI
+consensus review (`alpha review`) shipped today as PR #574 — that
+wasn't in the original Phase 2 list but slots here because it's a
+governance-shaped surface (consensus before reporting).
 
 ### Phase 3 (Weeks 5–6) — Coalitions + recipes
 

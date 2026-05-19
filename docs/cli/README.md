@@ -9,6 +9,10 @@ Cross-platform: macOS (arm64 + x86_64), Linux (x86_64), Windows (x86_64).
 Releases auto-update via `alpha upgrade`. Sources live under
 `apps/agentprovision-cli` and `apps/agentprovision-core`.
 
+**Current CLI version:** v0.7.5 (released 2026-05-18). Newcomers should
+start with the dedicated [getting-started guide](getting-started.md); known
+issues live in [troubleshooting](troubleshooting.md).
+
 ## Contents
 
 1. [Install & first login](#install--first-login)
@@ -16,19 +20,26 @@ Releases auto-update via `alpha upgrade`. Sources live under
 3. [Commands](#commands)
    - [`alpha login` / `alpha logout` / `alpha status`](#alpha-login--alpha-logout--alpha-status)
    - [`alpha chat` — streaming + REPL](#alpha-chat--streaming--repl)
+   - [`alpha run` — durable Temporal-backed tasks](#alpha-run--durable-temporal-backed-tasks)
+   - [`alpha watch` / `alpha cancel`](#alpha-watch--alpha-cancel)
+   - [`alpha review` — cross-CLI consensus reviews](#alpha-review--cross-cli-consensus-reviews)
    - [`alpha agent`](#alpha-agent)
    - [`alpha workflow`](#alpha-workflow)
    - [`alpha session`](#alpha-session)
-   - [`alpha memory`](#alpha-memory)
+   - [`alpha memory` / `alpha recall` / `alpha remember`](#alpha-memory--alpha-recall--alpha-remember)
    - [`alpha skill`](#alpha-skill)
    - [`alpha integration`](#alpha-integration)
+   - [`alpha coalition`](#alpha-coalition)
+   - [`alpha recipes`](#alpha-recipes)
+   - [`alpha tasks`](#alpha-tasks)
+   - [`alpha usage` / `alpha costs`](#alpha-usage--alpha-costs)
    - [`alpha upgrade`](#alpha-upgrade)
    - [`alpha completions`](#alpha-completions)
    - [`alpha quickstart`](#alpha-quickstart)
 4. [Common workflows / recipes](#common-workflows--recipes)
 5. [Scripting + CI use](#scripting--ci-use)
 6. [Environment variables & token storage](#environment-variables--token-storage)
-7. [Troubleshooting](#troubleshooting)
+7. [Troubleshooting](#troubleshooting) — also see [troubleshooting.md](troubleshooting.md)
 
 ---
 
@@ -147,6 +158,123 @@ Type your message, press Enter; the assistant streams its reply. `Ctrl-D` or
 `Ctrl-C` exits. History persists across REPL exits — use `alpha session ls` to
 find the session id and `alpha chat repl --session …` to come back.
 
+> **Long prompts:** `alpha chat send` streams over SSE through Cloudflare,
+> which cuts idle streams around the 524 deadline. For multi-minute turns
+> use `alpha run --fanout <cli> --background` instead — durable Temporal,
+> resumable from any host. See [troubleshooting.md](troubleshooting.md#cloudflare-524-on-alpha-chat-send).
+
+### `alpha run` — durable Temporal-backed tasks
+
+Dispatches a long-running task into Temporal's `agentprovision-code` queue.
+Unlike `alpha chat send` (synchronous, SSE), `alpha run` survives terminal
+close, network drop, and laptop reboot — resume from any other host with
+`alpha watch <task_id>`.
+
+```bash
+# Single-provider fanout (one CLI, durable Temporal child workflow). SHIPPED today.
+alpha run --fanout claude_code "refactor app/api/v1/reports.py into typed handlers" --background
+
+# Multi-provider fanout. Phase 2 lite — multiple providers spawn N child
+# workflows in parallel; `--merge council/all` aggregation is wired but
+# returns raw child outputs as a list today (council adjudication is queued).
+alpha run --fanout claude,codex,gemini "audit the auth module" --merge council --background
+
+# Fallback chain (sequential, quota-aware). NOT YET real-dispatched —
+# this path still hits the Phase-1 synthetic stub (see open follow-ups).
+alpha run --providers claude,codex,opencode "scaffold the orders service"
+
+# Foreground tail with a custom deadline (default 1800s / 30 min).
+alpha run --fanout claude_code "write the migration plan" --timeout 7200
+
+# JSONL event stream for CI / supervisors.
+alpha run --fanout claude_code "..." --events ./events.jsonl --background
+```
+
+**What's actually shipped (v0.7.5 / PR #573):**
+
+| CLI flag shape | Backend path | Status |
+|---|---|---|
+| `--fanout <single-cli>` | Real `FanoutChatCliWorkflow` (N=1) | LIVE under `USE_REAL_FANOUT_WORKFLOW=true` |
+| `--fanout a,b,c` | Real `FanoutChatCliWorkflow` (N=k, first-wins child) | LIVE; `--merge council/all` still returns raw list |
+| `--providers a,b,c` | Synthetic Phase-1 stub | NOT real-dispatched yet — see follow-ups |
+| (neither flag) | Synthetic Phase-1 stub | NOT real-dispatched yet — single-provider via `--fanout <cli>` is the workaround |
+| `--background` | Returns `{task_id, status:queued}` immediately | LIVE |
+| `--timeout N` | CLI honours the foreground deadline | LIVE on the CLI tail; not yet plumbed to Temporal `execution_timeout` (fixed at 180m server-side) |
+| `--agent <UUID>` | Propagated to backend | Accepted but **not** yet pushed into `ChatCliInput` (worker logs a warning, runs as tenant default) |
+| `--events <path>` | JSONL event sink | LIVE for state transitions; child-CLI tokens not yet routed through it |
+
+The single-provider 90% case is `alpha run --fanout claude_code "..."`
+(or codex / gemini_cli / copilot / opencode). Plain `alpha run "..."` and
+`alpha run --providers ...` still hit the Phase-1 synthetic stub; planned
+fix tracked in `docs/plans/2026-05-18-alpha-cli-delegation-pattern.md`
+Phase 3.
+
+The flag `USE_REAL_FANOUT_WORKFLOW=true` is set in `apps/api/.env` for
+production. Self-hosters need to flip it for real dispatch.
+
+### `alpha watch` / `alpha cancel`
+
+```bash
+alpha watch <task_id>        # tail an in-flight task from any machine
+alpha cancel <task_id>       # request cancellation (parent + all fanout children)
+```
+
+`alpha watch` polls workflow status until a terminal state. The
+underlying Temporal SDK upgraded to `temporalio>=1.10` in PR #575 —
+`WorkflowExecutionDescription` is now flat (no `.workflow_execution_info`
+attribute); upgrading the server-side worker is required before
+`alpha watch` works against a stale orchestration pod.
+
+`alpha cancel` issues `RequestCancelWorkflowExecution`. The leaf CLI
+subprocess may take several seconds to observe the signal — Temporal
+cancellation is cooperative, not preemptive.
+
+### `alpha review` — cross-CLI consensus reviews
+
+`alpha review` fans the same review prompt out to N active CLIs and
+returns only findings that ≥ 2 of them agree on. Operator fixes the
+agreed findings, replies with the new ref, loops until consensus
+("no agreed findings") or `--max-rounds` is exhausted.
+
+```bash
+# Dispatch a review against PR #570. NOTE the quotes — `#` is a shell comment.
+alpha review start "#570" --clis claude_code,codex,gemini_cli --max-rounds 3
+
+# By commit SHA / path range / piped diff
+alpha review start abc123def --clis claude_code,codex
+alpha review start "apps/api/main.py:42-100" --clis claude_code,codex
+gh pr diff 570 | alpha review start --stdin --clis claude_code,codex
+
+# Inspect / iterate / tail
+alpha review status <review_id>
+alpha review reply <review_id> "#570-rev2"
+alpha review watch <review_id>             # SSE; Cloudflare cuts at ~100s, re-run to resubscribe
+alpha review list --status awaiting_response --limit 20
+```
+
+Findings render as a list of clusters with their `cli_set`:
+
+```
+agreed_findings:
+  1. [BLOCKER]   apps/api/main.py:42-50 — SQL injection in login query
+                 (flagged by: claude_code, codex)
+  2. [IMPORTANT] apps/api/auth.py:7 — missing input validation
+                 (flagged by: claude_code, codex, gemini_cli)
+```
+
+**Backed by:** `reviews_coalitions` table (migration 139), the existing
+Blackboard substrate, and `ReviewWorkflow` on the
+`agentprovision-orchestration` queue. Subcommand surface and consensus
+aggregator are fully live (PR #574). Worker-side activity execution
+requires the `activity_executor` ThreadPool patch from PR #577.
+
+**Known issue (workaround documented):** the fire-and-forget Temporal
+dispatcher in `apps/api/app/services/review_dispatch.py::_runner` (daemon
+thread + `asyncio.run`) silently fails to start the `ReviewWorkflow`.
+While a hotfix is in flight, drive the consensus loop directly by
+POSTing each CLI's output to `POST /reviews/{id}/record` — full recipe
+in [troubleshooting.md](troubleshooting.md#review-stays-running-no-findings).
+
 ### `alpha agent`
 
 ```bash
@@ -209,7 +337,25 @@ reports per-session aggregate:
 `—` for unmeasured turns (older rows / agents without a usage struct / local
 CLIs that don't compute cost — OpenCode + gemma4 leaves cost NULL).
 
-### `alpha memory`
+### `alpha memory` / `alpha recall` / `alpha remember`
+
+Three subcommands cover three reads against the memory layer:
+
+| Command | Surface | Returns |
+|---|---|---|
+| `alpha memory` | Knowledge-graph entities only | Entity rows + observations |
+| `alpha recall` | Unified semantic search across entities, observations, episodes, and conversation snippets | The same shape the chat agent queries before every turn |
+| `alpha remember` | Write a free-form observation (optionally pinned to an entity) | Saves + embeds for semantic recall |
+
+```bash
+# Unified semantic recall (chat-agent parity)
+alpha recall "what's our standard FastAPI error handler pattern?"
+alpha recall "rhone stores" --limit 10
+
+# Write a fact — Phase 2 (#179) companion to `alpha recall`
+alpha remember "we standardized on httpx for outbound HTTP — never requests"
+alpha remember "Project Atlas runs on the GTM rebuild team" --entity "Project Atlas"
+```
 
 Browse the tenant's knowledge graph (entities + observations).
 
@@ -260,6 +406,64 @@ alpha integration ls --connected            # only what the tenant has connected
 Lists per-tenant connection status for Gmail, Calendar, GitHub, WhatsApp,
 Slack (when configured), Meta/Google/TikTok ads, and the other 30+ registered
 integrations.
+
+> **Known issue:** the server currently returns a map shape that the CLI
+> deserializer expects as an array, so `alpha integration ls` fails with a
+> serde error. CLI-side fix queued for the next release; see
+> [troubleshooting.md](troubleshooting.md#alpha-integration-ls-fails-with-a-serde-error).
+
+### `alpha coalition`
+
+Multi-agent coalitions on the existing `CoalitionWorkflow` /
+`Blackboard` substrate (shipped 2026-04-12). Patterns include incident
+investigation, plan/verify, research/synthesize, debate/resolve, and
+propose/critique/revise.
+
+```bash
+alpha coalition list                           # available patterns
+alpha coalition run incident-investigation --severity P1 --service orders-api
+alpha coalition watch <coalition_id>           # tail Blackboard SSE
+```
+
+### `alpha recipes`
+
+The "Helm charts for AI workflows" surface — pre-built dynamic
+workflows (daily briefings, competitor watch, code review, cardiac
+report, deal pipeline, ...) installable by name.
+
+```bash
+alpha recipes ls
+alpha recipes install <id>
+alpha recipes run <id>
+alpha recipes run <id> --schedule "0 8 * * 1-5"
+```
+
+### `alpha tasks`
+
+Cross-machine task dashboard for the current tenant — every working
+and recently-completed workflow run for the caller's account.
+
+```bash
+alpha tasks ls                                 # working + completed
+alpha tasks attach <task_id>                   # alias for `alpha watch`
+alpha tasks cancel <task_id>                   # alias for `alpha cancel`
+```
+
+`needs-input` task surfacing is deferred to a follow-up (see the
+agent-view design doc).
+
+### `alpha usage` / `alpha costs`
+
+Per-provider token rollup and per-day cost rollup. Both default to
+the current tenant; scope down with `--agent <uuid>`.
+
+```bash
+alpha usage --period mtd
+alpha costs --agent <agent_uuid> --period 7d
+```
+
+Phase 4 of the CLI roadmap; backed by the per-task `cost_usd` +
+input/output token columns shipped in #174.
 
 ### `alpha upgrade`
 
@@ -443,9 +647,19 @@ Token storage locations (in priority order):
 3. `~/Library/Application Support/agentprovision/tokens/<host>.token` (macOS fallback)
 4. `~/.config/agentprovision/tokens/<host>.token` (Linux XDG fallback)
 
+> **v0.7.5 upgrade note:** OS keychain is once again the default backend.
+> Users running `alpha upgrade` from v0.7.4 may need to `alpha login` again —
+> the token store path changed and the old plaintext fallback is no longer
+> auto-discovered. See [troubleshooting.md](troubleshooting.md#alpha-upgrade-lost-my-auth).
+
 ---
 
 ## Troubleshooting
+
+See [troubleshooting.md](troubleshooting.md) for the full and current list
+including v0.7.5-specific issues (review-dispatch threading bug, integration
+ls serde error, post-upgrade token-store path change, Cloudflare 524 on
+long chats). The entries below are the legacy quick-fixes.
 
 ### `error: authentication required` immediately after running a command
 

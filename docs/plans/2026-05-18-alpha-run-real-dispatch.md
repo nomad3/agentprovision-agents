@@ -1,9 +1,16 @@
 # `alpha run` — replace Phase-1 synthetic stub with real Temporal dispatch
 
 **Date:** 2026-05-18
-**Status:** In progress (Phase 2 of `alpha` CLI differentiation)
-**Branch:** `feat/alpha-run-real-dispatch`
+**Status:** **Phase 2 shipped (PR #573).** Single-provider real dispatch via
+`--fanout <cli>` is LIVE under `USE_REAL_FANOUT_WORKFLOW=true`
+(set in `apps/api/.env`). Multi-provider `--fanout a,b,c` returns the
+raw child outputs as a list; `--merge council/all` adjudication is
+queued. Plain `alpha run "..."` and `alpha run --providers a,b,c`
+still hit the Phase-1 synthetic stub — tracked as Phase 3 follow-ups
+in [`2026-05-18-alpha-cli-delegation-pattern.md`](2026-05-18-alpha-cli-delegation-pattern.md).
+**Branch (merged):** `feat/alpha-run-real-dispatch`
 **Predecessor:** `docs/plans/2026-05-13-ap-cli-differentiation-roadmap.md`
+**Successor:** `docs/plans/2026-05-18-alpha-cli-delegation-pattern.md`
 
 ## Problem
 
@@ -98,7 +105,19 @@ TODO for the tenant lookup.
 ## Open follow-ups documented in the PR
 
   - True quota-fallback semantics for `--providers` (currently first-wins,
-    not quota-aware).
-  - `--timeout` propagation.
-  - `agent_id` propagation through ChatCliInput.
-  - Default provider lookup from `tenant_features.default_cli_platform`.
+    not quota-aware) — `--providers` is also still on the synthetic stub
+    today, so wiring it through to real dispatch is the prerequisite.
+  - `--timeout` propagation (today backend execution_timeout fixed at 180m;
+    CLI honours the foreground tail deadline only).
+  - `agent_id` propagation through `ChatCliInput` (worker currently warns
+    and runs as the tenant default).
+  - Default provider lookup from `tenant_features.default_cli_platform`
+    (today hard-coded to `claude_code` for the safe path).
+  - `--merge council` LLM adjudication for `--fanout` N>1 (today returns
+    the raw list).
+  - Naked `alpha run "..."` (no `--fanout`, no `--providers`) still hits
+    the Phase-1 stub.
+
+All seven items rolled forward into
+[`2026-05-18-alpha-cli-delegation-pattern.md`](2026-05-18-alpha-cli-delegation-pattern.md)
+Phase 3.

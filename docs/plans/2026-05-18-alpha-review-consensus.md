@@ -1,7 +1,27 @@
 # `alpha review` — Cross-CLI Consensus Code Review (Phase 1)
 
-Status: Phase 1 plumbing landed. End-to-end CLI fanout depends on
-task #287 (real `alpha run` dispatch).
+**Status (2026-05-18 update — shipped as PR #574):** server-side wire
+surface, `reviews_coalitions` table (migration **139**), consensus
+aggregator, `ReviewWorkflow`, and CLI subcommands (`start`, `status`,
+`reply`, `list`, `watch`) are all live in v0.7.5. Real CLI fanout
+unblocked by PR #573 (single-provider `alpha run --fanout` real
+dispatch).
+
+> **Known issue (workaround documented):** the fire-and-forget Temporal
+> dispatcher in `apps/api/app/services/review_dispatch.py::_runner`
+> (daemon thread + `asyncio.run`) silently fails to start the
+> `ReviewWorkflow`. The aggregator, table, and `/record` endpoint are
+> fully live — operators drive the loop directly by POSTing to
+> `POST /reviews/{id}/record`. Recipe in
+> [`docs/cli/troubleshooting.md`](../cli/troubleshooting.md#review-stays-running-no-findings).
+> Hotfix queued as item #1 in
+> [`2026-05-18-alpha-cli-delegation-pattern.md`](2026-05-18-alpha-cli-delegation-pattern.md)
+> Phase 3.
+
+Subsequent notes in this doc reference "Migration 137" because that
+was the slot at design time; the actual migration slot used in PR #574
+is **139** (137 = `chat_jobs` for async-chat, 138 = Luna `higgsfield`
+tool group).
 
 ## Motivation
 
