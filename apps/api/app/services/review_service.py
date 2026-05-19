@@ -263,9 +263,14 @@ def aggregate_findings(per_cli: Dict[str, List[Dict]]) -> List[Dict]:
 
     Algorithm: greedy clustering. For each (cli, finding) pair, try to
     attach to an existing cluster where:
-      * file matches (both None counts as match),
+      * file matches (post-normalization suffix match; both None
+        counts as match),
       * line_range_overlap is True,
-      * Jaccard(description tokens) ≥ 0.4.
+      * EITHER Jaccard(description tokens) ≥ 0.2 (loose semantic
+        similarity)
+      * OR     severity matches AND file is non-None (weaker fallback
+        so synonym descriptions like "missing tenant_id check" vs
+        "tenant scoping not enforced" still cluster).
     Otherwise open a new cluster. After clustering, emit clusters with
     cli_set size ≥ 2.
     """
@@ -281,8 +286,28 @@ def aggregate_findings(per_cli: Dict[str, List[Dict]]) -> List[Dict]:
                     cluster.get("line_range"), f.get("line_range")
                 ):
                     continue
-                if _jaccard(cluster["_tokens"], tokens) < 0.4:
-                    continue
+                # I1: Jaccard 0.4 is too strict for synonym descriptions
+                # like "missing tenant_id check" vs "tenant scoping not
+                # enforced" — disjoint token sets => Jaccard 0 even
+                # though they're the same bug. Drop the main threshold
+                # to 0.2 AND add a file+line+severity fallback so true
+                # synonyms still cluster. The fallback is narrow enough
+                # not to over-cluster: file paths must already match
+                # (post-B2 normalization), line ranges must overlap
+                # (already enforced), and severities must agree.
+                jacc = _jaccard(cluster["_tokens"], tokens)
+                if jacc < 0.2:
+                    # Fallback: same file, overlapping lines, matching
+                    # severity → cluster anyway.
+                    cluster_sev = _strongest_severity(cluster.get("severities") or [])
+                    this_sev = (f.get("severity") or "NIT").upper()
+                    if cluster_sev != this_sev:
+                        continue
+                    if cluster.get("file") is None and f.get("file") is None:
+                        # Without a file anchor the fallback is too
+                        # loose — require file + line range present.
+                        continue
+                    # Otherwise allow the cluster join.
                 # Attach. Expand the cluster's line_range so later
                 # findings nearby (within slack window) still match.
                 cluster["descriptions"].append(f.get("description", ""))

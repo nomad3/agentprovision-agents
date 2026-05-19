@@ -225,6 +225,37 @@ def test_aggregate_findings_three_clis_consensus():
     assert set(agreed[0]["cli_set"]) == {"claude", "codex", "gemini"}
 
 
+def test_aggregate_findings_clusters_synonym_descriptions():
+    """I1: synonyms tokenize to disjoint sets (Jaccard 0) but if file
+    + line + severity all line up we should still cluster — otherwise
+    "missing tenant_id check" vs "tenant scoping not enforced" never
+    reach the >=2-cli "agreed" threshold."""
+    per_cli = {
+        "claude": [_f("BLOCKER", "auth.py", "42", "missing tenant_id check")],
+        "codex":  [_f("BLOCKER", "auth.py", "42", "tenant scoping not enforced")],
+    }
+    # Sanity: token sets are disjoint (after stopword filter).
+    a = _tokenize("missing tenant_id check")
+    b = _tokenize("tenant scoping not enforced")
+    assert _jaccard(a, b) < 0.2  # baseline: would NOT cluster on jaccard alone
+
+    agreed = aggregate_findings(per_cli)
+    assert len(agreed) == 1, "synonym fallback should let same-file+line+severity cluster"
+    assert set(agreed[0]["cli_set"]) == {"claude", "codex"}
+
+
+def test_aggregate_findings_synonym_fallback_skips_mismatched_severity():
+    """The synonym fallback must NOT collapse findings with different
+    severities — a BLOCKER and a NIT on the same line are still two
+    distinct findings."""
+    per_cli = {
+        "claude": [_f("BLOCKER", "auth.py", "42", "missing tenant_id check")],
+        "codex":  [_f("NIT",     "auth.py", "42", "tenant scoping not enforced")],
+    }
+    agreed = aggregate_findings(per_cli)
+    assert agreed == []
+
+
 def test_aggregate_findings_sorts_blocker_first():
     per_cli = {
         "claude": [
