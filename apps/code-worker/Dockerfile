@@ -1,11 +1,17 @@
 FROM python:3.11-slim
 
-# Install system deps: git, gh CLI, Node.js 22, bzip2 + libgomp1
+# Install system deps: git, gh CLI, Node.js 22, libgomp1
 # (Goose binary links libgomp.so.1 dynamically; slim image lacks it and
 # the binary fails with "error while loading shared libraries" → exit
 # 127 at `goose --version` → image build aborts).
+#
+# Phase B (2026-05-18) — dropped ``bzip2`` (PR #561 switched the goose
+# tarball to ``.tar.gz``; gzip is in the base image, so bzip2 is dead
+# weight) and ``socat`` (no call sites in apps/code-worker/ or
+# packages/cli_orchestrator/; legacy from an earlier port-forwarding
+# experiment that never shipped).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl gnupg ca-certificates socat bzip2 libgomp1 && \
+    git curl gnupg ca-certificates libgomp1 && \
     # Node.js 22
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
@@ -111,12 +117,14 @@ ARG GOOSE_VERSION=v1.34.1
 # both arches.
 ARG TARGETARCH
 # The python:3.11-slim base ships GNU tar with gzip baked in but does
-# NOT include `bzip2`, so `tar -xjf` (= -j = bzip2) silently aborts
-# with "Cannot exec: No such file or directory" → goose binary never
-# lands at /usr/local/bin/goose → `goose --version` exits 127 →
-# build fails. We grab the `.tar.gz` release variant instead (goose
+# NOT include `bzip2`. We grab the `.tar.gz` release variant (goose
 # publishes both for every triple) so gzip in the base image is
-# enough; no extra apt package required.
+# enough; no extra apt package required. (PR #561 history: an earlier
+# Wave 2d attempt used `.tar.bz2` and `tar -xjf` silently aborted with
+# "Cannot exec: No such file or directory" → goose binary never
+# landed → `goose --version` exited 127 → build failed. The fix was
+# switching to `.tar.gz`; the now-redundant bzip2 apt install was
+# dropped in Phase B (2026-05-18) of the shrink plan.)
 RUN case "${TARGETARCH}" in \
         amd64) GOOSE_TRIPLE="x86_64-unknown-linux-gnu" ;; \
         arm64) GOOSE_TRIPLE="aarch64-unknown-linux-gnu" ;; \
