@@ -19,6 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install CLI providers.
 #
+# Phase B shrink plan (2026-05-18): every CLI is pinned to an exact
+# version so the BuildKit cache doesn't invalidate on an upstream
+# release of any one of them. claude-code, codex, qwen-code already
+# had stable pins; gemini-cli, opencode-ai, copilot are pinned here
+# for the first time (latest stable as of 2026-05-18, captured via
+# ``npm view <pkg> version``). Bump deliberately, not by accident on
+# image rebuild.
+#
 # @openai/codex is pinned to 0.130.0 (2026-05-16) because the rmcp client
 # transport contract is version-sensitive — see
 # ``docs/plans/2026-05-16-codex-mcp-transport-mismatch-research.md``.
@@ -32,13 +40,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # is no npm package for it, and the executor in
 # ``cli_executors/kimi.py`` talks to Moonshot's OpenAI-compatible HTTP
 # endpoint directly via httpx. Do not add a Kimi npm install here.
+ARG CLAUDE_CODE_VERSION=2.1.144
+ARG CODEX_VERSION=0.130.0
+ARG GEMINI_CLI_VERSION=0.42.0
+ARG QWEN_CODE_VERSION=0.15.11
+ARG OPENCODE_VERSION=1.15.5
+ARG COPILOT_VERSION=1.0.49
 RUN npm install -g \
-        @anthropic-ai/claude-code \
-        @openai/codex@0.130.0 \
-        @google/gemini-cli \
-        @qwen-code/qwen-code@0.15.11 \
-        opencode-ai \
-        @github/copilot
+        @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+        @openai/codex@${CODEX_VERSION} \
+        @google/gemini-cli@${GEMINI_CLI_VERSION} \
+        @qwen-code/qwen-code@${QWEN_CODE_VERSION} \
+        opencode-ai@${OPENCODE_VERSION} \
+        @github/copilot@${COPILOT_VERSION}
 
 # Aider (Wave 2c) ships on PyPI as ``aider-chat``, NOT npm — it's a
 # Python CLI binary published by paul-gauthier@github (Apache 2.0). The
