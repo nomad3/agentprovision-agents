@@ -66,6 +66,13 @@ RUN npm install -g opencode-ai@${OPENCODE_VERSION}
 ARG COPILOT_VERSION=1.0.49
 RUN npm install -g @github/copilot@${COPILOT_VERSION}
 
+# Higgsfield CLI (Task #278, 2026-05-18). Image / video generation
+# surface; OAuth + MCP wiring already shipped in PR #550. The binary
+# lands at /usr/local/bin/higgsfield so the agent can ``higgsfield``-
+# invoke from chat. Pinned to latest stable as of 2026-05-18.
+ARG HIGGSFIELD_CLI_VERSION=0.1.40
+RUN npm install -g @higgsfield/cli@${HIGGSFIELD_CLI_VERSION}
+
 # Aider (Wave 2c) ships on PyPI as ``aider-chat``, NOT npm — it's a
 # Python CLI binary published by paul-gauthier@github (Apache 2.0). The
 # binary lands on $PATH as ``aider``. Version is pinned because Aider
