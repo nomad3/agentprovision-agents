@@ -38,10 +38,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ``cli_executors/kimi.py`` talks to Moonshot's OpenAI-compatible HTTP
 # endpoint directly via httpx. Do not add a Kimi npm install here.
 
-# claude-code — Anthropic's official CLI. Most stable surface; bumped
-# rarely, kept in its own layer so a cache hit here is the common case.
-ARG CLAUDE_CODE_VERSION=2.1.144
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+# Layer ordering principle: least-volatile first, most-volatile LAST.
+# Each layer's cache only invalidates the layers AFTER it. So when
+# claude-code ships its weekly release (most volatile), only the final
+# layer rebuilds. When copilot/qwen-code bumps (rare), everything
+# downstream rebuilds — but that's once every few months. Reordered
+# 2026-05-18 after PR #569 review found the original order forced a
+# 6-layer rebuild on every claude-code bump (~weekly).
+
+# GitHub Copilot CLI — pinned, bumped rarely. Most stable surface.
+ARG COPILOT_VERSION=1.0.49
+RUN npm install -g @github/copilot@${COPILOT_VERSION}
+
+# qwen-code — Tongyi Qwen-Coder BYOK; pinned because Wave 1b banner/
+# stdout shape is parser-sensitive (same reasoning as aider below).
+ARG QWEN_CODE_VERSION=0.15.11
+RUN npm install -g @qwen-code/qwen-code@${QWEN_CODE_VERSION}
 
 # @openai/codex is pinned to 0.130.0 (2026-05-16) because the rmcp client
 # transport contract is version-sensitive — see
@@ -51,33 +63,36 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 # refactor that surface (rename the flag, drop streamable-HTTP, etc.) and
 # silently break the streamable-HTTP mount in mcp-tools; pinning makes the
 # break a controlled bump-and-test rather than a surprise on image rebuild.
+#
+# TODO(codex 0.131.0 transport-verify): 0.131.0 is on npm; re-verify the
+# rmcp client + StreamableHttp mount against the new release before
+# bumping. Hold at 0.130.0 until that smoke-test passes.
 ARG CODEX_VERSION=0.130.0
 RUN npm install -g @openai/codex@${CODEX_VERSION}
-
-# qwen-code — Tongyi Qwen-Coder BYOK; pinned because Wave 1b banner/
-# stdout shape is parser-sensitive (same reasoning as aider below).
-ARG QWEN_CODE_VERSION=0.15.11
-RUN npm install -g @qwen-code/qwen-code@${QWEN_CODE_VERSION}
-
-# gemini-cli — Google's CLI. Newly pinned 2026-05-18 (was floating
-# ``latest`` → busted cache on every upstream release).
-ARG GEMINI_CLI_VERSION=0.42.0
-RUN npm install -g @google/gemini-cli@${GEMINI_CLI_VERSION}
 
 # opencode-ai — local Gemma 4 floor. Newly pinned 2026-05-18.
 ARG OPENCODE_VERSION=1.15.5
 RUN npm install -g opencode-ai@${OPENCODE_VERSION}
 
-# GitHub Copilot CLI. Newly pinned 2026-05-18.
-ARG COPILOT_VERSION=1.0.49
-RUN npm install -g @github/copilot@${COPILOT_VERSION}
+# gemini-cli — Google's CLI. Newly pinned 2026-05-18 (was floating
+# ``latest`` → busted cache on every upstream release). ~Monthly bumps.
+ARG GEMINI_CLI_VERSION=0.42.0
+RUN npm install -g @google/gemini-cli@${GEMINI_CLI_VERSION}
 
 # Higgsfield CLI (Task #278, 2026-05-18). Image / video generation
 # surface; OAuth + MCP wiring already shipped in PR #550. The binary
 # lands at /usr/local/bin/higgsfield so the agent can ``higgsfield``-
-# invoke from chat. Pinned to latest stable as of 2026-05-18.
+# invoke from chat. Pinned to latest stable as of 2026-05-18. Newer
+# package than the others → expect occasional churn while their API
+# stabilises.
 ARG HIGGSFIELD_CLI_VERSION=0.1.40
 RUN npm install -g @higgsfield/cli@${HIGGSFIELD_CLI_VERSION}
+
+# claude-code — Anthropic's official CLI. WEEKLY release cadence, so
+# this layer churns the most → placed LAST so its frequent bumps don't
+# invalidate the cache for any of the other CLIs above.
+ARG CLAUDE_CODE_VERSION=2.1.144
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # Aider (Wave 2c) ships on PyPI as ``aider-chat``, NOT npm — it's a
 # Python CLI binary published by paul-gauthier@github (Apache 2.0). The
