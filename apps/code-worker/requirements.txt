@@ -2,6 +2,14 @@ temporalio>=1.4.0
 pydantic>=2.0.0
 httpx>=0.25.0
 
+# Audio transcription (moved from apps/api per the api-image-diet plan —
+# docs/plans/2026-05-18-docker-image-shrink-and-latency.md). These pull
+# torch + CUDA wheels (~2 GB on amd64); they live here because the
+# transcription workflow runs in this container, not in the api.
+openai-whisper
+soundfile
+librosa
+
 # Test deps (kept here so the CI job can `pip install -r requirements.txt`
 # without a separate dev requirements file).
 pytest>=7.4.0

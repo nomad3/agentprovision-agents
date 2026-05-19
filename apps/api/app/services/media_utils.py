@@ -1,21 +1,19 @@
 """
 Media processing utilities for converting raw media bytes into
 LLM-compatible message parts (inline_data / text).
+
+Audio transcription (whisper) was moved to apps/code-worker per the
+api-image-diet plan (docs/plans/2026-05-18-docker-image-shrink-and-latency.md).
+The transcription helpers now live in
+``app.services.transcription_client`` and dispatch through Temporal.
 """
 
 import base64
-import functools
 import io
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-
-@functools.lru_cache(maxsize=1)
-def get_whisper_model(model_name: str = "base"):
-    """Load and cache the whisper model."""
-    import whisper
-    return whisper.load_model(model_name)
 
 # ── MIME-type sets ──────────────────────────────────────────────────────────
 
@@ -86,9 +84,17 @@ def build_media_parts(
     mime_type: str,
     caption: str = "",
     filename: str = "",
+    *,
+    precomputed_transcript: Optional[str] = None,
 ) -> Tuple[List[Dict], Dict]:
     """
     Convert raw media bytes into LLM-compatible message parts.
+
+    For audio: if ``precomputed_transcript`` is supplied the function will
+    NOT call ``transcribe_bytes_sync`` (which blocks the event loop and is
+    only safe from sync handlers). Async callers MUST resolve the
+    transcript via ``await transcription_client.transcribe_async(...)``
+    first and pass it through.
 
     Returns:
         (parts, attachment_meta)
@@ -125,7 +131,12 @@ def build_media_parts(
     if media_class == "image":
         parts = _build_image_parts(media_bytes, clean_mime, caption)
     elif media_class == "audio":
-        parts = _build_audio_parts(media_bytes, clean_mime, caption)
+        parts = _build_audio_parts(
+            media_bytes,
+            clean_mime,
+            caption,
+            precomputed_transcript=precomputed_transcript,
+        )
     elif media_class == "pdf":
         parts = _build_pdf_parts(media_bytes, caption, filename)
     elif media_class == "spreadsheet":
@@ -160,56 +171,29 @@ def _build_image_parts(
     ]
 
 
-def _transcribe_from_source(source) -> str | None:
-    """Internal helper: soundfile reads `source` (a path or file-like), whisper transcribes.
-
-    `source` must be something soundfile.read accepts (str path, pathlib.Path, or file-like).
-    """
-    try:
-        import soundfile as sf
-
-        data, sr = sf.read(source, dtype="float32")
-        if len(data.shape) > 1:
-            data = data.mean(axis=1)  # stereo → mono
-
-        # Whisper expects 16 kHz — resample if needed
-        if sr != 16000:
-            try:
-                import librosa
-                data = librosa.resample(data, orig_sr=sr, target_sr=16000)
-            except Exception:
-                pass  # proceed anyway; whisper handles other rates reasonably
-
-        model = get_whisper_model("base")
-        result = model.transcribe(data)
-        text = (result.get("text") or "").strip()
-        return text if text else None
-    except Exception:
-        logger.exception("Local Whisper transcription failed")
-        return None
-
-
-def transcribe_audio_bytes(audio_bytes: bytes) -> str | None:
-    """Transcribe audio bytes via Whisper. Used by inline message handlers."""
-    return _transcribe_from_source(io.BytesIO(audio_bytes))
-
-
-def transcribe_audio_path(path: str) -> str | None:
-    """Transcribe an audio file on disk via Whisper without loading it into memory first.
-
-    Preferred for large uploads — soundfile mmaps the file itself. Use this
-    instead of `transcribe_audio_bytes` when you have a disk-backed temp file.
-    """
-    return _transcribe_from_source(path)
-
-
 def _build_audio_parts(
     audio_bytes: bytes,
     mime_type: str,
     caption: str,
+    *,
+    precomputed_transcript: Optional[str] = None,
 ) -> List[Dict]:
-    """Transcribe audio locally with Whisper; fall back to base64 inline_data."""
-    transcript = transcribe_audio_bytes(audio_bytes)
+    """Transcribe audio via the code-worker transcription workflow; fall back to inline_data.
+
+    When ``precomputed_transcript`` is provided we skip the sync workflow
+    dispatch entirely — the async caller already resolved the transcript
+    via ``transcribe_async``. This avoids blocking the event loop with
+    ``transcribe_bytes_sync``'s ThreadPoolExecutor bridge.
+    """
+    transcript: Optional[str] = precomputed_transcript
+    if transcript is None:
+        try:
+            from app.services.transcription_client import transcribe_bytes_sync
+
+            transcript = transcribe_bytes_sync(audio_bytes)
+        except Exception:
+            logger.exception("Inline audio transcription dispatch failed; falling back to inline_data")
+
     if transcript:
         prompt = f"[Voice message transcription]: {transcript}"
         if caption:
@@ -321,3 +305,38 @@ def _build_spreadsheet_parts(
     except Exception:
         logger.exception("Failed to extract spreadsheet content")
         return [{"text": f"{caption or 'The user sent a spreadsheet.'}\n\n[Could not extract spreadsheet content from {filename}]"}]
+
+
+# ── Back-compat shims ──────────────────────────────────────────────────────
+#
+# The pre-migration module exposed ``transcribe_audio_bytes`` and
+# ``transcribe_audio_path``. A handful of callers (whatsapp_service.py,
+# robot.py, the chat file-upload endpoint) imported these directly.
+# Keep the names alive but route through the transcription_client so old
+# call sites don't break — new code should import from
+# ``app.services.transcription_client`` directly.
+
+
+def transcribe_audio_bytes(audio_bytes: bytes) -> Optional[str]:
+    """Compatibility shim — dispatches through the code-worker workflow."""
+    from app.services.transcription_client import transcribe_bytes_sync
+
+    return transcribe_bytes_sync(audio_bytes)
+
+
+def transcribe_audio_path(path: str) -> Optional[str]:
+    """Compatibility shim — reads the file and dispatches through the workflow.
+
+    Kept for callers that already wrote a temp file. Newer code paths should
+    hand the bytes straight to ``transcribe_bytes_sync`` to avoid the
+    extra read.
+    """
+    from app.services.transcription_client import transcribe_bytes_sync
+
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        logger.exception("transcribe_audio_path: failed to read %s", path)
+        return None
+    return transcribe_bytes_sync(data)

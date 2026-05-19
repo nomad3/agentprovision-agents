@@ -19,6 +19,11 @@ from workflows import (
     review_with_local_gemma, finalize_provider_council,
     FanoutChatCliWorkflow,
 )
+# Audio transcription was migrated out of apps/api (see docs/plans/
+# 2026-05-18-docker-image-shrink-and-latency.md, Phase A). The workflow +
+# activity register on the existing ``agentprovision-code`` queue so the
+# api can dispatch by workflow id without provisioning a second worker.
+from transcription import TranscribeAudioWorkflow, transcribe_audio_activity
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,11 +48,13 @@ async def main():
             ChatCliWorkflow,
             ProviderReviewWorkflow,
             FanoutChatCliWorkflow,  # #177 Phase 1 ship — parallel fanout
+            TranscribeAudioWorkflow,  # api-image-diet Phase A
         ],
         activities=[
             execute_code_task, execute_chat_cli,
             review_with_claude, review_with_codex,
             review_with_local_gemma, finalize_provider_council,
+            transcribe_audio_activity,
         ],
         activity_executor=ThreadPoolExecutor(max_workers=10),
         workflow_runner=SandboxedWorkflowRunner(
