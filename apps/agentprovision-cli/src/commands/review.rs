@@ -41,7 +41,9 @@ pub enum ReviewCommand {
     /// findings. Re-runs the review for another consensus round.
     Reply(ReplyArgs),
 
-    /// Tail review state-transition events (SSE).
+    /// Tail review state-transition events (SSE). Cloudflare cuts
+    /// idle streams at ~100s — just re-run the command to resubscribe
+    /// (see #570 for the async/queue-buffered migration).
     Watch(WatchArgs),
 
     /// List recent reviews for the current tenant.
@@ -92,6 +94,18 @@ pub struct ReplyArgs {
     pub updated_ref: String,
 }
 
+/// Tail review state-transition events via SSE.
+///
+/// Note: the upstream SSE stream is plain (no async-channel buffering
+/// yet — see issue #570). Cloudflare's edge has a hard ~100s idle
+/// ceiling on long-lived HTTP responses, so if a review sits idle
+/// (waiting on a slow CLI) past that ceiling the stream will be cut
+/// with a 524 by the edge even though the server is healthy. Re-run
+/// `alpha review watch <id>` to resubscribe — events you missed are
+/// reflected in the snapshot replayed on reconnect.
+///
+/// TODO(#570): migrate to the async/queue-buffered SSE pattern so the
+/// edge-idle ceiling stops mattering.
 #[derive(Debug, Args)]
 pub struct WatchArgs {
     pub id: String,

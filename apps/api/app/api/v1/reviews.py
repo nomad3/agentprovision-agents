@@ -329,6 +329,17 @@ def review_events(
     Reuses the same Redis pub/sub plumbing as
     `/collaborations/{id}/stream`. Events are emitted by the
     consensus aggregator on each round close.
+
+    Heartbeat is 15s, but Cloudflare's edge cuts long-lived HTTP
+    responses at ~100s idle regardless — a review that sits in
+    `running` past that ceiling will see the stream killed with 524.
+    The CLI's `alpha review watch <id>` doc-comment tells operators
+    to re-run the command to resubscribe; missed transitions are
+    re-emitted via the snapshot replay on reconnect.
+
+    TODO(#570): migrate to the async/queue-buffered SSE pattern shared
+    with collaborations once that lands so the Cloudflare ceiling
+    stops applying.
     """
     import redis as redis_lib
 
