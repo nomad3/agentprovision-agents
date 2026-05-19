@@ -42,7 +42,10 @@ def log_experience(
     """Log a decision as an RL experience. Optionally embeds state text via Gemini."""
     state_embedding = None
     if state_text:
-        state_embedding = embedding_service.embed_text(state_text, task_type="RETRIEVAL_DOCUMENT")
+        # Best-effort: embedding-service may be down; the experience row
+        # is still valuable without a state vector (the keyword/cosine
+        # search falls back to plain pg ordering).
+        state_embedding = embedding_service.try_embed_text(state_text, task_type="RETRIEVAL_DOCUMENT")
 
     exp = RLExperience(
         tenant_id=tenant_id,
@@ -135,7 +138,9 @@ def find_similar_experiences(
     limit: int = 200,
 ) -> List[Dict[str, Any]]:
     """Find similar past experiences using pgvector cosine similarity."""
-    query_embedding = embedding_service.embed_text(state_text, task_type="RETRIEVAL_QUERY")
+    # Best-effort: returns ``[]`` when embedding-service is down (same
+    # contract as before — see api-image-diet PR for context).
+    query_embedding = embedding_service.try_embed_text(state_text, task_type="RETRIEVAL_QUERY")
     if not query_embedding:
         return []
 

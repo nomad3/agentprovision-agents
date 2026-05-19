@@ -23,13 +23,24 @@ PROD_TENANT = UUID("0f134606-3906-44a5-9e88-6c2020f0f776")
 
 @pytest.fixture(scope="module", autouse=True)
 def _warm_embedding_model():
-    """Pre-load nomic-embed-text-v1.5 once. First load takes ~20s on a cold
-    Python process (model download + state-dict load). Subsequent calls are
-    sub-100ms, which is what production sees because the API process keeps
-    the model resident. Warming here makes the integration suite measure
-    the steady-state hot path."""
+    """Pre-load the embedding service once.
+
+    First call rounds-trips through the Rust ``embedding-service`` gRPC
+    pod (apps/embedding-service). When that pod isn't reachable —
+    typically when running this suite outside the docker-compose stack —
+    we skip the integration tests rather than fail collection, since
+    every test below depends on a working embedding path.
+
+    The pre-2026-05-18 build kept a sentence-transformers fallback that
+    masked an unreachable Rust service; that fallback was removed (see
+    docs/plans/2026-05-18-docker-image-shrink-and-latency.md) so the
+    fixture surfaces the missing dep loudly.
+    """
     from app.services import embedding_service
-    embedding_service.embed_text("warmup", task_type="RETRIEVAL_QUERY")
+    try:
+        embedding_service.embed_text("warmup", task_type="RETRIEVAL_QUERY")
+    except embedding_service.EmbeddingServiceUnavailable as exc:
+        pytest.skip(f"Rust embedding-service unavailable: {exc}")
 
 
 @pytest.mark.integration

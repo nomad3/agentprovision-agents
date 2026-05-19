@@ -302,12 +302,37 @@ async def post_message_with_file(
             detail=f"Unsupported file type: {mime_type}",
         )
 
+    # Async-safe transcription path: if the upload is audio, resolve the
+    # transcript via the code-worker workflow BEFORE calling the (sync)
+    # build_media_parts helper. transcribe_bytes_sync inside an async
+    # handler blocks the event loop on its ThreadPoolExecutor bridge —
+    # see transcription_client.py docstring. We pass an empty string
+    # (NOT None) on failure so build_media_parts skips its sync dispatch
+    # branch and falls straight to inline_data.
+    precomputed_transcript: Optional[str] = None
+    if media_type == "audio":
+        precomputed_transcript = ""  # sentinel — skip sync dispatch even if async failed
+        try:
+            from app.services.transcription_client import (
+                TranscriptionUnavailable,
+                transcribe_async,
+            )
+
+            tr = await transcribe_async(file_bytes)
+            if tr.status == "completed" and tr.transcript:
+                precomputed_transcript = tr.transcript
+        except TranscriptionUnavailable:
+            logger.warning("Transcription service unavailable for chat upload; falling back to inline audio")
+        except Exception:
+            logger.exception("Inline transcription failed for chat upload; falling back to inline audio")
+
     try:
         parts, attachment_meta = build_media_parts(
             media_bytes=file_bytes,
             mime_type=mime_type,
             caption=content,
             filename=file.filename or "",
+            precomputed_transcript=precomputed_transcript,
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

@@ -14,7 +14,13 @@ from app.api.deps import get_current_user_optional, get_db
 from app.core.config import settings
 from app.models.device_registry import DeviceRegistry
 from app.models.user import User
-from app.services.media_utils import transcribe_audio_bytes
+# Transcription was migrated out of media_utils (which kept whisper+torch
+# in the api image at 2 GB). The shim there still exists, but new
+# callers go through the canonical client directly — clearer call site +
+# bypasses one re-export hop.
+from app.services.transcription_client import (
+    transcribe_bytes_sync as transcribe_audio_bytes,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/robot", tags=["robot"])

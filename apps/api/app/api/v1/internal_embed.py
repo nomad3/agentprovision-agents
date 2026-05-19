@@ -31,7 +31,10 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from app.core.config import settings
-from app.services.embedding_service import embed_text
+# The endpoint contract surfaces ``{"embedding": null}`` on graceful
+# failure (see module docstring + EmbedResponse) so we use the
+# best-effort wrapper that returns ``None`` instead of raising.
+from app.services.embedding_service import try_embed_text as embed_text
 
 router = APIRouter()
 logger = logging.getLogger(__name__)

@@ -249,7 +249,12 @@ class TestBuildMemoryContextSemantic:
     @patch("app.services.memory_recall.embedding_service")
     def test_fallback_to_keyword_when_embedding_none(self, mock_embed_svc, mock_db):
         """Falls back to keyword-based recall when embed_text returns None."""
+        # The api-image-diet PR routed memory_recall through try_embed_text
+        # (best-effort wrapper) so the embedding-service-unavailable path
+        # surfaces as ``None`` instead of raising. Mock the wrapper too so
+        # this test still pins the keyword-fallback branch.
         mock_embed_svc.embed_text.return_value = None
+        mock_embed_svc.try_embed_text.return_value = None
 
         # Set up keyword fallback query results
         mock_entity = MagicMock()
