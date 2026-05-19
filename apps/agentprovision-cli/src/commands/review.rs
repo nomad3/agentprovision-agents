@@ -232,12 +232,15 @@ async fn start(args: StartArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     if ctx.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "review_id": resp.review_id,
-            "status": resp.status,
-            "ref": ref_value,
-            "clis": resp.clis.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "review_id": resp.review_id,
+                "status": resp.status,
+                "ref": ref_value,
+                "clis": resp.clis.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+            }))?
+        );
         return Ok(());
     }
     println!("[alpha] review dispatched");
@@ -270,23 +273,26 @@ async fn status(args: StatusArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     if ctx.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "id": state.id,
-            "ref": state.r#ref,
-            "scope": state.scope,
-            "status": state.status,
-            "rounds_completed": state.rounds_completed,
-            "max_rounds": state.max_rounds,
-            "agreed_findings": state.agreed_findings.iter().map(|f| {
-                serde_json::json!({
-                    "severity": f.severity,
-                    "file": f.file,
-                    "line_range": f.line_range,
-                    "descriptions": f.descriptions,
-                    "cli_set": f.cli_set,
-                })
-            }).collect::<Vec<_>>(),
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": state.id,
+                "ref": state.r#ref,
+                "scope": state.scope,
+                "status": state.status,
+                "rounds_completed": state.rounds_completed,
+                "max_rounds": state.max_rounds,
+                "agreed_findings": state.agreed_findings.iter().map(|f| {
+                    serde_json::json!({
+                        "severity": f.severity,
+                        "file": f.file,
+                        "line_range": f.line_range,
+                        "descriptions": f.descriptions,
+                        "cli_set": f.cli_set,
+                    })
+                }).collect::<Vec<_>>(),
+            }))?
+        );
         return Ok(());
     }
 
@@ -338,12 +344,15 @@ async fn reply(args: ReplyArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     if ctx.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-            "id": state.id,
-            "status": state.status,
-            "rounds_completed": state.rounds_completed,
-            "ref": state.r#ref,
-        }))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": state.id,
+                "status": state.status,
+                "rounds_completed": state.rounds_completed,
+                "ref": state.r#ref,
+            }))?
+        );
         return Ok(());
     }
     println!(
@@ -409,15 +418,19 @@ async fn list(args: ListArgs, ctx: Context) -> anyhow::Result<()> {
     };
 
     if ctx.json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!(
-            rows.iter().map(|r| serde_json::json!({
-                "id": r.id,
-                "ref": r.r#ref,
-                "status": r.status,
-                "rounds": r.rounds_completed,
-                "agreed_count": r.agreed_findings.len(),
-            })).collect::<Vec<_>>()
-        ))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!(rows
+                .iter()
+                .map(|r| serde_json::json!({
+                    "id": r.id,
+                    "ref": r.r#ref,
+                    "status": r.status,
+                    "rounds": r.rounds_completed,
+                    "agreed_count": r.agreed_findings.len(),
+                }))
+                .collect::<Vec<_>>()))?
+        );
         return Ok(());
     }
     if rows.is_empty() {
@@ -473,8 +486,12 @@ mod tests {
     #[test]
     fn parses_start_with_clis_list() {
         let cli = TestCli::try_parse_from([
-            "t", "review", "start", "#42",
-            "--clis", "claude,codex,gemini",
+            "t",
+            "review",
+            "start",
+            "#42",
+            "--clis",
+            "claude,codex,gemini",
         ])
         .unwrap();
         let TestCmd::Review(ReviewCommand::Start(a)) = cli.cmd else {
@@ -485,10 +502,8 @@ mod tests {
 
     #[test]
     fn parses_start_max_rounds_in_range() {
-        let cli = TestCli::try_parse_from([
-            "t", "review", "start", "#1", "--max-rounds", "5",
-        ])
-        .unwrap();
+        let cli =
+            TestCli::try_parse_from(["t", "review", "start", "#1", "--max-rounds", "5"]).unwrap();
         let TestCmd::Review(ReviewCommand::Start(a)) = cli.cmd else {
             panic!()
         };
@@ -497,16 +512,16 @@ mod tests {
 
     #[test]
     fn rejects_max_rounds_above_limit() {
-        let parsed = TestCli::try_parse_from([
-            "t", "review", "start", "#1", "--max-rounds", "11",
-        ]);
+        let parsed = TestCli::try_parse_from(["t", "review", "start", "#1", "--max-rounds", "11"]);
         assert!(parsed.is_err());
     }
 
     #[test]
     fn parses_reply() {
         let cli = TestCli::try_parse_from([
-            "t", "review", "reply",
+            "t",
+            "review",
+            "reply",
             "11111111-1111-1111-1111-111111111111",
             "#570-rev2",
         ])
@@ -520,10 +535,8 @@ mod tests {
 
     #[test]
     fn parses_list_with_status_filter() {
-        let cli = TestCli::try_parse_from([
-            "t", "review", "list", "--status", "awaiting_response",
-        ])
-        .unwrap();
+        let cli = TestCli::try_parse_from(["t", "review", "list", "--status", "awaiting_response"])
+            .unwrap();
         let TestCmd::Review(ReviewCommand::List(a)) = cli.cmd else {
             panic!()
         };
