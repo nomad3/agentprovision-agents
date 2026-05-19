@@ -1,4 +1,4 @@
--- Migration 137 — add `higgsfield` tool_group to every Luna agent.
+-- Migration 138 — add `higgsfield` tool_group to every Luna agent.
 --
 -- Why: PR #550 ships per-tenant Higgsfield MCP connector registration via
 -- `apps/api/app/services/higgsfield_mcp.register_for_tenant`. The connector
@@ -37,5 +37,5 @@ SET tool_groups = (
 WHERE name = 'Luna' OR name ILIKE 'luna%';
 
 -- Self-record so re-applying this migration on a fresh DB is a clean no-op.
-INSERT INTO _migrations(filename) VALUES ('137_luna_higgsfield_tool_group.sql')
+INSERT INTO _migrations(filename) VALUES ('138_luna_higgsfield_tool_group.sql')
 ON CONFLICT DO NOTHING;
