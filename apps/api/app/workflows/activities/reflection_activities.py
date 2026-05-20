@@ -115,7 +115,7 @@ async def write_reflections(
     # produces non-empty input so we never reach this branch — but
     # we keep the import lazy so the activity can be registered on a
     # worker that doesn't have the schemas loaded.
-    from app.core.database import SessionLocal
+    from app.db.session import SessionLocal
     from app.schemas.reflection import NightlyReflection
     from app.services import reflection_io
 
@@ -154,7 +154,7 @@ async def check_killswitch(tenant_id: str) -> bool:
     """Read the per-tenant kill-switch outside the workflow's main
     thread. Workflow code can't open DB sessions; activities can.
     Returns ``True`` when synthesis is allowed."""
-    from app.core.database import SessionLocal
+    from app.db.session import SessionLocal
     from app.services.reflection_killswitch import (
         is_nightly_reflection_enabled,
     )
