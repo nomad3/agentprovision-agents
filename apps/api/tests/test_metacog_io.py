@@ -221,42 +221,6 @@ def test_write_prediction_persists_and_roundtrips(db, tenant_with_agent):
     row_id = write_prediction(db, prediction=p)
     assert row_id is not None
 
-    # Diagnostic: raw count confirmed row persists; the bug is in
-    # the tenant_id filter inside list_predictions. Dump what's
-    # actually stored vs what we're filtering for.
-    from sqlalchemy import text as _sql_text
-    raw_rows = db.execute(_sql_text(
-        "SELECT id, tenant_id, agent_id, memory_type FROM agent_memories"
-    )).fetchall()
-    assert len(raw_rows) == 1, (
-        f"raw rows found {len(raw_rows)}; expected 1"
-    )
-    stored_tenant_id = raw_rows[0][1]
-    queried_tenant_id = str(tenant.id)
-    assert stored_tenant_id == queried_tenant_id, (
-        f"stored tenant_id={stored_tenant_id!r} (type={type(stored_tenant_id).__name__}) "
-        f"!= queried tenant_id={queried_tenant_id!r}"
-    )
-
-    # Diagnostic: bypass list_predictions, query directly via ORM.
-    # If filter-by-memory-type passes but filter-by-tenant-id fails,
-    # the shim's bind processor isn't being applied for the ORM query.
-    from app.models.agent_memory import AgentMemory as _AM
-    by_kind = db.query(_AM).filter(
-        _AM.memory_type == "metacog_confidence_prediction",
-    ).all()
-    assert len(by_kind) == 1, (
-        f"ORM filter by memory_type only: got {len(by_kind)}"
-    )
-    by_kind_and_tenant = db.query(_AM).filter(
-        _AM.memory_type == "metacog_confidence_prediction",
-        _AM.tenant_id == tenant.id,
-    ).all()
-    assert len(by_kind_and_tenant) == 1, (
-        f"ORM filter w/ tenant_id=uuid.UUID: got {len(by_kind_and_tenant)} "
-        f"(stored={stored_tenant_id!r}, tenant.id={tenant.id!r} type={type(tenant.id).__name__})"
-    )
-
     fetched = list_predictions(db, tenant_id=tenant.id)
     assert len(fetched) == 1
     assert fetched[0].predicted_confidence == 0.77
