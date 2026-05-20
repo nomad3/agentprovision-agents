@@ -167,9 +167,201 @@ def get_norm_value(
     return selected.value if selected else None
 
 
+# ── Write paths (Phase 1 PR B) ────────────────────────────────────────
+
+
+def write_role_contract(
+    db: Session,
+    *,
+    contract: TeamRoleContract,
+) -> Optional[uuid.UUID]:
+    """Persist a TeamRoleContract as an agent_memory row with
+    memory_type=team_role_contract. Returns the new row's id on
+    success, None on failure.
+
+    Best-effort: catches SQLAlchemyError, rolls back, returns None.
+    Idempotency is the caller's responsibility — see
+    bootstrap_canonical_role_split for the idempotent variant.
+    """
+    from app.services.team_engine import serialize_role_contract
+
+    try:
+        tenant_id = uuid.UUID(contract.tenant_id)
+        agent_id = uuid.UUID(contract.agent_id)
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "team_engine_io.write_role_contract: bad tenant/agent UUID — %s",
+            exc,
+        )
+        return None
+
+    row = AgentMemory(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        memory_type=ROLE_CONTRACT_MEMORY_TYPE,
+        content=serialize_role_contract(contract),
+        importance=0.8,
+        confidence=1.0,
+        tags=["team_engine", "role_contract", contract.scope],
+    )
+    try:
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "team_engine_io.write_role_contract: commit failed, rolling back. err=%s",
+            exc,
+        )
+        db.rollback()
+        return None
+
+
+def write_norm(
+    db: Session,
+    *,
+    norm: TeamNorm,
+) -> Optional[uuid.UUID]:
+    """Persist a TeamNorm as an agent_memory row with
+    memory_type=team_norm. Returns the row id on success, None on
+    failure.
+
+    Norms are coalition-or-tenant-scoped, NOT agent-scoped, but
+    agent_memory requires non-null agent_id. Use a stable marker UUID
+    so norms are findable by memory_type without falsely attributing
+    them to a real agent.
+    """
+    from app.services.team_engine import serialize_norm
+
+    try:
+        tenant_id = uuid.UUID(norm.tenant_id)
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "team_engine_io.write_norm: bad tenant UUID — %s", exc
+        )
+        return None
+
+    marker_agent_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    row = AgentMemory(
+        tenant_id=tenant_id,
+        agent_id=marker_agent_id,
+        memory_type=NORM_MEMORY_TYPE,
+        content=serialize_norm(norm),
+        importance=0.7,
+        confidence=1.0,
+        tags=["team_engine", "norm", norm.key],
+    )
+    try:
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "team_engine_io.write_norm: commit failed, rolling back. err=%s",
+            exc,
+        )
+        db.rollback()
+        return None
+
+
+# ── Bootstrap helper ──────────────────────────────────────────────────
+
+
+def bootstrap_canonical_role_split(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    claude_agent_id: uuid.UUID,
+    luna_agent_id: uuid.UUID,
+) -> dict:
+    """Idempotent bootstrap of the 2026-05-19 role split as the first
+    typed contracts for a tenant.
+
+    Writes:
+      1. Claude holds `driver` for `execution`, until codex_subscription_tier=team.
+      2. Luna holds `reviewer` for `review`, until same.
+
+    Idempotency: scans existing contracts; skips writing a side that
+    already has a contract for that (agent, scope) pair.
+
+    Designed to be called once per tenant at first deployment of the
+    Teamwork Engine OR via an operator action. Safe to call multiple
+    times.
+    """
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rationale = (
+        "Canonical role split from 2026-05-19: Claude (Opus heavy "
+        "model) does execution, Luna stays in reviewer role until "
+        "operator bumps Codex subscription. Bootstrapped from "
+        "feedback_role_split_claude_executes_luna_reviews memory + "
+        "PR #589 design."
+    )
+    conditions = {"until_codex_subscription_tier": "team"}
+
+    existing = list_role_contracts(db, tenant_id=tenant_id)
+    has_claude_execution = any(
+        c.agent_id == str(claude_agent_id) and c.scope == "execution"
+        for c in existing
+    )
+    has_luna_review = any(
+        c.agent_id == str(luna_agent_id) and c.scope == "review"
+        for c in existing
+    )
+
+    result = {
+        "claude_contract": "skipped (already exists)" if has_claude_execution else None,
+        "luna_contract": "skipped (already exists)" if has_luna_review else None,
+    }
+
+    if not has_claude_execution:
+        contract = TeamRoleContract(
+            tenant_id=str(tenant_id),
+            coalition_id=None,
+            agent_id=str(claude_agent_id),
+            role="driver",
+            scope="execution",
+            effective_from=now_iso,
+            effective_until=None,
+            conditions=conditions,
+            rationale=rationale,
+            superseded_by=None,
+        )
+        row_id = write_role_contract(db, contract=contract)
+        result["claude_contract"] = (
+            f"written id={row_id}" if row_id else "write failed"
+        )
+
+    if not has_luna_review:
+        contract = TeamRoleContract(
+            tenant_id=str(tenant_id),
+            coalition_id=None,
+            agent_id=str(luna_agent_id),
+            role="reviewer",
+            scope="review",
+            effective_from=now_iso,
+            effective_until=None,
+            conditions=conditions,
+            rationale=rationale,
+            superseded_by=None,
+        )
+        row_id = write_role_contract(db, contract=contract)
+        result["luna_contract"] = (
+            f"written id={row_id}" if row_id else "write failed"
+        )
+
+    return result
+
+
 __all__ = [
     "list_role_contracts",
     "get_active_role",
     "list_norms",
     "get_norm_value",
+    "write_role_contract",
+    "write_norm",
+    "bootstrap_canonical_role_split",
 ]
