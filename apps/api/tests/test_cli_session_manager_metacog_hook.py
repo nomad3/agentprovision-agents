@@ -35,8 +35,6 @@ import pytest
 # Postgres integration job exercises the same code path without the
 # shim and produces a green signal. M1 IO tests took the same path;
 # this file follows that lesson.
-pytestmark = pytest.mark.integration
-
 from sqlalchemy import JSON, String, create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -50,9 +48,14 @@ from app.models.tenant import Tenant
 from app.services import cli_session_manager
 
 
-# Single-threaded-only — same metadata-mutation discipline as the
-# metacog_io test suite (PR #617 CI lesson).
-pytestmark = pytest.mark.serial
+# Combined markers: integration (real Postgres, sidesteps the SQLite
+# shim breakage flagged above) + serial (same metadata-mutation
+# discipline as the metacog_io test suite, PR #617 CI lesson). Both
+# in one list because two `pytestmark = ...` statements would have
+# the second overwrite the first (silent Python semantics — caught
+# in CI debug of PR #626 after the integration mark mysteriously
+# didn't fire).
+pytestmark = [pytest.mark.integration, pytest.mark.serial]
 
 
 # ── Per-test SQLite isolation harness ─────────────────────────────────
