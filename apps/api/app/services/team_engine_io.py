@@ -96,6 +96,35 @@ def get_active_role(
 # ── Norm read paths ───────────────────────────────────────────────────
 
 
+def _resolve_anchor_agent_id(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+) -> Optional[uuid.UUID]:
+    """Find a real agent to anchor norm rows on. agent_memories.agent_id
+    is a NOT NULL FK to agents.id — the earlier marker-UUID approach
+    FK-failed on Postgres (caught by Luna review 2026-05-19).
+
+    Prefers any agent whose name starts with "Luna" (the supervisor
+    convention used in chat.py / robot.py / whatsapp_service.py), then
+    falls back to the oldest agent in the tenant. Returns None if the
+    tenant has zero agents — norm write should fail loudly in that
+    case rather than fabricate a row.
+    """
+    from app.models.agent import Agent
+
+    return (
+        db.query(Agent.id)
+        .filter(Agent.tenant_id == tenant_id)
+        .order_by(
+            Agent.name.ilike("Luna%").desc(),
+            Agent.id.asc(),
+        )
+        .limit(1)
+        .scalar()
+    )
+
+
 def list_norms(
     db: Session,
     *,
@@ -116,12 +145,16 @@ def list_norms(
         # backends without a JSONB ->> operator; fetch all candidates
         # for the tenant + filter in Python. Volume is bounded by the
         # number of norms per tenant (small) so this is fine for Phase 1.
+        # 2026-05-19 (Luna review): order by created_at DESC so
+        # select_norm's "last value wins" semantics are deterministic
+        # when duplicates exist (previously DB-order-dependent).
         rows = (
             db.query(AgentMemory)
             .filter(
                 AgentMemory.tenant_id == tenant_id,
                 AgentMemory.memory_type == NORM_MEMORY_TYPE,
             )
+            .order_by(AgentMemory.created_at.desc())
             .all()
         )
     except SQLAlchemyError as exc:
@@ -174,10 +207,19 @@ def write_role_contract(
     db: Session,
     *,
     contract: TeamRoleContract,
+    current_tenant_id: Optional[uuid.UUID] = None,
 ) -> Optional[uuid.UUID]:
     """Persist a TeamRoleContract as an agent_memory row with
     memory_type=team_role_contract. Returns the new row's id on
     success, None on failure.
+
+    `current_tenant_id`: when provided (the recommended path for HTTP
+    callers — it comes from the JWT), enforces that the contract's
+    tenant_id matches. Without this check, a caller passing a contract
+    object hand-built with the wrong tenant_id could write cross-tenant
+    rows (Luna 2026-05-19 review IMPORTANT). Bootstrap is allowed to
+    pass None because it constructs the contract object internally
+    with the loop-local tenant_id.
 
     Best-effort: catches SQLAlchemyError, rolls back, returns None.
     Idempotency is the caller's responsibility — see
@@ -192,6 +234,14 @@ def write_role_contract(
         logger.warning(
             "team_engine_io.write_role_contract: bad tenant/agent UUID — %s",
             exc,
+        )
+        return None
+
+    if current_tenant_id is not None and tenant_id != current_tenant_id:
+        logger.warning(
+            "team_engine_io.write_role_contract: tenant boundary violation — "
+            "contract.tenant_id=%s != current_tenant_id=%s; refusing write",
+            tenant_id, current_tenant_id,
         )
         return None
 
@@ -222,15 +272,25 @@ def write_norm(
     db: Session,
     *,
     norm: TeamNorm,
+    current_tenant_id: Optional[uuid.UUID] = None,
 ) -> Optional[uuid.UUID]:
     """Persist a TeamNorm as an agent_memory row with
     memory_type=team_norm. Returns the row id on success, None on
     failure.
 
     Norms are coalition-or-tenant-scoped, NOT agent-scoped, but
-    agent_memory requires non-null agent_id. Use a stable marker UUID
-    so norms are findable by memory_type without falsely attributing
-    them to a real agent.
+    agent_memory.agent_id is a NOT NULL FK to agents.id. We anchor
+    norm rows on the tenant's supervisor (Luna) — falling back to the
+    oldest agent — via `_resolve_anchor_agent_id`. The earlier
+    marker-UUID approach was a Postgres-time BLOCKER (Luna review
+    2026-05-19). The norm's logical scope is still encoded in its
+    JSON content (tenant + optional coalition_id), so retrieval is
+    unaffected — anchor_agent_id is just a row-level housekeeping
+    pointer.
+
+    `current_tenant_id`: when provided (JWT-derived), enforces
+    norm.tenant_id matches — same boundary discipline as
+    write_role_contract.
     """
     from app.services.team_engine import serialize_norm
 
@@ -242,10 +302,25 @@ def write_norm(
         )
         return None
 
-    marker_agent_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    if current_tenant_id is not None and tenant_id != current_tenant_id:
+        logger.warning(
+            "team_engine_io.write_norm: tenant boundary violation — "
+            "norm.tenant_id=%s != current_tenant_id=%s; refusing write",
+            tenant_id, current_tenant_id,
+        )
+        return None
+
+    anchor_agent_id = _resolve_anchor_agent_id(db, tenant_id=tenant_id)
+    if anchor_agent_id is None:
+        logger.warning(
+            "team_engine_io.write_norm: tenant=%s has no agents — refusing "
+            "to fabricate an anchor; norm write rejected",
+            tenant_id,
+        )
+        return None
     row = AgentMemory(
         tenant_id=tenant_id,
-        agent_id=marker_agent_id,
+        agent_id=anchor_agent_id,
         memory_type=NORM_MEMORY_TYPE,
         content=serialize_norm(norm),
         importance=0.7,
@@ -286,11 +361,40 @@ def bootstrap_canonical_role_split(
     Idempotency: scans existing contracts; skips writing a side that
     already has a contract for that (agent, scope) pair.
 
+    Concurrent-safety: Luna 2026-05-19 review flagged the read-then-
+    write window as duplicatable under concurrent seeder runs. We
+    serialize by taking a Postgres advisory transaction lock keyed on
+    tenant_id (gracefully no-op on SQLite for the test suite, where
+    only one connection runs anyway). After acquiring the lock we
+    re-check existence so two simultaneous bootstraps converge to a
+    single row each.
+
     Designed to be called once per tenant at first deployment of the
     Teamwork Engine OR via an operator action. Safe to call multiple
     times.
     """
     from datetime import datetime, timezone
+
+    from sqlalchemy import text as _sql_text
+
+    # Postgres advisory lock — second key derived from tenant_id so
+    # different tenants don't serialize against each other. Hash to
+    # signed-64 range. SQLite raises OperationalError; treat as no-op.
+    try:
+        lock_key = abs(hash(("team_engine.bootstrap", str(tenant_id)))) % (
+            2 ** 31
+        )
+        db.execute(
+            _sql_text("SELECT pg_advisory_xact_lock(:k)"),
+            {"k": lock_key},
+        )
+    except SQLAlchemyError as exc:
+        logger.debug(
+            "team_engine_io.bootstrap: advisory lock not available "
+            "(SQLite or non-PG backend); continuing without serialization. "
+            "err=%s",
+            exc,
+        )
 
     now_iso = datetime.now(timezone.utc).isoformat()
     rationale = (
@@ -364,4 +468,5 @@ __all__ = [
     "write_role_contract",
     "write_norm",
     "bootstrap_canonical_role_split",
+    "_resolve_anchor_agent_id",
 ]

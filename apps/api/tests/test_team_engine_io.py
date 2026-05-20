@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
+from app.models.agent import Agent
 from app.models.agent_memory import AgentMemory  # noqa: F401 — registers table
 from app.models.tenant import Tenant
 from app.schemas.team import TeamNorm, TeamRoleContract
@@ -50,6 +51,24 @@ def test_tenant_fixture(db_session: Session):
     db_session.add(tenant)
     db_session.commit()
     db_session.refresh(tenant)
+    # Norm writes need an anchor agent (Luna 2026-05-19 review fix
+    # for FK violation). Create a Luna-named agent so anchor lookup
+    # finds it. Tests that don't use norms still work — FK only fires
+    # when an agent_memory row is actually inserted.
+    luna = Agent(tenant_id=tenant.id, name="Luna Supervisor")
+    db_session.add(luna)
+    db_session.commit()
+    return tenant
+
+
+@pytest.fixture(name="agentless_tenant")
+def agentless_tenant_fixture(db_session: Session):
+    """A tenant deliberately created without any Agent — to exercise
+    the 'norm anchor agent not found' path."""
+    tenant = Tenant(name="Team Engine IO Agentless Tenant")
+    db_session.add(tenant)
+    db_session.commit()
+    db_session.refresh(tenant)
     return tenant
 
 
@@ -59,6 +78,9 @@ def other_tenant_fixture(db_session: Session):
     db_session.add(tenant)
     db_session.commit()
     db_session.refresh(tenant)
+    luna = Agent(tenant_id=tenant.id, name="Luna Supervisor")
+    db_session.add(luna)
+    db_session.commit()
     return tenant
 
 
@@ -317,3 +339,91 @@ def test_bootstrap_is_idempotent(db_session, test_tenant):
     # Only one of each
     all_contracts = list_role_contracts(db_session, tenant_id=test_tenant.id)
     assert len(all_contracts) == 2
+
+
+# ── Luna 2026-05-19 review fixes ──────────────────────────────────────
+
+
+def test_write_role_contract_rejects_tenant_boundary_violation(
+    db_session, test_tenant, other_tenant,
+):
+    """Luna IMPORTANT: write_role_contract must refuse to persist a
+    contract whose tenant_id doesn't match current_tenant_id (from
+    JWT). Defends against caller building a contract with the wrong
+    tenant_id by accident or attack."""
+    agent_id = uuid.uuid4()
+    foreign = _make_contract(other_tenant.id, agent_id)  # other tenant
+    row_id = write_role_contract(
+        db_session,
+        contract=foreign,
+        current_tenant_id=test_tenant.id,  # but we claim to be test_tenant
+    )
+    assert row_id is None
+    # And nothing got persisted for either tenant
+    own = list_role_contracts(db_session, tenant_id=test_tenant.id)
+    other = list_role_contracts(db_session, tenant_id=other_tenant.id)
+    assert len(own) == 0
+    assert len(other) == 0
+
+
+def test_write_norm_rejects_tenant_boundary_violation(
+    db_session, test_tenant, other_tenant,
+):
+    """Same boundary discipline applied to norms."""
+    foreign_norm = _make_norm(other_tenant.id)
+    row_id = write_norm(
+        db_session,
+        norm=foreign_norm,
+        current_tenant_id=test_tenant.id,
+    )
+    assert row_id is None
+
+
+def test_write_norm_rejects_agentless_tenant(db_session, agentless_tenant):
+    """Luna BLOCKER fix: norms anchor on a real agent. If the tenant
+    has zero agents, write_norm must refuse rather than fabricate a
+    marker UUID that would FK-fail on Postgres."""
+    norm = _make_norm(agentless_tenant.id)
+    row_id = write_norm(db_session, norm=norm)
+    assert row_id is None
+
+
+def test_write_norm_anchors_on_luna_when_present(
+    db_session, test_tenant,
+):
+    """Anchor selection should prefer agents whose name starts with
+    'Luna' (the supervisor convention)."""
+    # Add a non-Luna agent first so insertion order isn't what's
+    # winning the tie-break
+    other = Agent(tenant_id=test_tenant.id, name="Some Other Agent")
+    db_session.add(other)
+    db_session.commit()
+
+    norm = _make_norm(test_tenant.id)
+    row_id = write_norm(db_session, norm=norm)
+    assert row_id is not None
+
+    # The persisted row should anchor on the Luna agent
+    row = db_session.query(AgentMemory).filter(
+        AgentMemory.id == row_id,
+    ).first()
+    luna = db_session.query(Agent).filter(
+        Agent.tenant_id == test_tenant.id,
+        Agent.name.ilike("Luna%"),
+    ).first()
+    assert row.agent_id == luna.id
+
+
+def test_list_norms_orders_by_created_at_desc(db_session, test_tenant):
+    """Luna IMPORTANT (PR #602): when duplicate norms exist for the
+    same key, select_norm's 'last value wins' must resolve to the
+    most-recently-written one. The ordering happens in list_norms."""
+    norm_a = _make_norm(test_tenant.id, key="turn_taking", value="strict")
+    norm_b = _make_norm(test_tenant.id, key="turn_taking", value="loose")
+    write_norm(db_session, norm=norm_a)
+    write_norm(db_session, norm=norm_b)  # this one is newer
+
+    norms = list_norms(db_session, tenant_id=test_tenant.id)
+    assert len(norms) == 2
+    # First entry (after DESC sort) should be the newer one
+    assert norms[0].value == "loose"

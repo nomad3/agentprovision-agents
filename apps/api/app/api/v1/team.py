@@ -248,7 +248,11 @@ def create_team_role(
         rationale=body.rationale,
         superseded_by=None,
     )
-    row_id = write_role_contract(db, contract=contract)
+    row_id = write_role_contract(
+        db,
+        contract=contract,
+        current_tenant_id=current_user.tenant_id,
+    )
     if row_id is None:
         raise HTTPException(
             status_code=500,
@@ -273,11 +277,19 @@ def create_team_norm(
         rationale=body.rationale,
         last_confirmed_at=datetime.now(timezone.utc).isoformat(),
     )
-    row_id = write_norm(db, norm=norm)
+    row_id = write_norm(
+        db,
+        norm=norm,
+        current_tenant_id=current_user.tenant_id,
+    )
     if row_id is None:
         raise HTTPException(
             status_code=500,
-            detail="Failed to persist norm (see api logs)",
+            detail=(
+                "Failed to persist norm — tenant may have no agents "
+                "(norms anchor on a real agent_id), or write failed; "
+                "see api logs"
+            ),
         )
     return {"id": str(row_id), "norm": norm.to_dict()}
 
@@ -327,13 +339,36 @@ def amend_team_role(
         )
 
     now_iso = datetime.now(timezone.utc).isoformat()
+    amended_effective_from = body.effective_from or now_iso
+
+    # Luna 2026-05-19 review: enforce supersession invariant. If the
+    # caller supplies an effective_from that is not strictly after the
+    # original's effective_from, evaluate_role_contract would still
+    # pick the older row (it's the most-recent tie-break) and the
+    # "amend" would silently leave the old contract active. Reject
+    # rather than silently keep the old contract in force.
+    if amended_effective_from <= original.effective_from:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"effective_from ({amended_effective_from}) must be "
+                f"strictly after original's effective_from "
+                f"({original.effective_from}) — supersession requires a "
+                "later timestamp"
+            ),
+        )
+
     amended = TeamRoleContract(
-        tenant_id=original.tenant_id,
+        # Luna 2026-05-19 review: use current_user.tenant_id rather
+        # than original.tenant_id from JSON content. Even though the
+        # row was tenant-scope-filtered on lookup, corrupted content
+        # could carry a wrong tenant_id that we'd faithfully copy.
+        tenant_id=str(current_user.tenant_id),
         coalition_id=original.coalition_id,
         agent_id=original.agent_id,
         role=original.role,
         scope=original.scope,
-        effective_from=body.effective_from or now_iso,
+        effective_from=amended_effective_from,
         effective_until=(
             body.effective_until
             if body.effective_until is not None
@@ -347,12 +382,51 @@ def amend_team_role(
         ),
         superseded_by=None,
     )
-    new_row_id = write_role_contract(db, contract=amended)
+    new_row_id = write_role_contract(
+        db,
+        contract=amended,
+        current_tenant_id=current_user.tenant_id,
+    )
     if new_row_id is None:
         raise HTTPException(
             status_code=500,
             detail="Failed to persist amended role contract",
         )
+
+    # Stamp the original row with superseded_by pointer so the audit
+    # trail is bidirectional (forward via effective_from ordering,
+    # backward via superseded_by). Best-effort — if this fails the new
+    # contract still wins by evaluate_role_contract's tie-break, but
+    # we'd lose the explicit pointer.
+    try:
+        from app.services.team_engine import serialize_role_contract
+
+        stamped = TeamRoleContract(
+            tenant_id=original.tenant_id,
+            coalition_id=original.coalition_id,
+            agent_id=original.agent_id,
+            role=original.role,
+            scope=original.scope,
+            effective_from=original.effective_from,
+            effective_until=original.effective_until,
+            conditions=original.conditions,
+            rationale=original.rationale,
+            superseded_by=str(new_row_id),
+        )
+        row.content = serialize_role_contract(stamped)
+        db.add(row)
+        db.commit()
+    except Exception as exc:
+        # Don't surface this failure — the amend itself succeeded.
+        # Log for visibility.
+        import logging
+        logging.getLogger(__name__).warning(
+            "amend_team_role: failed to stamp superseded_by on original "
+            "row id=%s — new contract is still in force. err=%s",
+            contract_row_id, exc,
+        )
+        db.rollback()
+
     return {
         "id": str(new_row_id),
         "superseded_row_id": str(contract_row_id),
