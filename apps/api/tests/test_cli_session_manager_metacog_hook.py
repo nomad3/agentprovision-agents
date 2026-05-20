@@ -24,6 +24,19 @@ from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
+
+# Marked integration after the SQLite shim fixture fought with
+# SQLAlchemy's compiled-statement cache (same pattern as M1's IO
+# tests — see commit log on metacog_io.py UUID-cast fix and concern
+# memory 62190a0d). The shim's process_bind_param fires correctly
+# on INSERT but the SELECT-side cached bind processor silently
+# swallows the str cast, so _resolve_chat_agent_id keeps returning
+# None and the hook never reaches write_prediction. The real-
+# Postgres integration job exercises the same code path without the
+# shim and produces a green signal. M1 IO tests took the same path;
+# this file follows that lesson.
+pytestmark = pytest.mark.integration
+
 from sqlalchemy import JSON, String, create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
