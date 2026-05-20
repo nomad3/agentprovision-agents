@@ -221,6 +221,20 @@ def test_write_prediction_persists_and_roundtrips(db, tenant_with_agent):
     row_id = write_prediction(db, prediction=p)
     assert row_id is not None
 
+    # Diagnostic split: raw COUNT first to separate "row never
+    # persisted" (write_prediction bug) from "list_predictions
+    # query doesn't match the row" (read bug). CI was failing the
+    # combined `len(fetched) == 1` assertion → 0; the raw count
+    # tells us which side is broken.
+    from sqlalchemy import text as _sql_text
+    raw_count = db.execute(_sql_text(
+        "SELECT COUNT(*) FROM agent_memories "
+        "WHERE memory_type = 'metacog_confidence_prediction'"
+    )).scalar()
+    assert raw_count == 1, (
+        f"raw COUNT found {raw_count} rows; write_prediction didn't persist"
+    )
+
     fetched = list_predictions(db, tenant_id=tenant.id)
     assert len(fetched) == 1
     assert fetched[0].predicted_confidence == 0.77
