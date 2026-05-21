@@ -222,12 +222,35 @@ def test_extract_handles_lists_in_args():
 
 def test_extract_caps_walk_depth():
     """Defensive: an adversarially deep dict shouldn't blow the
-    walker. The cap is depth=2; deeper strings are ignored."""
-    deep = {"a": {"b": {"c": {"d": {"e": "production-main"}}}}}
+    walker. Cap is _WALK_MAX_DEPTH=4 (Review I2 fix from review
+    feedback — old depth=2 was too tight for documented tool action
+    shape with nested args). Strings at depth > 4 are ignored."""
+    from app.services.agent_value_set import _WALK_MAX_DEPTH
+    # Build a chain: root dict (d0) → dict (d1) → dict (d2) → dict
+    # (d3) → dict (d4) → dict (d5) → string. depth=5 exceeds 4 → skip.
+    deep = {"a": {"b": {"c": {"d": {"e": {"f": "production-main"}}}}}}
     vs = _vs(protect=["production-main"])
     v = consult(deep, vs, point="tool", intent="mutate", enabled=True)
-    # depth>2 → string not reached → no match
     assert v.decision == "allow"
+    # Verify cap value matches what the docstring promises.
+    assert _WALK_MAX_DEPTH == 4
+
+
+def test_walker_reaches_strings_inside_tool_args_list():
+    """The realistic deepest action shape — tool args with a nested
+    list — must reach the strings. (Review I2 verification.) Walk
+    path: root dict (d0) → args dict (d1) → list (d2) → string (d3).
+    Depth 3 ≤ 4 → captured. With the old depth=2 cap this was a
+    bug."""
+    from app.services.agent_value_set import _extract_search_text
+    action = {
+        "tool": "git_push",
+        "args": {"refs": ["staging", "production-main"]},
+    }
+    text = _extract_search_text(action)
+    assert "production-main" in text
+    assert "staging" in text
+    assert "git_push" in text
 
 
 # ── Consultation-point-agnostic ───────────────────────────────────────

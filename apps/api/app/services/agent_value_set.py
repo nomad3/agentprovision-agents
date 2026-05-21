@@ -30,7 +30,6 @@ safeguard.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -164,14 +163,34 @@ class ValueVerdict:
 
 # ── Constants ─────────────────────────────────────────────────────────
 
-_VALID_POINTS = frozenset({
+# Exported as VALID_CONSULTATION_POINTS so external callers (shims
+# in the IO wrapper, future Phase 2 callers) can validate their
+# point string before passing. Single source of truth.
+VALID_CONSULTATION_POINTS = frozenset({
     "routing", "tool", "reflection", "user_signal", "synthesis",
 })
+VALID_INTENTS = frozenset({"read", "mutate"})
 
-_VALID_INTENTS = frozenset({"read", "mutate"})
+# Internal aliases (kept for backward compat within this module).
+_VALID_POINTS = VALID_CONSULTATION_POINTS
+_VALID_INTENTS = VALID_INTENTS
 
 
 # ── Matching ──────────────────────────────────────────────────────────
+
+
+_WALK_MAX_DEPTH = 4
+"""Walker depth cap. Real-world action shapes:
+- routing/user_signal: depth 1 (string at depth 1 from root dict).
+- tool: depth 3 (root dict → args dict → list → string).
+- reflection/synthesis: depth 1 (kind + content strings).
+
+Cap at 4 to safely handle one more level of MCP-tool args nesting
+than the deepest observed shape. Adversarially deep dicts are
+short-circuited at the cap (review B-tier consideration: a
+deliberately-deep adversarial action MUST NOT force an unbounded
+walk). Phase 2 may swap the slug substring match for embedding-
+cosine; depth becomes moot then."""
 
 
 def _extract_search_text(action: dict) -> str:
@@ -179,19 +198,21 @@ def _extract_search_text(action: dict) -> str:
 
     ``action`` shape varies by consultation point:
       - routing:    {text: <intent text>}
-      - tool:       {tool: <name>, args: <dict>}
+      - tool:       {tool: <name>, args: <dict-or-list>}
       - reflection: {kind: <kind>, content: <text>}
       - user_signal:{text: <user message>}
       - synthesis:  {kind: 'value_proposal', content: <text>}
 
-    We concatenate every string we find at the top level + one
-    level into nested dicts/lists, lowercase, and use that as the
-    search corpus. Cheap substring match against item slug.
+    Recursive walk into dicts + lists/tuples; strings get
+    captured at any depth ≤ ``_WALK_MAX_DEPTH``. Tool action shape
+    requires depth ≥ 3 (root dict → args dict → list → string);
+    cap at 4 to leave one level of safety margin for nested
+    MCP tool args.
     """
     parts: list[str] = []
 
     def _walk(node: Any, depth: int = 0) -> None:
-        if depth > 2:
+        if depth > _WALK_MAX_DEPTH:
             return
         if isinstance(node, str):
             parts.append(node)
@@ -330,4 +351,6 @@ __all__ = [
     "ValueItem",
     "ValueVerdict",
     "consult",
+    "VALID_CONSULTATION_POINTS",
+    "VALID_INTENTS",
 ]

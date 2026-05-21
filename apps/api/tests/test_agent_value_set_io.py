@@ -85,6 +85,73 @@ def test_read_empty_for_unseen_tenant_agent(db_session):
     assert vs.version == 1
 
 
+def test_read_walks_back_on_corrupted_latest_row(db_session):
+    """(Review B3) When the latest value-set row's content can't be
+    parsed, read_value_set MUST walk back to the previous valid
+    version, not silently return empty. Returning empty would mask
+    a corrupted protect item — design §6 'No silent value mutation'.
+    """
+    import json
+    from app.models.agent_memory import AgentMemory
+
+    tenant, agent = _make_tenant_agent(db_session)
+
+    # Write a valid v1
+    io.write_value_set(
+        db_session,
+        tenant_id=tenant.id, agent_id=agent.id,
+        protect=[{"slug": "v1-good", "description": "valid v1",
+                  "added_at": "2026-05-21T00:00:00+00:00",
+                  "added_by": "operator"}],
+        pursue=[], avoid=[],
+    )
+    # Manually inject a CORRUPT row dated later — simulates someone
+    # smashing the agent_memory.content with bad JSON.
+    db_session.add(AgentMemory(
+        tenant_id=tenant.id,
+        agent_id=agent.id,
+        memory_type=io.VALUE_SET_MEMORY_TYPE,
+        content="<<not valid json>>",  # parse will fail
+        importance=1.0,
+        confidence=1.0,
+    ))
+    db_session.commit()
+
+    # Read must walk back to v1 and return its content — NOT
+    # return empty (which would silently bypass v1-good).
+    read = io.read_value_set(
+        db_session, tenant_id=tenant.id, agent_id=agent.id,
+    )
+    assert not read.is_empty(), (
+        "read_value_set returned empty when latest row was corrupt — "
+        "this is the silent-bypass behavior the design's §6 invariant "
+        "forbids. Should walk back to v1 instead."
+    )
+    assert read.protect[0].slug == "v1-good"
+
+
+def test_write_aborts_on_next_version_sql_error(monkeypatch, db_session):
+    """(Review B5) When _next_version can't read the latest row
+    (SQL failure), write_value_set MUST abort with None rather than
+    silently picking version=1 and potentially colliding with an
+    existing version=1 row."""
+    from app.services import agent_value_set_io
+
+    tenant, agent = _make_tenant_agent(db_session)
+
+    def _raise(*args, **kwargs):
+        raise agent_value_set_io._NextVersionError("simulated read failure")
+
+    monkeypatch.setattr(agent_value_set_io, "_next_version", _raise)
+
+    result = io.write_value_set(
+        db_session,
+        tenant_id=tenant.id, agent_id=agent.id,
+        protect=[], pursue=[], avoid=[],
+    )
+    assert result is None
+
+
 def test_write_then_read_round_trip(db_session):
     tenant, agent = _make_tenant_agent(db_session)
     result = io.write_value_set(
@@ -109,6 +176,97 @@ def test_write_then_read_round_trip(db_session):
     assert not read_back.is_empty()
     assert read_back.protect[0].slug == "production-main"
     assert read_back.version == 1
+
+
+def test_read_is_tenant_isolated(db_session):
+    """(Review I3) Two tenants with their own agents must NEVER see
+    each other's value sets — locked by separate filters on both
+    tenant_id AND agent_id. Even when agent NAMES collide.
+
+    Scenario:
+      - Tenant A has agent 'Luna' (A.luna).
+      - Tenant B has agent 'Luna' (B.luna) — same NAME but a
+        different uuid.
+      - A writes a value set; B reads — must be empty.
+      - We also probe with A.luna's agent_id but B's tenant_id —
+        the wrong-tenant + right-agent combo must also be empty.
+    """
+    tenant_a, agent_a = _make_tenant_agent(db_session)
+    tenant_b, agent_b = _make_tenant_agent(db_session)
+
+    # Sanity — two different uuids
+    assert agent_a.id != agent_b.id
+    assert tenant_a.id != tenant_b.id
+
+    io.write_value_set(
+        db_session,
+        tenant_id=tenant_a.id, agent_id=agent_a.id,
+        protect=[{"slug": "tenant-a-only", "description": "A's secret",
+                  "added_at": "x", "added_by": "operator"}],
+        pursue=[], avoid=[],
+    )
+
+    # Same agent uuid but wrong tenant — must be empty
+    cross_wrong_tenant = io.read_value_set(
+        db_session, tenant_id=tenant_b.id, agent_id=agent_a.id,
+    )
+    assert cross_wrong_tenant.is_empty(), (
+        "Cross-tenant read leaked: tenant_b reading agent_a's value "
+        "set returned a non-empty result. The filter on tenant_id is "
+        "not being enforced."
+    )
+
+    # Tenant B's own agent — never written to, must be empty
+    b_own = io.read_value_set(
+        db_session, tenant_id=tenant_b.id, agent_id=agent_b.id,
+    )
+    assert b_own.is_empty()
+
+    # Tenant A reading its own value set still works
+    a_own = io.read_value_set(
+        db_session, tenant_id=tenant_a.id, agent_id=agent_a.id,
+    )
+    assert not a_own.is_empty()
+    assert a_own.protect[0].slug == "tenant-a-only"
+
+
+def test_consult_with_audit_is_tenant_isolated(db_session):
+    """End-to-end tenant-isolation through the consult path. Tenant
+    A has a protect item that would block a mutation; tenant B (with
+    value_layer_enabled=True too) sees the same action allow because
+    B's value set is empty."""
+    tenant_a, agent_a = _make_tenant_agent(db_session)
+    tenant_b, agent_b = _make_tenant_agent(db_session)
+    for t in (tenant_a, tenant_b):
+        db_session.add(TenantFeatures(
+            tenant_id=t.id, value_layer_enabled=True,
+        ))
+    db_session.commit()
+
+    io.write_value_set(
+        db_session,
+        tenant_id=tenant_a.id, agent_id=agent_a.id,
+        protect=[{"slug": "production-main", "description": "A's prod",
+                  "added_at": "x", "added_by": "operator"}],
+        pursue=[], avoid=[],
+    )
+
+    same_action = {"text": "deploy to production-main"}
+    # A is blocked
+    v_a = io.consult_with_audit(
+        db_session, tenant_id=tenant_a.id, agent_id=agent_a.id,
+        action=same_action, point="tool", intent="mutate",
+    )
+    assert v_a.decision == "block"
+
+    # B sees the same text, has the kill-switch ON, has no value set
+    # → allow / empty_value_set
+    v_b = io.consult_with_audit(
+        db_session, tenant_id=tenant_b.id, agent_id=agent_b.id,
+        action=same_action, point="tool", intent="mutate",
+    )
+    assert v_b.decision == "allow"
+    assert v_b.reason == "empty_value_set"
 
 
 def test_write_is_append_only_with_monotonic_version(db_session):

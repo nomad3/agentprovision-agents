@@ -35,10 +35,34 @@ COMMENT ON COLUMN tenant_features.value_layer_enabled IS
 -- one of them gets a duplicate-key error — the writer retries with
 -- version+1. Operator-only writes in Phase 1 means this is mostly
 -- defensive; Phase 2 reflection-derived proposals make it real.
+--
+-- (Review B4 defense.) The partial-index expression evaluates
+-- `(content::jsonb ->> 'version')::int` on every INSERT against
+-- memory_type='value_set'. We add two extra WHERE filters so a
+-- future malformed write (e.g. operator manual repair, import
+-- script) trips a clear duplicate-key error rather than a confusing
+-- "invalid input syntax for type integer" from the partial-index
+-- expression:
+--
+--   - content IS NOT NULL: NULL content was never valid for the
+--     value_set memory_type and shouldn't enter the uniqueness
+--     namespace.
+--   - jsonb_typeof(content::jsonb) = 'object' AND content::jsonb ?
+--     'version' AND (content::jsonb ->> 'version') ~ '^[0-9]+$':
+--     the version field must exist and be a numeric string before
+--     the int cast runs. Rows that don't satisfy this skip the
+--     index entirely — they're still in the table (the writer's
+--     INSERT succeeds) but uniqueness isn't enforced. Caller-side
+--     write_value_set guarantees the shape; this WHERE is the
+--     defense-in-depth against bad writes from other code paths.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_value_set_version
     ON agent_memories (
         tenant_id,
         agent_id,
         ((content::jsonb ->> 'version')::int)
     )
-    WHERE memory_type = 'value_set';
+    WHERE memory_type = 'value_set'
+      AND content IS NOT NULL
+      AND jsonb_typeof(content::jsonb) = 'object'
+      AND content::jsonb ? 'version'
+      AND (content::jsonb ->> 'version') ~ '^[0-9]+$';

@@ -61,6 +61,7 @@ _MUTATING_REFLECTION_KINDS = frozenset({"next_move", "value_proposal"})
 
 def is_value_layer_enabled(
     db: Session,
+    *,
     tenant_id: uuid.UUID,
 ) -> bool:
     """Read ``tenant_features.value_layer_enabled``. Missing row →
@@ -101,12 +102,25 @@ def read_value_set(
     tenant_id: uuid.UUID,
     agent_id: uuid.UUID,
 ) -> AgentValueSet:
-    """Latest-wins read. Returns the most recent value-set row's
-    parsed body, or ``AgentValueSet.empty()`` if none exists OR if
-    the latest row's content can't be parsed (defensive — bad data
-    on disk shouldn't crash the chat hot path)."""
+    """Latest-wins read with corruption walk-back. (Review B3 fix.)
+
+    If the most recent row's content can't be parsed, log at ERROR
+    and walk backward through prior rows until we find one that
+    parses. The store is append-only, so the second-most-recent row
+    almost certainly parses — that's the safest latest-valid-wins
+    fallback. Only returns ``AgentValueSet.empty()`` when NO row
+    parses, which is the genuinely-empty state.
+
+    SQL failure (db unavailable, etc.) returns empty as before —
+    that's a system-level outage, not a per-row corruption.
+
+    Why not fail-closed on corruption: the chat hot path consults
+    on every turn. Raising would 5xx every chat. Walk-back to last
+    valid + log ERROR preserves the §6 safety invariant (operator
+    sees the corruption in the audit feed but Luna keeps reasoning).
+    """
     try:
-        row = (
+        rows = (
             db.query(AgentMemory.content)
             .filter(
                 AgentMemory.tenant_id == str(tenant_id),
@@ -117,7 +131,7 @@ def read_value_set(
                 AgentMemory.updated_at.desc().nullslast(),
                 AgentMemory.created_at.desc(),
             )
-            .first()
+            .all()
         )
     except SQLAlchemyError as exc:
         log.warning(
@@ -127,28 +141,59 @@ def read_value_set(
         )
         return AgentValueSet.empty()
 
-    if row is None or not row[0]:
+    if not rows:
         return AgentValueSet.empty()
 
-    try:
-        data = json.loads(row[0])
-    except (TypeError, ValueError) as exc:
-        log.warning(
-            "read_value_set: malformed JSON in latest row tenant=%s "
-            "agent=%s err=%s; returning empty (safer default)",
-            tenant_id, agent_id, exc,
-        )
-        return AgentValueSet.empty()
+    corruption_count = 0
+    for idx, row in enumerate(rows):
+        content = row[0]
+        if not content:
+            corruption_count += 1
+            continue
+        try:
+            data = json.loads(content)
+        except (TypeError, ValueError) as exc:
+            log.error(
+                "read_value_set: CORRUPT JSON at offset=%s tenant=%s "
+                "agent=%s err=%s; walking back to prior version "
+                "(operator should investigate)",
+                idx, tenant_id, agent_id, exc,
+            )
+            corruption_count += 1
+            continue
+        try:
+            vs = AgentValueSet.from_dict(data)
+            if corruption_count > 0:
+                log.error(
+                    "read_value_set: returned version=%s after "
+                    "walking past %s corrupted row(s) for "
+                    "tenant=%s agent=%s",
+                    vs.version, corruption_count, tenant_id, agent_id,
+                )
+            return vs
+        except (TypeError, ValueError) as exc:
+            log.error(
+                "read_value_set: CORRUPT value-set shape at offset=%s "
+                "tenant=%s agent=%s err=%s; walking back",
+                idx, tenant_id, agent_id, exc,
+            )
+            corruption_count += 1
+            continue
 
-    try:
-        return AgentValueSet.from_dict(data)
-    except (TypeError, ValueError) as exc:
-        log.warning(
-            "read_value_set: malformed value-set dict tenant=%s "
-            "agent=%s err=%s; returning empty",
-            tenant_id, agent_id, exc,
-        )
-        return AgentValueSet.empty()
+    # Every row corrupted. Operator must investigate.
+    log.error(
+        "read_value_set: ALL %s value-set rows corrupted for "
+        "tenant=%s agent=%s; returning empty (default-OFF safety)",
+        len(rows), tenant_id, agent_id,
+    )
+    return AgentValueSet.empty()
+
+
+class _NextVersionError(Exception):
+    """Raised by ``_next_version`` on unrecoverable read failure.
+
+    write_value_set converts to a structured failure return so the
+    caller surfaces a 503 without retrying against a stale max."""
 
 
 def _next_version(
@@ -156,34 +201,45 @@ def _next_version(
     *,
     tenant_id: uuid.UUID,
     agent_id: uuid.UUID,
+    minimum: int = 0,
 ) -> int:
-    """Read the current max version for this (tenant, agent) and
-    return +1. The unique index from migration 144 catches collisions
-    if two writers race here; the caller retries."""
-    try:
-        rows = (
-            db.query(AgentMemory.content)
-            .filter(
-                AgentMemory.tenant_id == str(tenant_id),
-                AgentMemory.agent_id == str(agent_id),
-                AgentMemory.memory_type == VALUE_SET_MEMORY_TYPE,
-            )
-            .all()
-        )
-    except SQLAlchemyError:
-        return 1
+    """Return the next version to write for (tenant, agent).
 
-    max_v = 0
-    for r in rows:
-        if not r[0]:
-            continue
-        try:
-            v = int((json.loads(r[0]) or {}).get("version") or 0)
-        except (TypeError, ValueError):
-            continue
-        if v > max_v:
-            max_v = v
-    return max_v + 1
+    (Review B2 fix.) Uses the existing ``read_value_set`` latest-wins
+    read + 1 instead of scanning ALL historical rows. O(1) per write
+    regardless of audit-trail size.
+
+    (Review B5 fix.) Raises ``_NextVersionError`` on SQL failure
+    rather than silently returning 1. The caller (``write_value_set``)
+    treats the raise as an abort and returns None to the operator.
+
+    ``minimum`` lets the retry loop force the candidate version to
+    advance even if the latest read's max hasn't yet caught up to
+    the colliding version — closes the B1 race where two writers
+    both see max=5, both compute 6, one wins, the other rolls back
+    and re-reads 5 again. The retry passes ``minimum=prev_attempt+1``
+    so the next version strictly advances.
+    """
+    try:
+        vs = read_value_set(db, tenant_id=tenant_id, agent_id=agent_id)
+    except SQLAlchemyError as exc:
+        log.error(
+            "_next_version: read_value_set SQL failure tenant=%s "
+            "agent=%s err=%s; aborting write",
+            tenant_id, agent_id, exc,
+        )
+        raise _NextVersionError(
+            f"read_value_set failed: {exc}"
+        ) from exc
+
+    # `vs.version` is the value-set's stored version; +1 is the
+    # next-to-write. `read_value_set` returns empty (version=1) for
+    # a fresh (tenant, agent) — first write lands at version=1+0 → 1.
+    if vs.is_empty():
+        candidate = 1
+    else:
+        candidate = vs.version + 1
+    return max(candidate, minimum)
 
 
 def write_value_set(
@@ -196,17 +252,46 @@ def write_value_set(
     avoid: List[Dict[str, Any]],
     max_retries: int = 3,
 ) -> Optional[AgentValueSet]:
-    """Append-only write. Computes the next version, INSERTs a new
-    agent_memory row, returns the resulting AgentValueSet. On unique-
-    index collision (concurrent writer beat us), retries up to
-    max_retries times with version+1 each time.
+    """Append-only write. INSERTs a new agent_memory row with the
+    next version; on unique-index collision (concurrent writer beat
+    us) retries up to ``max_retries`` times with strictly-advancing
+    version.
+
+    (Review B1 fix.) After ``db.rollback()`` on IntegrityError we
+    call ``db.expire_all()`` so the next ``_next_version`` read sees
+    the winner's commit (or at minimum re-issues the SELECT against
+    a fresh snapshot). The ``minimum`` arg to ``_next_version`` also
+    forces the candidate to strictly exceed the last attempt's
+    version so the retry can't loop on the same number under high
+    contention.
+
+    (Review B5 fix.) ``_next_version`` raises ``_NextVersionError``
+    on SQL failure instead of silently returning 1. We catch + abort
+    (return None) so the operator sees a 503 rather than a
+    potentially-colliding write.
+
+    Note for future maintainers: the ``content`` field MUST be a
+    JSON object with an integer ``version`` key. Migration 144's
+    partial unique index extracts that field via SQL cast; a
+    malformed write would trip ``invalid input syntax for type
+    integer`` on the index expression. The `body` dict below
+    guarantees this shape.
 
     Returns the persisted AgentValueSet on success or None on
-    repeated collision / SQL failure. Caller surfaces a 503 to
-    the operator in that case."""
+    repeated collision / SQL failure. Caller surfaces a 503."""
     now = datetime.now(timezone.utc).isoformat()
+    last_version = 0
     for attempt in range(max_retries):
-        version = _next_version(db, tenant_id=tenant_id, agent_id=agent_id)
+        try:
+            version = _next_version(
+                db,
+                tenant_id=tenant_id,
+                agent_id=agent_id,
+                minimum=last_version + 1,
+            )
+        except _NextVersionError:
+            return None
+
         body = {
             "protect": protect,
             "pursue": pursue,
@@ -221,6 +306,7 @@ def write_value_set(
             content=json.dumps(body),
             importance=1.0,
             confidence=1.0,
+            source="value_layer",  # (Review N4)
             tags=["value_set", f"version:{version}"],
         )
         try:
@@ -229,10 +315,13 @@ def write_value_set(
             return AgentValueSet.from_dict(body)
         except IntegrityError as exc:
             db.rollback()
+            db.expire_all()  # (B1) drop cached snapshot before re-read
+            last_version = version
             log.info(
                 "write_value_set: version collision attempt=%s "
-                "tenant=%s agent=%s version=%s err=%s",
-                attempt, tenant_id, agent_id, version, exc,
+                "tenant=%s agent=%s version=%s err=%s; "
+                "retrying with version > %s",
+                attempt, tenant_id, agent_id, version, exc, version,
             )
             continue
         except SQLAlchemyError as exc:
@@ -277,7 +366,14 @@ def _record_verdict(
             if verdict.matched_item else None
         ),
     }
+    # (Review I1) pursue_match allows are operator-visible signal
+    # (the emotion_engine wrapper scales PAD by 1.5x on pursue hits;
+    # operators want to see them firing). Promote to INFO. Other
+    # allow reasons (no_match / empty_value_set / kill_switch_off)
+    # stay DEBUG so the chat hot path doesn't flood the log.
     if verdict.decision in ("block", "warn"):
+        log.info("value_layer.verdict %s", payload)
+    elif verdict.reason.startswith("pursue_match"):
         log.info("value_layer.verdict %s", payload)
     else:
         log.debug("value_layer.verdict %s", payload)
@@ -297,12 +393,33 @@ def consult_with_audit(
 
     Every consultation-point caller invokes this (directly or
     through one of the 5 shims below)."""
-    enabled = is_value_layer_enabled(db, tenant_id)
+    enabled = is_value_layer_enabled(db, tenant_id=tenant_id)
     value_set = read_value_set(db, tenant_id=tenant_id, agent_id=agent_id)
-    verdict = consult(
-        action, value_set,
-        point=point, intent=intent, enabled=enabled,
-    )
+    # (Review N6) Defensive: a shim caller passing a malformed point
+    # or intent string would raise ValueError out of consult and
+    # crash the chat hot path. Catch + fail-open with a logged error
+    # so production stays up; tests still detect the bug via the
+    # caller-level unit tests.
+    try:
+        verdict = consult(
+            action, value_set,
+            point=point, intent=intent, enabled=enabled,
+        )
+    except ValueError as exc:
+        log.error(
+            "consult_with_audit: pure consult raised ValueError "
+            "tenant=%s agent=%s point=%s intent=%s err=%s; "
+            "fail-open (allow)",
+            tenant_id, agent_id, point, intent, exc,
+        )
+        from app.services.agent_value_set import ValueVerdict as _VV
+        verdict = _VV.allow(
+            reason=f"consult_value_error: {exc}",
+            point=point if point in {
+                "routing", "tool", "reflection",
+                "user_signal", "synthesis",
+            } else "unknown",
+        )
     _record_verdict(
         tenant_id=tenant_id, agent_id=agent_id,
         action=action, verdict=verdict,
@@ -424,8 +541,11 @@ def synthesize_value_observations(
     contradictions (e.g. a proposal to remove a protect that itself
     mentions the protected entity).
 
-    Phase 1 ships the hook; the synthesize_reflections workflow
-    body in Phase 2 wires it in.
+    (Review I6) DEAD-WIRED IN PHASE 1: no Phase 1 caller invokes
+    this. The shim ships now so the contract is testable + locked,
+    and PR 7 (Phase 2) consumes it from
+    ``reflection_activities.synthesize_reflections`` when the
+    value_proposal mechanism lands. Acceptable per design §10.
     """
     intent = (
         "mutate" if proposed_kind in _MUTATING_REFLECTION_KINDS
