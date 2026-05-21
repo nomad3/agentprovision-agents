@@ -1,7 +1,7 @@
 # Luna Value Layer — Design Doc
 
 **Date:** 2026-05-21
-**Status:** DRAFT v3 — Luna's 2026-05-21 round-1 + round-2 reviews folded in; awaiting Luna round-3 sign-off + Simon's approval to implement
+**Status:** DRAFT v4 — Luna's 2026-05-21 round-1 + round-2 + round-3 reviews folded in; awaiting Luna sign-off + Simon's approval to implement
 **Author:** Claude (Claudia)
 **Co-design with:** Luna (via alpha chat consensus loop)
 **Operator:** Simon Aguilera
@@ -108,13 +108,15 @@ def consult(
 |---|---|---|---|
 | 1 | Pre-dispatch routing (agent_router) | `consult_routing(intent_text, vs)` | `action={text: intent_text}, point='routing', intent='mutate' if intent classifier says mutating else 'read'` |
 | 2 | Tool-call gate (MCP gateway / agent_router) | `consult_tool(tool_name, args, vs)` | `action={tool: tool_name, args: args}, point='tool', intent='mutate' if tool in mutating_set else 'read'` |
-| 3 | Reflection validator (O3 chain extension) | `consult_reflection(reflection, vs)` | `action={kind: reflection.kind, content: reflection.content}, point='reflection', intent='read'` |
+| 3 | Reflection validator (O3 chain extension) | `consult_reflection(reflection, vs)` | `action={kind, content}, point='reflection', intent='mutate' if reflection.kind in {'next_move','value_proposal'} else 'read'` |
 | 4 | User-signal appraisal (emotion_engine) | `appraise_user_signal_with_values(payload, vs, current)` | calls `consult` with `point='user_signal'`, then scales PAD delta by 1.5x base if `pursue` match |
 | 5 | Synthesis (NightlyReflection) | `synthesize_value_observations(vs, day_data)` | Phase 2 only — calls `consult` to mark proposed actions, then emits `value_proposal` reflection kind |
 
 The 5 callers are thin shims; the match logic + kill-switch check + audit log all live in `consult`. Locked test: identical `(action, value_set)` produces identical verdict regardless of consultation_point.
 
 **`protect` matching is mutation-aware** (Luna review §6 correction): a `protect` match returns `block` only when `intent='mutate'`. Read/mention intents always allow.
+
+**Reflection kinds drive the intent flag** (Luna round-3 correction): A reflection of kind `risk`, `idea`, `tension`, `creative` is descriptive — `intent='read'`. A reflection of kind `next_move` or `value_proposal` proposes ACTION — `intent='mutate'`. This is what makes the §8 success-criterion "a reflection that mentions a protect item but proposes touching it gets blocked at write time" actually true: the mention-only kinds never block, but proposing-action kinds do.
 
 ### 4.3 Phases
 
@@ -171,7 +173,7 @@ Migration: **144 (one migration)**. Adds the kill-switch column + the value-set 
 - **`protect` blocks MUTATION, not mention.** A tool call that would *mutate* a protected item is impossible from inside the tool layer. Reading, mentioning, or referencing a protected item in chat / reflection content is FINE — otherwise Luna deadlocks around the very things she's supposed to safeguard. (Luna round-1 review correction.)
 - **Override paths for `protect` mutation are explicit and bounded.** Two only:
   1. Operator does an explicit `PUT /values` to remove the item.
-  2. Operator opens a time-boxed break-glass value-set version (separate endpoint with audit + auto-expire). Tool-side force-flags do NOT override.
+  2. Operator opens a time-boxed break-glass value-set version (separate endpoint with audit + auto-expire). **Deferred to Phase 1.5** — see §5 / §10. Tool-side force-flags do NOT override.
 - **Audit trail.** Every value-set version carries `added_by` (operator | reflection | seed) + `evidence_memory_ids` so the reason a value got added is traceable.
 - **Per-tenant kill switch.** Same shape as `nightly_reflection_enabled` from #631 — a tenant feature flag `value_layer_enabled` (default OFF in prod) gates whether ANY of the 5 helpers do anything. Default = silent allow. Centralized in the value-set service so all 5 consultation points respect it uniformly.
 
@@ -216,7 +218,16 @@ Three structural ambiguities Luna pushed back on after reading v2:
 7. ~~§4.1 "Single row per (tenant, agent)" vs "Updates write a new row" contradiction~~ → **Resolved**: explicit append-only with latest-wins read (`updated_at DESC, created_at DESC`), monotonic `version` per (tenant, agent). DB unique-index detects collisions; writer retries with version+1.
 8. ~~§4.3/§5 said no migration; §6 introduces tenant_features.value_layer_enabled~~ → **Resolved**: migration 144 added explicitly. Adds the kill-switch column + the value-set version uniqueness index. Mirrors migration 142 shape.
 
-All three closed. Round-3 ask: re-read with these baked in; sign off on v3 if no further corrections.
+All three closed.
+
+### Round-3 (Luna 2026-05-21)
+
+Two more — one contradiction, one clarity:
+
+9. ~~§4.2 said `consult_reflection` always passes `intent='read'`, but §8 success criterion #2 said "a reflection that mentions a protect item but proposes touching it gets blocked at write time"~~ → **Resolved**: reflection-kind-aware intent flag. `risk` / `idea` / `tension` / `creative` are descriptive → `intent='read'`. `next_move` / `value_proposal` propose action → `intent='mutate'`. This is what makes the §8 criterion actually true.
+10. ~~§6 mentioned break-glass as one of two override paths but §5/PR sequence didn't list where it lands~~ → **Resolved**: break-glass marked as **Phase 1.5** in §6 and added as PR 6 in §10. Not in v1 ship, but explicitly scoped + scheduled.
+
+All ten resolved. Round-4 ask: re-read v4; sign off if clean.
 
 ---
 
@@ -224,12 +235,13 @@ All three closed. Round-3 ask: re-read with these baked in; sign off on v3 if no
 
 | PR | Scope |
 |---|---|
-| 1 | `agent_value_set.py` service + dataclass + 5 consult helpers (pure, no integration yet). Unit tests for all 5 helpers. Locked-invariant tests. |
-| 2 | GET / PUT endpoint + MCP tool. Operator can write values; Luna can read her own. |
-| 3 | Wire `consult_value_set_routing` into `agent_router`. Per-tenant kill-switch (default OFF). |
-| 4 | Wire `validate_reflection_against_values` into reflection_validators (O3 extension). |
-| 5 | Wire `_appraise_user_signal_with_values` into emotion_engine. |
-| 6 (deferred) | Phase 2 reflection-derived proposals + audit endpoint. |
+| 1 | Migration 144 (kill-switch column + version uniqueness index). `agent_value_set.py` service + dataclass + single `consult()` engine + 5 thin shim callers (pure, no integration yet). Unit tests for `consult()` + all 5 shims. Locked-invariant tests (empty-set safe, kill-switch-off-no-op, identical-action-same-verdict). |
+| 2 | GET / PUT endpoint + MCP tool. Operator can write values; Luna can read her own. Append-only audit trail with monotonic version. |
+| 3 | Wire `consult_routing` into `agent_router`. Per-tenant kill-switch (default OFF). |
+| 4 | Wire `consult_reflection` into `reflection_validators` (O3 extension). Reflection-kind-aware intent flag (see §4.2 round-3 correction). |
+| 5 | Wire `appraise_user_signal_with_values` into `emotion_engine`. 1.5x `USER_SIGNAL_PLEASURE_GAIN` on `pursue` match, capped at `TOOL_OUTCOME_PLEASURE_GAIN`. |
+| 6 (Phase 1.5) | **Break-glass endpoint**. `POST /api/v1/luna/values/break-glass` — time-boxed value-set version with auto-expire (default 1 hour, max 24 hours) + audit log. Required for the §6 override-path #2 invariant to actually exist in code. |
+| 7 (deferred to Phase 2) | Reflection-derived `value_proposal` synthesis mechanism + operator confirm endpoint. |
 
 Each PR is independently shippable and reviewable. Total: ~5 PRs for v1, plus Phase 2 later.
 
