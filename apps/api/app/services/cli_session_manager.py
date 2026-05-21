@@ -7,10 +7,12 @@ import uuid
 from datetime import timedelta
 from typing import Any, Dict, Optional, Tuple
 
+from sqlalchemy import func as _sa_func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.db.safe_ops import safe_rollback
+from app.models.agent import Agent as _AgentModel
 from app.models.integration_config import IntegrationConfig
 from app.models.mcp_server_connector import MCPServerConnector
 from app.services.memory_recall import build_memory_context_with_git
@@ -22,6 +24,17 @@ from app.services.tool_groups import TIER_LIMITS, TIER_MODEL_MAP, format_allowed
 logger = logging.getLogger(__name__)
 
 SUPPORTED_CLI_PLATFORMS = {"claude_code", "codex", "gemini_cli", "copilot_cli", "qwen_code", "opencode"}
+
+# (#663 Path B) Minimal clean-base persona for the
+# no-persona-no-skill case. Surfaces when an agent has neither
+# persona_prompt nor a marketplace skill matching its slug — better
+# than legacy 5xx and better than ghosting Luna's full identity onto
+# a "Custom Agent" / freshly-wizarded row. Tunable in one place; the
+# string is intentionally short + neutral.
+_CLEAN_BASE_PERSONA = (
+    "You are an AI assistant. Be clear, accurate, and concise. "
+    "When the user asks for an action you cannot take, say so."
+)
 
 
 # Universal anti-hallucination preamble. Lifted from aremko's "REGLA DE ORO"
@@ -797,9 +810,6 @@ def _run_agent_session_legacy(
     # If both miss: run on a minimal "clean base persona" rather than
     # erroring or ghosting Luna. (Luna's "clean persona, not
     # accidental Luna-clone" rule.)
-    from sqlalchemy import func as _sa_func
-    from app.models.agent import Agent as _AgentModel
-
     persona_prompt: Optional[str] = None
     try:
         agent_row_for_persona = (
@@ -860,10 +870,7 @@ def _run_agent_session_legacy(
                 "slug=%r tenant=%s; running on clean base persona",
                 agent_slug, str(tenant_id)[:8],
             )
-            skill_body = (
-                "You are an AI assistant. Be clear, accurate, and concise. "
-                "When the user asks for an action you cannot take, say so."
-            )
+            skill_body = _CLEAN_BASE_PERSONA
 
     # Compose additional skill bodies (PR2). With Path B, two cases:
     #   - persona-driven identity (persona_prompt loaded): ALL slugs in
@@ -873,6 +880,11 @@ def _run_agent_session_legacy(
     # Dedup against the identity AND any earlier appearance — a config
     # like `skills: [luna, calculator, calculator]` composes calculator
     # exactly once.
+    # Fallback shape for empty agent_skill_slugs:
+    #   - persona-driven identity → empty list (no skill files to load;
+    #     persona alone is the body)
+    #   - skill-driven identity → [agent_slug] so the legacy single-skill
+    #     dispatch still has the identity slug to dedup against
     composed_slugs = list(agent_skill_slugs) if agent_skill_slugs else (
         [] if persona_prompt else [agent_slug]
     )
