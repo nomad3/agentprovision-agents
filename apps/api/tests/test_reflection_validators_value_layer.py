@@ -93,31 +93,18 @@ def test_value_layer_block_on_next_move_reflection(monkeypatch):
     assert "production-main" in r.reason
 
 
-def test_value_layer_block_on_value_proposal_reflection(monkeypatch):
-    """value_proposal kind (Phase 2) also gets intent='mutate' →
-    protect match blocks. Locks the contract before PR 7 lands the
-    synthesis mechanism."""
-    from app.services.agent_value_set import ValueVerdict
-
-    blocked = ValueVerdict.block(
-        reason="protect_match: production-main",
-        point="reflection",
-        item={"slug": "production-main", "description": "prod main",
-              "added_at": "x", "added_by": "operator",
-              "evidence_memory_ids": []},
-    )
-
-    with patch(
-        "app.services.agent_value_set_io.consult_reflection",
-        return_value=blocked,
-    ):
-        r = _validate_against_value_set(
-            _refl(kind="value_proposal",
-                  content="Propose removing protect on production-main"),
-            db=MagicMock(),
-            current_tenant_id=uuid.uuid4(),
-        )
-    assert not r.ok
+# NOTE on value_proposal kind: the design (§4.3 / §10 PR 7) adds
+# value_proposal to REFLECTION_KINDS in Phase 2. NightlyReflection's
+# __post_init__ rejects unknown kinds, so we CAN'T construct a
+# value_proposal-kind reflection in PR 4. The (kind → intent='mutate')
+# contract for value_proposal is locked at the IO layer instead:
+# see apps/api/tests/test_agent_value_set_io.py::
+# test_synthesize_value_observations_proposal_intent in PR 1.
+# Duplicating the assertion through validate_reflection here would
+# require either (a) bypassing schema validation (brittle) or (b)
+# landing the REFLECTION_KINDS change ahead of Phase 2 (scope creep).
+# Phase 2 PR 7 will add the matching validator test when the synthesis
+# mechanism actually wires this surface.
 
 
 def test_descriptive_kinds_pass_on_warn(monkeypatch):
@@ -255,11 +242,25 @@ def test_validate_reflection_runs_value_layer_after_existing_validators(
 
 def test_validate_reflection_passes_when_all_validators_clean(monkeypatch):
     """End-to-end: all 5 validators pass → ValidationResult.pass_().
-    Locks the chain order doesn't get rearranged accidentally."""
+    Locks the chain order doesn't get rearranged accidentally.
+
+    (Review B2 fix) Also patch validate_entity_grounding — its real
+    body extracts Capitalized non-stopword tokens from content and
+    cross-checks against source_memory_contents. The default
+    _refl() content contained 'Pattern' (Capitalized, not in the
+    stopword list) which the source_memory_contents didn't mention,
+    so the real entity-grounding validator failed on entity-invention.
+    Patching it removes that confound — this test is about CHAIN
+    ORDER, not entity-grounding semantics (which has its own tests
+    in test_reflection_validators.py).
+    """
     from app.services.agent_value_set import ValueVerdict
 
     with patch(
         "app.services.reflection_validators.validate_citation",
+        return_value=ValidationResult.pass_(),
+    ), patch(
+        "app.services.reflection_validators.validate_entity_grounding",
         return_value=ValidationResult.pass_(),
     ), patch(
         "app.services.reflection_validators.validate_next_move_safety",

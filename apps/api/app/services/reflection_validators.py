@@ -412,11 +412,28 @@ def _validate_against_value_set(
         )
         return ValidationResult.pass_()
 
+    # (Review I1) Pre-parse agent_id outside the try so a malformed
+    # UUID surfaces under a specific log message instead of being
+    # mis-attributed as "consult_reflection crashed" during incident
+    # triage. NightlyReflection.agent_id is typed `str` and the
+    # schema's __post_init__ doesn't validate it as a UUID — bad
+    # data at this layer would otherwise look like a value-layer
+    # bug.
+    try:
+        agent_uuid = uuid.UUID(reflection.agent_id)
+    except (ValueError, AttributeError, TypeError) as exc:
+        log.warning(
+            "validate_reflection: reflection.agent_id is not a "
+            "valid UUID (%r); skipping value gate. err=%s",
+            reflection.agent_id, exc,
+        )
+        return ValidationResult.pass_()
+
     try:
         verdict = agent_value_set_io.consult_reflection(
             db,
             tenant_id=current_tenant_id,
-            agent_id=uuid.UUID(reflection.agent_id),
+            agent_id=agent_uuid,
             reflection_kind=reflection.kind,
             reflection_content=reflection.content,
         )
@@ -424,7 +441,9 @@ def _validate_against_value_set(
         log.warning(
             "validate_reflection: consult_reflection crashed "
             "tenant=%s reflection_kind=%s err=%s; allowing reflection "
-            "to write (fail-open)",
+            "to write (fail-open). NOTE: persistent audit-log table "
+            "write for warn verdicts is a Phase 1.5 follow-up — see "
+            "agent_value_set_io._record_verdict docstring.",
             current_tenant_id, reflection.kind, exc,
         )
         return ValidationResult.pass_()
@@ -445,6 +464,5 @@ __all__ = [
     "validate_entity_grounding",
     "validate_next_move_safety",
     "validate_creative_opt_in",
-    "validate_reflection",
     "validate_reflection",
 ]
