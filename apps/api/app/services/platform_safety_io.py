@@ -91,6 +91,22 @@ def _record_event(
             db.rollback()
         except SQLAlchemyError:
             pass
+    except Exception as exc:  # noqa: BLE001
+        # (Review NIT-5) Catch non-SQL crashes too — e.g. an
+        # AttributeError on a malformed verdict shape. The verdict
+        # has already been computed and is the authoritative refusal
+        # signal; the audit row is bookkeeping. A crash here MUST
+        # NOT propagate up into consult_with_audit (which would
+        # then fail-OPEN the refusal we just decided to fire).
+        log.warning(
+            "platform_safety: audit row unexpected error "
+            "tenant=%s category=%s err=%s; refusal still fired",
+            tenant_id, verdict.category, exc,
+        )
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def consult_with_audit(
@@ -116,6 +132,15 @@ def consult_with_audit(
     bug, which is the case the fail-closed/open policy covers. Tier
     2/3 add their own crash surfaces in PRs 4/5 and route through
     this same wrapper.
+
+    (Review NIT-3 — cross-ref to design §12 #1). Important: when
+    tier 1 raises BEFORE a match (compiled-regex bug, corpus loader
+    failure), we have NO category context — per-category
+    fail-closed cannot apply. We fail-OPEN with a loud ERROR log
+    and rely on tier 2/3's per-category fail-closed for the
+    existential categories. Tier 1 raising is the "should never
+    happen" path; the fail-closed semantics apply to per-category
+    classifier crashes, which only exist at tier 2+.
     """
     try:
         verdict = consult(message)

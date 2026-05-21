@@ -91,11 +91,28 @@ class PlatformSafetyVerdict:
         )
 
     def to_dict(self) -> dict:
+        """Client-safe serialization. ``trigger_id`` is intentionally
+        OMITTED — it's a platform-admin-only opaque pattern id (see
+        §9 + the class docstring) and would leak the
+        detection-pattern catalogue if it appeared on the chat
+        client's ChatMessage.context. The audit row (written by
+        ``platform_safety_io._record_event``) carries trigger_id;
+        client-visible metadata does not.
+
+        Use ``to_admin_dict()`` when you need the trigger_id (admin
+        endpoint, server-side log)."""
         return {
             "decision": self.decision,
             "category": self.category,
             "detection_tier": self.detection_tier,
             "confidence": self.confidence,
+        }
+
+    def to_admin_dict(self) -> dict:
+        """Admin-only serialization including ``trigger_id``. NEVER
+        feed this into a client-visible response field."""
+        return {
+            **self.to_dict(),
             "trigger_id": self.trigger_id,
         }
 
