@@ -117,21 +117,31 @@ def _resolve_default_agent(
     tenant_id: uuid.UUID,
 ) -> Agent:
     """Pick the tenant's Luna persona agent (or first agent if
-    none named luna). Mirrors the resolution in
-    reflection_activities.synthesize_reflections. Used by the
-    GET / PUT routes that don't take an explicit agent_id."""
+    none named luna).
+
+    Deterministic resolution by created_at ASC (oldest first) —
+    reviewer IMPORTANT-2 fix. Without an explicit order, a tenant
+    that adds a second Luna-like agent later may see its
+    previously-set values "disappear" because reads now resolve
+    to whichever row Postgres returns first. The oldest-agent
+    convention pins the canonical agent to whichever agent existed
+    when the operator first wrote the value set, so values follow
+    the agent that was originally tagged.
+    """
     agent = (
         db.query(Agent)
         .filter(
             Agent.tenant_id == tenant_id,
             Agent.name.ilike("%luna%"),
         )
+        .order_by(Agent.created_at.asc())
         .first()
     )
     if agent is None:
         agent = (
             db.query(Agent)
             .filter(Agent.tenant_id == tenant_id)
+            .order_by(Agent.created_at.asc())
             .first()
         )
     if agent is None:
