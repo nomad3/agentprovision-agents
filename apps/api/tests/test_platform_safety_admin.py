@@ -212,11 +212,13 @@ def test_admin_endpoint_returns_aggregate_shape(monkeypatch):
     }
 
 
-def test_admin_endpoint_filters_unknown_categories(monkeypatch):
-    """If a row's category isn't in PLATFORM_SAFETY_CATEGORIES (data
-    drift from a category being removed but historical rows
-    surviving), the handler MUST filter it out of the response.
-    Otherwise the response shape becomes unpredictable."""
+def test_admin_endpoint_drift_categories_go_to_unknown_bucket(monkeypatch):
+    """(Review NIT) If a row's category isn't in
+    PLATFORM_SAFETY_CATEGORIES (drift from removed categories with
+    historical rows surviving), the handler aggregates them into
+    ``unknown_category`` rather than dropping them silently. Locks
+    the response invariant
+    sum(by_category) + unknown_category == total."""
     from app.api.v1 import platform_safety_admin
 
     user = _StubUser(superuser=True)
@@ -235,6 +237,36 @@ def test_admin_endpoint_filters_unknown_categories(monkeypatch):
     client = _build_app_with_stubs(user, db, superuser=True)
     resp = client.get("/admin/safety-events?window_hours=24")
     assert resp.status_code == 200
-    cats = [c["category"] for c in resp.json()["by_category"]]
+    body = resp.json()
+    cats = [c["category"] for c in body["by_category"]]
     assert "ghost_category_from_old_data" not in cats
     assert "mass_harm_synthesis" in cats
+    assert body["unknown_category"] == 2
+    # Internal consistency
+    by_cat_sum = sum(c["count"] for c in body["by_category"])
+    assert by_cat_sum + body["unknown_category"] == body["total"]
+
+
+def test_real_require_superuser_dep_403s_non_superuser():
+    """(Review NIT) The stubbed dep in test_admin_endpoint_requires_superuser
+    doesn't exercise the real require_superuser body. This test
+    calls the real dep directly with a non-superuser User to lock
+    the 403 path."""
+    from fastapi import HTTPException
+    from app.api.deps import require_superuser
+
+    user = _StubUser(superuser=False)
+    with pytest.raises(HTTPException) as excinfo:
+        require_superuser(user)
+    assert excinfo.value.status_code == 403
+
+
+def test_real_require_superuser_dep_passes_superuser():
+    """Companion to the above — the real dep must return the user
+    when is_superuser=True."""
+    from app.api.deps import require_superuser
+
+    user = _StubUser(superuser=True)
+    # No exception, returns the user
+    result = require_superuser(user)
+    assert result is user

@@ -19,7 +19,7 @@ endpoint shipping in PR 6.
 """
 from __future__ import annotations
 
-import random
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -56,6 +56,12 @@ class AdminSafetyEventsResponse(BaseModel):
     window_hours: int
     total: int
     by_category: list[CategoryCount]
+    # (Review NIT) Drift bucket — events whose category was removed
+    # from PLATFORM_SAFETY_CATEGORIES between the row write and now
+    # are aggregated here. Without this, ``sum(by_category.count)``
+    # could differ from ``total`` silently. Surface drift so admins
+    # notice when historical categories age out.
+    unknown_category: int = 0
     enforced: int
     shadow: int
 
@@ -82,16 +88,25 @@ class OperatorSafetyCounterResponse(BaseModel):
 
 
 _OPERATOR_JITTER_MAX_SECONDS = 5 * 60  # 5 minutes, Luna §12 #3
-_MAX_WINDOW_HOURS = 24 * 7  # 7 days — anything longer goes to
-                              # the platform-admin path
+_MAX_WINDOW_HOURS = 24 * 7  # 7 days — anything longer goes to the
+                              # platform-admin path. Follow-up:
+                              # admin endpoint may want a 30-day
+                              # compliance window cap separately.
+
+# Cryptographically-strong jitter source (Review NIT). PRNG would
+# be sufficient for the threat model (defeating sub-second probing
+# of pattern boundaries via an operator UI), but `secrets.SystemRandom`
+# is a drop-in upgrade that removes any possible reasoning about PRNG
+# state leakage. Same call signature, same distribution.
+_jitter_rng = secrets.SystemRandom()
 
 
 def _jittered_now() -> datetime:
     """Return ``now() - random[0, 5min]``. Two operator polls a few
-    seconds apart see different jitter offsets, so the counter
-    appears 'about right' but probing a sub-second boundary is
-    foiled."""
-    jitter_seconds = random.uniform(0, _OPERATOR_JITTER_MAX_SECONDS)
+    seconds apart see different jitter offsets, so the counter appears
+    'about right' but probing a sub-second boundary is foiled.
+    Cryptographically-strong randomness — see ``_jitter_rng``."""
+    jitter_seconds = _jitter_rng.uniform(0, _OPERATOR_JITTER_MAX_SECONDS)
     return datetime.now(timezone.utc) - timedelta(seconds=jitter_seconds)
 
 
@@ -184,8 +199,15 @@ def get_admin_safety_events(
     by_category = [
         CategoryCount(category=cat, count=cnt)
         for cat, cnt in cat_rows
-        if cat in VALID_CATEGORIES  # filter out any drift
+        if cat in VALID_CATEGORIES
     ]
+    # (Review NIT) Drift bucket — events whose category was removed
+    # from PLATFORM_SAFETY_CATEGORIES are summed into a single
+    # `unknown_category` count so the response stays internally
+    # consistent: sum(by_category.count) + unknown_category == total.
+    unknown_category = sum(
+        cnt for cat, cnt in cat_rows if cat not in VALID_CATEGORIES
+    )
 
     # Enforced vs shadow split (§12 #7)
     enforced = (
@@ -203,6 +225,7 @@ def get_admin_safety_events(
         window_hours=window_hours,
         total=total,
         by_category=by_category,
+        unknown_category=unknown_category,
         enforced=enforced,
         shadow=shadow,
     )
