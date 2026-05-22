@@ -83,8 +83,10 @@ from .external_agent import ExternalAgent
 from .agent_marketplace_listing import AgentMarketplaceListing, AgentMarketplaceSubscription
 from .agent_test_suite import AgentTestCase, AgentTestRun
 from .training_run import TrainingRun
+from .platform_safety_event import PlatformSafetyEvent
 
 __all__ = [
+    "PlatformSafetyEvent",
     "Tenant", "User",
     "Agent", "AgentGroup", "AgentMemory", "AgentPermission", "AgentPerformanceSnapshot", "AgentVersion", "AgentPolicy", "AgentAuditLog",
     "AgentRelationship", "AgentSkill", "AgentTask",
