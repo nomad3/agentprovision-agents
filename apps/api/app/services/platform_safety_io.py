@@ -173,7 +173,124 @@ def consult_with_audit(
             tenant_id, agent_id, verdict.category,
             verdict.detection_tier, verdict.trigger_id,
         )
-    return verdict
+        return verdict
+
+    # Tier 3 — LLM classifier. Runs only when tier 1+2 missed AND
+    # the pre-screen surfaced at least one candidate category. Shadow
+    # mode (§12 #7 — Luna call) gates whether tier 3 blocks the user
+    # or just records what it WOULD have blocked.
+    return _run_tier3_with_shadow_gate(
+        db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        session_id=session_id,
+        user_id=user_id,
+        message=message,
+    )
+
+
+def _run_tier3_with_shadow_gate(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    agent_id: Optional[uuid.UUID],
+    session_id: Optional[uuid.UUID],
+    user_id: Optional[uuid.UUID],
+    message: str,
+) -> PlatformSafetyVerdict:
+    """Run tier 3 LLM classifier with the shadow-mode gate (§12 #7).
+
+    Steps:
+      1. Compute candidate categories from the same pre-screen
+         tier 2 uses. Empty → tier 3 skipped (90%+ of turns).
+      2. Call tier3.classify(); on any exception, treat as allow
+         (tier 1 + 2 already ran cleanly).
+      3. If classifier returns would_block=False: allow.
+      4. If would_block=True AND category.tier3_enforcement=True:
+         record audit with enforcement_mode='enforced', return
+         block.
+      5. If would_block=True AND tier3_enforcement=False (shadow,
+         the default for first 14 days): record audit with
+         enforcement_mode='shadow', return ALLOW. The user sees a
+         normal LLM dispatch; the platform admin sees the
+         would-have-block in the count-only operator counter
+         excludes shadow rows.
+    """
+    try:
+        from app.services.platform_safety.tier2 import (
+            candidate_categories,
+        )
+        from app.services.platform_safety.tier3 import (
+            classify as tier3_classify,
+        )
+    except ImportError as exc:
+        log.error(
+            "platform_safety.tier3: import failed (%s); skipping tier 3, "
+            "allowing message",
+            exc,
+        )
+        return PlatformSafetyVerdict.allow()
+
+    candidates = candidate_categories(message)
+    if not candidates:
+        return PlatformSafetyVerdict.allow()
+
+    try:
+        result = tier3_classify(message, candidates)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "platform_safety.tier3: classify raised (%s); allowing "
+            "(tier 1 + 2 already ran)",
+            exc,
+        )
+        return PlatformSafetyVerdict.allow()
+
+    if not result.would_block or not result.category:
+        return PlatformSafetyVerdict.allow()
+
+    # Shadow vs enforced — code-owned per-category policy. The
+    # PR 1 safety_defaults.py ships every category with
+    # tier3_enforcement=False; after the 14-day precision audit,
+    # each category flips individually via a config-only deploy.
+    try:
+        policy = category_for_label(result.category)
+        enforce = bool(policy.tier3_enforcement)
+    except ValueError:
+        log.warning(
+            "platform_safety.tier3: classifier returned unknown "
+            "category %r; treating as allow (drift defense)",
+            result.category,
+        )
+        return PlatformSafetyVerdict.allow()
+
+    mode = "enforced" if enforce else "shadow"
+    block_verdict = PlatformSafetyVerdict.block(
+        category=result.category,
+        detection_tier=3,
+        confidence=result.confidence,
+        trigger_id=result.trigger_id,
+    )
+    _record_event(
+        db,
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        session_id=session_id,
+        user_id=user_id,
+        message=message,
+        verdict=block_verdict,
+        enforcement_mode=mode,
+    )
+    log.info(
+        "platform_safety.tier3 %s tenant=%s agent=%s category=%s "
+        "confidence=%s provider=%s",
+        mode, tenant_id, agent_id, result.category,
+        result.confidence, result.provider,
+    )
+
+    if enforce:
+        return block_verdict
+    # Shadow mode — would-have-blocked recorded; user proceeds.
+    return PlatformSafetyVerdict.allow()
 
 
 def fail_closed_for_category(category: str) -> bool:
