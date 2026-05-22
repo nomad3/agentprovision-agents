@@ -164,8 +164,11 @@ def test_io_block_path_invokes_repeat_attempt_check(monkeypatch):
         called["n"] += 1
         return None
 
+    # Patch the IO module's aliased import — module-top binding
+    # at import time, so patching the source module won't affect
+    # the call site (same pattern as _ps_escape in PR 6).
     monkeypatch.setattr(
-        "app.services.platform_safety_rate_limit.check_repeat_attempts",
+        "app.services.platform_safety_io._check_repeat_attempts",
         _spy,
     )
 
@@ -202,7 +205,7 @@ def test_io_block_path_swallows_rate_limit_crash(monkeypatch):
         raise RuntimeError("simulated rate-limit module crash")
 
     monkeypatch.setattr(
-        "app.services.platform_safety_rate_limit.check_repeat_attempts",
+        "app.services.platform_safety_io._check_repeat_attempts",
         _crash,
     )
 
