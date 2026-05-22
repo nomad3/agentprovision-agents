@@ -67,3 +67,146 @@ def test_dollar_paren_substitution_is_literal(
         f"$(...) was expanded by the shell; canary at {canary_path} appeared. "
         "shell=True regression."
     )
+
+
+def test_backtick_substitution_is_literal(
+    canary_path: Path, workspace_with_git: Path
+):
+    """Backtick `command` MUST NOT execute. Some shells expand inside
+    double-quoted strings — argv-list form must defeat this."""
+    commit_msg = f"msg`touch {canary_path}`"
+    # Create initial commit so `git commit` succeeds
+    (workspace_with_git / "f.txt").write_text("x")
+    wf._run(["git", "add", "-A"], cwd=str(workspace_with_git))
+    try:
+        wf._run(
+            ["git", "commit", "-F", "-"],
+            cwd=str(workspace_with_git),
+            input=commit_msg,
+        )
+    except RuntimeError:
+        pass
+    assert not canary_path.exists(), (
+        f"Backtick was expanded; canary at {canary_path} appeared."
+    )
+
+
+def test_semicolon_chain_is_literal(
+    canary_path: Path, workspace_with_git: Path
+):
+    """`; command` MUST NOT chain to a new shell command."""
+    branch_name = f"feat/x;touch {canary_path}"
+    try:
+        wf._run(
+            ["git", "checkout", "-b", branch_name],
+            cwd=str(workspace_with_git),
+        )
+    except RuntimeError:
+        pass
+    assert not canary_path.exists(), (
+        f"; chain was expanded; canary at {canary_path} appeared."
+    )
+
+
+def test_double_ampersand_is_literal(
+    canary_path: Path, workspace_with_git: Path
+):
+    """`&& command` MUST NOT chain to a new shell command."""
+    commit_msg = f"msg && touch {canary_path}"
+    (workspace_with_git / "g.txt").write_text("x")
+    wf._run(["git", "add", "-A"], cwd=str(workspace_with_git))
+    try:
+        wf._run(
+            ["git", "commit", "-F", "-"],
+            cwd=str(workspace_with_git),
+            input=commit_msg,
+        )
+    except RuntimeError:
+        pass
+    assert not canary_path.exists(), (
+        f"&& was expanded; canary at {canary_path} appeared."
+    )
+
+
+def test_pipe_is_literal(
+    canary_path: Path, workspace_with_git: Path
+):
+    """`| command` MUST NOT pipe to a new shell command."""
+    branch_name = f"feat/x | touch {canary_path}"
+    try:
+        wf._run(
+            ["git", "checkout", "-b", branch_name],
+            cwd=str(workspace_with_git),
+        )
+    except RuntimeError:
+        pass
+    assert not canary_path.exists(), (
+        f"| pipe was expanded; canary at {canary_path} appeared."
+    )
+
+
+def test_output_redirect_is_literal(
+    canary_path: Path, workspace_with_git: Path
+):
+    """`> file` MUST NOT redirect to a new file."""
+    commit_msg = f"msg > {canary_path}"
+    (workspace_with_git / "h.txt").write_text("x")
+    wf._run(["git", "add", "-A"], cwd=str(workspace_with_git))
+    try:
+        wf._run(
+            ["git", "commit", "-F", "-"],
+            cwd=str(workspace_with_git),
+            input=commit_msg,
+        )
+    except RuntimeError:
+        pass
+    assert not canary_path.exists(), (
+        f"> redirect was expanded; canary at {canary_path} appeared."
+    )
+
+
+def test_input_redirect_combined_with_output_is_literal(
+    canary_path: Path, workspace_with_git: Path
+):
+    """Combined `< sourcefile > canary` test. If `<` were expanded as
+    input redirection AND `>` as output redirection, the shell would
+    pipe the source file's contents into canary_path. argv-form
+    treats the whole string as one literal branch name — canary
+    stays absent."""
+    source = workspace_with_git / "source.txt"
+    source.write_text("MARKER\n")
+    branch_name = f"feat/x < {source} > {canary_path}"
+    try:
+        wf._run(
+            ["git", "checkout", "-b", branch_name],
+            cwd=str(workspace_with_git),
+        )
+    except RuntimeError:
+        # Git rejects branch names with spaces / metachars — fine.
+        pass
+    assert not canary_path.exists(), (
+        f"< / > redirection was expanded; canary at {canary_path} "
+        f"appeared (would contain source.txt contents under shell=True)."
+    )
+
+
+def test_newline_in_commit_message_is_literal_multiline(
+    workspace_with_git: Path,
+):
+    """Newlines in commit messages MUST NOT trigger a second shell
+    command. They should produce a legitimate multi-line commit."""
+    commit_msg = "subject line\n\nbody line one\nbody line two"
+    (workspace_with_git / "i.txt").write_text("x")
+    wf._run(["git", "add", "-A"], cwd=str(workspace_with_git))
+    wf._run(
+        ["git", "commit", "-F", "-"],
+        cwd=str(workspace_with_git),
+        input=commit_msg,
+    )
+    # Verify the commit message contains the newlines (multi-line)
+    log = wf._run(
+        ["git", "log", "-1", "--pretty=format:%B"],
+        cwd=str(workspace_with_git),
+    )
+    assert "body line one" in log
+    assert "body line two" in log
