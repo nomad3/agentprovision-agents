@@ -1,5 +1,5 @@
 import { Badge, OverlayTrigger, Tooltip } from 'react-bootstrap';
-import { FaExchangeAlt, FaExclamationTriangle, FaServer } from 'react-icons/fa';
+import { FaExchangeAlt, FaExclamationTriangle, FaServer, FaShieldAlt } from 'react-icons/fa';
 import { useTranslation } from 'react-i18next';
 
 /**
@@ -70,8 +70,52 @@ export const resolveActionableHint = (t, hintKey) => {
  */
 const RoutingFooter = ({ context }) => {
   const { t } = useTranslation('cliErrors');
+  const { t: tChat } = useTranslation('chat');
   const summary = context?.routing_summary;
   if (!summary) return null;
+
+  // Platform Safety Floor refusal (#665 PR 2). When served_by is the
+  // platform_safety_block sentinel, render a distinct shield-badge
+  // surface — NOT the generic "Served by X" footer. The category
+  // label is read from i18n; the trigger_id is NEVER shown (it's
+  // platform-admin only per the design § 9).
+  if (summary.served_by === 'platform_safety_block') {
+    const category = context?.safety_verdict?.category;
+    const categoryLabel = category
+      ? tChat(`platformSafetyBlock.category.${category}`, {
+          defaultValue: category,
+        })
+      : tChat('platformSafetyBlock.subtitle');
+    const safetyTip = (
+      <Tooltip id="routing-tip-platform-safety">
+        {tChat('platformSafetyBlock.mistake')}
+      </Tooltip>
+    );
+    return (
+      <OverlayTrigger placement="top" overlay={safetyTip}>
+        <div
+          className="routing-footer mt-2 d-flex align-items-center gap-2"
+          style={{
+            fontSize: '0.72rem',
+            color: 'var(--color-warn, #c98a16)',
+            opacity: 0.95,
+          }}
+          tabIndex={0}
+          role="group"
+          aria-label={tChat('platformSafetyBlock.title')}
+          data-testid="routing-platform-safety-block"
+        >
+          <FaShieldAlt size={10} aria-hidden="true" />
+          <span>
+            {tChat('platformSafetyBlock.title')} — <em>{categoryLabel}</em>
+          </span>
+          <Badge bg="warning" pill style={{ fontSize: '0.6rem' }}>
+            platform policy
+          </Badge>
+        </div>
+      </OverlayTrigger>
+    );
+  }
 
   // Phase 3 commit 6 — surface the actionable_hint to the user.
   // hintKey is e.g. ``cli.errors.needs_auth.claude_code``; we resolve
