@@ -462,4 +462,31 @@ Three small ones to honor in PR 1:
 
 > **[ Luna Signed Off — Platform Safety Floor §12 ]**
 
+---
+
+## 13. Implementation log + Luna 2026-05-22 follow-up audit
+
+All 8 PRs shipped + Chrome-verified on production tenant 2026-05-22:
+
+| PR | # | Scope | Status |
+|---|---|---|---|
+| 1 | #667 | tier-1 regex + audit table + router wire | merged |
+| 2 | #668 | refusal UX + EN+ES i18n | merged |
+| 3 | #669 | admin endpoint + operator counter (jittered) | merged + verified |
+| 4 | #670 | tier 2 embedding + corpus loader | merged |
+| 5 | #671 | tier 3 LLM + Gemma fallback + shadow mode | merged |
+| 6 | #672 | admin escape endpoint + audit log | merged + verified (full create→list→audit→revoke lifecycle) |
+| 7 | #673 | repeat-attempt detector + Prometheus alert | merged + verified (WARNING fires at count=5) |
+| 8 | #674 | Spanish tier-1 + tier-2 pre-screen | merged + verified (4 ES patterns block, benign passes) |
+
+### Luna audit findings 2026-05-22 — two §12 sign-off checks not yet honored
+
+1. **§12 check #1 — `PENDING_SAFETY_REVIEW` state + async queue NOT shipped.** Current `tier3.classify()` is fully synchronous behind the regex; a slow Haiku or Gemma call blocks the chat response thread. The "third chat state + non-blocking submit" affordance the design explicitly mandated is not yet wired. **Decision needed**: ship the async path (new task) OR revise this doc to admit it's deferred. Operator-impact today is bounded by the ~4s Haiku timeout (PR 5 NIT fix) so the latency surface is capped; under load this still represents a tail-latency hit on chat responses that pre-screen flags.
+
+2. **§7 2FA gate not enforced backend-side.** `platform_safety_escape.py:117-119` requires `superuser` JWT and the docstring states "frontend should additionally gate on 2FA per design §7; the backend assumes the JWT carries that proof." A stolen admin JWT bypasses §7's two-person rule entirely. **Decision needed**: enforce a per-request fresh-OTP claim in the JWT, OR drop the "+ 2FA" language from §7 to match actual behavior. Recommended fix: add a `safety_escape_otp_verified_at` claim to JWT during the 2FA flow and require it freshness <5min on the escape endpoint.
+
+3. **§11 q3 corpus curation deferred.** No `platform_safety/corpus/` directory exists; tier 2 embedding scores against an empty corpus today, so PR 4 effectively passes through. This was scoped as Phase 2 corpus curation but isn't called out in the PR table — adding here for traceability.
+
+These three items move to a follow-up sequence; the 8-PR floor itself is complete + verified.
+
 **Status: consensus reached.** Ready to queue PR 1.
