@@ -38,6 +38,13 @@ from app.services.platform_safety import (
 # (PR 6 Review IMPORTANT-2) Module-top import. No circular-import
 # risk: platform_safety_escape doesn't import platform_safety_io.
 from app.services import platform_safety_escape as _ps_escape
+# (Review PR 7 NIT-1) Module-top import — surfaces import-level
+# regressions in the rate-limit module as startup errors instead of
+# silent runtime degradation. No circular-import risk verified
+# (platform_safety_rate_limit only imports the audit model).
+from app.services.platform_safety_rate_limit import (
+    check_repeat_attempts as _check_repeat_attempts,
+)
 
 log = logging.getLogger(__name__)
 
@@ -176,6 +183,20 @@ def consult_with_audit(
             tenant_id, agent_id, verdict.category,
             verdict.detection_tier, verdict.trigger_id,
         )
+        # (PR 7) Repeat-attempt detection — runs AFTER the verdict
+        # has been recorded so the new row is counted. Best-effort:
+        # any failure here is bookkeeping; the user-facing refusal
+        # already returned.
+        try:
+            _check_repeat_attempts(
+                db, tenant_id=tenant_id, user_id=user_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug(
+                "platform_safety.rate_limit check raised (%s); "
+                "ignored — refusal already fired",
+                exc,
+            )
         return verdict
 
     # Tier 3 — LLM classifier. Runs only when tier 1+2 missed AND
@@ -328,6 +349,22 @@ def _run_tier3_with_shadow_gate(
     )
 
     if enforce and grant_active is None:
+        # (Review PR 7 IMPORTANT-1) Tier-3 enforced blocks must
+        # feed the repeat-attempt detector too. A probe-by-
+        # paraphrase attacker is more likely to evade tier-1 regex
+        # and land on tier-3 — that's exactly the user pattern this
+        # counter targets. Best-effort: failure here is bookkeeping;
+        # the refusal still fires below.
+        try:
+            _check_repeat_attempts(
+                db, tenant_id=tenant_id, user_id=user_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug(
+                "platform_safety.rate_limit check raised on tier-3 "
+                "enforced block (%s); ignored",
+                exc,
+            )
         return block_verdict
     # Shadow mode OR active escape grant — would-have-blocked
     # recorded; user proceeds.
