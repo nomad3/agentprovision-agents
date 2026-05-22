@@ -15,12 +15,14 @@ or missing affect_vector degrades to neutral, which is acceptable.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from typing import Optional
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.db.safe_ops import safe_rollback
 from app.models.agent_memory import AgentMemory
 from app.models.conversation_episode import ConversationEpisode
 from app.schemas.emotion import PADVector
@@ -658,8 +660,6 @@ def record_session_user_signal(
     no-op. NEVER raises — callers are typically inside a bare
     except.
     """
-    import os as _os
-
     if session_id is None:
         return None
     if not user_text or not user_text.strip():
@@ -675,6 +675,15 @@ def record_session_user_signal(
             .first()
         )
     except SQLAlchemyError as exc:
+        # (Review IMPORTANT-2) Roll back so a poisoned session doesn't
+        # cascade. Unlike record_session_tool_failure (which fires
+        # AFTER cli_session_manager has already done safe_rollback in
+        # its failure handler), the user_signal wire-in fires at the
+        # TOP of _run_agent_session_legacy — first DB-touching call
+        # on this session. A stale InFailedSqlTransaction here would
+        # poison every downstream query (persona load, agent lookup,
+        # message append) in the hot path.
+        safe_rollback(db)
         logger.warning(
             "emotion_engine_io.record_session_user_signal: episode "
             "lookup failed. session_id=%s tenant_id=%s err=%s",
@@ -689,7 +698,7 @@ def record_session_user_signal(
     # when the higher-accuracy classifier is worth the ~1s/turn cost.
     effective_backend = (
         backend
-        or _os.environ.get("USER_SIGNAL_CHAT_BACKEND", "heuristic")
+        or os.environ.get("USER_SIGNAL_CHAT_BACKEND", "heuristic")
     )
     try:
         from app.services.user_signal_classifier import (
@@ -709,9 +718,9 @@ def record_session_user_signal(
         return None
 
     # Mirror the agent_id-fallback pattern from
-    # ``record_session_tool_failure``: emit a WARN + use a random
-    # UUID so the appraisal lands on a neutral baseline without
-    # corrupting another agent's affect state.
+    # ``record_session_tool_failure``: emit a WARN + Prometheus
+    # counter + use a random UUID so the appraisal lands on a neutral
+    # baseline without corrupting another agent's affect state.
     effective_agent_id = agent_id
     if effective_agent_id is None:
         effective_agent_id = uuid.uuid4()
@@ -722,6 +731,21 @@ def record_session_user_signal(
             "affect won't be attributable to a real agent.",
             session_id, tenant_id, effective_agent_id,
         )
+        # (Review IMPORTANT-1) Emit the same Prometheus counter the
+        # tool_failure path emits so ops can dashboard user_signal
+        # attribution gaps. Best-effort; never break appraisal.
+        try:
+            from app.services.emotion_engine_metrics import (
+                record_appraise_event,
+            )
+            record_appraise_event(
+                tenant_id=str(tenant_id),
+                event_type="agent_id_fallback",
+            )
+        except ImportError:
+            pass  # metrics module shipped in PR #607
+        except Exception:  # noqa: BLE001
+            pass
 
     try:
         return appraise_and_record_user_signal(

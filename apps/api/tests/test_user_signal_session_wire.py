@@ -200,6 +200,73 @@ def test_happy_path_forwards_classifier_output_and_text(frozen_classifier):
     assert captured["payload"] == payload.to_dict()
 
 
+def test_cli_session_wrapper_swallows_io_helper_exception():
+    """(Review NIT-5) Locks the bare ``except Exception`` at
+    ``_record_user_signal_affect`` — the chat hot path MUST NEVER
+    inherit a raised exception from the emotion layer. If
+    ``record_session_user_signal`` raises (despite the IO helper's
+    own fail-open contract — defence in depth), the cli_session_manager
+    wrapper swallows it and the chat turn proceeds normally."""
+    from app.services import cli_session_manager
+
+    db = MagicMock()
+    db_session_memory = {
+        "chat_session_id": str(uuid.uuid4()),
+    }
+    tenant_id = uuid.uuid4()
+
+    with patch(
+        "app.services.emotion_engine_io.record_session_user_signal",
+        side_effect=RuntimeError(
+            "defence-in-depth — IO helper should never raise but we test what happens if it does"
+        ),
+    ):
+        # Should NOT propagate; bare except in the wrapper catches it.
+        cli_session_manager._record_user_signal_affect(
+            db,
+            db_session_memory,
+            tenant_id,
+            user_text="any text",
+        )
+    # If we got here without an exception, the chat hot path is safe.
+
+
+def test_cli_session_wrapper_bails_on_missing_chat_session_id():
+    """When db_session_memory has no chat_session_id key, the wrapper
+    returns silently — no DB calls, no classifier dispatch."""
+    from app.services import cli_session_manager
+
+    db = MagicMock()
+
+    cli_session_manager._record_user_signal_affect(
+        db,
+        db_session_memory={},  # no chat_session_id
+        tenant_id=uuid.uuid4(),
+        user_text="hello",
+    )
+    db.query.assert_not_called()
+
+
+def test_cli_session_wrapper_bails_on_malformed_session_id():
+    """When chat_session_id is a non-UUID string (legacy / typo), the
+    wrapper bails on the UUID parse and returns silently — no IO
+    helper call."""
+    from app.services import cli_session_manager
+
+    db = MagicMock()
+
+    with patch(
+        "app.services.emotion_engine_io.record_session_user_signal",
+    ) as mock_io:
+        cli_session_manager._record_user_signal_affect(
+            db,
+            db_session_memory={"chat_session_id": "not-a-uuid"},
+            tenant_id=uuid.uuid4(),
+            user_text="hello",
+        )
+    mock_io.assert_not_called()
+
+
 def test_agent_id_none_uses_random_uuid_fallback(frozen_classifier):
     """When the chat session has no agent_id resolved, the helper
     falls back to a random UUID (mirrors record_session_tool_failure
