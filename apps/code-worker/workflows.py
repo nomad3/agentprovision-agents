@@ -170,19 +170,56 @@ class AgentReview:
     summary: str
 
 
-def _run(cmd: str, cwd: str = WORKSPACE, timeout: int = 600, extra_env: dict | None = None) -> str:
-    """Run a shell command and return stdout. Raises on failure."""
-    logger.info("Running: %s", cmd)
+def _run(
+    argv: list[str],
+    cwd: str = WORKSPACE,
+    timeout: int = 600,
+    extra_env: dict | None = None,
+    input: str | None = None,
+) -> str:
+    """Run a subprocess from an argv list and return stdout.
+
+    Uses ``shell=False`` always — shell metacharacters in argv elements
+    become literal text, never expanded. For commands that need to read
+    a long/user-derived string (e.g. git commit messages), pass it via
+    ``input=`` which is fed to the subprocess on stdin. The argv stays
+    free of user data.
+
+    Raises RuntimeError on non-zero exit.
+
+    Spec: docs/superpowers/specs/2026-05-22-subproject-a-infra-secret-hardening-design.md
+    PR1 (F1 shell=True removal).
+    """
+    # Defensive str-cast: if a future caller passes a non-string in argv
+    # (Path, int), ``" ".join(argv)`` would TypeError BEFORE the
+    # subprocess runs, masking the real bug. ``map(str, ...)`` keeps the
+    # log/error sites robust without changing what's passed to
+    # ``subprocess.run`` itself (which already accepts Path-like via
+    # os.fspath).
+    argv_display = " ".join(map(str, argv))
+    logger.info("Running: %s", argv_display)
     env = None
     if extra_env:
         env = {**os.environ, **extra_env}
     result = subprocess.run(
-        cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env
+        argv,
+        shell=False,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+        input=input,
     )
     if result.returncode != 0:
         error_detail = result.stderr or result.stdout
-        logger.error("Command failed: %s\nstderr: %s\nstdout: %s", cmd, result.stderr, result.stdout[:2000])
-        raise RuntimeError(f"Command failed: {cmd}\n{error_detail}")
+        logger.error(
+            "Command failed: %s\nstderr: %s\nstdout: %s",
+            argv_display, result.stderr, result.stdout[:2000],
+        )
+        raise RuntimeError(
+            f"Command failed: {argv_display}\n{error_detail}"
+        )
     return result.stdout.strip()
 
 
@@ -619,11 +656,13 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
 
         # 2. Pull latest code
         activity.heartbeat("Pulling latest code...")
-        _run("git fetch origin && git checkout main && git pull origin main")
+        _run(["git", "fetch", "origin"])
+        _run(["git", "checkout", "main"])
+        _run(["git", "pull", "origin", "main"])
 
         # 3. Create feature branch
         activity.heartbeat("Creating feature branch...")
-        _run(f"git checkout -b {branch_name}")
+        _run(["git", "checkout", "-b", branch_name])
 
         # ── PHASE 1: Planning ────────────────────────────────────────────────
         # 4a. Architect agent reads the task + CLAUDE.md and writes a plan file
@@ -807,7 +846,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
                 claude_data = {"raw": claude_output}
 
         # 7. Check if there are any changes to commit
-        status = _run("git status --porcelain")
+        status = _run(["git", "status", "--porcelain"])
         if not status:
             return CodeTaskResult(
                 pr_url="",
@@ -987,13 +1026,16 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
 
         # 8. Stage, commit and push
         activity.heartbeat("Pushing changes...")
-        _run("git add -A")
+        _run(["git", "add", "-A"])
         commit_msg = _extract_goal(task_input.task_description)[:100].replace('"', '\\"')
-        _run(f'git commit -m "{tag}: {commit_msg}"')
-        _run(f'git push origin {branch_name}')
+        _run(
+            ["git", "commit", "-F", "-"],
+            input=f"{tag}: {commit_msg}",
+        )
+        _run(["git", "push", "origin", branch_name])
 
         # 9. Get changed files
-        files_changed = _run("git diff --name-only main").split("\n")
+        files_changed = _run(["git", "diff", "--name-only", "main"]).split("\n")
         files_changed = [f for f in files_changed if f]
 
         # 10. Create PR
@@ -1001,7 +1043,12 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         pr_title = f"{tag}: {_extract_goal(task_input.task_description)[:67]}"
 
         # Gather commit log and claude summary for traceability
-        commit_log = _run(f"git log main..{branch_name} --pretty=format:'- %h %s' --reverse")
+        commit_log = _run([
+            "git", "log",
+            f"main..{branch_name}",
+            "--pretty=format:- %h %s",
+            "--reverse",
+        ])
         claude_summary = ""
         if isinstance(claude_data, dict):
             claude_summary = str(claude_data.get("result", ""))[:1500]
@@ -1069,7 +1116,7 @@ async def execute_code_task(task_input: CodeTaskInput) -> CodeTaskResult:
         logger.exception("Code task failed: %s", e)
         # Clean up: switch back to main
         try:
-            _run("git checkout main", timeout=10)
+            _run(["git", "checkout", "main"], timeout=10)
         except Exception:
             pass
 
