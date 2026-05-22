@@ -109,7 +109,8 @@ def mint_agent_token(
         "iat": now,
         "exp": exp,
     }
-    return jwt.encode(claims, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    from app.core.jwt_signing import mint_token
+    return mint_token(claims, domain="agent")
 
 
 def verify_agent_token(token: str) -> AgentTokenClaims:
@@ -122,11 +123,8 @@ def verify_agent_token(token: str) -> AgentTokenClaims:
             "shape failure" exception).
     """
     try:
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=[settings.ALGORITHM],
-        )
+        from app.core.jwt_signing import verify_token
+        payload = verify_token(token, expected_domain="agent")
     except ExpiredSignatureError:
         raise
     except JWTError as e:
