@@ -37,37 +37,40 @@ SECRETS=(
 fail=0
 
 read_keychain() {
-  # Returns the secret on stdout; non-zero exit if not found.
+  # Returns the (base64-decoded) secret on stdout; non-zero exit if
+  # not found OR if the decode fails.
+  #
+  # setup-keychain.sh stores every value base64-encoded to dodge the
+  # macOS `security -w` hex-encoding quirk that fires on payloads
+  # containing newlines (PEM certs, multi-line .env). Mirror that
+  # here on read.
   local svc="$1"
-  security find-generic-password -s "$svc" -a "$RUNNER_USER" -w 2>/dev/null
+  security find-generic-password -s "$svc" -a "$RUNNER_USER" -w 2>/dev/null \
+    | base64 -D 2>/dev/null
 }
 
-write_dest() {
-  # Write content (stdin) into destination atomically with 0600 perms.
-  # security ... -w appends a trailing newline; we leave it intact —
-  # .env files tolerate it, JSON tolerates it, PEM expects it.
-  local dst="$1"
-  mkdir -p "$(dirname "$dst")"
-  umask 077
-  cat > "$dst.tmp"
-  mv "$dst.tmp" "$dst"
-  chmod 600 "$dst"
-}
 
 for triplet in "${SECRETS[@]}"; do
   IFS=':' read -r svc dst fb_rel <<< "$triplet"
   fb_abs="$HOME_REPO/$fb_rel"
 
-  if val="$(read_keychain "$svc")" && [ -n "$val" ]; then
-    printf '%s' "$val" | write_dest "$dst"
+  # Try keychain. Stream the decoded content directly to a temp file
+  # (no $(...) variable round-trip — bash command substitution strips
+  # trailing newlines and corrupts multi-line PEM / .env content).
+  mkdir -p "$(dirname "$dst")"
+  umask 077
+  if read_keychain "$svc" > "$dst.tmp" 2>/dev/null && [ -s "$dst.tmp" ]; then
+    chmod 600 "$dst.tmp"
+    mv "$dst.tmp" "$dst"
     echo "[keychain] $dst  ←  $svc"
     continue
   fi
+  rm -f "$dst.tmp"
 
   if [ -f "$fb_abs" ] && [ -s "$fb_abs" ]; then
     cp "$fb_abs" "$dst.tmp"
+    chmod 600 "$dst.tmp"
     mv "$dst.tmp" "$dst"
-    chmod 600 "$dst"
     echo "[fallback] $dst  ←  $fb_abs"
     continue
   fi

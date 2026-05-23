@@ -56,6 +56,15 @@ green "Pre-flight OK — all 4 source files present."
 echo
 
 # Add or update each entry.
+#
+# Encoding note: macOS `security add-generic-password -w VAL` stores
+# VAL as a UTF-8 string but on retrieve via `-w` HEX-ENCODES the
+# payload if it contains newlines or any byte that's not safely
+# printable. The retrieve quirk doubles the byte-length and breaks
+# every consumer that expects raw text (PEM certs, multi-line .env).
+# Workaround: base64 on store + base64-decode on read. Stored
+# payload is then pure ASCII with no newlines, so the hex-encoding
+# quirk never fires. load-from-keychain.sh mirrors this.
 for entry in "${ENTRIES[@]}"; do
   svc="${entry%%:*}"
   rel="${entry#*:}"
@@ -64,26 +73,26 @@ for entry in "${ENTRIES[@]}"; do
 
   blue "→ $svc  (from $rel, $src_bytes bytes)"
 
+  # base64 the source; tr -d '\n' collapses the line-wrap macOS adds.
+  payload="$(base64 < "$abs" | tr -d '\n')"
+
   # -U updates if the entry exists; otherwise creates.
   # -s service, -a account, -w password value.
-  # Note: -w "$(cat file)" briefly exposes the value in argv to
-  # other processes on this host. Acceptable on the runner Mac
-  # (single-user); the spec already accepts this trade-off.
+  # Note: payload briefly visible in argv to ps. Acceptable on the
+  # runner Mac (single-user); spec already accepts this trade-off.
   security add-generic-password \
     -U \
     -s "$svc" \
     -a "$ACCOUNT" \
-    -w "$(cat "$abs")"
+    -w "$payload"
 
-  # Read back + length-compare. We avoid printing the secret.
-  readback_bytes="$(security find-generic-password -s "$svc" -a "$ACCOUNT" -w 2>/dev/null | wc -c | tr -d ' ')"
-  # `security ... -w` appends a trailing newline; allow ±1.
-  delta=$(( readback_bytes - src_bytes ))
-  if (( delta < -1 || delta > 1 )); then
-    red "  VERIFY FAILED: readback=$readback_bytes src=$src_bytes (delta=$delta)"
+  # Read back, base64-decode, compare byte length to source.
+  readback_bytes="$(security find-generic-password -s "$svc" -a "$ACCOUNT" -w 2>/dev/null | base64 -D 2>/dev/null | wc -c | tr -d ' ')"
+  if [[ "$readback_bytes" != "$src_bytes" ]]; then
+    red "  VERIFY FAILED: readback=$readback_bytes src=$src_bytes"
     exit 1
   fi
-  green "  verified ($readback_bytes bytes)"
+  green "  verified ($readback_bytes bytes after base64 round-trip)"
 done
 
 echo
