@@ -11,7 +11,10 @@ This file locks four invariants:
 
   1. Missing X-Tenant-Id header → 400
   2. Body tenant_id mismatching X-Tenant-Id header → 400
-  3. Cross-tenant experience_id on /internal/provider-council → 403
+  3. Cross-tenant experience_id on /internal/provider-council → 404
+     (F9 review IMPORTANT-2 fix: return same 404 as "doesn't exist"
+     to deny the enumeration-oracle that would distinguish
+     "exists-in-another-tenant" from "doesn't-exist-anywhere")
   4. Happy path (header == body, valid key) → write succeeds
 """
 from __future__ import annotations
@@ -260,40 +263,38 @@ def test_internal_experience_happy_path_writes(
 
 
 @pytest.mark.integration
-def test_provider_council_rejects_cross_tenant_experience_id(
+def test_provider_council_returns_404_on_cross_tenant_experience_id(
     client, stub_internal_keys, monkeypatch,
 ):
-    """Invariant 3: even with header+body matching the caller's tenant,
-    an experience_id that belongs to a DIFFERENT tenant must return 403.
-    Guards against a leaked experience_id from one tenant being mutated
-    by the holder of the internal key targeting their own tenant."""
+    """Invariant 3 (F9 review IMPORTANT-2 fix): a leaked experience_id
+    from a different tenant returns the SAME 404 as a nonexistent
+    UUID — the query is tenant-scoped so the endpoint cannot be used
+    as an enumeration oracle to confirm UUID ownership across tenants.
+
+    Pre-fix shape returned 403 with 'different tenant' detail which
+    distinguished cross-tenant from genuinely-missing; that's the
+    oracle we just closed."""
     from app.models.rl_experience import RLExperience
 
     caller_tid = str(uuid.uuid4())
-    foreign_tid = uuid.uuid4()
     foreign_exp_id = uuid.uuid4()
 
-    # Stub the DB query to return an experience with foreign_tid as
-    # the owner, regardless of which UUID the caller passed.
-    fake_exp = MagicMock(spec=RLExperience)
-    fake_exp.tenant_id = foreign_tid
-    fake_exp.reward_components = None
-
-    def _query_returns_fake(*a, **kw):
+    # The tenant-scoped query for caller_tid will not find the foreign
+    # experience — return None to simulate "not in this tenant".
+    def _query_returns_none(*a, **kw):
         chained = MagicMock()
-        chained.filter.return_value.first.return_value = fake_exp
+        chained.filter.return_value.first.return_value = None
         return chained
 
     monkeypatch.setattr(
         "app.api.v1.rl.db", MagicMock(),
         raising=False,
     )
-    # Patch the actual SQLAlchemy session method used in the endpoint.
     with patch(
         "app.api.deps.SessionLocal"
     ) as mock_session_local:
         session_instance = MagicMock()
-        session_instance.query.side_effect = _query_returns_fake
+        session_instance.query.side_effect = _query_returns_none
         mock_session_local.return_value = session_instance
 
         response = client.post(
@@ -309,5 +310,5 @@ def test_provider_council_rejects_cross_tenant_experience_id(
             },
         )
 
-    assert response.status_code == 403, response.text
-    assert "different tenant" in response.text
+    assert response.status_code == 404, response.text
+    assert "Experience not found" in response.text

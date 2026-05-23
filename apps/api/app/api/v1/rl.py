@@ -54,14 +54,12 @@ def _verify_internal_key_and_tenant(
         )
 
 
-def _verify_internal_key(
-    x_internal_key: Optional[str] = Header(None, alias="X-Internal-Key"),
-):
-    """Legacy internal-key-only gate. KEEP — used by read-only endpoints
-    that don't take a tenant_id payload. The mutating endpoints (#371)
-    use ``_verify_internal_key_and_tenant`` instead."""
-    if x_internal_key not in (settings.API_INTERNAL_KEY, settings.MCP_API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid internal key")
+# F9 review IMPORTANT-3 (reviewer 2026-05-22): removed dead
+# ``_verify_internal_key`` helper. It had zero callers in rl.py after
+# the mutating endpoints migrated to ``_verify_internal_key_and_tenant``.
+# Carrying an unused gate "that knows the internal key" is attack
+# surface for future authors who might reuse it as-is on a new
+# endpoint that takes a tenant_id payload.
 
 
 class InternalExperienceCreate(BaseModel):
@@ -94,17 +92,21 @@ def update_provider_council(
     _verify_internal_key_and_tenant(
         payload.tenant_id, x_internal_key, x_tenant_id,
     )
-    exp = db.query(RLExperience).filter(RLExperience.id == payload.experience_id).first()
+    # F9 review IMPORTANT-2 (timing oracle fix): tenant-scope the
+    # query so "exists in another tenant" returns the same 404 as
+    # "doesn't exist anywhere" — denies an enumeration oracle that
+    # would otherwise distinguish the two via 403 vs 404. The
+    # cross-tenant case is now indistinguishable from a miss.
+    exp = (
+        db.query(RLExperience)
+        .filter(
+            RLExperience.id == payload.experience_id,
+            RLExperience.tenant_id == x_tenant_id,
+        )
+        .first()
+    )
     if not exp:
         raise HTTPException(404, "Experience not found")
-    if str(exp.tenant_id) != str(x_tenant_id):
-        # The internal caller knows the experience UUID but not the
-        # tenant it belongs to (e.g. via a leak in another service).
-        # Refuse cross-tenant mutation.
-        raise HTTPException(
-            status_code=403,
-            detail="experience_id belongs to a different tenant",
-        )
     # Merge provider council into existing reward_components
     components = exp.reward_components or {}
     components["provider_council"] = payload.provider_council
