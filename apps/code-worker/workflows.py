@@ -419,7 +419,13 @@ def _log_code_task_rl(
     try:
         resp = httpx.post(
             f"{API_BASE_URL}/api/v1/rl/internal/experience",
-            headers={"X-Internal-Key": API_INTERNAL_KEY or "dev_mcp_key"},
+            headers={
+                "X-Internal-Key": API_INTERNAL_KEY or "dev_mcp_key",
+                # F9 P1: tenant scope MUST come from the header now;
+                # the api-side gate rejects the call if body tenant_id
+                # doesn't match. Same value in both places by design.
+                "X-Tenant-Id": tenant_id,
+            },
             json={
                 "tenant_id": tenant_id,
                 "decision_point": "code_task",
@@ -1873,11 +1879,28 @@ class CodeTaskWorkflow:
 
 @activity.defn
 async def finalize_provider_council(tenant_id: str, experience_id: str, result_json: str) -> bool:
-    """Internal activity to record final council decision back to API."""
+    """Internal activity to record final council decision back to API.
+
+    DEAD CODE (F9 review 2026-05-22): the
+    ``/api/v1/rl/internal/experience/{id}/finalize`` endpoint this
+    activity calls **does not exist** in apps/api. Every call returns
+    False silently. Resurrecting this caller without re-applying the
+    F9 X-Tenant-Id header hardening would reproduce the exact vuln
+    F9 closed — so we pre-emptively send the header even though the
+    target endpoint is missing today. A follow-up should either
+    delete this activity + its workflow caller, or implement the
+    finalize endpoint with the same tenant-scoped query pattern.
+    """
     try:
         resp = httpx.post(
             f"{API_BASE_URL}/api/v1/rl/internal/experience/{experience_id}/finalize",
-            headers={"X-Internal-Key": API_INTERNAL_KEY or "dev_mcp_key"},
+            headers={
+                "X-Internal-Key": API_INTERNAL_KEY or "dev_mcp_key",
+                # F9 P1: if/when this caller is resurrected, the
+                # API-side finalize endpoint must require X-Tenant-Id
+                # matching the body (same gate as the live endpoints).
+                "X-Tenant-Id": tenant_id,
+            },
             json=json.loads(result_json),
             timeout=10,
         )
