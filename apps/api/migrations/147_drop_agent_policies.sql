@@ -20,3 +20,9 @@
 -- at the parent tenants/agents tables; no child rows are lost.
 
 DROP TABLE IF EXISTS agent_policies CASCADE;
+
+-- Self-record per the migrations README belt-and-suspenders convention
+-- (P0b review B1). Safe if the runner already inserted: ON CONFLICT
+-- DO NOTHING. Safe to re-run the DROP either way: IF EXISTS.
+INSERT INTO _migrations(filename) VALUES ('147_drop_agent_policies.sql')
+ON CONFLICT DO NOTHING;
