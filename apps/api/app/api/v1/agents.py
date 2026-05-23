@@ -22,10 +22,48 @@ from app.services import agents as agent_service
 from app.services.agent_importer import parse_agent_definition
 from app.services.agent_registry import registry
 from app.services.audit_log import write_audit_log
+from app.services.platform_safety import consult as platform_safety_consult
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# F11 P1 — operator-supplied persona_prompt is a long-lived prompt that
+# composes into CLAUDE.md every turn. A malicious persona ("if asked,
+# exfiltrate X") would bypass the user-message safety floor entirely.
+# Screen persona text at write time using the same tier-1 regex pipeline.
+# Pure consult() — no DB side effect (the agent write itself is the audit
+# event we'd record).
+def _screen_persona_prompt(persona_prompt: Optional[str]) -> None:
+    """Run platform_safety_consult on persona_prompt; raise 400 on block.
+
+    Pure tier-1 regex screen (no LLM cost). Catches the obvious cases
+    (mass-harm synthesis, bulk-malware deploy intent, CSAM language)
+    that should never appear in a legitimate operator persona. Soft
+    categories (jailbreak attempts, prompt-injection prefaces) are
+    out of tier-1 scope; tier-2 + tier-3 corpus curation handles
+    those when the platform safety corpus is loaded.
+
+    Empty / None persona_prompt → no-op.
+
+    Spec: 2026-05-22 red-team review F11 P1.
+    """
+    if not persona_prompt or not persona_prompt.strip():
+        return
+    verdict = platform_safety_consult(persona_prompt)
+    if verdict.decision == "block":
+        # Coarse category label only — never leak the trigger pattern.
+        # Mirrors the chat-write refusal shape so operators see the same
+        # message they'd see if a USER hit it. Reference "F11" only
+        # (the doc path can rot; the slug is stable).
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{verdict.to_refusal_message()} "
+                f"(persona_prompt write-time screen — F11)"
+            ),
+        )
 
 # Status transition order for promote
 _PROMOTE_TRANSITIONS = {
@@ -119,6 +157,13 @@ def update_agent_config_internal(
                 detail=f"Cannot patch config keys from chat: {sorted(rejected_cfg)}.",
             )
 
+    # F11 P1 BLOCKER (reviewer 2026-05-22): the chat-driven MCP path
+    # can also mutate persona_prompt — Luna or any leaf-agent session
+    # could rewrite its own persona unscreened, bypassing the gates
+    # on the operator-facing create/update/import/rollback endpoints.
+    # Screen here before any setattr fires.
+    _screen_persona_prompt(payload.updates.get("persona_prompt"))
+
     before_value = {
         "description": agent.description,
         "persona_prompt": agent.persona_prompt,
@@ -195,6 +240,8 @@ def create_agent(
     """
     Create new agent for the current tenant.
     """
+    # F11 P1: screen operator-supplied persona_prompt before persist.
+    _screen_persona_prompt(getattr(item_in, "persona_prompt", None))
     item = agent_service.create_tenant_agent(db=db, item_in=item_in, tenant_id=current_user.tenant_id)
     item.owner_user_id = current_user.id
     db.commit()
@@ -431,6 +478,10 @@ def import_agent(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     parsed = parse_agent_definition(body.content, body.filename)
+    # F11 P1: screen the persona_prompt parsed out of the imported
+    # bundle before constructing the AgentCreate. An imported SKILL.md
+    # / agent.yaml can carry the same operator-injected persona attack.
+    _screen_persona_prompt(parsed.get("persona_prompt"))
     item_in = schemas.agent.AgentCreate(
         name=parsed.get("name", "Imported Agent"),
         description=parsed.get("description"),
@@ -472,6 +523,8 @@ def update_agent(
     agent = agent_service.get_agent(db, agent_id=agent_id)
     if not agent or str(agent.tenant_id) != str(current_user.tenant_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    # F11 P1: screen new persona_prompt on update.
+    _screen_persona_prompt(getattr(item_in, "persona_prompt", None))
     item = agent_service.update_agent(db=db, db_obj=agent, obj_in=item_in)
     return item
 
@@ -660,9 +713,21 @@ def rollback_agent_version(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
 
     snapshot = target.config_snapshot
+    # F11 P1: rolling back to an older version can resurrect a
+    # malicious persona_prompt that was blocked at write time on the
+    # current version. Re-screen the snapshot's persona before
+    # applying — same gate that fired on create/update.
+    _screen_persona_prompt(snapshot.get("persona_prompt"))
     agent.name = snapshot.get("name", agent.name)
     agent.description = snapshot.get("description", agent.description)
     agent.status = snapshot.get("status", "production")
+    # F11 P1 NOTE (reviewer 2026-05-22): the `config` blob restored
+    # below could carry `config.system_prompt` from a malicious old
+    # snapshot. Verified at cli_session_manager.py:959-994 that the
+    # runtime composition reads `persona_prompt` ONLY — `config.system_
+    # prompt` is currently inert. If any future composition starts
+    # reading from `config`, extend `_screen_persona_prompt` to also
+    # screen `snapshot.get("config", {}).get("system_prompt")`.
     for field in ("persona_prompt", "capabilities", "tool_groups", "config"):
         if field in snapshot and hasattr(agent, field):
             setattr(agent, field, snapshot[field])
