@@ -175,6 +175,7 @@ async def start_review(
             scope=request.scope,
             max_rounds=request.max_rounds,
             chat_session_id=request.chat_session_id,
+            changed_files=request.changed_files,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -214,6 +215,74 @@ async def start_review(
             f"Cross-CLI review dispatched to {len(review.clis or [])} CLI(s). "
             "Poll GET /api/v1/reviews/{id} or stream /events."
         ),
+    )
+
+
+class _CircularityCheckRequest(BaseModel):
+    """POST /api/v1/reviews/check-circularity body."""
+
+    changed_files: List[str] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Paths the PR modifies (e.g. `gh pr diff --name-only`)."
+        ),
+    )
+    candidate_slugs: List[str] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Bundled-agent slugs you intend to dispatch as reviewers. "
+            "CLI-platform slugs (claude/codex/gemini) are passed "
+            "through unchanged."
+        ),
+    )
+
+
+class _CircularityFindingPayload(BaseModel):
+    agent_slug: str
+    bundled_path: str
+    escalation_slug: Optional[str]
+
+
+class _CircularityCheckResponse(BaseModel):
+    filtered_reviewers: List[str]
+    findings: List[_CircularityFindingPayload]
+
+
+@router.post("/check-circularity", response_model=_CircularityCheckResponse)
+def check_circularity(
+    request: _CircularityCheckRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Dry-run the introduction-PR circularity gate.
+
+    Lets an operator (or Luna) inspect, before dispatching reviewers,
+    whether the PR's changed files would force any candidate
+    reviewer out of the fanout. Returns the filtered reviewer list
+    plus per-dropped-reviewer findings with the escalation target.
+
+    Design: docs/plans/2026-05-24-review-gate-medium-followups-design.md
+    """
+    from app.services.review_circularity import detect_self_modification
+
+    filtered, findings = detect_self_modification(
+        db,
+        current_user.tenant_id,
+        request.changed_files,
+        request.candidate_slugs,
+    )
+    return _CircularityCheckResponse(
+        filtered_reviewers=filtered,
+        findings=[
+            _CircularityFindingPayload(
+                agent_slug=f.agent_slug,
+                bundled_path=f.bundled_path,
+                escalation_slug=f.escalation_slug,
+            )
+            for f in findings
+        ],
     )
 
 

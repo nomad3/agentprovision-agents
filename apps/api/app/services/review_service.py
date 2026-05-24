@@ -401,6 +401,7 @@ def start_review(
     scope: str = "bugs+security",
     max_rounds: int = 3,
     chat_session_id: Optional[uuid.UUID] = None,
+    changed_files: Optional[List[str]] = None,
 ) -> Tuple[ReviewCoalition, Blackboard]:
     """Create a new review coalition + its backing Blackboard.
 
@@ -408,12 +409,33 @@ def start_review(
     actual CLI fanout is performed by the caller (typically the router
     layer which kicks off a Temporal ReviewWorkflow). This keeps the
     service layer testable without a Temporal client.
+
+    ``changed_files`` (optional) is the list of paths the PR modifies.
+    When provided, any bundled-agent reviewer whose own config the PR
+    modifies is dropped from the fanout (introduction-PR circularity
+    gate). Caller is responsible for surfacing the dropped reviewers
+    to the operator. No-op for CLI-platform slugs.
     """
     # Resolve fanout list.
     if clis:
         cli_list = [{"name": c, "agent_slug": c} for c in clis]
     else:
         cli_list = _default_clis(db, tenant_id)
+
+    # Introduction-PR circularity gate (gap #4 of the 2026-05-24
+    # blameless RL experiment). When the caller knows which files
+    # the PR touches, drop any reviewer whose own bundled config is
+    # in the diff. See review_circularity.detect_self_modification.
+    if changed_files:
+        from app.services.review_circularity import detect_self_modification
+
+        filtered_slugs, _circularity_findings = detect_self_modification(
+            db,
+            tenant_id,
+            changed_files,
+            [c["agent_slug"] for c in cli_list],
+        )
+        cli_list = [c for c in cli_list if c["agent_slug"] in filtered_slugs]
 
     # Blackboard for raw per-CLI findings.
     title = f"review:{ref[:64]}"

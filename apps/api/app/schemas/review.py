@@ -52,6 +52,16 @@ class ReviewStartRequest(BaseModel):
     scope: str = Field(default="bugs+security", max_length=50)
     max_rounds: int = Field(default=3, ge=1, le=10)
     chat_session_id: Optional[uuid.UUID] = None
+    changed_files: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional list of file paths the review target modifies "
+            "(e.g. `gh pr diff --name-only <pr>` output). When "
+            "provided, the server runs an introduction-PR circularity "
+            "gate and drops any bundled-agent reviewer whose own "
+            "config the PR touches. No-op for CLI-platform slugs."
+        ),
+    )
 
     @field_validator("clis")
     @classmethod
