@@ -92,8 +92,8 @@ Hardened the persona-prompt resolver so when a non-Luna agent's row was hit (Cod
 ### #678 — fix(persona): IDENTITY block defers to persona — no hardcoded Luna prepend
 Removed the hardcoded `IDENTITY: You are Luna...` prepend in the universal CLI preamble. Replaced with a deferred-to-persona block. Pairs with #677. Companion fix for the same identity-leakage class.
 
-### #700 — test(migrations): add unit test for *.down.sql skip filter (follow-up to #698)
-Locks the migration-runner hygiene fix from PR #698 (`apply_pending_migrations.sh` skips `*.down.sql` files in forward auto-apply). One test file; protects against a regression that would silently rollback every recent forward migration on next deploy.
+### #700 — test(migrations): add shell-script test for *.down.sql skip filter (follow-up to #698)
+Locks the migration-runner hygiene fix from PR #698 (`apply_pending_migrations.sh` skips `*.down.sql` files in forward auto-apply). Adds `scripts/test_apply_pending_migrations_skip_down.sh` — a shell-script test, not a pytest. Protects against a regression that would silently rollback every recent forward migration on next deploy.
 
 ### #701 — fix(whatsapp): restore voice note transcription
 First of three rapid WhatsApp transcription fixes. Re-enabled the path that had silently regressed (added `audio` to `_detect_inbound_media` classification + reinstated the transcription dispatch). Production was returning "Sorry, I couldn't transcribe that voice note" for every voice note before this.

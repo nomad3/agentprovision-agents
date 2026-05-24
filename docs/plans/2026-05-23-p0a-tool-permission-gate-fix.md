@@ -205,4 +205,4 @@ Exit criteria (§6) status:
 - Per-tenant ramp + fail-closed cutover: ✅ live across all tenants as of 2026-05-23 evening
 - Operator-review path for NULL-backfilled rows: ✅ flag column shipped (migration 149); operator-review queue UI is a known follow-up (see migration 153 column COMMENT for the chicken-and-egg unblock SQL)
 
-Net: breach **closed** as scoped. P0a + P0c (#689) + value-arbitration lib (#688) form the cluster.
+Net: breach **closed** as scoped. P0a + P0b (#690, AgentPolicy deletion) + P0c (#689) + value-arbitration lib (#688) form the substrate-hardening cluster shipped 2026-05-23.

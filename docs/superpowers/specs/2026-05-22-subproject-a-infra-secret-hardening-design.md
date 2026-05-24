@@ -297,4 +297,4 @@ Simon's review pending on the §10 conditions. F1 + F7a shipped 2026-05-22/-23 i
 - Open F7b PR (kid cutover — see §5 PR4)
 - Open F7c PR (Ed25519 + cleanup-commit; gated on F7b + GPG offline backup per §5 PR3 amendment)
 
-**Spec location follow-up:** this spec lives at `docs/superpowers/specs/` while every other live plan lives at `docs/plans/`. Consider relocating + opening a redirect-stub at the new path so future grep finds it.
+**Spec location note:** this spec lives at `docs/superpowers/specs/` while every other live plan lives at `docs/plans/`. Noted as an inconsistency — no action planned. If a future grep miss makes this load-bearing, relocate + leave a redirect-stub at the new path.

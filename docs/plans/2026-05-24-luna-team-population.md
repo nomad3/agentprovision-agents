@@ -169,7 +169,7 @@ Code Reviewer (first of the 8-agent team) shipped end-of-day 2026-05-24 across 3
 | #705 | fix(tool-groups): split knowledge readonly + flip review_required default TRUE — corrected tool_groups to `[github, knowledge_readonly, meta]` (see §3.2 note) + flipped `tool_groups_review_required` default FALSE → TRUE in migration 153 so new agents land in operator review queue by default |
 
 Post-merge verification (§5) passed:
-- ✅ Code Reviewer row exists in `agents` for Simon's tenant (`755796a4-4cc4-4d1c-99e5-dd9c4f7d0f22`)
+- ✅ Code Reviewer row exists in `agents` for Simon's tenant (`755796a4-4cc4-4d1c-99e5-dd9c4f7d0f22` — verified via direct query against the live `agents` table 2026-05-24; seed migration uses `gen_random_uuid()` so the UUID isn't reproducible from the repo alone)
 - ✅ `alpha agent ls` shows the agent with `role=code_reviewer`, `status=production`
 - ✅ Tool-scope refusal works for `execute_shell` (P0a breach-probe exit criterion holds)
 - ✅ `tool_groups_review_required` flag cleared 2026-05-24 evening after operator verified the corrected tool_groups (Substrate Sentinel cleared same time)
