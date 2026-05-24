@@ -52,6 +52,16 @@ class ReviewStartRequest(BaseModel):
     scope: str = Field(default="bugs+security", max_length=50)
     max_rounds: int = Field(default=3, ge=1, le=10)
     chat_session_id: Optional[uuid.UUID] = None
+    changed_files: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Optional list of file paths the review target modifies "
+            "(e.g. `gh pr diff --name-only <pr>` output). When "
+            "provided, the server runs an introduction-PR circularity "
+            "gate and drops any bundled-agent reviewer whose own "
+            "config the PR touches. No-op for CLI-platform slugs."
+        ),
+    )
 
     @field_validator("clis")
     @classmethod
@@ -72,6 +82,40 @@ class ReviewStartRequest(BaseModel):
         if not out:
             raise ValueError("clis cannot be empty after normalization")
         return out
+
+
+class CircularityFindingPayload(BaseModel):
+    """One reviewer dropped by the introduction-PR circularity gate."""
+
+    agent_slug: str
+    bundled_path: str
+    escalation_slug: Optional[str]
+
+
+class CircularityCheckRequest(BaseModel):
+    """POST /api/v1/reviews/check-circularity body — dry-run the gate."""
+
+    changed_files: List[str] = Field(
+        ...,
+        description=(
+            "Paths the PR modifies (e.g. `gh pr diff --name-only`). "
+            "Empty list returns the candidate list unchanged."
+        ),
+    )
+    candidate_slugs: List[str] = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Bundled-agent slugs you intend to dispatch as reviewers. "
+            "CLI-platform slugs (claude/codex/gemini) are passed "
+            "through unchanged."
+        ),
+    )
+
+
+class CircularityCheckResponse(BaseModel):
+    filtered_reviewers: List[str]
+    findings: List[CircularityFindingPayload]
 
 
 class ReviewStartResponse(BaseModel):

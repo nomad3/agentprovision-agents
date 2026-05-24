@@ -49,6 +49,9 @@ from app.models.user import User
 from app.models.agent import Agent
 from app.schemas.review import (
     ALLOWED_SCOPES,
+    CircularityCheckRequest,
+    CircularityCheckResponse,
+    CircularityFindingPayload,
     ReviewReplyRequest,
     ReviewStartRequest,
     ReviewStartResponse,
@@ -56,6 +59,7 @@ from app.schemas.review import (
 )
 from app.services import review_service
 from app.services.agent_token import verify_agent_token
+from app.services.review_circularity import detect_self_modification
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -175,6 +179,7 @@ async def start_review(
             scope=request.scope,
             max_rounds=request.max_rounds,
             chat_session_id=request.chat_session_id,
+            changed_files=request.changed_files,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -214,6 +219,40 @@ async def start_review(
             f"Cross-CLI review dispatched to {len(review.clis or [])} CLI(s). "
             "Poll GET /api/v1/reviews/{id} or stream /events."
         ),
+    )
+
+
+@router.post("/check-circularity", response_model=CircularityCheckResponse)
+def check_circularity(
+    request: CircularityCheckRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Dry-run the introduction-PR circularity gate.
+
+    Lets an operator (or Luna) inspect, before dispatching reviewers,
+    whether the PR's changed files would force any candidate
+    reviewer out of the fanout. Returns the filtered reviewer list
+    plus per-dropped-reviewer findings with the escalation target.
+
+    Design: docs/plans/2026-05-24-review-gate-medium-followups-design.md
+    """
+    filtered, findings = detect_self_modification(
+        db,
+        current_user.tenant_id,
+        request.changed_files,
+        request.candidate_slugs,
+    )
+    return CircularityCheckResponse(
+        filtered_reviewers=filtered,
+        findings=[
+            CircularityFindingPayload(
+                agent_slug=f.agent_slug,
+                bundled_path=f.bundled_path,
+                escalation_slug=f.escalation_slug,
+            )
+            for f in findings
+        ],
     )
 
 
