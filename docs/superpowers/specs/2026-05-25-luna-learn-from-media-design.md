@@ -131,7 +131,29 @@ Filesystem write happens AFTER the DB row is reserved. If the filesystem write f
 
 `apps/api/app/agents/luna/AGENT.md` — add `learning` to `tool_groups`.
 
-### 1.10 Audio file lifecycle
+### 1.10 Orchestration substrate
+
+Luna's reasoning loop does **NOT** chain the 7 MCP primitives in a single LLM turn. Cumulative latency (download + transcribe + 2 LLM calls + reviewer dispatch + test exec + DB write) routinely exceeds the 60–90s HTTP gateway timeout (Luna's runtime constraint, confirmed 2026-05-25).
+
+Orchestration runs as a **Temporal Dynamic Workflow** `LearnFromMediaWorkflow` (precedent: see `apps/api/app/workflows/` patterns and `external_agents_a2a_patterns` memory).
+
+- Luna's chat turn dispatches the workflow and ACKs the user immediately ("Got it, learning…")
+- Workflow runs the 7 primitives as Temporal activities
+- On completion (success OR terminal failure), workflow fires a notification back to Luna's session, which then notifies the user
+- This makes the data flow in §2 **async** end-to-end; nothing happens inside a single user-facing turn
+
+The MCP-primitive contract from §1.1 is unchanged — the primitives are still the unit of work. Only the *driver* changes from "Luna's reasoning loop within one turn" to "Temporal workflow dispatched by Luna's reasoning, completing across multiple turns."
+
+### 1.11 Resume cache
+
+A learn attempt that aborts at the Code Reviewer step (or later) caches its intermediate state at `_tenant/<uuid>/_learning_cache/<job_id>/{transcript.txt, draft.md, test.json}`. The user can re-trigger the same URL within 7 days and Luna picks up from the cached step instead of re-transcribing.
+
+- `alpha learn <url> --resume` and `alpha learn --resume-last` surfaces
+- WhatsApp: re-sending the same URL within 7 days auto-resumes
+- Cache TTL: 7 days, separate from the 30-day quarantine TTL
+- Cache and quarantine are mutually exclusive: a job that completes goes to neither; a job that aborts goes to ONE of (cache for recoverable failures: reviewer-down, KG-down; quarantine for terminal failures: rejected verdict, test fail, scrub-required PII)
+
+### 1.12 Audio file lifecycle
 
 `extract_media` writes to `/var/agentprovision/workspaces/_learning/<job_id>.audio`:
 - Deleted immediately after `transcribe_url` returns (success path)
@@ -144,10 +166,11 @@ Filesystem write happens AFTER the DB row is reserved. If the filesystem write f
 
 ```
 WhatsApp text w/ URL  ─┐
-                       ├─→ Luna ack: "Got it, learning from this..."
-alpha learn <url>     ─┘    (fire-and-forget; single final notify)
-                          │
-                          ▼ (Luna's reasoning loop reads SKILL.md)
+                       ├─→ Luna reads SKILL.md + dispatches
+alpha learn <url>     ─┘     LearnFromMediaWorkflow (Temporal)
+                          │  + acks user: "Got it, learning from this..."
+                          │  (Luna's turn ends here; workflow runs async)
+                          ▼ (LearnFromMediaWorkflow activities, per §1.10)
 
 1. extract_media(url, max_duration_s=900)
    ├─ ok → {audio_path, metadata}
@@ -202,7 +225,7 @@ alpha learn <url>     ─┘    (fire-and-forget; single final notify)
 | `transcribe_url` fails | Abort + quarantine. Existing `transcription_client.py` error semantics. |
 | `synthesize_skill_draft` LLM error | One retry, then abort + quarantine. |
 | Draft fails parse (`_validate_skill_payload` in `skills_new.py:162`) | Treated as `revise` verdict. Loop back with parser errors as hints. |
-| `dispatch_skill_review` — Code Reviewer agent (`755796a4`) **not provisioned in this tenant** (registry 404) | **Abort + notify** "skill review unavailable; ask operator to provision the Code Reviewer agent." Do NOT fall back to self-review (defeats the cross-agent QC pick in §0.3). Do NOT install without review. |
+| `dispatch_skill_review` — Code Reviewer agent (`755796a4`) **not provisioned in this tenant** (registry 404) | **Cache + notify** (recoverable per §1.11): state saved at `_tenant/<uuid>/_learning_cache/<job_id>/`. Notify: "skill review unavailable; ask operator to provision the Code Reviewer agent, then re-send the URL or run `alpha learn --resume-last` to pick up from review step." Do NOT fall back to self-review (defeats the cross-agent QC pick in §0.3). Do NOT install without review. |
 | `dispatch_skill_review` timeout (60s) | Abort + notify + quarantine. No auto-install on review timeout. |
 | Verdict = `rejected` | Quarantine + notify user with reviewer's reason. No install. |
 | Verdict = `revise` after 2 retries | Quarantine + notify "couldn't refine to passing quality (final issues: …)". No install. |
@@ -210,7 +233,7 @@ alpha learn <url>     ─┘    (fire-and-forget; single final notify)
 | `install_skill` slug conflict (5 retries via `-vN` suffix exhausted) | Abort with "couldn't allocate slug." Operator-rename situation. |
 | `install_skill` DB error | Transaction rollback. Filesystem write rolled back. Quarantine. |
 | `install_skill` filesystem write fails after DB row reserved | Transaction rollback (deletes the reserved row). Quarantine. |
-| `diffuse_learning` fails | **Soft fail** — skill is installed and usable; KG observation is best-effort. Failure logged at `WARN` level for operator visibility. No automatic retry sweep in MVP (deferred — see §8). |
+| `diffuse_learning` fails | **Cache + soft success** (recoverable per §1.11): skill is installed and usable; KG observation cached for retry. Failure logged at `WARN`. `alpha learn --resume-last` will re-attempt diffusion. (Auto-retry sweep deferred — see §8.) |
 | Orphaned audio file in `/var/agentprovision/workspaces/_learning/` | Daily cron (`0 4 * * *`) removes files > 24h old. Handles mid-flight crashes. |
 | PII detected during synthesis | Draft generated WITH placeholders. Original PII-bearing transcript stays in quarantine only. PII-scrubbed transcript hash is what `install_skill` records as `transcript_sha256`. KG observation embeds ONLY: capability names + source_url + skill_id + 1-sentence description — no transcript snippets. |
 
@@ -230,6 +253,8 @@ alpha learn <url>     ─┘    (fire-and-forget; single final notify)
 ## §5 — Civilization-layer angle
 
 This feature compounds tenant knowledge. Every video that flows through it becomes a discoverable capability for every agent in the tenant via the KG diffusion step. The coordination win is that Luna's individual learning becomes population-level capability without any explicit assignment or agent-config edit.
+
+KG observations are **tenant-scoped, not agent-scoped** (verified by Luna 2026-05-25): `search_knowledge` queries the entire tenant graph regardless of which agent ran the query. `source_agent` is recorded on the observation for audit, but cross-agent discovery requires no extra plumbing. This is what makes single-agent learning safely scale to population-level capability.
 
 This pattern — single-agent learning → KG diffusion → semantic discovery — is a reusable primitive. If we later add `luna learn from documentation` (PDF/HTML), `luna learn from chat episode` (replay user-corrected conversations as skill seeds), or `luna learn from incident postmortem`, they all reuse `diffuse_learning` + the audit + provenance pattern established here.
 
