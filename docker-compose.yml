@@ -181,6 +181,11 @@ services:
       - API_BASE_URL=http://api:8000
       # 4h cache for BrightLocal rank pulls (and any future MCP tool that opts in)
       - REDIS_URL=redis://redis:6379/0
+      # Optional: Phase 1a diagnostic — set MCP_AUTH_DEBUG_HEADERS=1 in
+      # the calling shell to trace incoming auth headers in mcp_auth.
+      # Default empty (off). See
+      # docs/plans/2026-05-25-subprocess-mcp-agent-token-phase0-baseline.md §8.
+      - MCP_AUTH_DEBUG_HEADERS=${MCP_AUTH_DEBUG_HEADERS:-}
     depends_on:
       - db
       - redis

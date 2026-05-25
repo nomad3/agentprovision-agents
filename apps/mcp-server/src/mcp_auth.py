@@ -119,6 +119,43 @@ def resolve_auth_context(ctx) -> AuthContext:
     """
     auth_header = _get_header(ctx, "Authorization") or _get_header(ctx, "authorization")
 
+    # ── Phase 1a diagnostic (gated by MCP_AUTH_DEBUG_HEADERS=1) ────────
+    # Print which auth headers are visible to mcp_auth + what shape the
+    # ctx.request_context exposes. Logs ONLY presence + truncated
+    # prefixes (max 8 chars after "Bearer ", last 8 chars of UUID-shaped
+    # values) — never full secrets. Default off; on only for this Phase
+    # 1a live-wire investigation. See:
+    #   docs/plans/2026-05-25-subprocess-mcp-agent-token-phase0-baseline.md §8
+    if os.environ.get("MCP_AUTH_DEBUG_HEADERS") == "1":
+        try:
+            rc = getattr(ctx, "request_context", None)
+            rc_type = type(rc).__name__ if rc is not None else "None"
+            rc_attrs = [a for a in dir(rc) if not a.startswith("_")][:20] if rc is not None else []
+            tenant_hdr = _get_header(ctx, "X-Tenant-Id") or _get_header(ctx, "tenant_id")
+            internal_hdr = _get_header(ctx, "X-Internal-Key") or _get_header(ctx, "x-internal-key")
+            user_hdr = _get_header(ctx, "X-User-Id") or _get_header(ctx, "user_id")
+            auth_present = "yes" if auth_header else "no"
+            auth_preview = (
+                f"prefix={auth_header[:14]!r}"  # "Bearer <8chars>"
+                if auth_header else "none"
+            )
+            tenant_preview = (
+                f"last8={tenant_hdr[-8:]}" if tenant_hdr else "absent"
+            )
+            internal_preview = "present" if internal_hdr else "absent"
+            user_preview = (
+                f"last8={user_hdr[-8:]}" if user_hdr else "absent"
+            )
+            logger.info(
+                "mcp_auth_debug: ctx_type=%s ctx_attrs=%s "
+                "authorization=%s|%s X-Tenant-Id=%s X-Internal-Key=%s X-User-Id=%s",
+                rc_type, rc_attrs,
+                auth_present, auth_preview,
+                tenant_preview, internal_preview, user_preview,
+            )
+        except Exception as _e:  # noqa: BLE001 — defensive; debug must not break auth
+            logger.warning("mcp_auth_debug failed to introspect ctx: %s", _e)
+
     # ── Tier 1: agent_token ────────────────────────────────────────────
     auth_ctx = decode_agent_token_if_present(auth_header)
     if auth_ctx is not None:
