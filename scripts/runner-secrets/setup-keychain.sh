@@ -49,9 +49,17 @@ echo
 # was the second gate.
 #
 # `set-keychain-settings` with no flags = no lock-on-sleep, no
-# inactivity-lock. Keychain stays unlocked from your login until
-# logout. Post-reboot pre-login window still relies on the $HOME
-# fallback (acceptable — deploys queue until you log in).
+# inactivity-lock. Keychain stays unlocked from your GUI login (which
+# loginwindow unlocks automatically with your password) until logout.
+# (man security: omitting -l → no lock-on-sleep, omitting -u → no
+# inactivity-lock, omitting -t → "no timeout".)
+#
+# Pre-login window (post-reboot, no one logged in yet) is covered by
+# the runner agent's `LimitLoadToSessionType: Aqua` constraint (see
+# scripts/runner-secrets/LAUNCHD.md) — the runner doesn't load until
+# the Aqua session is up, so no deploys are attempted against the
+# locked keychain. The $HOME fallback in load-from-keychain.sh covers
+# per-entry coexistence during the F2 migration, not the boot window.
 #
 # Trade-off: any app running in your GUI session can read the
 # (-A flag) any-app-ACL entries without re-prompt. Same security
