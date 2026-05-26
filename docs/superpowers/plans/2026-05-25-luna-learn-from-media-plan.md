@@ -22,7 +22,15 @@
 
 ## §0b — Spec accuracy corrections (to apply during impl)
 
-- Spec says `apps/api/app/agents/luna/AGENT.md` for Luna agent config. Actual path is `apps/api/app/agents/_bundled/luna/skill.md`. Luna currently has NO `tool_groups` frontmatter (the field exists for other agents). T5.2 adds it.
+- Spec says `apps/api/app/agents/luna/AGENT.md` for Luna agent config. Actual path is `apps/api/app/agents/_bundled/luna/skill.md`. Luna's `tool_groups` lives in the DB (per `apps/api/app/models/agent.py:30`), seeded for Luna Supervisor by migration `154_expand_luna_supervisor_tool_groups.sql`. The bundled `skill.md` file may also carry `tool_groups` frontmatter (verified at `apps/api/app/agents/_bundled/code-reviewer/skill.md:9`). T5.2 adds a migration `NNN_luna_learning_tool_group.sql` AND updates the bundled `skill.md` frontmatter (mirroring `code-reviewer`'s pattern).
+
+## §0c — Conservative defaults applied (Luna's plan-review dispatch failed)
+
+Luna's iteration-1 plan-review dispatch timed out at the Cloudflare gateway (524) twice — same failure mode as her tighter spec-review dispatch. She already co-designed every spec section in 3 prior rounds + ratified the full design. Conservative defaults applied here, documented for revisit:
+
+- **dispatch_skill_review shape**: kept as a synchronous Temporal activity (T2.4) rather than refactored into a workflow signal Luna handles in her reasoning loop. Reason: spec §1.10 already commits to "workflow runs all 7 primitives as activities" — making one a signal would break the symmetry. If Luna later prefers signal-based, single-activity refactor.
+- **Completion notification channel**: ChatMessage with `context.kind="learn_complete"` to Luna's session, picked up by existing WhatsApp message-out plumbing (matches `post_chat_memory.py` pattern at `apps/api/app/workflows/post_chat_memory.py`). If Luna prefers a separate signal channel, change is contained to T3.5.
+- **Bundled skill content**: full pipeline description so Luna can mentally model the flow, with the dispatch step being the only executable action. Skill body becomes Luna's "how I learn" reference document (legible to other agents reading her toolkit).
 
 ## File structure
 
@@ -1311,109 +1319,604 @@ git push -u origin impl/luna-learn-t27-diffuse
 - Modify: `apps/api/app/workflows/activities/learn_from_media_activities.py`
 - Test: `apps/api/tests/test_learn_activities.py` (new)
 
-Each activity is a thin async wrapper that calls the MCP primitive via the mcp-server HTTP surface (since Temporal worker runs in api/orchestration-worker, not mcp-server). Includes typed-exception → workflow-readable result mapping.
+Each activity is a thin async wrapper that calls the MCP primitive via the mcp-server HTTP surface (Temporal worker runs in api/orchestration-worker, not mcp-server). Typed-exception mapping for workflow branching. Pattern reference: `apps/api/tests/test_coalition_activities.py`.
 
-- [ ] **Step 1: Write failing tests** for each activity that simulates HTTP call to mcp-server
+**Activity result shape** (Temporal serialization-friendly):
+```python
+{"ok": bool, "data": dict | None, "error": {"type": str, "message": str} | None}
+```
+The typed exceptions from learning.py (`MediaPrivate`, `MediaNotFound`, `MediaGeoBlocked`, `MediaAntiScrape`, `MediaTooLong`, `DraftInvalid`, `DraftForbiddenShellout`, `ReviewerNotProvisioned`, `ReviewTimeout`, `SlugExhausted`) become `{"ok": False, "error": {"type": "MediaPrivate", "message": "..."}}`. The workflow body branches on `error.type`.
 
-(Tests at `apps/api/tests/test_learn_activities.py` — see structure of existing `test_*activities.py` files in repo.)
+- [ ] **Step 1: Write failing test for one activity (act_extract_media)** as template
+
+```python
+# apps/api/tests/test_learn_activities.py
+import pytest
+from unittest.mock import patch, AsyncMock
+from app.workflows.activities.learn_from_media_activities import (
+    act_extract_media, act_transcribe_url, act_synthesize_skill_draft,
+    act_dispatch_skill_review, act_run_synthetic_test, act_install_skill,
+    act_diffuse_learning, act_write_cache, act_write_quarantine,
+    act_notify_session, act_probe_attachment,
+)
+
+@pytest.mark.asyncio
+async def test_act_extract_media_ok():
+    with patch("app.workflows.activities.learn_from_media_activities._call_mcp") as call:
+        call.return_value = {"audio_path": "/tmp/x", "metadata": {"duration_s": 90}}
+        r = await act_extract_media("https://youtu.be/abc", 900)
+        assert r["ok"] is True
+        assert r["data"]["audio_path"] == "/tmp/x"
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,etype", [
+    (451, "MediaPrivate"), (404, "MediaNotFound"),
+    (403, "MediaGeoBlocked"), (429, "MediaAntiScrape"),
+    (413, "MediaTooLong"),
+])
+async def test_act_extract_media_typed_errors(status, etype):
+    import httpx
+    with patch("app.workflows.activities.learn_from_media_activities._call_mcp") as call:
+        call.side_effect = httpx.HTTPStatusError(
+            etype, request=AsyncMock(),
+            response=AsyncMock(status_code=status, json=lambda: {"error_type": etype, "message": "x"}),
+        )
+        r = await act_extract_media("https://x.com/v", 900)
+        assert r["ok"] is False
+        assert r["error"]["type"] == etype
+```
+
+(Parallel tests for the other 10 activities follow the same shape; abbreviated here — the implementer writes one block per activity.)
 
 - [ ] **Step 2: Run → fail**
 
-- [ ] **Step 3: Implement** — each activity httpx-calls the MCP-server endpoint that exposes the corresponding primitive
+Run: `cd apps/api && pytest tests/test_learn_activities.py -v -k extract_media`
+Expected: FAIL with NotImplementedError or import errors.
+
+- [ ] **Step 3: Implement** — each activity is a thin httpx call to the mcp-server endpoint that wraps the corresponding `mcp_tools.learning` primitive
+
+```python
+# apps/api/app/workflows/activities/learn_from_media_activities.py
+import os
+import httpx
+from temporalio import activity
+
+_MCP_BASE = os.environ.get("MCP_SERVER_BASE", "http://mcp-tools:8001")
+_HEADERS = {"X-Internal-Key": os.environ.get("MCP_API_KEY", "")}
+
+# Maps MCP-side HTTP status → typed exception name (mirrors learning.py exceptions).
+_STATUS_TO_TYPE = {
+    451: "MediaPrivate", 404: "MediaNotFound",
+    403: "MediaGeoBlocked", 429: "MediaAntiScrape",
+    413: "MediaTooLong", 422: "DraftInvalid",
+    424: "DraftForbiddenShellout", 503: "ReviewerNotProvisioned",
+    504: "ReviewTimeout", 409: "SlugExhausted",
+}
+
+
+async def _call_mcp(tool: str, payload: dict) -> dict:
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        r = await client.post(f"{_MCP_BASE}/tools/{tool}", json=payload, headers=_HEADERS)
+        r.raise_for_status()
+        return r.json()
+
+
+def _wrap(coro):
+    """Convert (success | HTTPStatusError) → Temporal result envelope."""
+    async def wrapper(*args, **kwargs):
+        try:
+            data = await coro(*args, **kwargs)
+            return {"ok": True, "data": data, "error": None}
+        except httpx.HTTPStatusError as e:
+            etype = _STATUS_TO_TYPE.get(e.response.status_code, "UnknownError")
+            try:
+                body = e.response.json()
+            except Exception:
+                body = {}
+            return {"ok": False, "data": None, "error": {"type": etype, "message": body.get("message", str(e))}}
+    return wrapper
+
+
+@activity.defn
+@_wrap
+async def act_extract_media(url: str, max_duration_s: int = 900) -> dict:
+    return await _call_mcp("extract_media", {"url": url, "max_duration_s": max_duration_s})
+
+
+@activity.defn
+@_wrap
+async def act_transcribe_url(audio_path: str) -> dict:
+    try:
+        return await _call_mcp("transcribe_url", {"audio_path": audio_path})
+    finally:
+        # Spec §1.12: delete audio on success path. Failure path leaves it
+        # for quarantine bundle (T3.3 will copy from this location).
+        from pathlib import Path
+        p = Path(audio_path)
+        if p.exists():
+            p.unlink(missing_ok=True)
+
+
+@activity.defn
+@_wrap
+async def act_synthesize_skill_draft(transcript: str, source_url: str, hints: list[str] | None = None) -> dict:
+    return await _call_mcp("synthesize_skill_draft", {
+        "transcript": transcript, "source_url": source_url, "hints": hints or [],
+    })
+
+
+@activity.defn
+@_wrap
+async def act_dispatch_skill_review(skill_md: str, transcript: str, source_url: str,
+                                     synthetic_test_input: dict, synthetic_test_expected: dict) -> dict:
+    return await _call_mcp("dispatch_skill_review", {
+        "skill_md": skill_md, "transcript": transcript, "source_url": source_url,
+        "synthetic_test_input": synthetic_test_input,
+        "synthetic_test_expected": synthetic_test_expected,
+    })
+
+
+@activity.defn
+@_wrap
+async def act_run_synthetic_test(skill_md: str, test_input: dict, test_expected: dict) -> dict:
+    return await _call_mcp("run_synthetic_test", {
+        "skill_md": skill_md, "test_input": test_input, "test_expected": test_expected,
+    })
+
+
+@activity.defn
+@_wrap
+async def act_install_skill(skill_md: str, slug: str, tenant_id: str,
+                             source_url: str, reviewer_agent_id: str,
+                             transcript_sha256: str, learned_by_agent_id: str) -> dict:
+    return await _call_mcp("install_skill", {
+        "skill_md": skill_md, "slug": slug, "tenant_id": tenant_id,
+        "source_url": source_url, "reviewer_agent_id": reviewer_agent_id,
+        "transcript_sha256": transcript_sha256,
+        "learned_by_agent_id": learned_by_agent_id,
+    })
+
+
+@activity.defn
+@_wrap
+async def act_diffuse_learning(skill_id: str, source_url: str, capabilities: list[str]) -> dict:
+    return await _call_mcp("diffuse_learning", {
+        "skill_id": skill_id, "source_url": source_url, "capabilities": capabilities,
+    })
+
+
+# Cache + quarantine + notify + attachment-probe activities are T3.3, T3.5,
+# and T4.4b — same envelope shape; bodies in those tasks.
+```
+
+T2.6's `install_skill` server endpoint must return HTTP `409` on slug exhaustion (so the envelope maps to `SlugExhausted`); 422 on draft-parse failure; 503 when Code Reviewer agent registry returns 404; 504 on review timeout. Add these contract clauses to T2.4 + T2.6 internal-endpoint specs (see T2.5b-bis below).
 
 - [ ] **Step 4: Run → pass**
+
+Run: `cd apps/api && pytest tests/test_learn_activities.py -v`
+Expected: all activity tests pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git switch -c impl/luna-learn-t31-activities impl/luna-learn-t27-diffuse
 git add apps/api/app/workflows/activities/learn_from_media_activities.py apps/api/tests/test_learn_activities.py
-git commit -m "feat(luna-learn): Temporal activities wrapping the 7 MCP primitives"
+git commit -m "feat(luna-learn): Temporal activities wrapping the 7 MCP primitives + typed-error envelope"
 git push -u origin impl/luna-learn-t31-activities
 ```
 
-### Task 3.2: `LearnFromMediaWorkflow` body
+### Task 3.2: `LearnFromMediaWorkflow` body (decomposed into 6 sub-tasks per spec §2 branches)
 
-**Files:**
+**Files (all 6 sub-tasks):**
 - Modify: `apps/api/app/workflows/learn_from_media_workflow.py`
-- Test: `apps/api/tests/test_learn_workflow.py` (new)
+- Test: `apps/api/tests/test_learn_workflow.py` (new — extended across sub-tasks)
 
-Workflow orchestration body per spec §2:
+Test scaffolding (used in every sub-task):
+```python
+# apps/api/tests/test_learn_workflow.py
+import pytest
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Worker
+from app.workflows.learn_from_media_workflow import LearnFromMediaWorkflow
+from app.workflows.activities import learn_from_media_activities as A
+
+@pytest.fixture
+async def env():
+    async with await WorkflowEnvironment.start_time_skipping() as e:
+        yield e
+
+@pytest.fixture
+async def worker(env):
+    async with Worker(
+        env.client, task_queue="learn-test",
+        workflows=[LearnFromMediaWorkflow],
+        activities=[
+            A.act_extract_media, A.act_transcribe_url, A.act_synthesize_skill_draft,
+            A.act_dispatch_skill_review, A.act_run_synthetic_test, A.act_install_skill,
+            A.act_diffuse_learning, A.act_write_cache, A.act_write_quarantine,
+            A.act_notify_session, A.act_probe_attachment,
+        ],
+    ) as w:
+        yield w
+```
+
+#### Task 3.2a — Happy path (no revise, install + diffuse success)
+
+- [ ] **Step 1: Write failing test**
 
 ```python
+@pytest.mark.asyncio
+async def test_workflow_happy_path(env, worker, monkeypatch):
+    # Stub every activity to return success
+    async def stub_extract(*a, **k): return {"ok": True, "data": {"audio_path": "/tmp/x.m4a", "metadata": {"duration_s": 90, "title": "T"}}, "error": None}
+    async def stub_transcribe(*a, **k): return {"ok": True, "data": {"transcript": "hello world", "engine": "whisper", "duration_ms": 90000}, "error": None}
+    async def stub_synth(*a, **k): return {"ok": True, "data": {"skill_md": "---\nname: Fix Printer\nengine: markdown\nauto_trigger: \"Fix printer\"\ninputs: []\n---\nUnplug it", "slug": "fix-printer", "engine": "markdown", "synthetic_test_input": {"x": 1}, "synthetic_test_expected": {"y": 2}}, "error": None}
+    async def stub_review(*a, **k): return {"ok": True, "data": {"verdict": "approved", "findings": [], "reviewer_agent_id": "755796a4-..."}, "error": None}
+    async def stub_test(*a, **k): return {"ok": True, "data": {"passed": True, "actual_output": {"y": 2}, "error": None}, "error": None}
+    async def stub_install(*a, **k): return {"ok": True, "data": {"skill_id": "s1", "path": "/x/_tenant/t1/fix-printer/skill.md"}, "error": None}
+    async def stub_diffuse(*a, **k): return {"ok": True, "data": {"observation_id": "obs1", "soft_failed": False}, "error": None}
+    async def stub_notify(*a, **k): return {"ok": True, "data": {}, "error": None}
+    for name, stub in [
+        ("act_extract_media", stub_extract), ("act_transcribe_url", stub_transcribe),
+        ("act_synthesize_skill_draft", stub_synth), ("act_dispatch_skill_review", stub_review),
+        ("act_run_synthetic_test", stub_test), ("act_install_skill", stub_install),
+        ("act_diffuse_learning", stub_diffuse), ("act_notify_session", stub_notify),
+    ]:
+        monkeypatch.setattr(A, name, stub)
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {"source_url": "https://youtu.be/abc123", "tenant_id": "t1", "actor_user_id": "u1"},
+        id="test-happy", task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    assert result["skill_id"] == "s1"
+    assert "fix-printer" in result["skill_path"] or "Fix Printer" in result["skill_name"]
+```
+
+- [ ] **Step 2: Run → fail** (workflow body still NotImplementedError)
+
+- [ ] **Step 3: Implement happy-path body**
+
+```python
+import os
+from datetime import timedelta
+from temporalio import workflow
+
+with workflow.unsafe.imports_passed_through():
+    import hashlib, re, yaml
+    from app.workflows.activities import learn_from_media_activities as A
+
+
+_ACTIVITY_TIMEOUTS = {
+    "extract": timedelta(minutes=5),
+    "transcribe": timedelta(minutes=10),
+    "synth": timedelta(minutes=2),
+    "review": timedelta(seconds=70),  # MCP-side gates at 60s; give workflow 10s headroom
+    "test": timedelta(minutes=2),
+    "install": timedelta(seconds=30),
+    "diffuse": timedelta(seconds=15),
+    "notify": timedelta(seconds=15),
+    "write": timedelta(seconds=30),
+    "probe": timedelta(seconds=30),
+}
+
+
+def _extract_capabilities(skill_md: str) -> list[str]:
+    """Pull tags + auto_trigger from frontmatter for the KG observation."""
+    m = re.match(r"^---\n(.+?)\n---", skill_md, re.DOTALL)
+    if not m:
+        return []
+    fm = yaml.safe_load(m.group(1))
+    return [fm.get("auto_trigger", "").strip()] + list(fm.get("tags") or [])
+
+
+def _skill_name(skill_md: str) -> str:
+    m = re.match(r"^---\n(.+?)\n---", skill_md, re.DOTALL)
+    fm = yaml.safe_load(m.group(1)) if m else {}
+    return fm.get("name", "<unnamed>")
+
+
 @workflow.defn(name="LearnFromMediaWorkflow")
 class LearnFromMediaWorkflow:
     @workflow.run
     async def run(self, intent_dict: dict) -> dict:
-        intent = LearningIntent(**intent_dict)
-        # Step 1: extract or use attachment
-        if intent.attachment_path:
-            audio_path = intent.attachment_path
-            metadata = await workflow.execute_activity(A.act_probe_attachment, intent.attachment_path, ...)
+        intent = intent_dict  # validated upstream by LearningService
+        source_url = intent.get("source_url")
+        attachment = intent.get("attachment_path")
+        tenant_id = intent["tenant_id"]
+        learned_by = intent["actor_user_id"]
+        session_id = intent.get("session_id")
+        job_id = workflow.info().workflow_id
+
+        # --- step 1: extract OR probe attachment ---
+        if attachment:
+            probe = await workflow.execute_activity(
+                A.act_probe_attachment, attachment,
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["probe"],
+            )
+            if not probe["ok"]:
+                return {"status": "attachment_invalid", "error": probe["error"]}
+            audio_path = attachment
+            audio_meta = probe["data"]
+            provenance_url = f"attachment://{attachment.split('/')[-1]}"
         else:
             extract = await workflow.execute_activity(
-                A.act_extract_media, intent.source_url, ...
+                A.act_extract_media, source_url, 900,
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["extract"],
             )
-            audio_path = extract["audio_path"]
-            metadata = extract["metadata"]
-        # Step 2: transcribe
-        trans = await workflow.execute_activity(A.act_transcribe_url, audio_path, ...)
-        # Step 3: synthesize (with revise loop max 2)
-        hints = []
-        max_retries = int(os.environ.get("LUNA_LEARN_MAX_REVISE_RETRIES", "2"))
-        for attempt in range(max_retries + 1):
-            draft = await workflow.execute_activity(
-                A.act_synthesize_skill_draft, trans["transcript"], intent.source_url, hints, ...
-            )
-            review = await workflow.execute_activity(A.act_dispatch_skill_review, ...)
-            if review["verdict"] == "approved":
-                break
-            if review["verdict"] == "rejected":
-                await workflow.execute_activity(A.act_write_quarantine, ...)
-                return {"status": "rejected", "reason": review["findings"]}
-            hints = review["findings"]  # revise
-        else:
-            await workflow.execute_activity(A.act_write_quarantine, ...)
-            return {"status": "revise_exhausted", "findings": review["findings"]}
-        # Step 4: synthetic test
-        test = await workflow.execute_activity(A.act_run_synthetic_test, ...)
-        if not test["passed"]:
-            await workflow.execute_activity(A.act_write_quarantine, ...)
-            return {"status": "test_fail", "error": test.get("error")}
-        # Step 5: install
-        install = await workflow.execute_activity(A.act_install_skill, ...)
-        # Step 6: diffuse (soft-fail)
-        diffuse = await workflow.execute_activity(A.act_diffuse_learning, ...)
-        if diffuse["soft_failed"]:
-            await workflow.execute_activity(A.act_write_cache, ...)
-        # Step 7: notify
-        return {
+            if not extract["ok"]:
+                # T3.2b handles per-error-type branches; happy path stops here.
+                return {"status": "extract_failed", "error": extract["error"]}
+            audio_path = extract["data"]["audio_path"]
+            audio_meta = extract["data"]["metadata"]
+            provenance_url = source_url
+
+        # --- step 2: transcribe (also deletes audio on success per T3.1) ---
+        trans = await workflow.execute_activity(
+            A.act_transcribe_url, audio_path,
+            start_to_close_timeout=_ACTIVITY_TIMEOUTS["transcribe"],
+        )
+        if not trans["ok"]:
+            return {"status": "transcribe_failed", "error": trans["error"]}
+        transcript = trans["data"]["transcript"]
+
+        # --- step 3: synth ---
+        synth = await workflow.execute_activity(
+            A.act_synthesize_skill_draft, transcript, provenance_url, [],
+            start_to_close_timeout=_ACTIVITY_TIMEOUTS["synth"],
+        )
+        if not synth["ok"]:
+            return {"status": "synth_failed", "error": synth["error"]}
+        draft = synth["data"]
+
+        # --- step 4: review (T3.2c handles revise/rejected branches) ---
+        review = await workflow.execute_activity(
+            A.act_dispatch_skill_review,
+            draft["skill_md"], transcript, provenance_url,
+            draft["synthetic_test_input"], draft["synthetic_test_expected"],
+            start_to_close_timeout=_ACTIVITY_TIMEOUTS["review"],
+        )
+        if not review["ok"]:
+            return {"status": "review_failed", "error": review["error"]}
+        if review["data"]["verdict"] != "approved":
+            return {"status": review["data"]["verdict"], "findings": review["data"]["findings"]}
+
+        # --- step 5: test ---
+        test = await workflow.execute_activity(
+            A.act_run_synthetic_test,
+            draft["skill_md"], draft["synthetic_test_input"], draft["synthetic_test_expected"],
+            start_to_close_timeout=_ACTIVITY_TIMEOUTS["test"],
+        )
+        if not test["ok"] or not test["data"]["passed"]:
+            return {"status": "test_failed", "error": test["data"].get("error") if test["ok"] else test["error"]}
+
+        # --- step 6: install ---
+        sha256 = hashlib.sha256(transcript.encode()).hexdigest()
+        install = await workflow.execute_activity(
+            A.act_install_skill,
+            draft["skill_md"], draft["slug"], tenant_id, provenance_url,
+            review["data"]["reviewer_agent_id"], sha256, learned_by,
+            start_to_close_timeout=_ACTIVITY_TIMEOUTS["install"],
+        )
+        if not install["ok"]:
+            return {"status": "install_failed", "error": install["error"]}
+
+        # --- step 7: diffuse (soft-fail) ---
+        capabilities = _extract_capabilities(draft["skill_md"])
+        diffuse = await workflow.execute_activity(
+            A.act_diffuse_learning,
+            install["data"]["skill_id"], provenance_url, capabilities,
+            start_to_close_timeout=_ACTIVITY_TIMEOUTS["diffuse"],
+        )
+        # diffuse soft-fail handling lives in T3.2e
+
+        # --- step 8: notify ---
+        result = {
             "status": "success",
-            "skill_id": install["skill_id"],
-            "skill_name": draft["skill_md"].split("name:")[1].split("\n")[0].strip(),
-            "capabilities": ...,  # extract from frontmatter
-            "source_url": intent.source_url or f"attachment://{intent.attachment_path}",
+            "skill_id": install["data"]["skill_id"],
+            "skill_path": install["data"]["path"],
+            "skill_name": _skill_name(draft["skill_md"]),
+            "capabilities": capabilities,
+            "source_url": provenance_url,
         }
+        if session_id:
+            await workflow.execute_activity(
+                A.act_notify_session, session_id, result,
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+            )
+        return result
 ```
 
-- [ ] **Step 1-5: TDD** the orchestration body. Tests use `temporalio.testing.WorkflowEnvironment` per existing pattern in `test_coalition_workflow.py`.
+- [ ] **Step 4: Run → pass**
+
+Run: `cd apps/api && pytest tests/test_learn_workflow.py::test_workflow_happy_path -v`
+Expected: 1 passed.
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git switch -c impl/luna-learn-t32-workflow impl/luna-learn-t31-activities
-# ... commits
+git switch -c impl/luna-learn-t32a-happy impl/luna-learn-t31-activities
+git add apps/api/app/workflows/learn_from_media_workflow.py apps/api/tests/test_learn_workflow.py
+git commit -m "feat(luna-learn): workflow happy path (extract → transcribe → synth → review:approved → test:pass → install → diffuse → notify)"
+git push -u origin impl/luna-learn-t32a-happy
 ```
+
+#### Task 3.2b — Extract-error per-type branches + notify+quarantine
+
+- [ ] **Step 1: Write failing tests** for each typed extract error (MediaPrivate, MediaNotFound, MediaGeoBlocked, MediaAntiScrape, MediaTooLong) — each asserts the right user-facing notify message per spec §3 + a quarantine write.
+
+- [ ] **Step 2-4: Implement** the branches in the workflow body: replace `return {"status": "extract_failed", ...}` with a dispatch to per-type notify message helpers + `act_write_quarantine` call. Notify message strings come straight from spec §3 rows.
+
+- [ ] **Step 5: Commit** as `impl/luna-learn-t32b-extract-errors`.
+
+#### Task 3.2c — Review branches: `revise` loop (max 2 retries) + `rejected` + `reviewer-down` distinct from `timeout`
+
+- [ ] **Step 1: Write failing tests**:
+  - revise→approved (hints flow into next synth call)
+  - revise×3 → revise-exhausted → quarantine
+  - rejected → quarantine + notify with reviewer reason
+  - `error.type == "ReviewerNotProvisioned"` → **cache** (recoverable per spec §1.11) + notify with --resume-last hint
+  - `error.type == "ReviewTimeout"` → **quarantine** (terminal per spec §3) + notify
+
+This is the distinction reviewer flagged (I6).
+
+- [ ] **Step 2-4: Implement** the for-loop with `max_retries = int(os.environ.get("LUNA_LEARN_MAX_REVISE_RETRIES", "2"))` + branch on `error.type` for cache vs quarantine.
+
+- [ ] **Step 5: Commit** as `impl/luna-learn-t32c-review-branches`.
+
+#### Task 3.2d — Test-failure → quarantine + library_revisions audit row
+
+- [ ] **Step 1: Write failing test** that asserts test_failed branch writes a library_revisions row with `result: "rejected_test_fail"`.
+
+- [ ] **Step 2-4: Implement** + add a `act_log_test_fail` activity that hits an internal `POST /api/v1/skills/library/internal/audit-rejection` endpoint (added in T2.6's API surface as a follow-on).
+
+- [ ] **Step 5: Commit** as `impl/luna-learn-t32d-test-fail`.
+
+#### Task 3.2e — Diffuse soft-fail → cache (do not abort install)
+
+- [ ] **Step 1: Write failing test**: diffuse_learning returns `{soft_failed: True}` → workflow STILL returns `status: success` + an additional `diffuse_cached: true` key + a `act_write_cache` call recording the pending diffusion.
+
+- [ ] **Step 2-4: Implement** the post-install branch (do not propagate the soft-fail to user; user sees success with a note that semantic discovery may be delayed).
+
+- [ ] **Step 5: Commit** as `impl/luna-learn-t32e-diffuse-soft-fail`.
+
+#### Task 3.2f — Install rollback (DB error + FS write failure after DB row reserved)
+
+- [ ] **Step 1: Write failing test** (B4 from reviewer):
+  - DB error during insert → result `install_failed`, no FS write, no library_revisions row
+  - FS write fails after DB row reserved → DB row deleted on rollback (verify with DB query)
+  - This is the spec §1.7 "No TOCTOU" claim made testable.
+
+- [ ] **Step 2-4: Implement** the rollback semantics in the server endpoint (T2.6's `/api/v1/skills/install-learned`) — wrap DB row insert + FS write in a single `async with` transaction with explicit FS-failure rollback. The workflow side just sees the error envelope.
+
+- [ ] **Step 5: Commit** as `impl/luna-learn-t32f-install-rollback`.
 
 ### Task 3.3: Quarantine + Cache write helpers (`act_write_quarantine`, `act_write_cache`)
 
-**Files:** `apps/api/app/workflows/activities/learn_from_media_activities.py`, test file.
+**Files:**
+- Modify: `apps/api/app/workflows/activities/learn_from_media_activities.py`
+- Test: `apps/api/tests/test_learn_cache_quarantine.py` (new)
 
-Writes per spec §1.11 + §2 quarantine layout.
+`_tenant_root(tenant_id)` resolves to `/var/agentprovision/workspaces/_tenant/<uuid>/` per existing tenant-workspace convention (referenced in `transcription_client.py:48` for `_transcribe/`; same root, different namespace dir).
 
-- [ ] **Step 1-5: TDD** with `tmp_path` fixtures; verify file layout matches spec exactly.
+- [ ] **Step 1: Write failing tests** including the cache⊕quarantine mutual-exclusion invariant (B3 from reviewer)
+
+```python
+import pytest
+from pathlib import Path
+from app.workflows.activities.learn_from_media_activities import (
+    _tenant_root, act_write_cache, act_write_quarantine,
+)
+
+def test_tenant_root_resolves(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.workflows.activities.learn_from_media_activities._WORKSPACE_BASE", tmp_path)
+    assert _tenant_root("uuid-1") == tmp_path / "_tenant" / "uuid-1"
+
+@pytest.mark.asyncio
+async def test_write_quarantine_layout(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.workflows.activities.learn_from_media_activities._WORKSPACE_BASE", tmp_path)
+    r = await act_write_quarantine(
+        tenant_id="t1", job_id="2026-05-25-123000-fix-printer",
+        transcript="raw transcript with PII", draft={"skill_md": "---\n..."},
+        review={"verdict": "rejected"}, test_result=None, abort_reason="rejected by reviewer",
+    )
+    qdir = tmp_path / "_tenant" / "t1" / "_learning_quarantine" / "2026-05-25-123000-fix-printer"
+    assert (qdir / "transcript.txt").read_text() == "raw transcript with PII"
+    assert (qdir / "abort_reason.txt").read_text() == "rejected by reviewer"
+
+@pytest.mark.asyncio
+async def test_write_cache_layout(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.workflows.activities.learn_from_media_activities._WORKSPACE_BASE", tmp_path)
+    r = await act_write_cache(
+        tenant_id="t1", job_id="job-1",
+        transcript="scrubbed", draft={"skill_md": "---\nname: x..."},
+        last_review={"verdict": "revise"}, last_test=None,
+    )
+    cdir = tmp_path / "_tenant" / "t1" / "_learning_cache" / "job-1"
+    assert (cdir / "transcript.txt").exists()
+    assert (cdir / "draft.md").exists()
+
+@pytest.mark.asyncio
+async def test_cache_and_quarantine_are_mutually_exclusive(tmp_path, monkeypatch):
+    """Spec §1.11 invariant: same job_id never appears in both."""
+    monkeypatch.setattr("app.workflows.activities.learn_from_media_activities._WORKSPACE_BASE", tmp_path)
+    job_id = "job-mutex-test"
+    await act_write_cache(tenant_id="t1", job_id=job_id, transcript="x", draft={}, last_review=None, last_test=None)
+    # Caller invariant: must not also quarantine. Verify by asserting that a write_quarantine
+    # call for the same job_id raises (the helper checks for existing cache entry first).
+    from app.workflows.activities.learn_from_media_activities import CacheAndQuarantineConflict
+    with pytest.raises(CacheAndQuarantineConflict):
+        await act_write_quarantine(
+            tenant_id="t1", job_id=job_id, transcript="x", draft={},
+            review={}, test_result=None, abort_reason="x",
+        )
+```
+
+- [ ] **Step 2: Run → fail**
+
+- [ ] **Step 3: Implement helpers + invariant check**
+
+```python
+import json
+from pathlib import Path
+
+_WORKSPACE_BASE = Path("/var/agentprovision/workspaces")
+
+
+def _tenant_root(tenant_id: str) -> Path:
+    return _WORKSPACE_BASE / "_tenant" / tenant_id
+
+
+class CacheAndQuarantineConflict(Exception):
+    """Spec §1.11: a job_id may exist in cache OR quarantine, never both."""
+
+
+@activity.defn
+async def act_write_cache(tenant_id: str, job_id: str, transcript: str,
+                          draft: dict, last_review: dict | None,
+                          last_test: dict | None) -> dict:
+    cdir = _tenant_root(tenant_id) / "_learning_cache" / job_id
+    qdir = _tenant_root(tenant_id) / "_learning_quarantine"
+    # Mutex check: any quarantine dir with the same job_id?
+    if qdir.exists() and any(d.name.endswith(job_id) for d in qdir.iterdir() if d.is_dir()):
+        raise CacheAndQuarantineConflict(f"{job_id} already quarantined")
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "transcript.txt").write_text(transcript or "")
+    (cdir / "draft.md").write_text(draft.get("skill_md", ""))
+    if last_review:
+        (cdir / "review.json").write_text(json.dumps(last_review))
+    if last_test:
+        (cdir / "test.json").write_text(json.dumps(last_test))
+    return {"cache_dir": str(cdir)}
+
+
+@activity.defn
+async def act_write_quarantine(tenant_id: str, job_id: str, transcript: str,
+                                draft: dict, review: dict, test_result: dict | None,
+                                abort_reason: str) -> dict:
+    cdir = _tenant_root(tenant_id) / "_learning_cache" / job_id
+    if cdir.exists():
+        raise CacheAndQuarantineConflict(f"{job_id} already in cache")
+    qdir = _tenant_root(tenant_id) / "_learning_quarantine" / job_id
+    qdir.mkdir(parents=True, exist_ok=True)
+    (qdir / "transcript.txt").write_text(transcript or "")
+    (qdir / "draft.md").write_text(draft.get("skill_md", "") if draft else "")
+    (qdir / "review.json").write_text(json.dumps(review) if review else "{}")
+    if test_result:
+        (qdir / "test_result.json").write_text(json.dumps(test_result))
+    (qdir / "abort_reason.txt").write_text(abort_reason)
+    return {"quarantine_dir": str(qdir)}
+```
+
+- [ ] **Step 4: Run → pass** (4 tests including mutex invariant)
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git switch -c impl/luna-learn-t33-quarantine-cache impl/luna-learn-t32-workflow
-# ... commits
+git switch -c impl/luna-learn-t33-cache-quarantine impl/luna-learn-t32f-install-rollback
+git add apps/api/app/workflows/activities/learn_from_media_activities.py apps/api/tests/test_learn_cache_quarantine.py
+git commit -m "feat(luna-learn): cache + quarantine helpers + §1.11 mutual-exclusion invariant test"
+git push -u origin impl/luna-learn-t33-cache-quarantine
 ```
 
 ### Task 3.4: Resume path — `LearningIntent.resume_job_id` short-circuit
@@ -1446,20 +1949,23 @@ git switch -c impl/luna-learn-t35-notify impl/luna-learn-t34-resume
 
 ## Phase 4 — Entry surfaces
 
-### Task 4.1: `LearningService` — shared dispatch helper
+### Task 4.1a: `LearningService` — shared dispatch helper (service layer ONLY)
 
 **Files:**
 - Create: `apps/api/app/services/learning_service.py`
 - Test: `apps/api/tests/test_learning_service.py` (new)
 
-`LearningService.dispatch(intent: LearningIntent) → workflow_id`. Used by both CLI (T4.3) and WhatsApp (T4.2) entry points.
+`LearningService.dispatch(intent: LearningIntent) → workflow_id` connects to Temporal and starts `LearnFromMediaWorkflow`. Pure service-layer; the HTTP route is T4.4c.
 
-- [ ] **Step 1-5: TDD** the dispatch helper.
+- [ ] **Step 1-5: TDD** the dispatch helper, mocking Temporal client.
 
 ```bash
-git switch -c impl/luna-learn-t41-service impl/luna-learn-t35-notify
-# ... commits
+git switch -c impl/luna-learn-t41a-service impl/luna-learn-t35-notify
+git commit -m "feat(luna-learn): LearningService.dispatch helper"
+# ... push
 ```
+
+(T4.4c later wires the HTTP route around this helper. The split keeps service vs route boundaries clear per reviewer I4.)
 
 ### Task 4.2: WhatsApp URL detection + learning intent routing
 
@@ -1504,7 +2010,7 @@ git switch -c impl/luna-learn-t43-cli impl/luna-learn-t42-whatsapp
 
 **Files:** modify `learn.rs` + test.
 
-`--from-attachment FILE`: uploads the local file to a temp internal URL, then dispatches with `attachment_path` set. Server enforces size/MIME/duration caps per spec §1.8.
+`--from-attachment FILE`: uploads the local file to the new internal `/api/v1/learning/upload-attachment` endpoint (added in T4.4b), then dispatches with `attachment_path` set.
 
 `--resume <job_id>` + `--resume-last`: queries the cache and re-dispatches with `resume_job_id`.
 
@@ -1514,6 +2020,166 @@ git switch -c impl/luna-learn-t43-cli impl/luna-learn-t42-whatsapp
 git switch -c impl/luna-learn-t44-cli-flags impl/luna-learn-t43-cli
 # ... commits
 ```
+
+### Task 4.4b — Attachment server-side enforcement (spec §1.8 — was missing)
+
+**Files:**
+- Create: `apps/api/app/api/v1/learning.py` (new router; T4.1's `/learning/dispatch` lives here too)
+- Test: `apps/api/tests/test_learning_attachment.py` (new)
+
+Enforces ALL spec §1.8 constraints server-side (CLI checks are best-effort UX only — server is the trust boundary):
+- Max file size: 50MB
+- Allowed MIME types: `audio/*`, `video/*`
+- Duration cap: 900s via `ffprobe` (probed before transcription dispatch)
+- Provenance source_url recorded as `attachment://<basename>` (never the full local path)
+
+Also implements `act_probe_attachment` activity referenced in T3.2a.
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+# apps/api/tests/test_learning_attachment.py
+import pytest
+from fastapi.testclient import TestClient
+from app.main import app
+
+client = TestClient(app)
+
+def _post(file_bytes: bytes, filename: str, content_type: str):
+    return client.post(
+        "/api/v1/learning/upload-attachment",
+        files={"file": (filename, file_bytes, content_type)},
+        headers={"X-Internal-Key": "test-key"},
+    )
+
+def test_attachment_oversize_rejected():
+    r = _post(b"\x00" * (51 * 1024 * 1024), "big.mp4", "video/mp4")
+    assert r.status_code == 413
+    assert "50MB" in r.json()["detail"]
+
+def test_attachment_bad_mime_rejected():
+    r = _post(b"hello", "doc.pdf", "application/pdf")
+    assert r.status_code == 415
+    assert "MIME" in r.json()["detail"] or "type" in r.json()["detail"].lower()
+
+def test_attachment_audio_ok(monkeypatch):
+    monkeypatch.setattr("app.api.v1.learning._ffprobe_duration", lambda p: 120)
+    r = _post(b"OggS" + b"\x00" * 100, "voice.ogg", "audio/ogg")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source_url"].startswith("attachment://")
+    assert body["source_url"].endswith("voice.ogg")
+
+def test_attachment_too_long_rejected(monkeypatch):
+    monkeypatch.setattr("app.api.v1.learning._ffprobe_duration", lambda p: 1200)
+    r = _post(b"\x00" * 200, "long.mp4", "video/mp4")
+    assert r.status_code == 413
+    assert "900s" in r.json()["detail"] or "duration" in r.json()["detail"].lower()
+```
+
+- [ ] **Step 2: Run → fail**
+
+- [ ] **Step 3: Implement** the endpoint
+
+```python
+# apps/api/app/api/v1/learning.py
+import os
+import subprocess
+import uuid
+from pathlib import Path
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from app.api.v1.skills_new import _verify_internal_key
+
+router = APIRouter(prefix="/learning", tags=["learning"])
+
+_MAX_SIZE_BYTES = 50 * 1024 * 1024
+_MAX_DURATION_S = 900
+_ATTACH_DIR = Path("/var/agentprovision/workspaces/_learning")
+
+
+def _ffprobe_duration(path: Path) -> int:
+    out = subprocess.check_output([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+    ])
+    return int(float(out.decode().strip()))
+
+
+@router.post("/upload-attachment")
+async def upload_attachment(
+    file: UploadFile = File(...),
+    _auth: None = Depends(_verify_internal_key),
+):
+    ct = (file.content_type or "").lower()
+    if not (ct.startswith("audio/") or ct.startswith("video/")):
+        raise HTTPException(415, f"unsupported MIME type {ct!r}; only audio/* or video/* allowed")
+    body = await file.read()
+    if len(body) > _MAX_SIZE_BYTES:
+        raise HTTPException(413, f"file size {len(body)} exceeds 50MB cap")
+    _ATTACH_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _ATTACH_DIR / f"{uuid.uuid4().hex}-{file.filename}"
+    dest.write_bytes(body)
+    try:
+        dur = _ffprobe_duration(dest)
+    except Exception as e:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(422, f"could not probe duration: {e}")
+    if dur > _MAX_DURATION_S:
+        dest.unlink(missing_ok=True)
+        raise HTTPException(413, f"duration {dur}s exceeds 900s cap")
+    return {
+        "attachment_path": str(dest),
+        "source_url": f"attachment://{file.filename}",
+        "duration_s": dur,
+        "size_bytes": len(body),
+    }
+```
+
+Also: add `act_probe_attachment` activity in `learn_from_media_activities.py` that just shells out to `_ffprobe_duration` for paths already on disk (for the WhatsApp video-attachment path).
+
+- [ ] **Step 4: Run → pass**
+
+- [ ] **Step 5: Commit**
+
+```bash
+git switch -c impl/luna-learn-t44b-attachment-enforcement impl/luna-learn-t44-cli-flags
+# ... commits
+```
+
+### Task 4.4c — Internal `POST /api/v1/learning/dispatch` endpoint TDD
+
+**Files:**
+- Modify: `apps/api/app/api/v1/learning.py`
+- Test: `apps/api/tests/test_learning_dispatch.py` (new)
+
+T4.1's `LearningService.dispatch()` is the service-layer helper; this task adds the HTTP route around it (the route the CLI in T4.3 calls).
+
+- [ ] **Step 1-5: TDD** — request schema validation, internal-key auth gate, returns `{workflow_id}`, integration with `LearningService.dispatch`. Commit as `impl/luna-learn-t44c-dispatch-route`.
+
+### Task 4.4d — Internal `POST /api/v1/skills/execute-draft` endpoint TDD (referenced in T2.5)
+
+**Files:**
+- Modify: `apps/api/app/api/v1/skills_new.py`
+- Test: `apps/api/tests/test_skills_execute_draft.py` (new)
+
+Currently T2.5 introduces this endpoint inline; promoting to its own task per reviewer I3.
+
+- [ ] **Step 1-5: TDD** — request schema (skill_md + inputs), internal-key gate, executes via existing skill-execution path, returns output. Commit as `impl/luna-learn-t44d-execute-draft-route`.
+
+### Task 4.4e — Internal `POST /api/v1/skills/install-learned` endpoint TDD (referenced in T2.6)
+
+**Files:**
+- Modify: `apps/api/app/api/v1/skills_new.py`
+- Test: `apps/api/tests/test_skills_install_learned.py` (new)
+
+Currently T2.6 introduces this endpoint inline; promoting to its own task with explicit error-code contract:
+- 200 on success
+- **409** on slug conflict (unique-constraint violation) — required by T3.1's `_STATUS_TO_TYPE` map
+- **422** on draft parse failure
+- **500** on FS write fail after DB row reserved (with DB rollback verified)
+- Single transaction; FS write wrapped in try/except with explicit DB row delete on FS failure (spec §1.7 No-TOCTOU)
+
+- [ ] **Step 1-5: TDD** — including the FS-rollback test from T3.2f.
 
 ---
 
@@ -1541,30 +2207,29 @@ git commit -m "feat(luna-learn): bundled meta-skill orchestration template"
 git push -u origin impl/luna-learn-t51-bundled-skill
 ```
 
-### Task 5.2: Luna `skill.md` — add `learning` to `tool_groups`
+### Task 5.2: Luna `skill.md` + tool_groups migration — grant `learning` group
 
-**Files:** `apps/api/app/agents/_bundled/luna/skill.md`
+**Resolved from review I5:** Luna's effective `tool_groups` come from BOTH the bundled `skill.md` frontmatter AND a DB row keyed by `agent_id`. Migration `154_expand_luna_supervisor_tool_groups.sql` added 12 groups to her DB row (`calendar, email, drive, data, reports, bookings, monitor, jira, github, workflows, skills, ecommerce` + kept `competitor, knowledge, meta, sales, web_research, higgsfield` = 18 total). T5.2 ADDS `learning` as item 19.
 
-Luna currently has no `tool_groups` frontmatter. Add it:
+**Files:**
+- Modify: `apps/api/app/agents/_bundled/luna/skill.md` — add `tool_groups: [..., learning]` frontmatter (mirroring the pattern in `apps/api/app/agents/_bundled/code-reviewer/skill.md:9`)
+- Create: `apps/api/migrations/NNN_luna_add_learning_tool_group.sql` — DB-side append to Luna Supervisor's `tool_groups` array (model the migration on `154_expand_luna_supervisor_tool_groups.sql`)
+- Test: `apps/api/tests/test_luna_learning_tool_group.py` (new) — asserts after migration application, Luna's effective tool_groups includes `learning`
 
-```yaml
-tool_groups: [knowledge, calendar, learning]
-```
+- [ ] **Step 1: Write failing test** that runs the migration in a test DB transaction and asserts `learning in agent.tool_groups`
 
-(Final list depends on her current effective groups — verify by reading the model's defaults. The point is `learning` is in the list.)
+- [ ] **Step 2: Run → fail** (migration doesn't exist yet)
 
-- [ ] **Step 1: Read current Luna frontmatter + identify current effective tool_groups**
+- [ ] **Step 3: Implement** both files (frontmatter + migration) following the `154` template
 
-- [ ] **Step 2: Add `learning` to the list**
+- [ ] **Step 4: Run → pass** + smoke test: `alpha chat send` to Luna asking her to list available tool groups — verify `learning` appears
 
-- [ ] **Step 3: Test that Luna can call a `learning` tool** via `alpha chat send` smoke test
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git switch -c impl/luna-learn-t52-agent-config impl/luna-learn-t51-bundled-skill
-git add apps/api/app/agents/_bundled/luna/skill.md
-git commit -m "feat(luna-learn): grant Luna the `learning` tool_group"
+git add apps/api/app/agents/_bundled/luna/skill.md apps/api/migrations/NNN_luna_add_learning_tool_group.sql apps/api/tests/test_luna_learning_tool_group.py
+git commit -m "feat(luna-learn): grant Luna the learning tool_group (frontmatter + DB migration)"
 git push -u origin impl/luna-learn-t52-agent-config
 ```
 
@@ -1616,18 +2281,126 @@ git switch -c impl/luna-learn-t63-dry-run-golden impl/luna-learn-t62-integration
 # ... commits
 ```
 
-### Task 6.4: Audio cleanup cron job
+### Task 6.4: Audio cleanup — Temporal cron schedule
 
-**Files:** wherever cron jobs register in api (likely `apps/api/app/services/cron_jobs.py` or a Celery beat schedule).
+**Files:**
+- Modify: `apps/api/app/workers/scheduler_worker.py` (the project's cron equivalent — uses `croniter` + Temporal `Client.schedule` per existing pattern; see lines 8-9 and 31)
+- Create: `apps/api/app/workflows/learning_audio_cleanup_workflow.py` (new minimal workflow)
+- Test: `apps/api/tests/test_learning_audio_cleanup.py` (new)
 
-Daily at 04:00 UTC: `find /var/agentprovision/workspaces/_learning -mtime +1 -delete`.
+Daily at 04:00 UTC: deletes any file in `/var/agentprovision/workspaces/_learning/` older than 24h. Handles mid-flight crashes per spec §1.12 + §3 orphan row.
 
-- [ ] **Step 1-5: TDD** the sweep helper + register in cron.
+- [ ] **Step 1: Write failing test** for sweep helper
+
+```python
+import time
+from pathlib import Path
+import pytest
+from app.workflows.learning_audio_cleanup_workflow import _sweep_old_files
+
+def test_sweep_removes_files_older_than_24h(tmp_path):
+    old = tmp_path / "old.audio"; old.write_bytes(b"x")
+    new = tmp_path / "new.audio"; new.write_bytes(b"x")
+    old_mtime = time.time() - 25 * 3600
+    new_mtime = time.time() - 1 * 3600
+    import os
+    os.utime(old, (old_mtime, old_mtime))
+    os.utime(new, (new_mtime, new_mtime))
+    deleted = _sweep_old_files(tmp_path, max_age_s=24 * 3600)
+    assert deleted == 1
+    assert not old.exists()
+    assert new.exists()
+
+def test_sweep_handles_missing_dir(tmp_path):
+    deleted = _sweep_old_files(tmp_path / "does-not-exist", max_age_s=3600)
+    assert deleted == 0
+```
+
+- [ ] **Step 2: Run → fail**
+
+Run: `cd apps/api && pytest tests/test_learning_audio_cleanup.py -v`
+Expected: import error.
+
+- [ ] **Step 3: Implement**
+
+```python
+# apps/api/app/workflows/learning_audio_cleanup_workflow.py
+import os
+import time
+from pathlib import Path
+from temporalio import workflow, activity
+
+
+def _sweep_old_files(directory: Path, max_age_s: int = 24 * 3600) -> int:
+    if not directory.exists():
+        return 0
+    cutoff = time.time() - max_age_s
+    deleted = 0
+    for f in directory.iterdir():
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            f.unlink()
+            deleted += 1
+    return deleted
+
+
+@activity.defn
+async def act_sweep_learning_audio() -> int:
+    return _sweep_old_files(Path("/var/agentprovision/workspaces/_learning"))
+
+
+@workflow.defn(name="LearningAudioCleanupWorkflow")
+class LearningAudioCleanupWorkflow:
+    @workflow.run
+    async def run(self) -> int:
+        return await workflow.execute_activity(act_sweep_learning_audio, start_to_close_timeout=workflow.timedelta(minutes=5))
+```
+
+Register a Temporal Schedule (per `apps/api/app/workers/scheduler_worker.py:31` pattern) firing this workflow at `0 4 * * *`.
+
+- [ ] **Step 4: Run → pass**
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git switch -c impl/luna-learn-t64-cleanup-cron impl/luna-learn-t63-dry-run-golden
 # ... commits
 ```
+
+### Task 6.4b: Synthesis prompt snapshot + stub-driven shellout-ban end-to-end (review I1)
+
+**Files:**
+- Create: `apps/mcp-server/tests/snapshots/synthesis_system_prompt.txt`
+- Test: `apps/mcp-server/tests/test_learning_prompt.py` (new)
+
+T2.3's tests verify regex-on-body but don't pin the synthesis PROMPT itself. The prompt is the contract — drift here silently degrades synthesis quality. Add:
+
+1. Snapshot test asserting `SYNTHESIS_SYSTEM` from `learning_prompts.py` matches a checked-in snapshot. Manual update workflow when intentionally changed.
+2. Integration test using a stub `_llm_synthesize` that intentionally tries to emit `subprocess.run(['yt-dlp', ...])` — assert real synthesize_skill_draft raises `DraftForbiddenShellout` (already exists in T2.3 but make it explicit that the stub feeds an end-to-end path, not just a unit isolation).
+
+- [ ] **Step 1-5: TDD** the snapshot + e2e.
+
+### Task 6.4c: PII end-to-end pipeline test
+
+**Files:**
+- Test: `apps/api/tests/test_luna_learn_pii.py` (new)
+
+Spec §3 final row says PII detected → placeholders in body, raw transcript stays in quarantine only, `transcript_sha256` is hash of SCRUBBED transcript, KG observation embeds no transcript snippets. Plan has no test for the end-to-end PII path.
+
+- [ ] **Step 1: Write failing test** that stubs synthesize_skill_draft to return a draft WITH `<user-name>` placeholders (simulating LLM compliance) + asserts:
+  - Installed skill body contains `<user-name>` placeholders (NOT the raw name)
+  - `transcript_sha256` in provenance matches sha256 of the SCRUBBED transcript variant
+  - KG observation text contains capability names + source_url + skill_id but NO transcript snippet
+
+- [ ] **Step 2-5: Implement** any scrub-side helpers needed + commit.
+
+### Task 6.4d: WhatsApp → workflow integration test (review I7)
+
+**Files:**
+- Test: `apps/api/tests/test_whatsapp_learning_integration.py` (new)
+
+Simulates a WhatsApp message containing a YouTube URL → asserts `_detect_inbound_media` returns `("learning_url", url, caption)` → asserts `LearningService.dispatch` is called with the right `LearningIntent` → asserts a workflow id is returned. Mocks the workflow client; doesn't run actual extraction.
+
+- [ ] **Step 1-5: TDD** the WhatsApp-to-dispatch handoff.
 
 ### Task 6.5: Router-graph startup smoke (per `feedback_test_router_startup`)
 
