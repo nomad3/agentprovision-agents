@@ -1,6 +1,7 @@
 """Pydantic models for Luna Learn from Media subsystem."""
 from __future__ import annotations
 from enum import Enum
+from typing import Any
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -24,8 +25,8 @@ class SkillDraft(BaseModel):
     skill_md: str
     slug: str
     engine: str
-    synthetic_test_input: dict
-    synthetic_test_expected: dict
+    synthetic_test_input: dict[str, Any]
+    synthetic_test_expected: dict[str, Any]
 
 
 class ReviewVerdict(str, Enum):
@@ -41,6 +42,8 @@ class ReviewResult(BaseModel):
 
 
 class TestResult(BaseModel):
+    __test__ = False
+
     passed: bool
     actual_output: dict | None = None
     error: str | None = None
@@ -49,7 +52,7 @@ class TestResult(BaseModel):
 class LearningJobState(BaseModel):
     """Persisted cache state for --resume-last."""
     job_id: str
-    source_url: str | None
+    source_url: str | None = None
     transcript: str | None = None
     draft: SkillDraft | None = None
     last_review: ReviewResult | None = None
