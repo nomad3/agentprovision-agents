@@ -457,13 +457,37 @@ class LearnFromMediaWorkflow:
         if not install["ok"]:
             return {"status": "install_failed", "error": install["error"]}
 
-        # --- step 7: diffuse (soft-fail handled in T3.2e) ---
+        # --- step 7: diffuse (T3.2e — soft-fail does NOT abort install) ---
         capabilities = _extract_capabilities(draft["skill_md"])
-        await workflow.execute_activity(
+        diffuse = await workflow.execute_activity(
             A.act_diffuse_learning,
             args=[install["data"]["skill_id"], provenance_url, capabilities],
             start_to_close_timeout=_ACTIVITY_TIMEOUTS["diffuse"],
         )
+        diffuse_cached = False
+        # Two soft-fail paths per spec §3:
+        #   1. the activity envelope itself failed (KG unreachable, 5xx)
+        #   2. the tool returned ``soft_failed: True`` in ``data``
+        # Both are RECOVERABLE: install already succeeded, the skill is
+        # usable. Cache the pending diffusion so ``alpha learn --resume-last``
+        # can retry. User sees ``success`` (with ``diffuse_cached: true``).
+        if not diffuse["ok"] or (diffuse.get("data") or {}).get("soft_failed"):
+            await workflow.execute_activity(
+                A.act_write_cache,
+                args=[
+                    tenant_id,
+                    workflow.info().workflow_id,
+                    transcript,
+                    draft,
+                    {
+                        "skill_id": install["data"]["skill_id"],
+                        "capabilities": capabilities,
+                    },
+                    "diffuse_pending",
+                ],
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+            )
+            diffuse_cached = True
 
         # --- step 8: notify ---
         result = {
@@ -474,6 +498,8 @@ class LearnFromMediaWorkflow:
             "capabilities": capabilities,
             "source_url": provenance_url,
         }
+        if diffuse_cached:
+            result["diffuse_cached"] = True
         if session_id:
             await workflow.execute_activity(
                 A.act_notify_session,

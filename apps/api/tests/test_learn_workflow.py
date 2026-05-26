@@ -536,3 +536,84 @@ async def test_workflow_test_step_envelope_error(env, worker, monkeypatch):
     assert result["status"] == "test_failed"
     # ``error`` is the envelope dict, not a string, when the step itself failed.
     assert result["error"]["type"] == "UnknownError"
+
+
+# ---------------------------------------------------------------------------
+# T3.2e — diffuse soft-fail → cache, install survives
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_workflow_diffuse_soft_fail_still_success(env, worker, monkeypatch):
+    """T3.2e — diffuse_learning returns ``soft_failed: True``:
+    install already happened so the skill is usable; cache the pending
+    diffusion + return ``success`` with ``diffuse_cached: true``."""
+    responses = _happy_responses()
+    responses["diffuse_learning"] = {
+        "observation_id": None,
+        "soft_failed": True,
+    }
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-diffuse-soft-fail",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    assert result["diffuse_cached"] is True
+    assert result["skill_id"] == "s1"
+
+
+@pytest.mark.asyncio
+async def test_workflow_diffuse_envelope_error_still_success(
+    env, worker, monkeypatch
+):
+    """T3.2e — diffuse step ENVELOPE fails (KG unreachable / 5xx) → same
+    soft-fail handling: install survives, cache written, success returned.
+    """
+    responses = _happy_responses()
+    responses["diffuse_learning"] = _typed_error(500, "UnknownError", "kg down")
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-diffuse-envelope-err",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    assert result["diffuse_cached"] is True
+
+
+@pytest.mark.asyncio
+async def test_workflow_diffuse_success_no_cache_key(env, worker, monkeypatch):
+    """T3.2e — happy diffuse path should NOT set ``diffuse_cached`` (the
+    key is only added on soft-fail, so callers can distinguish)."""
+    responses = _happy_responses()
+    # default ``diffuse_learning`` is {soft_failed: False}.
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-diffuse-success",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    assert "diffuse_cached" not in result
