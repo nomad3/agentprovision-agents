@@ -33,11 +33,14 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import Awaitable, Callable, Dict
 
 import httpx
+
+from .learning_prompts import SYNTHESIS_SYSTEM, SYNTHESIS_USER
 
 
 # ── Internal API client config ─────────────────────────────────────────
@@ -289,13 +292,154 @@ async def transcribe_url(audio_path: str) -> dict:
     return await _transcribe_bytes_async(path.read_bytes())
 
 
+# ── T2.3: synthesize_skill_draft ───────────────────────────────────────
+# Patterns the synthesis prompt explicitly forbids inside python-engine
+# skills. The intent is: external IO goes through MCP tools, not through
+# subprocess.run() bound into a skill body. We check the body (post-
+# frontmatter) only when the draft selected ``engine: python`` —
+# markdown bodies are prose for another agent to read, so a transcript
+# that mentions "yt-dlp" verbatim shouldn't be quarantined as a
+# forbidden shellout.
+#
+# Ordering note: the regex list is scanned in order and the first match
+# wins for the raised error message; keep the binary names ahead of the
+# more general subprocess+curl/wget pattern so error messages are
+# precise about what tripped.
+_FORBIDDEN_PATTERNS = [
+    r"\byt[-_]?dlp\b",
+    r"\bffmpeg\b",
+    r"\bffprobe\b",
+    r"subprocess\.run.*\b(curl|wget)\b",
+]
+
+
+def _slugify(name: str) -> str:
+    """Kebab-case a frontmatter ``name`` into a slug for the skills library.
+
+    Lowercased, non-alphanumeric runs collapse to a single hyphen, max
+    60 chars (matches the skills library slug column). Falls back to
+    ``learned-skill`` when the input has no alphanumeric content so the
+    workflow never sees an empty slug (T2.6's install path requires a
+    non-empty slug to seed its collision-resolution loop).
+    """
+    s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return s[:60] or "learned-skill"
+
+
+async def _llm_synthesize(
+    transcript: str,
+    source_url: str,
+    hints: list[str],
+) -> tuple[str, dict]:
+    """Single Claude Sonnet call returning ``(skill_md, synthetic_test)``.
+
+    Model id is configurable via ``LUNA_LEARN_SYNTHESIS_MODEL`` so we
+    can flip to a newer Sonnet without a redeploy. The LLM is instructed
+    (system prompt) to return a single JSON object with ``skill_md`` and
+    ``synthetic_test`` keys; we don't tolerate any other shape because
+    Temporal's revise loop needs a clean parse failure → ``DraftInvalid``
+    signal, not a silent best-effort recovery.
+
+    Split out as its own helper so unit tests can patch it without
+    touching the anthropic SDK (which isn't a hard runtime dep of the
+    test harness). T3.1's activity wrapper layers retry policy on top.
+    """
+    import anthropic  # local import: SDK isn't loaded for non-synth paths
+
+    model = os.environ.get("LUNA_LEARN_SYNTHESIS_MODEL", "claude-sonnet-4-6")
+    hints_block = (
+        "Reviewer feedback to address:\n" + "\n".join(f"- {h}" for h in hints)
+        if hints
+        else ""
+    )
+    client = anthropic.AsyncAnthropic()
+    resp = await client.messages.create(
+        model=model,
+        max_tokens=4096,
+        system=SYNTHESIS_SYSTEM,
+        messages=[
+            {
+                "role": "user",
+                "content": SYNTHESIS_USER.format(
+                    transcript=transcript,
+                    source_url=source_url,
+                    hints_block=hints_block,
+                ),
+            }
+        ],
+    )
+    payload = json.loads(resp.content[0].text)
+    return payload["skill_md"], payload["synthetic_test"]
+
+
 async def synthesize_skill_draft(
     transcript: str,
     source_url: str,
     hints: list[str] | None = None,
 ) -> dict:
-    """T2.3 — LLM-synthesize a SKILL.md draft from a transcript."""
-    raise NotImplementedError("T2.3")
+    """T2.3 — LLM-synthesize a SKILL.md draft from a transcript.
+
+    Spec §1.5 (engine selection) + §1.6 (frontmatter schema). Single
+    Claude Sonnet call via ``_llm_synthesize``; the prompt embeds the
+    rubric, PII-scrub instruction, and the FORBIDDEN-shellout list. On
+    return we validate the draft structurally:
+
+    1. Parse YAML frontmatter via the leading ``---\\n…\\n---`` block.
+       Missing or malformed → ``DraftInvalid`` (workflow re-cycles as a
+       revise iteration).
+    2. Require ``name`` AND ``engine`` keys in the frontmatter.
+    3. If ``engine == "python"`` scan the body for any
+       ``_FORBIDDEN_PATTERNS`` match → ``DraftForbiddenShellout``
+       (workflow treats as a hard quarantine, not a revise).
+
+    The returned dict matches the contract the Temporal workflow (T1.3)
+    consumes:
+
+        {
+            "skill_md": str,
+            "slug": str,            # kebab-case, ≤60 chars
+            "engine": "markdown" | "python",
+            "synthetic_test_input": dict,
+            "synthetic_test_expected": dict,
+        }
+
+    ``hints`` carries the prior reviewer's findings on revise cycles and
+    is empty on the first synthesis pass.
+    """
+    skill_md, test = await _llm_synthesize(transcript, source_url, hints or [])
+
+    # Frontmatter must be the very first block; partial matches against a
+    # body-embedded ``---`` are not enough. Anchored to start-of-string
+    # with DOTALL so the YAML block can wrap multiple lines.
+    fm_match = re.match(r"^---\n(.+?)\n---", skill_md, re.DOTALL)
+    if not fm_match:
+        raise DraftInvalid("missing frontmatter")
+
+    import yaml  # local import to keep top-of-module light
+
+    try:
+        fm = yaml.safe_load(fm_match.group(1))
+    except yaml.YAMLError as exc:
+        raise DraftInvalid(f"YAML parse: {exc}") from exc
+
+    if not isinstance(fm, dict) or "name" not in fm or "engine" not in fm:
+        raise DraftInvalid("frontmatter missing name or engine")
+
+    # Forbidden-shellout check applies only to python skills (markdown
+    # bodies are prose for an agent to read, not executable code).
+    if fm["engine"] == "python":
+        body = skill_md[fm_match.end():]
+        for pat in _FORBIDDEN_PATTERNS:
+            if re.search(pat, body, re.IGNORECASE):
+                raise DraftForbiddenShellout(f"forbidden shellout: {pat}")
+
+    return {
+        "skill_md": skill_md,
+        "slug": _slugify(fm["name"]),
+        "engine": fm["engine"],
+        "synthetic_test_input": test.get("input", {}),
+        "synthetic_test_expected": test.get("expected", {}),
+    }
 
 
 async def dispatch_skill_review(

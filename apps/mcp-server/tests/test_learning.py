@@ -12,12 +12,15 @@ import pytest
 
 from src.mcp_tools import learning
 from src.mcp_tools.learning import (
+    DraftForbiddenShellout,
+    DraftInvalid,
     MediaAntiScrape,
     MediaGeoBlocked,
     MediaNotFound,
     MediaPrivate,
     MediaTooLong,
     extract_media,
+    synthesize_skill_draft,
     transcribe_url,
 )
 
@@ -113,3 +116,56 @@ async def test_transcribe_url_calls_existing_client(tmp_path):
 async def test_transcribe_url_missing_file():
     with pytest.raises(FileNotFoundError):
         await transcribe_url("/nonexistent/path.m4a")
+
+
+# ── T2.3: synthesize_skill_draft ───────────────────────────────────────
+# All four tests patch ``_llm_synthesize`` directly so the anthropic SDK
+# is never touched at test time — the unit under test is the validation
+# logic (frontmatter parse, engine check, forbidden-shellout scan), not
+# the LLM call itself. T3.x activity tests cover the network hop.
+async def test_synthesize_returns_valid_draft():
+    with patch("src.mcp_tools.learning._llm_synthesize") as llm:
+        llm.return_value = (
+            "---\nname: Fix Printer Error 41\nengine: markdown\n"
+            "category: support\ntags: [printer]\n"
+            "auto_trigger: \"Fix printer error 41\"\n"
+            "inputs: []\n---\nUnplug the printer and ...",
+            {"input": {"code": 41}, "expected": {"resolved": True}},
+        )
+        result = await synthesize_skill_draft("transcript text", "https://x.com/v")
+    assert result["engine"] == "markdown"
+    assert result["slug"] == "fix-printer-error-41"
+    assert result["synthetic_test_input"] == {"code": 41}
+    assert result["synthetic_test_expected"] == {"resolved": True}
+
+
+async def test_synthesize_parses_invalid_draft_raises():
+    with patch("src.mcp_tools.learning._llm_synthesize") as llm:
+        llm.return_value = ("not valid yaml at all", {})
+        with pytest.raises(DraftInvalid):
+            await synthesize_skill_draft("t", "u")
+
+
+async def test_synthesize_emits_python_when_clearly_deterministic():
+    with patch("src.mcp_tools.learning._llm_synthesize") as llm:
+        llm.return_value = (
+            "---\nname: Mod-7 Compute\nengine: python\nscript: compute.py\n"
+            "category: data\ntags: []\nauto_trigger: \"Compute mod-7\"\n"
+            "inputs:\n  - name: x\n    type: number\n    description: input\n"
+            "    required: true\n---\n",
+            {"input": {"x": 14}, "expected": {"y": 0}},
+        )
+        result = await synthesize_skill_draft("given x compute x mod 7", "u")
+    assert result["engine"] == "python"
+    assert result["slug"] == "mod-7-compute"
+
+
+async def test_synthesize_forbids_ytdlp_in_python_draft():
+    with patch("src.mcp_tools.learning._llm_synthesize") as llm:
+        llm.return_value = (
+            "---\nname: bad\nengine: python\nscript: bad.py\n---\n"
+            "import subprocess; subprocess.run(['yt-dlp', '...'])",
+            {},
+        )
+        with pytest.raises(DraftForbiddenShellout):
+            await synthesize_skill_draft("t", "u")

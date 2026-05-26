@@ -39,6 +39,15 @@ dependencies = [
     # yt-dlp to download audio from YouTube / Instagram. Requires the
     # ffmpeg system binary (installed via apt in the Dockerfile).
     "yt-dlp>=2024.10.0",
+    # Luna Learn from Media (T2.3): synthesize_skill_draft makes a single
+    # Claude Sonnet call to generate SKILL.md from a transcript. SDK is
+    # lazy-imported inside _llm_synthesize so non-synthesis MCP tool
+    # paths don't pay the import cost.
+    "anthropic>=0.34.0",
+    # Luna Learn from Media (T2.3): SKILL.md frontmatter is YAML; we
+    # parse it post-synthesis to validate ``name`` + ``engine`` and to
+    # branch on engine for the forbidden-shellout scan.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
