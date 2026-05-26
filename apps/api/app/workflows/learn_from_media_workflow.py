@@ -455,7 +455,46 @@ class LearnFromMediaWorkflow:
             start_to_close_timeout=_ACTIVITY_TIMEOUTS["install"],
         )
         if not install["ok"]:
-            return {"status": "install_failed", "error": install["error"]}
+            # T3.2f — install_failed branch. Real DB+FS rollback runs
+            # server-side in T4.4e (atomic INSERT + filesystem write inside
+            # a single transaction). The workflow sees the error envelope
+            # only; we quarantine the reviewed-and-tested draft for the
+            # operator to inspect.
+            err = install["error"] or {}
+            etype = err.get("type", "UnknownError")
+            install_msg = (
+                "couldn't allocate a slug after 5 retries; rename "
+                "an existing skill or use `alpha learn` with `--slug`."
+                if etype == "SlugExhausted"
+                else f"install failed ({etype}); the draft was quarantined."
+            )
+            await workflow.execute_activity(
+                A.act_write_quarantine,
+                args=[
+                    tenant_id,
+                    workflow.info().workflow_id,
+                    transcript,
+                    draft,
+                    review["data"],
+                    test.get("data"),
+                    f"install_failed: {etype}",
+                ],
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+            )
+            if session_id:
+                await workflow.execute_activity(
+                    A.act_notify_session,
+                    args=[
+                        session_id,
+                        {"status": "install_failed", "message": install_msg},
+                    ],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                )
+            return {
+                "status": "install_failed",
+                "error": err,
+                "notify_message": install_msg,
+            }
 
         # --- step 7: diffuse (T3.2e — soft-fail does NOT abort install) ---
         capabilities = _extract_capabilities(draft["skill_md"])

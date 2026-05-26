@@ -617,3 +617,67 @@ async def test_workflow_diffuse_success_no_cache_key(env, worker, monkeypatch):
     )
     assert result["status"] == "success"
     assert "diffuse_cached" not in result
+
+
+# ---------------------------------------------------------------------------
+# T3.2f — install_failed branches (workflow-side; server-side DB+FS
+# rollback lands in T4.4e)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_workflow_install_slug_exhausted(env, worker, monkeypatch):
+    """T3.2f — install raises SlugExhausted (409): workflow quarantines
+    the reviewed+tested draft and returns ``install_failed`` with a
+    user-facing notify message that nudges towards ``--slug`` or rename.
+    The real DB-side serialization that produces SlugExhausted after 5
+    retries lives in T4.4e."""
+    responses = _happy_responses()
+    responses["install_skill"] = _typed_error(
+        409, "SlugExhausted", "5 retries exhausted"
+    )
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-install-slug-exhausted",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "install_failed"
+    assert result["error"]["type"] == "SlugExhausted"
+    assert "slug" in result["notify_message"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_install_unknown_error(env, worker, monkeypatch):
+    """T3.2f — install raises an unknown error (500 / non-typed): workflow
+    still quarantines + returns install_failed with the generic message.
+
+    The reviewer-flagged B4 case (DB error mid-transaction, FS-rollback
+    after row reserved) manifests to the workflow as exactly this
+    envelope shape, validated server-side in T4.4e."""
+    responses = _happy_responses()
+    responses["install_skill"] = _typed_error(
+        500, "UnknownError", "db connection refused"
+    )
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-install-unknown-error",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "install_failed"
+    assert result["error"]["type"] == "UnknownError"
+    assert "quarantined" in result["notify_message"]
