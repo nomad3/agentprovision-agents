@@ -1481,7 +1481,8 @@ import os
 import httpx
 from temporalio import activity
 
-_MCP_BASE = os.environ.get("MCP_SERVER_BASE", "http://mcp-tools:8001")
+_MCP_BASE = os.environ.get("MCP_SERVER_BASE", "http://mcp-tools:8000")  # REST FastAPI port (NOT 8001; that's FastMCP streamable). Resolved during T1.2a review.
+_TOOL_PREFIX = "/agentprovision/v1/tools"  # matches existing server.py convention; T1.2a registered the learning shim here
 _HEADERS = {"X-Internal-Key": os.environ.get("MCP_API_KEY", "")}
 
 # Maps MCP-side HTTP status → typed exception name (mirrors learning.py exceptions).
@@ -1496,7 +1497,7 @@ _STATUS_TO_TYPE = {
 
 async def _call_mcp(tool: str, payload: dict) -> dict:
     async with httpx.AsyncClient(timeout=120.0) as client:
-        r = await client.post(f"{_MCP_BASE}/tools/{tool}", json=payload, headers=_HEADERS)
+        r = await client.post(f"{_MCP_BASE}{_TOOL_PREFIX}/{tool}", json=payload, headers=_HEADERS)
         r.raise_for_status()
         return r.json()
 
