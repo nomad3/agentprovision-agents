@@ -381,7 +381,7 @@ class LearnFromMediaWorkflow:
                     "revise_attempts": revise_attempts,
                 }
 
-        # --- step 5: synthetic test ---
+        # --- step 5: synthetic test (T3.2d) ---
         test = await workflow.execute_activity(
             A.act_run_synthetic_test,
             args=[
@@ -392,9 +392,51 @@ class LearnFromMediaWorkflow:
             start_to_close_timeout=_ACTIVITY_TIMEOUTS["test"],
         )
         if not test["ok"] or not test["data"]["passed"]:
+            test_error = (
+                test["data"].get("error") if test["ok"] else test["error"]
+            )
+            test_msg = (
+                "synthetic test failed; no install. The reviewer-approved "
+                "draft was quarantined and the rejection logged."
+            )
+            # T4.4e audit row: result=rejected_test_fail (spec §3).
+            await workflow.execute_activity(
+                A.act_log_test_fail,
+                args=[
+                    tenant_id,
+                    workflow.info().workflow_id,
+                    draft.get("slug"),
+                    test_error,
+                    review["data"].get("reviewer_agent_id"),
+                ],
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+            )
+            await workflow.execute_activity(
+                A.act_write_quarantine,
+                args=[
+                    tenant_id,
+                    workflow.info().workflow_id,
+                    transcript,
+                    draft,
+                    review["data"],
+                    test.get("data"),
+                    f"test_failed: {test_error}",
+                ],
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+            )
+            if session_id:
+                await workflow.execute_activity(
+                    A.act_notify_session,
+                    args=[
+                        session_id,
+                        {"status": "test_failed", "message": test_msg},
+                    ],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                )
             return {
                 "status": "test_failed",
-                "error": test["data"].get("error") if test["ok"] else test["error"],
+                "error": test_error,
+                "notify_message": test_msg,
             }
 
         # --- step 6: install ---

@@ -50,6 +50,7 @@ async def worker(env):
             A.act_diffuse_learning,
             A.act_write_cache,
             A.act_write_quarantine,
+            A.act_log_test_fail,
             A.act_notify_session,
             A.act_probe_attachment,
         ],
@@ -464,3 +465,74 @@ async def test_workflow_review_timeout_quarantines(env, worker, monkeypatch):
     assert result["status"] == "review_failed"
     assert result["error"]["type"] == "ReviewTimeout"
     assert "--resume-last" not in result["notify_message"]
+
+
+# ---------------------------------------------------------------------------
+# T3.2d — test_failed → quarantine + audit row
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_workflow_test_failed_quarantines(env, worker, monkeypatch):
+    """T3.2d — run_synthetic_test returns ``passed: False`` →
+    workflow writes a library_revisions audit row (act_log_test_fail) +
+    quarantines the draft. No install attempted.
+
+    The stubs for act_log_test_fail and act_write_quarantine return
+    ``{ok: True, ...}`` envelopes so the workflow proceeds through both;
+    real bodies land in T4.4e (audit) and T3.3 (quarantine). Failure to
+    reach either would surface as a worker error or wrong return status.
+    """
+    responses = _happy_responses()
+    responses["run_synthetic_test"] = {
+        "passed": False,
+        "actual_output": {"y": 99},
+        "error": "expected y=2 got y=99",
+    }
+    # If the workflow accidentally proceeds to install / diffuse, those
+    # entries are still present in _happy_responses; with the correct
+    # branching they should NEVER be called. We can't easily assert
+    # "not called" without an interceptor, but the returned status is
+    # ``test_failed`` (not ``success``) which proves the branch fired
+    # before install.
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-test-failed",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "test_failed"
+    assert "expected y=2" in result["error"]
+    assert "quarantined" in result["notify_message"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_test_step_envelope_error(env, worker, monkeypatch):
+    """T3.2d — run_synthetic_test itself errors (e.g. transient code-worker
+    failure) → workflow still treats it as test_failed and quarantines.
+    The error string comes from the envelope's ``error.type`` so user-facing
+    notify can mention the underlying cause."""
+    responses = _happy_responses()
+    responses["run_synthetic_test"] = _typed_error(500, "UnknownError", "worker died")
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-test-envelope-err",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "test_failed"
+    # ``error`` is the envelope dict, not a string, when the step itself failed.
+    assert result["error"]["type"] == "UnknownError"
