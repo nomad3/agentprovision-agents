@@ -28,6 +28,17 @@ from app.workflows.activities import learn_from_media_activities as A
 from app.workflows.learn_from_media_workflow import LearnFromMediaWorkflow
 
 
+@pytest.fixture(autouse=True)
+def _isolate_workspace(monkeypatch, tmp_path):
+    """T3.3+ activities (act_write_cache/act_write_quarantine) write to
+    ``_WORKSPACE_BASE`` which defaults to ``/var/agentprovision/workspaces``
+    — a path the test process can't create. Redirect every workflow test
+    to a tmp dir so the quarantine/cache writes succeed (otherwise the
+    activity raises PermissionError, Temporal retries forever, and the
+    test hangs until pytest-timeout fires)."""
+    monkeypatch.setattr(A, "_WORKSPACE_BASE", tmp_path)
+
+
 @pytest.fixture
 async def env():
     async with await WorkflowEnvironment.start_time_skipping() as e:
@@ -53,6 +64,7 @@ async def worker(env):
             A.act_log_test_fail,
             A.act_notify_session,
             A.act_probe_attachment,
+            A.act_read_cache,
         ],
     ) as w:
         yield w
@@ -681,3 +693,176 @@ async def test_workflow_install_unknown_error(env, worker, monkeypatch):
     assert result["status"] == "install_failed"
     assert result["error"]["type"] == "UnknownError"
     assert "quarantined" in result["notify_message"]
+
+
+# ---------------------------------------------------------------------------
+# T3.4 — resume path (reviewer-down + KG-down)
+# ---------------------------------------------------------------------------
+
+_HAPPY_DRAFT = {
+    "skill_md": (
+        "---\n"
+        "name: Fix Printer\n"
+        "engine: markdown\n"
+        "auto_trigger: \"Fix printer\"\n"
+        "inputs: []\n"
+        "tags: [hardware]\n"
+        "---\n"
+        "Unplug it"
+    ),
+    "slug": "fix-printer",
+    "engine": "markdown",
+    "synthetic_test_input": {"x": 1},
+    "synthetic_test_expected": {"y": 2},
+}
+
+
+@pytest.mark.asyncio
+async def test_workflow_resume_reviewer_down(env, worker, monkeypatch, tmp_path):
+    """T3.4 — reviewer-down resume: cache holds transcript + draft only
+    (no review.json, no test.json). Workflow re-dispatches
+    ``dispatch_skill_review`` against the cached draft and proceeds through
+    test → install → diffuse → success. ``extract_media`` and
+    ``transcribe_url`` MUST NOT be called (they're the expensive steps the
+    resume path exists to skip)."""
+    # Point the cache at a tmp_path so we control the on-disk state.
+    monkeypatch.setattr(A, "_WORKSPACE_BASE", tmp_path)
+    # Seed the reviewer-down cache shape (transcript + draft, no review,
+    # no test) per the T3.4 contract.
+    job_id = "resume-job-reviewer-down"
+    cdir = tmp_path / "_tenant" / "t1" / "_learning_cache" / job_id
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "transcript.txt").write_text("hello world")
+    (cdir / "draft.md").write_text(_HAPPY_DRAFT["skill_md"])
+    import json as _json
+    (cdir / "draft.json").write_text(_json.dumps(_HAPPY_DRAFT))
+
+    # Only the post-cache steps should hit MCP. extract / transcribe /
+    # synth are NOT in the responses dict so _mock_mcp_responses raises
+    # RuntimeError → test fail if the workflow tries to call them.
+    _mock_mcp_responses(
+        monkeypatch,
+        {
+            "dispatch_skill_review": {
+                "verdict": "approved",
+                "findings": [],
+                "reviewer_agent_id": "rev-1",
+            },
+            "run_synthetic_test": {
+                "passed": True,
+                "actual_output": {"y": 2},
+                "error": None,
+            },
+            "install_skill": {
+                "skill_id": "s1",
+                "path": "/x/_tenant/t1/fix-printer/skill.md",
+            },
+            "diffuse_learning": {"observation_id": "obs1", "soft_failed": False},
+        },
+    )
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+            "resume_job_id": job_id,
+        },
+        id="test-resume-reviewer-down",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    assert result["resumed"] is True
+    assert result["skill_id"] == "s1"
+    assert result["skill_name"] == "Fix Printer"
+
+
+@pytest.mark.asyncio
+async def test_workflow_resume_kg_down(env, worker, monkeypatch, tmp_path):
+    """T3.4 — KG-down resume: cache holds transcript + draft + review +
+    test.install (skill already installed). Workflow retries
+    ``diffuse_learning`` ONLY — no extract, no transcribe, no synth, no
+    review, no test, no install. Success returns the cached install info
+    with ``resumed: true``."""
+    monkeypatch.setattr(A, "_WORKSPACE_BASE", tmp_path)
+    job_id = "resume-job-kg-down"
+    cdir = tmp_path / "_tenant" / "t1" / "_learning_cache" / job_id
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "transcript.txt").write_text("hello world")
+    (cdir / "draft.md").write_text(_HAPPY_DRAFT["skill_md"])
+    import json as _json
+    (cdir / "draft.json").write_text(_json.dumps(_HAPPY_DRAFT))
+    (cdir / "review.json").write_text(
+        _json.dumps(
+            {
+                "verdict": "approved",
+                "findings": [],
+                "reviewer_agent_id": "rev-1",
+            }
+        )
+    )
+    (cdir / "test.json").write_text(
+        _json.dumps(
+            {
+                "install": {
+                    "skill_id": "s-existing",
+                    "path": "/x/_tenant/t1/fix-printer/skill.md",
+                    "capabilities": ["Fix printer", "hardware"],
+                },
+                "soft_failed_diffuse": True,
+            }
+        )
+    )
+
+    # Only diffuse_learning is allowed — every other MCP call raises.
+    _mock_mcp_responses(
+        monkeypatch,
+        {
+            "diffuse_learning": {
+                "observation_id": "obs-resumed",
+                "soft_failed": False,
+            },
+        },
+    )
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+            "resume_job_id": job_id,
+        },
+        id="test-resume-kg-down",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    assert result["resumed"] is True
+    assert result["skill_id"] == "s-existing"
+    assert result["skill_path"] == "/x/_tenant/t1/fix-printer/skill.md"
+    # diffuse_cached must NOT be set: this resume succeeded, no soft-fail.
+    assert "diffuse_cached" not in result
+
+
+@pytest.mark.asyncio
+async def test_workflow_resume_cache_not_found(env, worker, monkeypatch, tmp_path):
+    """T3.4 — resume with a job_id that has no cache directory returns
+    ``resume_cache_not_found`` so the caller knows to re-dispatch fresh
+    instead of silently re-running the full pipeline."""
+    monkeypatch.setattr(A, "_WORKSPACE_BASE", tmp_path)
+    # No MCP calls allowed — workflow must short-circuit on the cache miss
+    # without touching extract/transcribe/anything else.
+    _mock_mcp_responses(monkeypatch, {})
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+            "resume_job_id": "no-such-job",
+        },
+        id="test-resume-not-found",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "resume_cache_not_found"
+    assert result["job_id"] == "no-such-job"
+    assert result["error"]["type"] == "CacheNotFound"

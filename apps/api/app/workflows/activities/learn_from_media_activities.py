@@ -277,7 +277,14 @@ async def act_write_cache(
         raise CacheAndQuarantineConflict(f"{job_id} already quarantined")
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "transcript.txt").write_text(transcript or "")
+    # Write skill_md to draft.md for operator inspection, plus the FULL
+    # draft dict to draft.json so the resume path (T3.4) has slug +
+    # synthetic_test_input + synthetic_test_expected intact. Losing those
+    # on resume would force re-synth and break determinism (same skill_id,
+    # same install path).
     (cdir / "draft.md").write_text((draft or {}).get("skill_md", ""))
+    if draft:
+        (cdir / "draft.json").write_text(json.dumps(draft))
     if last_review:
         (cdir / "review.json").write_text(json.dumps(last_review))
     if last_test:
@@ -313,6 +320,74 @@ async def act_write_quarantine(
         (qdir / "test_result.json").write_text(json.dumps(test_result))
     (qdir / "abort_reason.txt").write_text(abort_reason)
     return {"quarantine_dir": str(qdir)}
+
+
+@activity.defn
+async def act_read_cache(tenant_id: str, job_id: str) -> dict:
+    """T3.4 — read cached resume bundle under ``_learning_cache/<job_id>/``.
+
+    Returns the parsed bundle so the workflow can short-circuit to the
+    failed step. Two cache shapes per spec §1.11 + §3:
+
+    * **Reviewer-down**: ``transcript.txt`` + ``draft.md`` only. No
+      ``review.json``. Workflow resumes from step 4 (review).
+    * **KG-down (diffuse soft-fail)**: ``transcript.txt`` + ``draft.md`` +
+      ``review.json`` (holding ``{skill_id, capabilities}`` from the
+      install step). Workflow resumes from step 7 (diffuse).
+
+    The activity is read-only — it does NOT clear the cache. The resume
+    flow re-runs the failed step and overwrites the cache (on subsequent
+    failure) or proceeds past it (on success) via the normal pipeline.
+
+    Returns ``{ok: False, error: {type: "CacheNotFound"}}`` when the
+    directory is missing, so the workflow surfaces a clean error envelope
+    instead of crashing.
+    """
+    cdir = _tenant_root(tenant_id) / "_learning_cache" / job_id
+    if not cdir.exists():
+        return {
+            "ok": False,
+            "data": None,
+            "error": {"type": "CacheNotFound", "message": f"no cache for job {job_id}"},
+        }
+    transcript_p = cdir / "transcript.txt"
+    draft_json_p = cdir / "draft.json"
+    draft_md_p = cdir / "draft.md"
+    review_p = cdir / "review.json"
+    test_p = cdir / "test.json"
+    transcript = transcript_p.read_text() if transcript_p.exists() else ""
+    # Prefer the full draft JSON (slug + test inputs intact); fall back to
+    # the skill_md-only shape for legacy caches written before T3.4.
+    draft: dict = {}
+    if draft_json_p.exists():
+        try:
+            draft = json.loads(draft_json_p.read_text())
+        except (json.JSONDecodeError, ValueError):
+            draft = {}
+    if not draft and draft_md_p.exists():
+        draft = {"skill_md": draft_md_p.read_text()}
+    last_review = None
+    if review_p.exists():
+        try:
+            last_review = json.loads(review_p.read_text())
+        except (json.JSONDecodeError, ValueError):
+            last_review = None
+    last_test = None
+    if test_p.exists():
+        try:
+            last_test = json.loads(test_p.read_text())
+        except (json.JSONDecodeError, ValueError):
+            last_test = None
+    return {
+        "ok": True,
+        "data": {
+            "transcript": transcript,
+            "draft": draft,
+            "last_review": last_review,
+            "last_test": last_test,
+        },
+        "error": None,
+    }
 
 
 @activity.defn

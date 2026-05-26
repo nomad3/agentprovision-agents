@@ -133,6 +133,125 @@ class LearnFromMediaWorkflow:
         tenant_id = intent["tenant_id"]
         learned_by = intent["actor_user_id"]
         session_id = intent.get("session_id")
+        resume_job_id = intent.get("resume_job_id")
+
+        # --- T3.4: resume short-circuit ---
+        # When ``resume_job_id`` is set the workflow reads the cached state
+        # (T3.3 cache layout) and picks up from the failed step. Two
+        # recovery shapes per spec §1.11 + §3:
+        #
+        #   * **Reviewer-down**: cache holds transcript + draft only; the
+        #     last review attempt errored with ``ReviewerNotProvisioned``.
+        #     Resume re-runs dispatch_skill_review (step 4) and proceeds
+        #     forward through test → install → diffuse.
+        #
+        #   * **KG-down (diffuse soft-fail)**: install already succeeded;
+        #     the cached ``last_test`` envelope carries ``install`` info
+        #     (skill_id, path, capabilities). Resume re-runs diffuse only
+        #     (step 7) — no re-install (would duplicate the row).
+        #
+        # If the cache directory is missing we surface
+        # ``resume_cache_not_found`` so the caller can re-dispatch fresh.
+        if resume_job_id:
+            cache = await workflow.execute_activity(
+                A.act_read_cache,
+                args=[tenant_id, resume_job_id],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            if not cache["ok"]:
+                return {
+                    "status": "resume_cache_not_found",
+                    "job_id": resume_job_id,
+                    "error": cache["error"],
+                }
+            cdata = cache["data"]
+            transcript = cdata["transcript"]
+            draft = cdata["draft"] or {}
+            last_test = cdata.get("last_test") or {}
+            last_review = cdata.get("last_review") or {}
+            # Cached source_url is not currently persisted; fall back to
+            # the intent or a synthetic marker.
+            provenance_url = source_url or f"resume://{resume_job_id}"
+
+            install_info = (
+                last_test.get("install")
+                if isinstance(last_test, dict)
+                else None
+            )
+            if install_info:
+                # KG-down resume: install survived, retry diffuse only.
+                capabilities = install_info.get(
+                    "capabilities"
+                ) or _extract_capabilities(draft.get("skill_md", ""))
+                skill_id = install_info["skill_id"]
+                diffuse = await workflow.execute_activity(
+                    A.act_diffuse_learning,
+                    args=[skill_id, provenance_url, capabilities],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["diffuse"],
+                )
+                diffuse_cached = False
+                if not diffuse["ok"] or (diffuse.get("data") or {}).get(
+                    "soft_failed"
+                ):
+                    await workflow.execute_activity(
+                        A.act_write_cache,
+                        args=[
+                            tenant_id,
+                            resume_job_id,
+                            transcript,
+                            draft,
+                            last_review,
+                            {
+                                "install": install_info,
+                                "soft_failed_diffuse": True,
+                            },
+                        ],
+                        start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+                    )
+                    diffuse_cached = True
+                result = {
+                    "status": "success",
+                    "skill_id": skill_id,
+                    "skill_path": install_info.get("path"),
+                    "skill_name": _skill_name(draft.get("skill_md", "")),
+                    "capabilities": capabilities,
+                    "source_url": provenance_url,
+                    "resumed": True,
+                }
+                if diffuse_cached:
+                    result["diffuse_cached"] = True
+                if session_id:
+                    await workflow.execute_activity(
+                        A.act_notify_session,
+                        args=[session_id, result],
+                        start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                    )
+                return result
+
+            # Reviewer-down resume: jump into the review step with the
+            # cached transcript + draft (skipping the costly
+            # extract+transcribe). The cached draft already carries
+            # slug + synthetic_test_input/expected (T3.4 draft.json), so
+            # we can re-dispatch review directly without re-synthesising.
+            if not draft.get("skill_md"):
+                return {
+                    "status": "resume_cache_not_found",
+                    "job_id": resume_job_id,
+                    "error": {
+                        "type": "CacheIncomplete",
+                        "message": "draft missing from cache",
+                    },
+                }
+            return await self._run_review_onwards(
+                tenant_id=tenant_id,
+                job_id=resume_job_id,
+                transcript=transcript,
+                draft=draft,
+                provenance_url=provenance_url,
+                session_id=session_id,
+                learned_by=learned_by,
+                resumed=True,
+            )
 
         # --- step 1: extract OR probe attachment ---
         if attachment:
@@ -193,26 +312,66 @@ class LearnFromMediaWorkflow:
         transcript = trans["data"]["transcript"]
 
         # --- step 3+4: synth → review loop (T3.2c) ---
-        # On verdict=revise the reviewer's findings flow into the next synth
-        # call as hints. Capped at LUNA_LEARN_MAX_REVISE_RETRIES extra
-        # revise attempts (default 2 per spec §3) → revise_exhausted →
-        # quarantine. ReviewerNotProvisioned is recoverable (cache + resume
-        # hint); ReviewTimeout is terminal (quarantine).
+        return await self._run_review_onwards(
+            tenant_id=tenant_id,
+            job_id=workflow.info().workflow_id,
+            transcript=transcript,
+            draft=None,
+            provenance_url=provenance_url,
+            session_id=session_id,
+            learned_by=learned_by,
+            resumed=False,
+        )
+
+    async def _run_review_onwards(
+        self,
+        *,
+        tenant_id: str,
+        job_id: str,
+        transcript: str,
+        draft: dict | None,
+        provenance_url: str,
+        session_id: str | None,
+        learned_by: str,
+        resumed: bool,
+    ) -> dict:
+        """Run synth+review loop → test → install → diffuse → notify.
+
+        Extracted so the T3.4 resume path can re-enter the pipeline at
+        the review step with a pre-loaded ``draft`` from cache, skipping
+        the costly extract+transcribe stages. When ``draft`` is provided
+        AND ``resumed`` is True, the first iteration of the loop reuses
+        it instead of calling ``act_synthesize_skill_draft`` — this is
+        the whole point of caching the draft on reviewer-down failure
+        (the synth output is deterministic-ish but re-running it would
+        risk a different skill_md / slug, defeating idempotent install).
+        """
+        # On verdict=revise the reviewer's findings flow into the next
+        # synth call as hints. Capped at LUNA_LEARN_MAX_REVISE_RETRIES
+        # extra revise attempts (default 2 per spec §3) → revise_exhausted
+        # → quarantine. ReviewerNotProvisioned is recoverable (cache +
+        # resume hint); ReviewTimeout is terminal (quarantine).
         max_revise = _MAX_REVISE_RETRIES
         hints: list[str] = []
-        draft = None
         review = None
         revise_attempts = 0
+        cached_draft = draft if resumed else None
         # Initial synth (attempt 0) + up to max_revise revisions.
         for attempt in range(max_revise + 1):
-            synth = await workflow.execute_activity(
-                A.act_synthesize_skill_draft,
-                args=[transcript, provenance_url, hints],
-                start_to_close_timeout=_ACTIVITY_TIMEOUTS["synth"],
-            )
-            if not synth["ok"]:
-                return {"status": "synth_failed", "error": synth["error"]}
-            draft = synth["data"]
+            if attempt == 0 and cached_draft and cached_draft.get("skill_md"):
+                # T3.4 resume — reuse cached draft for the first review
+                # attempt. If the review verdict is ``revise`` we fall
+                # through to synth on the next iteration (with hints).
+                draft = cached_draft
+            else:
+                synth = await workflow.execute_activity(
+                    A.act_synthesize_skill_draft,
+                    args=[transcript, provenance_url, hints],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["synth"],
+                )
+                if not synth["ok"]:
+                    return {"status": "synth_failed", "error": synth["error"]}
+                draft = synth["data"]
 
             review = await workflow.execute_activity(
                 A.act_dispatch_skill_review,
@@ -242,15 +401,20 @@ class LearnFromMediaWorkflow:
                         "the Code Reviewer agent, then re-send the URL or run "
                         "`alpha learn --resume-last` to pick up from review."
                     )
+                    # Reviewer-down cache: persist transcript + draft so
+                    # the T3.4 resume path can re-dispatch review without
+                    # re-running extract/transcribe. ``last_review`` and
+                    # ``last_test`` are intentionally None — the resume
+                    # reader keys on their absence to pick this mode.
                     await workflow.execute_activity(
                         A.act_write_cache,
                         args=[
                             tenant_id,
-                            workflow.info().workflow_id,
+                            job_id,
                             transcript,
                             draft,
                             None,
-                            "reviewer_not_provisioned",
+                            None,
                         ],
                         start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
                     )
@@ -280,7 +444,7 @@ class LearnFromMediaWorkflow:
                     A.act_write_quarantine,
                     args=[
                         tenant_id,
-                        workflow.info().workflow_id,
+                        job_id,
                         transcript,
                         draft,
                         None,
@@ -318,7 +482,7 @@ class LearnFromMediaWorkflow:
                     A.act_write_quarantine,
                     args=[
                         tenant_id,
-                        workflow.info().workflow_id,
+                        job_id,
                         transcript,
                         draft,
                         review["data"],
@@ -356,7 +520,7 @@ class LearnFromMediaWorkflow:
                     A.act_write_quarantine,
                     args=[
                         tenant_id,
-                        workflow.info().workflow_id,
+                        job_id,
                         transcript,
                         draft,
                         review["data"],
@@ -404,7 +568,7 @@ class LearnFromMediaWorkflow:
                 A.act_log_test_fail,
                 args=[
                     tenant_id,
-                    workflow.info().workflow_id,
+                    job_id,
                     draft.get("slug"),
                     test_error,
                     review["data"].get("reviewer_agent_id"),
@@ -415,7 +579,7 @@ class LearnFromMediaWorkflow:
                 A.act_write_quarantine,
                 args=[
                     tenant_id,
-                    workflow.info().workflow_id,
+                    job_id,
                     transcript,
                     draft,
                     review["data"],
@@ -472,7 +636,7 @@ class LearnFromMediaWorkflow:
                 A.act_write_quarantine,
                 args=[
                     tenant_id,
-                    workflow.info().workflow_id,
+                    job_id,
                     transcript,
                     draft,
                     review["data"],
@@ -511,18 +675,27 @@ class LearnFromMediaWorkflow:
         # usable. Cache the pending diffusion so ``alpha learn --resume-last``
         # can retry. User sees ``success`` (with ``diffuse_cached: true``).
         if not diffuse["ok"] or (diffuse.get("data") or {}).get("soft_failed"):
+            # Cache shape for KG-down resume (T3.4): preserve the
+            # reviewer envelope verbatim and stash install info under
+            # ``last_test.install``. ``act_read_cache`` keys on
+            # ``last_test["install"]`` to detect the diffuse-only resume
+            # mode (no re-install, no re-review).
             await workflow.execute_activity(
                 A.act_write_cache,
                 args=[
                     tenant_id,
-                    workflow.info().workflow_id,
+                    job_id,
                     transcript,
                     draft,
+                    review["data"],
                     {
-                        "skill_id": install["data"]["skill_id"],
-                        "capabilities": capabilities,
+                        "install": {
+                            "skill_id": install["data"]["skill_id"],
+                            "path": install["data"].get("path"),
+                            "capabilities": capabilities,
+                        },
+                        "soft_failed_diffuse": True,
                     },
-                    "diffuse_pending",
                 ],
                 start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
             )
@@ -539,6 +712,8 @@ class LearnFromMediaWorkflow:
         }
         if diffuse_cached:
             result["diffuse_cached"] = True
+        if resumed:
+            result["resumed"] = True
         if session_id:
             await workflow.execute_activity(
                 A.act_notify_session,
