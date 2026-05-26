@@ -1025,3 +1025,267 @@ def clone_skill(
     if not skill:
         raise HTTPException(status_code=404, detail="Skill not found")
     return skill
+
+
+# ---------------------------------------------------------------------------
+# T4.4d — internal /library/execute-draft endpoint
+# T4.4e — internal /library/install-learned endpoint
+#
+# These two routes back the Luna Learn mcp-server wrappers
+# (``run_synthetic_test`` + ``install_skill``). Both are internal-key
+# gated; both work on raw skill_md text without requiring the skill to
+# be installed first.
+# ---------------------------------------------------------------------------
+
+
+class ExecuteDraftRequest(BaseModel):
+    """Run a draft skill_md against test inputs WITHOUT persisting it.
+
+    The optional ``script`` field is only consumed for ``engine: python``
+    / ``engine: shell`` drafts. For ``engine: markdown`` drafts the
+    prompt body lives in the skill_md itself so no script is needed.
+    """
+
+    skill_md: str
+    inputs: Dict = {}
+    script: Optional[str] = None
+
+
+def _parse_draft_frontmatter(skill_md: str) -> Dict:
+    """Return the parsed frontmatter dict. Raises HTTPException(422) on bad input.
+
+    Spec §1.7: frontmatter MUST be a YAML block bracketed by ``---`` lines
+    starting at byte 0. Anything else is a draft synthesis bug — refuse
+    loudly rather than silently picking defaults.
+    """
+    if not skill_md.startswith("---"):
+        raise HTTPException(422, "draft parse failed: missing frontmatter delimiter")
+    parts = skill_md.split("---", 2)
+    if len(parts) < 3:
+        raise HTTPException(422, "draft parse failed: malformed frontmatter (need opening + closing ---)")
+    try:
+        meta = yaml.safe_load(parts[1].strip())
+    except yaml.YAMLError as e:
+        raise HTTPException(422, f"draft parse failed: invalid YAML — {e}")
+    if not isinstance(meta, dict):
+        raise HTTPException(422, "draft parse failed: frontmatter must be a YAML mapping")
+    if not meta.get("name"):
+        raise HTTPException(422, "draft parse failed: frontmatter missing required 'name' field")
+    return meta
+
+
+def skill_md_body(skill_md: str) -> str:
+    """Return the body after the closing ``---`` of the frontmatter.
+
+    Used by execute-draft to mirror the markdown body into a prompt.md
+    file because the skill_manager's ``_execute_markdown`` reads the
+    prompt body from ``script_path`` rather than from the skill.md
+    itself.
+    """
+    parts = skill_md.split("---", 2)
+    return parts[2].strip() if len(parts) >= 3 else ""
+
+
+@router.post("/library/execute-draft")
+def execute_draft_skill(
+    payload: ExecuteDraftRequest,
+    _auth: None = Depends(_verify_internal_key),
+):
+    """T4.4d — run an unsaved skill_md against ``inputs`` and return the output.
+
+    Called by mcp-server's ``run_synthetic_test`` (T2.5) to exercise a
+    reviewer-approved draft before deciding to install it. Writes the
+    draft to a transient tmpdir, builds a FileSkill via the same parser
+    used at scan time, then invokes the engine-appropriate execution
+    helper from ``SkillManager``. Nothing is persisted to the skills
+    library — this is a stateless dry-run.
+
+    Returns the same envelope shape as ``execute_file_skill``:
+    ``{"success": True, "skill": <name>, "result": {...}}`` on success,
+    ``{"error": "..."}`` on engine-level failure (still 200; the workflow
+    interprets ``error`` as a synthetic-test failure not an HTTP failure
+    per the contract in mcp-server's ``run_synthetic_test``).
+    """
+    import shutil
+    import tempfile
+    from app.services.skill_manager import _parse_skill_md, skill_manager
+
+    meta = _parse_draft_frontmatter(payload.skill_md)
+    engine = meta.get("engine", "markdown")
+    if engine not in ("python", "shell", "markdown"):
+        raise HTTPException(422, f"draft parse failed: unsupported engine '{engine}'")
+
+    script_filenames = {"python": "script.py", "shell": "script.sh", "markdown": "prompt.md"}
+    script_file = meta.get("script_path") or script_filenames.get(engine, "script.py")
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="execute-draft-"))
+    try:
+        skill_dir = tmpdir / "_draft"
+        skill_dir.mkdir()
+        (skill_dir / "skill.md").write_text(payload.skill_md, encoding="utf-8")
+
+        if engine in ("python", "shell"):
+            if not payload.script:
+                raise HTTPException(
+                    422,
+                    f"engine '{engine}' draft requires a 'script' body alongside skill_md",
+                )
+            (skill_dir / script_file).write_text(payload.script, encoding="utf-8")
+        elif engine == "markdown":
+            # ``_execute_markdown`` reads the prompt body from
+            # ``script_path`` (default ``prompt.md``), NOT from the
+            # skill.md body. For drafts the body lives inline in the
+            # skill_md, so we extract it (the bit after the closing
+            # ``---``) and mirror it into the script_path file.
+            md_body = skill_md_body(payload.skill_md)
+            (skill_dir / script_file).write_text(md_body, encoding="utf-8")
+
+        skill = _parse_skill_md(skill_dir, tier="custom")
+        if not skill:
+            raise HTTPException(422, "draft parse failed: _parse_skill_md returned None")
+
+        # Use engine-specific dispatch — execute_skill() looks up by name
+        # from the scanned registry which won't include our transient
+        # draft. Calling the private _execute_* helpers directly skips
+        # the registry lookup.
+        script_path = str(skill_dir / skill.script_path)
+        if engine == "python":
+            return skill_manager._execute_python(skill.name, script_path, payload.inputs)
+        if engine == "shell":
+            return skill_manager._execute_shell(skill.name, script_path, payload.inputs)
+        # markdown
+        return skill_manager._execute_markdown(skill, payload.inputs)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── T4.4e — install-learned ────────────────────────────────────────────
+
+
+class InstallLearnedRequest(BaseModel):
+    """Persist a reviewer-approved draft into the tenant skills library.
+
+    The endpoint enforces a single transaction: DB row insert + FS write
+    to ``_tenant/<uuid>/<slug>/skill.md`` + ``library_revisions`` audit
+    row. If the FS write fails after the DB row is reserved, the row is
+    rolled back so retries don't see a phantom skill entry (spec §1.7
+    "No-TOCTOU").
+    """
+
+    skill_md: str
+    slug: str
+    tenant_id: str
+    actor_user_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@router.post("/library/install-learned")
+def install_learned_skill(
+    payload: InstallLearnedRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(_verify_internal_key),
+):
+    """T4.4e — persist a Luna Learn draft into the tenant skills library.
+
+    Error contract (required by T3.1's ``_STATUS_TO_TYPE`` map and the
+    mcp-server install_skill retry loop):
+
+      * 200 — installed cleanly, returns ``{skill_id, slug, path}``.
+      * 409 — slug already taken (either DB row or on-disk dir exists).
+              The mcp-server loop catches this and re-attempts with a
+              ``-vN`` suffix.
+      * 422 — skill_md frontmatter could not be parsed.
+      * 500 — FS write failed after DB row was reserved; row was rolled
+              back so the next attempt sees a clean slot.
+    """
+    from app.models.skill import Skill as DBSkill
+    from app.services.library_revisions import record_revision
+
+    # Parse + validate frontmatter (422 path).
+    meta = _parse_draft_frontmatter(payload.skill_md)
+
+    # Tenant + actor UUIDs.
+    try:
+        tenant_uuid = uuid.UUID(payload.tenant_id)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "install failed: tenant_id is not a valid UUID")
+    actor_uuid: Optional[uuid.UUID] = None
+    if payload.actor_user_id:
+        try:
+            actor_uuid = uuid.UUID(payload.actor_user_id)
+        except (ValueError, TypeError):
+            actor_uuid = None  # mcp-server may pass an agent string id
+
+    # FS slot probe (cheap pre-check that lets us return a clean 409
+    # without first inserting a DB row that we'd then have to roll back).
+    tenant_dir = skill_manager._tenant_skills_dir(payload.tenant_id)
+    skill_dir = tenant_dir / payload.slug
+    if skill_dir.exists():
+        raise HTTPException(409, f"slug '{payload.slug}' already taken for tenant")
+
+    # DB row reservation. Reserving first keeps the DB authoritative and
+    # lets the FS rollback close cleanly on failure.
+    db_row = DBSkill(
+        tenant_id=tenant_uuid,
+        name=meta["name"],
+        description=meta.get("description") or "",
+        skill_type=meta.get("category", "learned"),
+        config={"engine": meta.get("engine", "markdown"), "slug": payload.slug, "source": "luna_learn"},
+        is_system=False,
+        enabled=True,
+    )
+    db.add(db_row)
+    try:
+        db.flush()
+    except Exception as e:
+        db.rollback()
+        # Unique-constraint or any other DB-level conflict → 409 so the
+        # caller's retry loop can suffix the slug. Any other DB error is
+        # surfaced as 500 by the caller's raise_for_status above.
+        raise HTTPException(409, f"slug '{payload.slug}' rejected by DB: {e}")
+
+    # FS write — wrap in try/except so any failure triggers a DB rollback
+    # and a 500 (the contract guarantees the next retry sees no orphan
+    # row, per spec §1.7 "No-TOCTOU").
+    try:
+        tenant_dir.mkdir(parents=True, exist_ok=True)
+        skill_dir.mkdir(parents=True, exist_ok=False)
+        (skill_dir / "skill.md").write_text(payload.skill_md, encoding="utf-8")
+    except FileExistsError:
+        db.rollback()
+        raise HTTPException(409, f"slug '{payload.slug}' already taken on disk")
+    except Exception as e:
+        # Best-effort FS cleanup before rollback.
+        try:
+            import shutil
+            if skill_dir.exists():
+                shutil.rmtree(skill_dir, ignore_errors=True)
+        except Exception:
+            pass
+        db.rollback()
+        raise HTTPException(500, f"FS write failed; DB row rolled back: {e}")
+
+    # Audit row (best-effort — its own session.commit() inside
+    # record_revision; on failure we still want the install to succeed
+    # because the DB+FS pair is the source of truth).
+    try:
+        record_revision(
+            db,
+            tenant_id=tenant_uuid,
+            target_type="skill",
+            target_ref=payload.slug,
+            actor_user_id=actor_uuid,
+            reason=payload.reason,
+            before_value=None,
+            after_value={"engine": meta.get("engine"), "name": meta["name"]},
+        )
+    except Exception:
+        logger_ = __import__("logging").getLogger(__name__)
+        logger_.exception("install-learned: revision audit row failed for slug=%s", payload.slug)
+
+    db.commit()
+    return {
+        "skill_id": str(db_row.id),
+        "slug": payload.slug,
+        "path": str(skill_dir / "skill.md"),
+    }
