@@ -409,19 +409,40 @@ def test_stub_activities_are_registered():
 
 
 @pytest.mark.asyncio
-async def test_stub_activities_minimal_bodies():
-    """T3.2b–f need cache/quarantine/log_test_fail returning envelopes so
-    the workflow body can branch through them. Real bodies in T3.3 / T4.4e.
-    ``notify_session`` + ``probe_attachment`` remain NotImplementedError
-    until T3.5 / T4.4b.
+async def test_stub_activities_minimal_bodies(tmp_path, monkeypatch):
+    """Branch-through smoke for the activities the workflow body dispatches
+    around cache/quarantine/audit. ``act_write_cache`` + ``act_write_quarantine``
+    landed real (T3.3) — they return ``{cache_dir|quarantine_dir: str}`` and
+    write files under the configured workspace. ``act_log_test_fail`` is still
+    a T4.4e stub returning the envelope shape. ``notify_session`` +
+    ``probe_attachment`` remain NotImplementedError until T3.5 / T4.4b.
     """
-    cache = await act_write_cache()
-    assert cache["ok"] is True
-    assert "cache_dir" in cache["data"]
+    # T3.3 helpers write to the FS — sandbox them onto tmp_path.
+    monkeypatch.setattr(
+        "app.workflows.activities.learn_from_media_activities._WORKSPACE_BASE",
+        tmp_path,
+    )
 
-    quar = await act_write_quarantine()
-    assert quar["ok"] is True
-    assert "quarantine_dir" in quar["data"]
+    cache = await act_write_cache(
+        tenant_id="t1",
+        job_id="job-1",
+        transcript="x",
+        draft={},
+        last_review=None,
+        last_test=None,
+    )
+    assert "cache_dir" in cache
+
+    quar = await act_write_quarantine(
+        tenant_id="t1",
+        job_id="job-2",
+        transcript="x",
+        draft={},
+        review={},
+        test_result=None,
+        abort_reason="x",
+    )
+    assert "quarantine_dir" in quar
 
     audit = await act_log_test_fail()
     assert audit["ok"] is True

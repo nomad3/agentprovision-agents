@@ -14,12 +14,33 @@ absent or unparseable (matches the T1.2a shim contract — plan §1.10).
 """
 from __future__ import annotations
 
+import json
 import os
 from functools import wraps
 from pathlib import Path
 
 import httpx
 from temporalio import activity
+
+
+# ---------------------------------------------------------------------------
+# Tenant workspace layout (spec §1.11 + §2 — T3.3)
+# ---------------------------------------------------------------------------
+# Cache:      _tenant/<uuid>/_learning_cache/<job_id>/             (7-day TTL)
+# Quarantine: _tenant/<uuid>/_learning_quarantine/<job_id>/        (30-day TTL)
+# A given job_id MUST NOT appear in both at the same time — see
+# ``CacheAndQuarantineConflict``. Base path is module-level so tests can
+# ``monkeypatch.setattr`` it onto a ``tmp_path`` without touching the FS.
+_WORKSPACE_BASE = Path("/var/agentprovision/workspaces")
+
+
+def _tenant_root(tenant_id: str) -> Path:
+    """Resolve ``_tenant/<uuid>/`` under the configured workspace base."""
+    return _WORKSPACE_BASE / "_tenant" / tenant_id
+
+
+class CacheAndQuarantineConflict(Exception):
+    """Spec §1.11: a job_id may exist in cache OR quarantine, never both."""
 
 
 # Default targets the in-cluster service name on the docker-compose / Helm
@@ -232,15 +253,66 @@ async def act_diffuse_learning(
 # ---------------------------------------------------------------------------
 
 @activity.defn
-async def act_write_cache(*args, **kwargs) -> dict:
-    """T3.3 stub — returns a cache marker so T3.2c/e branches can proceed."""
-    return {"ok": True, "data": {"cache_dir": "stub"}, "error": None}
+async def act_write_cache(
+    tenant_id: str,
+    job_id: str,
+    transcript: str,
+    draft: dict,
+    last_review: dict | None,
+    last_test: dict | None,
+) -> dict:
+    """Persist resumable cache bundle under ``_learning_cache/<job_id>/``.
+
+    Enforces the spec §1.11 mutex: if a quarantine entry already exists for
+    this ``job_id``, refuse (raising ``CacheAndQuarantineConflict``) so the
+    caller cannot leave the workspace in a both-locations state. The
+    quarantine layout uses ``<YYYY-MM-DD-HHMMSS>-<slug>`` directory names
+    (spec §2), so we match by suffix on ``job_id``.
+    """
+    cdir = _tenant_root(tenant_id) / "_learning_cache" / job_id
+    qdir = _tenant_root(tenant_id) / "_learning_quarantine"
+    if qdir.exists() and any(
+        d.name.endswith(job_id) for d in qdir.iterdir() if d.is_dir()
+    ):
+        raise CacheAndQuarantineConflict(f"{job_id} already quarantined")
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "transcript.txt").write_text(transcript or "")
+    (cdir / "draft.md").write_text((draft or {}).get("skill_md", ""))
+    if last_review:
+        (cdir / "review.json").write_text(json.dumps(last_review))
+    if last_test:
+        (cdir / "test.json").write_text(json.dumps(last_test))
+    return {"cache_dir": str(cdir)}
 
 
 @activity.defn
-async def act_write_quarantine(*args, **kwargs) -> dict:
-    """T3.3 stub — returns a quarantine marker so T3.2b/c/d branches can proceed."""
-    return {"ok": True, "data": {"quarantine_dir": "stub"}, "error": None}
+async def act_write_quarantine(
+    tenant_id: str,
+    job_id: str,
+    transcript: str,
+    draft: dict,
+    review: dict,
+    test_result: dict | None,
+    abort_reason: str,
+) -> dict:
+    """Persist final-failure bundle under ``_learning_quarantine/<job_id>/``.
+
+    Enforces the spec §1.11 mutex: if a cache entry exists for this
+    ``job_id``, refuse (raising ``CacheAndQuarantineConflict``). Caller is
+    expected to clear the cache entry before quarantining.
+    """
+    cdir = _tenant_root(tenant_id) / "_learning_cache" / job_id
+    if cdir.exists():
+        raise CacheAndQuarantineConflict(f"{job_id} already in cache")
+    qdir = _tenant_root(tenant_id) / "_learning_quarantine" / job_id
+    qdir.mkdir(parents=True, exist_ok=True)
+    (qdir / "transcript.txt").write_text(transcript or "")
+    (qdir / "draft.md").write_text((draft or {}).get("skill_md", ""))
+    (qdir / "review.json").write_text(json.dumps(review) if review else "{}")
+    if test_result:
+        (qdir / "test_result.json").write_text(json.dumps(test_result))
+    (qdir / "abort_reason.txt").write_text(abort_reason)
+    return {"quarantine_dir": str(qdir)}
 
 
 @activity.defn
