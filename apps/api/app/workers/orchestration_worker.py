@@ -206,6 +206,23 @@ from app.workflows.activities.inbound_lead_capture import (
 )
 from app.workflows.activities.agent_performance import compute_agent_performance_snapshot
 from app.workflows.agent_performance_rollup import AgentPerformanceRollupWorkflow
+# Luna Learn (T3.1) — activities are functional; LearnFromMediaWorkflow is
+# NOT yet added to `workflows=[...]` because its body is still
+# NotImplementedError (T3.2a does that). Activities are safe to register
+# now: Temporal only dispatches them when a workflow invokes them.
+from app.workflows.activities.learn_from_media_activities import (
+    act_extract_media as learn_act_extract_media,
+    act_transcribe_url as learn_act_transcribe_url,
+    act_synthesize_skill_draft as learn_act_synthesize_skill_draft,
+    act_dispatch_skill_review as learn_act_dispatch_skill_review,
+    act_run_synthetic_test as learn_act_run_synthetic_test,
+    act_install_skill as learn_act_install_skill,
+    act_diffuse_learning as learn_act_diffuse_learning,
+    act_write_cache as learn_act_write_cache,
+    act_write_quarantine as learn_act_write_quarantine,
+    act_notify_session as learn_act_notify_session,
+    act_probe_attachment as learn_act_probe_attachment,
+)
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -413,6 +430,22 @@ async def run_orchestration_worker():
             # Returns success=False; api-side OAuth handlers stay on
             # subprocess.run until Phase D-2/D-3 wire this in.
             oauth_run_oauth_handshake,
+            # Luna Learn (T3.1) — 7 MCP-backed activities + 4 stubs
+            # whose bodies land in T3.3 (cache/quarantine), T3.5
+            # (notify_session), T4.4b (probe_attachment). Stubs are
+            # registered now so T3.2's workflow body can be added in
+            # a single follow-up PR without re-touching the worker file.
+            learn_act_extract_media,
+            learn_act_transcribe_url,
+            learn_act_synthesize_skill_draft,
+            learn_act_dispatch_skill_review,
+            learn_act_run_synthetic_test,
+            learn_act_install_skill,
+            learn_act_diffuse_learning,
+            learn_act_write_cache,
+            learn_act_write_quarantine,
+            learn_act_notify_session,
+            learn_act_probe_attachment,
         ],
     )
 
