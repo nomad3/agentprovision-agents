@@ -28,6 +28,10 @@
 
 mcp-server tests + production code use `from src.mcp_tools import learning` (with the `src.` prefix), NOT `from mcp_tools import learning`. Several test code samples in this plan show the bare form — implementer subagents should mirror neighboring test files in `apps/mcp-server/tests/` for the actual import path.
 
+## §0g — Temporal workflow sandbox forbids `os.environ` access (resolved during T3.2c impl)
+
+Inside a `@workflow.defn` body, `os.environ.get(...)` raises `RestrictedWorkflowAccessError` — Temporal's sandbox blocks non-deterministic OS access. Move env reads to **module import time** (constants at file top), or pass them in via the workflow's input dict. Plan T3.2c originally showed `os.environ.get("LUNA_LEARN_MAX_REVISE_RETRIES", "2")` inside the loop — read it at module-load as `_MAX_REVISE_RETRIES` constant instead.
+
 ## §0f — Temporal `execute_activity` multi-arg pattern (resolved during T3.2a impl)
 
 Temporal's `workflow.execute_activity(...)` has TWO overloads:
