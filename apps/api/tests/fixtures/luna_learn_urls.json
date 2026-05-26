@@ -1,0 +1,17 @@
+{
+  "_comment": "Public-domain / well-known short YouTube clips used by the Luna Learn end-to-end integration test (T6.2). The default fixture is intentionally short (≤90s) so the real transcription pipeline can finish in CI's per-test timeout without burning compute. If a URL goes 404 / private, swap in another known-stable public clip. The integration test is `@pytest.mark.slow` and skipped by default — only contributors who opt in (`pytest -m slow`) hit YouTube.",
+  "default": {
+    "url": "https://www.youtube.com/watch?v=ScMzIvxBSi4",
+    "title": "Big Buck Bunny — short public-domain clip",
+    "approx_duration_s": 65,
+    "expected_capability_hint": "animation"
+  },
+  "alternates": [
+    {
+      "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+      "title": "Big Buck Bunny — official Blender Open Movie",
+      "approx_duration_s": 600,
+      "note": "Longer — use only if default fixture is unavailable; raise LUNA_LEARN_MAX_DURATION_S accordingly."
+    }
+  ]
+}
