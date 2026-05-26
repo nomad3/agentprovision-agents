@@ -239,31 +239,48 @@ async fn upload_attachment(
 }
 
 fn render(args: &LearnArgs, resp: &DispatchResponse, json: bool) -> anyhow::Result<()> {
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    render_to_writer(&mut handle, args, resp, json)
+}
+
+/// Writer-targeted rendering — same surface as `render` but writes
+/// to any `std::io::Write` so the T6.3 golden test can capture stdout
+/// into a `String` for byte-for-byte comparison against the
+/// checked-in golden file (`tests/golden/learn_dry_run.txt`).
+fn render_to_writer<W: std::io::Write>(
+    w: &mut W,
+    args: &LearnArgs,
+    resp: &DispatchResponse,
+    json: bool,
+) -> anyhow::Result<()> {
     if json {
-        println!("{}", serde_json::to_string_pretty(resp)?);
+        writeln!(w, "{}", serde_json::to_string_pretty(resp)?)?;
         return Ok(());
     }
     // Spec §2 step 5: Luna's ack is "Got it, learning…". Mirror the
     // phrasing here so the CLI surface matches the WhatsApp surface
     // — important for ops who jump between both during debugging.
-    println!(
+    writeln!(
+        w,
         "[alpha] Got it, learning…  workflow_id={}",
         resp.workflow_id
-    );
+    )?;
     if args.dry_run {
         if let Some(result) = &resp.result {
-            println!("[alpha] --dry-run result:");
-            println!("{}", serde_json::to_string_pretty(result)?);
+            writeln!(w, "[alpha] --dry-run result:")?;
+            writeln!(w, "{}", serde_json::to_string_pretty(result)?)?;
         } else {
             // The server-side T4.4c implementer chooses whether
             // --dry-run holds the connection or returns a
             // poll-handle. Until that lands we print a hint so the
             // user knows what to do next instead of getting nothing.
-            println!(
+            writeln!(
+                w,
                 "[alpha] --dry-run requested but the server returned no inline result; \
                  use `alpha workflow get {}` to poll the run.",
                 resp.workflow_id,
-            );
+            )?;
         }
     }
     Ok(())
@@ -494,5 +511,100 @@ mod tests {
         assert_eq!(r.workflow_id, "luna-learn-t1-abc");
         assert!(r.result.is_some());
         assert_eq!(r.source_url.as_deref(), Some("https://youtu.be/x"));
+    }
+
+    // ── T6.3: --dry-run golden test ────────────────────────────────
+    //
+    // The pretty-printed CLI output for `alpha learn <url> --dry-run`
+    // is the surface scripts + ops humans rely on. A drift here means
+    // an automation that greps for "workflow_id=" or the
+    // "[alpha] --dry-run result:" header silently breaks. We pin the
+    // exact bytes against a checked-in golden file
+    // (`tests/golden/learn_dry_run.txt`) — updates require a manual
+    // diff review, which is the whole point.
+
+    /// Construct the canonical dry-run args used by the golden test.
+    /// Hard-coded URL so the golden file is fully reproducible from
+    /// the test source alone.
+    fn _golden_args() -> LearnArgs {
+        LearnArgs {
+            url: Some("https://youtu.be/dQw4w9WgXcQ".into()),
+            dry_run: true,
+            from_attachment: None,
+            resume: None,
+            resume_last: false,
+        }
+    }
+
+    /// Build the canonical dry-run response. The server returns
+    /// `result` inline for --dry-run; we mirror that with a small,
+    /// deterministic skill envelope.
+    fn _golden_response() -> DispatchResponse {
+        DispatchResponse {
+            workflow_id: "luna-learn-t1-deadbeefcafe".to_string(),
+            result: Some(serde_json::json!({
+                "skill_id": "sk_int_e2e_001",
+                "slug": "big-buck-bunny-lesson"
+            })),
+            source_url: Some("https://youtu.be/dQw4w9WgXcQ".to_string()),
+        }
+    }
+
+    #[test]
+    fn dry_run_render_matches_golden() {
+        // Render into an in-memory buffer instead of stdout so we
+        // can byte-compare against the golden file. Trailing newline
+        // semantics are part of the contract — the golden includes
+        // them verbatim.
+        let mut buf: Vec<u8> = Vec::new();
+        render_to_writer(&mut buf, &_golden_args(), &_golden_response(), false)
+            .expect("render must succeed");
+
+        let actual = String::from_utf8(buf).expect("rendered output is UTF-8");
+        let golden = include_str!("../../tests/golden/learn_dry_run.txt");
+        if actual != golden {
+            // Print both sides for fast diffing when the snapshot drifts.
+            panic!(
+                "dry-run golden mismatch\n---- actual ----\n{actual}\n\
+                 ---- expected ----\n{golden}\n\
+                 If the change is intentional, update tests/golden/learn_dry_run.txt."
+            );
+        }
+    }
+
+    #[test]
+    fn dry_run_render_without_result_falls_back_to_poll_hint() {
+        // When --dry-run is requested but the server doesn't inline a
+        // result (e.g. T4.4c chose poll-handle semantics), the CLI
+        // must print the poll-hint variant so the user knows what to
+        // do next. Pin the literal hint phrasing.
+        let resp = DispatchResponse {
+            workflow_id: "luna-learn-t1-pollme".to_string(),
+            result: None,
+            source_url: None,
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        render_to_writer(&mut buf, &_golden_args(), &resp, false)
+            .expect("render must succeed");
+        let actual = String::from_utf8(buf).expect("utf8");
+        assert!(actual.contains("workflow_id=luna-learn-t1-pollme"));
+        assert!(actual.contains("`alpha workflow get luna-learn-t1-pollme`"));
+    }
+
+    #[test]
+    fn dry_run_render_json_mode_emits_only_json() {
+        // `--json` global flag swaps pretty rendering for the raw
+        // serialized DispatchResponse. The first non-whitespace char
+        // must be '{' (no `[alpha] ...` preamble leaks through).
+        let resp = _golden_response();
+        let mut buf: Vec<u8> = Vec::new();
+        render_to_writer(&mut buf, &_golden_args(), &resp, true)
+            .expect("render must succeed");
+        let actual = String::from_utf8(buf).expect("utf8");
+        assert!(
+            actual.trim_start().starts_with('{'),
+            "json mode must emit a bare JSON object, got: {actual:?}"
+        );
+        assert!(!actual.contains("[alpha]"), "json mode must not include the human ack");
     }
 }

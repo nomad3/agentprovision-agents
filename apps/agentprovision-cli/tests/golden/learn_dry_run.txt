@@ -1,0 +1,6 @@
+[alpha] Got it, learning…  workflow_id=luna-learn-t1-deadbeefcafe
+[alpha] --dry-run result:
+{
+  "skill_id": "sk_int_e2e_001",
+  "slug": "big-buck-bunny-lesson"
+}
