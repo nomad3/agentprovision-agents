@@ -43,6 +43,21 @@ with workflow.unsafe.imports_passed_through():
     from app.workflows.activities import learn_from_media_activities as A
 
 
+def _read_max_revise_retries() -> int:
+    """LUNA_LEARN_MAX_REVISE_RETRIES env (default 2 per spec §3)."""
+    try:
+        return int(os.environ.get("LUNA_LEARN_MAX_REVISE_RETRIES", "2"))
+    except (TypeError, ValueError):
+        return 2
+
+
+# Read at module import time. Temporal's workflow sandbox forbids
+# ``os.environ`` access from within the workflow body — the value must be
+# baked at import time so the workflow stays deterministic. Tests that
+# need to override use ``monkeypatch.setattr`` on this module attribute.
+_MAX_REVISE_RETRIES = _read_max_revise_retries()
+
+
 # Spec §3 — per-error-type user-facing notify messages. Keys are the
 # typed-error ``error.type`` strings emitted by the MCP shim (T1.2a).
 _EXTRACT_ERROR_NOTIFY = {
@@ -177,35 +192,194 @@ class LearnFromMediaWorkflow:
             return {"status": "transcribe_failed", "error": trans["error"]}
         transcript = trans["data"]["transcript"]
 
-        # --- step 3: synth ---
-        synth = await workflow.execute_activity(
-            A.act_synthesize_skill_draft,
-            args=[transcript, provenance_url, []],
-            start_to_close_timeout=_ACTIVITY_TIMEOUTS["synth"],
-        )
-        if not synth["ok"]:
-            return {"status": "synth_failed", "error": synth["error"]}
-        draft = synth["data"]
+        # --- step 3+4: synth → review loop (T3.2c) ---
+        # On verdict=revise the reviewer's findings flow into the next synth
+        # call as hints. Capped at LUNA_LEARN_MAX_REVISE_RETRIES extra
+        # revise attempts (default 2 per spec §3) → revise_exhausted →
+        # quarantine. ReviewerNotProvisioned is recoverable (cache + resume
+        # hint); ReviewTimeout is terminal (quarantine).
+        max_revise = _MAX_REVISE_RETRIES
+        hints: list[str] = []
+        draft = None
+        review = None
+        revise_attempts = 0
+        # Initial synth (attempt 0) + up to max_revise revisions.
+        for attempt in range(max_revise + 1):
+            synth = await workflow.execute_activity(
+                A.act_synthesize_skill_draft,
+                args=[transcript, provenance_url, hints],
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["synth"],
+            )
+            if not synth["ok"]:
+                return {"status": "synth_failed", "error": synth["error"]}
+            draft = synth["data"]
 
-        # --- step 4: review (T3.2c handles revise/rejected branches) ---
-        review = await workflow.execute_activity(
-            A.act_dispatch_skill_review,
-            args=[
-                draft["skill_md"],
-                transcript,
-                provenance_url,
-                draft["synthetic_test_input"],
-                draft["synthetic_test_expected"],
-            ],
-            start_to_close_timeout=_ACTIVITY_TIMEOUTS["review"],
-        )
-        if not review["ok"]:
-            return {"status": "review_failed", "error": review["error"]}
-        if review["data"]["verdict"] != "approved":
-            return {
-                "status": review["data"]["verdict"],
-                "findings": review["data"]["findings"],
-            }
+            review = await workflow.execute_activity(
+                A.act_dispatch_skill_review,
+                args=[
+                    draft["skill_md"],
+                    transcript,
+                    provenance_url,
+                    draft["synthetic_test_input"],
+                    draft["synthetic_test_expected"],
+                ],
+                start_to_close_timeout=_ACTIVITY_TIMEOUTS["review"],
+            )
+            if not review["ok"]:
+                # Per spec §3:
+                #   ReviewerNotProvisioned → cache + --resume-last hint
+                #     (recoverable). User can re-trigger after operator
+                #     provisions the Code Reviewer agent.
+                #   ReviewTimeout → quarantine (terminal). Reviewer agent
+                #     exists but didn't respond in 60s; investigating that
+                #     is an operator concern, not user-recoverable.
+                #   Anything else (UnknownError, etc) → quarantine.
+                err = review["error"] or {}
+                etype = err.get("type", "UnknownError")
+                if etype == "ReviewerNotProvisioned":
+                    cache_msg = (
+                        "skill review unavailable; ask operator to provision "
+                        "the Code Reviewer agent, then re-send the URL or run "
+                        "`alpha learn --resume-last` to pick up from review."
+                    )
+                    await workflow.execute_activity(
+                        A.act_write_cache,
+                        args=[
+                            tenant_id,
+                            workflow.info().workflow_id,
+                            transcript,
+                            draft,
+                            None,
+                            "reviewer_not_provisioned",
+                        ],
+                        start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+                    )
+                    if session_id:
+                        await workflow.execute_activity(
+                            A.act_notify_session,
+                            args=[
+                                session_id,
+                                {"status": "review_unavailable", "message": cache_msg},
+                            ],
+                            start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                        )
+                    return {
+                        "status": "review_unavailable",
+                        "error": err,
+                        "notify_message": cache_msg,
+                        "cached": True,
+                    }
+                # ReviewTimeout / anything else → quarantine + terminal.
+                quar_msg = (
+                    "couldn't get a review verdict in time. The skill was "
+                    "quarantined; operator can inspect and re-run."
+                    if etype == "ReviewTimeout"
+                    else f"review failed ({etype}); skill quarantined."
+                )
+                await workflow.execute_activity(
+                    A.act_write_quarantine,
+                    args=[
+                        tenant_id,
+                        workflow.info().workflow_id,
+                        transcript,
+                        draft,
+                        None,
+                        None,
+                        f"review_failed: {etype}",
+                    ],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+                )
+                if session_id:
+                    await workflow.execute_activity(
+                        A.act_notify_session,
+                        args=[
+                            session_id,
+                            {"status": "review_failed", "message": quar_msg},
+                        ],
+                        start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                    )
+                return {
+                    "status": "review_failed",
+                    "error": err,
+                    "notify_message": quar_msg,
+                }
+
+            verdict = review["data"]["verdict"]
+            if verdict == "approved":
+                break
+            if verdict == "rejected":
+                findings = review["data"].get("findings", [])
+                reason = "; ".join(findings) if findings else "no reason provided"
+                quar_msg = (
+                    f"reviewer rejected the skill: {reason}. "
+                    "It has been quarantined for operator review."
+                )
+                await workflow.execute_activity(
+                    A.act_write_quarantine,
+                    args=[
+                        tenant_id,
+                        workflow.info().workflow_id,
+                        transcript,
+                        draft,
+                        review["data"],
+                        None,
+                        f"rejected: {reason}",
+                    ],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+                )
+                if session_id:
+                    await workflow.execute_activity(
+                        A.act_notify_session,
+                        args=[
+                            session_id,
+                            {"status": "rejected", "message": quar_msg},
+                        ],
+                        start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                    )
+                return {
+                    "status": "rejected",
+                    "findings": findings,
+                    "notify_message": quar_msg,
+                }
+            # verdict == "revise" — loop with reviewer findings as hints,
+            # unless we've exhausted the retry budget.
+            revise_attempts += 1
+            hints = list(review["data"].get("findings", []))
+            if attempt == max_revise:
+                # Last attempt also came back as ``revise`` → exhausted.
+                final = "; ".join(hints) if hints else "no specifics"
+                exhausted_msg = (
+                    "couldn't refine the skill to passing quality after "
+                    f"{revise_attempts} revisions (final issues: {final})."
+                )
+                await workflow.execute_activity(
+                    A.act_write_quarantine,
+                    args=[
+                        tenant_id,
+                        workflow.info().workflow_id,
+                        transcript,
+                        draft,
+                        review["data"],
+                        None,
+                        f"revise_exhausted: {final}",
+                    ],
+                    start_to_close_timeout=_ACTIVITY_TIMEOUTS["write"],
+                )
+                if session_id:
+                    await workflow.execute_activity(
+                        A.act_notify_session,
+                        args=[
+                            session_id,
+                            {"status": "revise_exhausted", "message": exhausted_msg},
+                        ],
+                        start_to_close_timeout=_ACTIVITY_TIMEOUTS["notify"],
+                    )
+                return {
+                    "status": "revise_exhausted",
+                    "findings": hints,
+                    "notify_message": exhausted_msg,
+                    "revise_attempts": revise_attempts,
+                }
 
         # --- step 5: synthetic test ---
         test = await workflow.execute_activity(

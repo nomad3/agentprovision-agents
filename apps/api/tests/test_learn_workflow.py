@@ -292,3 +292,175 @@ async def test_workflow_extract_unknown_error_uses_generic_notify(
     )
     assert result["status"] == "extract_failed"
     assert "UnknownError" in result["notify_message"]
+
+
+# ---------------------------------------------------------------------------
+# T3.2c — review branches
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_workflow_review_revise_then_approved(env, worker, monkeypatch):
+    """T3.2c — revise verdict on attempt 0 → reviewer findings become hints
+    in attempt 1's synth call → approved → install proceeds (success)."""
+    responses = _happy_responses()
+    # Track which synth call we're on, to verify hints flow.
+    synth_payloads: list[dict] = []
+
+    def synth_cb(payload, idx):
+        synth_payloads.append(payload)
+        return _happy_responses()["synthesize_skill_draft"]
+
+    def review_cb(payload, idx):
+        if idx == 0:
+            return {
+                "verdict": "revise",
+                "findings": ["use kebab-case for slug", "tighten body"],
+                "reviewer_agent_id": "rev-1",
+            }
+        return {
+            "verdict": "approved",
+            "findings": [],
+            "reviewer_agent_id": "rev-1",
+        }
+
+    responses["synthesize_skill_draft"] = synth_cb
+    responses["dispatch_skill_review"] = review_cb
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-revise-approved",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "success"
+    # Synth was called twice; second call's payload carries the reviewer
+    # findings as hints.
+    assert len(synth_payloads) == 2
+    assert synth_payloads[0]["hints"] == []
+    assert synth_payloads[1]["hints"] == [
+        "use kebab-case for slug",
+        "tighten body",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_workflow_review_revise_exhausted(env, worker, monkeypatch):
+    """T3.2c — revise × (max+1) attempts → revise_exhausted → quarantine.
+
+    Default max_revise = 2 so we allow attempt 0 + 2 revisions = 3 total
+    review calls, all returning ``revise``.
+    """
+    responses = _happy_responses()
+    responses["dispatch_skill_review"] = {
+        "verdict": "revise",
+        "findings": ["still wrong"],
+        "reviewer_agent_id": "rev-1",
+    }
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-revise-exhausted",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "revise_exhausted"
+    # Default max_revise = 2 → initial synth + 2 retries = 3 attempts, all
+    # returning ``revise``. ``revise_attempts`` counts every revise verdict.
+    assert result["revise_attempts"] == 3
+    assert "still wrong" in result["notify_message"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_review_rejected(env, worker, monkeypatch):
+    """T3.2c — verdict ``rejected`` → quarantine + notify with reason."""
+    responses = _happy_responses()
+    responses["dispatch_skill_review"] = {
+        "verdict": "rejected",
+        "findings": ["script forbidden by policy"],
+        "reviewer_agent_id": "rev-1",
+    }
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-rejected",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "rejected"
+    assert result["findings"] == ["script forbidden by policy"]
+    assert "script forbidden by policy" in result["notify_message"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_review_reviewer_not_provisioned_caches(
+    env, worker, monkeypatch
+):
+    """T3.2c — ReviewerNotProvisioned (503) is RECOVERABLE per spec §3:
+    workflow caches state, notifies with ``--resume-last`` hint, returns
+    ``review_unavailable`` (NOT ``review_failed``)."""
+    responses = _happy_responses()
+    responses["dispatch_skill_review"] = _typed_error(
+        503, "ReviewerNotProvisioned", "agent not in tenant"
+    )
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-reviewer-down",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "review_unavailable"
+    assert result["cached"] is True
+    assert "--resume-last" in result["notify_message"]
+    assert result["error"]["type"] == "ReviewerNotProvisioned"
+
+
+@pytest.mark.asyncio
+async def test_workflow_review_timeout_quarantines(env, worker, monkeypatch):
+    """T3.2c — ReviewTimeout (504) is TERMINAL per spec §3: quarantine, no
+    resume hint. The distinction from ``ReviewerNotProvisioned`` is what
+    reviewer flagged (I6)."""
+    responses = _happy_responses()
+    responses["dispatch_skill_review"] = _typed_error(
+        504, "ReviewTimeout", "60s exceeded"
+    )
+    _mock_mcp_responses(monkeypatch, responses)
+    Path("/tmp/x.m4a").write_bytes(b"x")
+
+    result = await env.client.execute_workflow(
+        LearnFromMediaWorkflow.run,
+        {
+            "source_url": "https://youtu.be/abc",
+            "tenant_id": "t1",
+            "actor_user_id": "u1",
+        },
+        id="test-review-timeout",
+        task_queue="learn-test",
+    )
+    assert result["status"] == "review_failed"
+    assert result["error"]["type"] == "ReviewTimeout"
+    assert "--resume-last" not in result["notify_message"]
