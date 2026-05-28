@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-05-28 |
-| Status | DRAFT v3 (reviewer-iter-1/2 addressed; Luna round-1 objections O1–O5 addressed; round-2 pending) |
+| Status | DRAFT v4 (reviewer-iter-1/2 addressed; Luna round-1 O1–O5 + round-2 R1–R2 addressed; round-3 pending) |
 | Author | Simon Aguilera (via Claude Code) |
 | Reviewers | Luna (supervisor agent), spec-document-reviewer subagent |
 | Scope axis chosen | C — *evidence-first smell report*, no code changes this round |
@@ -21,7 +21,7 @@ Produce **one ranked markdown artifact** that tells us, with evidence, which par
 
 The output of *this* spec is the report. The output of the *next* cycle (writing-plans + execution) is the actual cleanup PRs, one per high-value finding.
 
-**One sanctioned exception:** §§3.1, 3.2, 3.3, 3.5 require small deterministic scripts committed to `scripts/smell/` (Python AST scans + one Node script for React routing). That tooling is the only code change this round; it exists so each dimension's re-runs are reproducible. Every script reference in §§3.x is to a `scripts/smell/*.py|.js` file authored as part of this round.
+**One sanctioned exception:** §§3.1, 3.2, 3.3, 3.4, 3.5 require small deterministic scripts committed to `scripts/smell/` (Python AST scans + one Node script for React routing + one log-capture wrapper). That tooling is the only code change this round; it exists so each dimension's re-runs are reproducible. Every script reference in §§3.x is to a `scripts/smell/*.py|.js` file authored as part of this round.
 
 ## 2. Inputs
 
@@ -29,7 +29,7 @@ The output of *this* spec is the report. The output of the *next* cycle (writing
 |---|---|---|
 | Codebase | `apps/api`, `apps/mcp-server`, `apps/code-worker`, `apps/web`, `apps/luna-client`, `apps/agentprovision-cli`, `apps/agentprovision-core`, `apps/embedding-service`, `apps/memory-core`, `apps/device-bridge`, `apps/docs` | `.venv`, `node_modules`, `target/`, `__pycache__/` excluded everywhere |
 | Canonical patterns | `CLAUDE.md`, `docs/architecture/*.md` (incl. `alpha_cli_kernel.md`, `dashboard.md`, `workspace.md`) | Treated as ground truth — drift = pattern violation |
-| Live errors | `docker logs` for `agentprovision-agents-api-1`, `code-worker-1`, `mcp-tools-1`, `embedding-service-1`, `memory-core-1` — last 72h | Filtered for `ERROR/WARNING`, repeated stack traces, silent fallbacks |
+| Live errors | `docker logs` for the 5 canonical containers (all under the `agentprovision-agents-*-1` prefix per the 2026-05-13 rename): `agentprovision-agents-api-1`, `agentprovision-agents-code-worker-1`, `agentprovision-agents-mcp-tools-1`, `agentprovision-agents-embedding-service-1`, `agentprovision-agents-memory-core-1` — last 72h | Filtered for `ERROR/WARNING` across all three log formats (§3.4); preflight must confirm every container name resolves via `docker ps` |
 | Recent plans | `docs/plans/2026-05-*.md` | To distinguish "deliberately dropped" from "abandoned mid-flight" |
 | Migration history | `apps/api/migrations/*.sql` + `_migrations` table | A migration in the dir but not the table is dead; a table not referenced by any model is suspect |
 
@@ -111,7 +111,7 @@ Canonical patterns to check against (each must produce either ✓ or a list of v
 
 **Three sequential phases:**
 
-- **Phase 0 — Scaffolding (this session, before any fan-out).** Author and commit the deterministic scripts listed in §§3.1, 3.2, 3.3, 3.5 under `scripts/smell/`. Each script is committed individually with a passing smoke test (the script runs against the repo and exits 0; even an empty findings array is fine — the test is "the script doesn't crash"). The Phase 1 subagents are strictly read-only and consume only scripts that exist on the branch as of the fan-out commit SHA, which the aggregator records.
+- **Phase 0 — Scaffolding (this session, before any fan-out).** Author and commit the deterministic scripts listed in §§3.1, 3.2, 3.3, 3.4, 3.5 under `scripts/smell/`. Each script is committed individually with a passing smoke test (the script runs against the repo and exits 0; even an empty findings array is fine — the test is "the script doesn't crash"). The Phase 1 subagents are strictly read-only and consume only scripts that exist on the branch as of the fan-out commit SHA, which the aggregator records.
 - **Phase 1 — Parallel evidence collection** (the diagram below). Five Explore subagents fan out, each running the scripts and `grep`/`docker` commands in its dimension. Read-only.
 - **Phase 2 — Aggregation & report write-up.** Sequential, in this session.
 
