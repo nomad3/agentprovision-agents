@@ -21,7 +21,7 @@ Produce **one ranked markdown artifact** that tells us, with evidence, which par
 
 The output of *this* spec is the report. The output of the *next* cycle (writing-plans + execution) is the actual cleanup PRs, one per high-value finding.
 
-**One sanctioned exception:** §3.2 requires a small deterministic AST script committed to `scripts/smell/`. That tooling is the only code change this round; it exists so re-runs of the AI-slop dimension are reproducible.
+**One sanctioned exception:** §§3.1, 3.2, 3.3, 3.5 require small deterministic scripts committed to `scripts/smell/` (Python AST scans + one Node script for React routing). That tooling is the only code change this round; it exists so each dimension's re-runs are reproducible. Every script reference in §§3.x is to a `scripts/smell/*.py|.js` file authored as part of this round.
 
 ## 2. Inputs
 
