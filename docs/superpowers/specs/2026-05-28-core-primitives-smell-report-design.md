@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Date | 2026-05-28 |
-| Status | DRAFT v2 (reviewer-iter-1 addressed; pre-Luna-consensus) |
+| Status | DRAFT v3 (reviewer-iter-1/2 addressed; Luna round-1 objections O1–O5 addressed; round-2 pending) |
 | Author | Simon Aguilera (via Claude Code) |
 | Reviewers | Luna (supervisor agent), spec-document-reviewer subagent |
 | Scope axis chosen | C — *evidence-first smell report*, no code changes this round |
@@ -46,6 +46,7 @@ Five independent dimensions. Each produces a section in the final report with a 
 - **Suggested action:** <delete | refactor | document | leave>
 - **Effort:** S (≤1 PR) / M (2–3 PRs) / L (multi-PR plan)
 - **Risk if left:** low / med / high
+- **Blast radius:** small / medium / large — *small* = single module, ≤2 import sites; *medium* = one service/component or one route/page, ≤10 import sites; *large* = cross-cutting (public HTTP API, JWT scope, DB schema, MCP tool contract, multiple services). Reporter cites the import-site or consumer count that justified the bucket.
 ```
 
 ### 3.1 Dead Code
@@ -55,7 +56,7 @@ Five independent dimensions. Each produces a section in the final report with a 
   - **Unregistered MCP tools:** `grep -L 'register_tool\|@mcp_tool' apps/mcp-server/src/mcp_tools/*.py` cross-referenced against `apps/mcp-server/src/mcp_tools/__init__.py` exports.
   - **Dropped Temporal workflows:** for each class in `apps/api/app/workflows/*.py` (and `apps/code-worker/workflows.py`), confirm it appears in a worker's `workflows=[...]` list. Reproducer: `python3 scripts/smell/unregistered_workflows.py`.
   - **Dropped React pages:** for each `apps/web/src/pages/*.js`, check it's referenced in `apps/web/src/App.js` routing table. Reproducer: `node scripts/smell/unrouted_pages.js`.
-  - **Migration ↔ DB drift:** SQL — `SELECT filename FROM _migrations` vs `ls apps/api/migrations/*.sql`; either side missing the other is a finding.
+  - **Migration ↔ DB drift:** DB list via `docker exec agentprovision-agents-db-1 psql -U postgres agentprovision -t -c "SELECT filename FROM _migrations ORDER BY filename;"` (preflight must confirm container reachable + `_migrations` table exists; if DB unreachable, the dimension reports a **degraded** finding rather than empty, so the aggregator does not silently swallow). Files list: `ls apps/api/migrations/*.sql | xargs -n1 basename | sort`. Diff either way is a finding.
 - **Acceptance:** every finding cites one of the commands above + a specific symbol/file/migration.
 
 ### 3.2 AI Slop
@@ -74,8 +75,8 @@ Canonical patterns to check against (each must produce either ✓ or a list of v
 - **Alpha CLI kernel** (`docs/architecture/alpha_cli_kernel.md`): any v1 route that contains business logic instead of delegating to the same Python entrypoint the `alpha` binary calls. Reproducer: `grep -rnE 'def\s+\w+\([^)]*\bsession\s*:\s*Session' apps/api/app/api/v1/*.py | grep -v 'await client\.\|service\.\|orchestrator\.'` — routes with raw DB access but no service/orchestrator delegation.
 - **Single SSE per session** (`docs/architecture/dashboard.md`): any React component opening its own `new EventSource(...)` for session events instead of subscribing to `SessionEventsContext`. Reproducer: `grep -rnE 'new\s+EventSource\(' apps/web/src/ --include='*.js' --include='*.jsx' | grep -v 'SessionEventsContext'`.
 - **MCP-as-leaf-protocol** (`memory/leaf_agent_inbound_via_mcp.md` referenced by CLAUDE.md): any leaf calling the API directly with the user JWT instead of via `apps/mcp-server` over SSE. Reproducer: `grep -rnE 'Authorization.*Bearer' apps/code-worker/ apps/luna-client/src/ apps/luna-client/src-tauri/src/ | grep -v 'X-Internal-Key\|MCP_API_KEY\|agent-scoped'`.
-- **publish_session_event for human-watchable actions** (`CLAUDE.md` Alpha CLI Kernel §4): any agent/tool/workflow that mutates state without emitting a session event. Reproducer: scan `apps/api/app/services/` for functions that `db.commit()` but never call `publish_session_event`.
-- **RL experience logged for autonomous decisions** (`CLAUDE.md` Alpha CLI Kernel §5): any autonomous-decision path missing the `rl_experience` insert. Reproducer: `grep -rnE 'decision_point\s*=' apps/api/app/services/` vs grep of services that route/select/dispatch without it.
+- **publish_session_event for human-watchable actions** (`CLAUDE.md` Alpha CLI Kernel §4): any agent/tool/workflow function that mutates state via `db.commit()` (or equivalent SQLAlchemy write) without emitting a `publish_session_event`. Reproducer: `python3 scripts/smell/missing_session_event.py apps/api/app/services/ apps/api/app/workflows/` — AST scan that, for each function containing a session write, reports a finding if no `publish_session_event` is called within the same function or any callee in the same module. Script is committed in Phase 0 (see §4).
+- **RL experience logged for autonomous decisions** (`CLAUDE.md` Alpha CLI Kernel §5): any autonomous-decision path that selects an agent / route / platform / tool without logging an `rl_experience`. Reproducer: `python3 scripts/smell/missing_rl_log.py apps/api/app/services/` — AST scan that flags functions whose name matches `^(route|select|dispatch|pick|choose|fallback)_\w+$` (or whose docstring claims a routing/selection decision) and that return a chosen value without a call to `rl_experience_service.log_*` (or equivalent `record_*` helper). Script is committed in Phase 0.
 - **`tenant_id` filter on multi-tenant queries** (`CLAUDE.md` "Multi-tenant Query Pattern"): any service query of a tenant-scoped model missing `.filter(Model.tenant_id == …)`. Reproducer: AST scan `python3 scripts/smell/tenant_filter_check.py apps/api/app/services/` — flags `db.query(<tenanted-model>)` chains without a tenant_id filter.
 - **Workspace path-safety guards** (`docs/architecture/workspace.md` §3): any FastAPI route or service resolving a path under `WORKSPACES_ROOT` / `/var/agentprovision/workspaces` must (a) jail via `Path.resolve()` + `relative_to(tenant_root)`, (b) reject hidden segments (`.git`, `.env`, `node_modules`, `.venv`, `venv`, `__pycache__`), and (c) gate `scope=platform` on `is_superuser`. Reproducer: `grep -rnE 'WORKSPACES_ROOT|/var/agentprovision/workspaces' apps/api/app/` cross-referenced against `apps/api/app/api/v1/workspace.py` as the reference implementation.
 - **Volume / PVC discipline** (`CLAUDE.md` "Operational Notes" + `docs/architecture/workspace.md` §1): no CI workflow may run `docker volume prune` and no manifest may run `kubectl delete pvc` against the `workspaces` volume. Reproducer: `grep -rnE 'docker\s+volume\s+prune|kubectl\s+delete\s+pvc' .github/workflows/ scripts/ helm/` — any unguarded hit is an immediate blocker finding.
@@ -83,7 +84,11 @@ Canonical patterns to check against (each must produce either ✓ or a list of v
 
 ### 3.4 Live Error Signal
 - **Method:** `docker logs --since 72h <container>` for the 5 services above. Pipe through:
-  - `grep -E '"level":\s*"(ERROR|WARNING)"'`
+  - Capture **all three log shapes** the platform actually emits (verified during the 2026-05-27 session):
+    - JSON envelope (uvicorn / structlog Python services): `grep -E '"level":\s*"(ERROR|WARNING)"'`.
+    - Leading-timestamp + bare level (Rust services — codex CLI, embedding-service, memory-core): `grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.Z+-]+\s+(ERROR|WARN(ING)?)\b'`.
+    - Bare-prefix (neonize / legacy): `grep -E '^(ERROR|WARN(ING)?):'`.
+    - Combined invocation reference: `python3 scripts/smell/log_errors.py --since 72h --container agentprovision-agents-api-1 --container agentprovision-agents-code-worker-1 --container agentprovision-agents-mcp-tools-1 --container agentprovision-agents-embedding-service-1 --container agentprovision-agents-memory-core-1`.
   - Normalize stack traces: strip line numbers, UUIDs, timestamps, request IDs.
   - Top-20 by **fingerprint** (the normalized message); each gets a count over the window.
   - Cross-reference each fingerprint against `apps/api/app/services/` (or the relevant package) to locate the producing call site.
@@ -103,6 +108,12 @@ Canonical patterns to check against (each must produce either ✓ or a list of v
 - **Acceptance:** each finding includes file path, LOC, function count or complexity score, and a one-sentence "why this is too big to safely change."
 
 ## 4. Execution shape
+
+**Three sequential phases:**
+
+- **Phase 0 — Scaffolding (this session, before any fan-out).** Author and commit the deterministic scripts listed in §§3.1, 3.2, 3.3, 3.5 under `scripts/smell/`. Each script is committed individually with a passing smoke test (the script runs against the repo and exits 0; even an empty findings array is fine — the test is "the script doesn't crash"). The Phase 1 subagents are strictly read-only and consume only scripts that exist on the branch as of the fan-out commit SHA, which the aggregator records.
+- **Phase 1 — Parallel evidence collection** (the diagram below). Five Explore subagents fan out, each running the scripts and `grep`/`docker` commands in its dimension. Read-only.
+- **Phase 2 — Aggregation & report write-up.** Sequential, in this session.
 
 ```
             ┌───────────────────────────────────────────┐
