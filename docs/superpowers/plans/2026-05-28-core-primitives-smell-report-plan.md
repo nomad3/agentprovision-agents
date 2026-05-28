@@ -24,6 +24,7 @@
 | `scripts/smell/unimported_symbols.py` | 0 | §3.1 unused public symbols in `apps/api/app/services/`. Wraps `vulture` if installed; AST fallback otherwise. |
 | `scripts/smell/unregistered_workflows.py` | 0 | §3.1 Temporal workflow classes not in any worker's `workflows=[...]` list. |
 | `scripts/smell/unrouted_pages.js` | 0 | §3.1 React pages under `apps/web/src/pages/` not referenced by `apps/web/src/App.js`. |
+| `scripts/smell/migration_drift.py` | 0 | §3.1 migration↔DB drift with explicit preflight; `degraded` exit_summary if DB unreachable so Phase-2 fail-loud trips correctly. |
 | `scripts/smell/reexport_only.py` | 0 | §3.2 multi-name wrappers: `*_service.py` whose body is only `from … import *` (or N re-exports). |
 | `scripts/smell/docstring_redundancy.py` | 0 | §3.2 functions whose docstring restates the symbol name. |
 | `scripts/smell/missing_session_event.py` | 0 | §3.3 functions doing a SQLAlchemy write but no `publish_session_event`. |
@@ -34,12 +35,18 @@
 | `scripts/smell/run_dimension.sh` | 0 | Smoke-test runner: invokes every script with `--smoke` and asserts exit 0 + valid JSON. |
 | `docs/reports/2026-05-28-core-primitives-smell-report.md` | 2 | The final deliverable. |
 
-All Phase-0 scripts share an output contract enforced by `_findings.py`:
+All Phase-0 scripts share an output contract enforced by `_findings.py`. This is the **spec §4 contract verbatim** (`commands_attempted` shape, `containers_seen`, `input_set`, `method_notes` at top level) plus the convenience extension `preflight.exit_summary` (plan-only) used by Task 1.1's fail-loud rule:
 
 ```json
 {
-  "preflight": { "commands_attempted": [...], "input_set": "<scope>", "exit_summary": "ok|degraded" },
-  "findings": [ { "id": "F<dim>.<n>", "title": "...", "where": "...", "evidence": "...", "reproducer": "...", "why_it_smells": "...", "suggested_action": "delete|refactor|document|leave", "effort": "S|M|L", "risk": "low|med|high", "blast_radius": "small|medium|large" } ]
+  "preflight": {
+    "commands_attempted": [ { "cmd": "<exact shell>", "exit": 0, "lines": 123 } ],
+    "containers_seen": [ "agentprovision-agents-api-1", "..." ],
+    "input_set": "<short description of what was actually scanned>",
+    "exit_summary": "ok | degraded"   // plan extension, documented for aggregator
+  },
+  "findings": [ { "id": "F<dim>.<n>", "title": "...", "where": "...", "evidence": "...", "reproducer": "...", "why_it_smells": "...", "suggested_action": "delete|refactor|document|leave", "effort": "S|M|L", "risk": "low|med|high", "blast_radius": "small|medium|large" } ],
+  "method_notes": "<≤200 words on how the dimension/script scanned, surfaced in Appendix A>"
 }
 ```
 
@@ -68,6 +75,12 @@ BlastRadius = Literal["small", "medium", "large"]
 Action = Literal["delete", "refactor", "document", "leave"]
 
 @dataclass
+class CommandRecord:
+    cmd: str            # exact shell invocation
+    exit: int           # process exit code
+    lines: int = 0      # lines of output captured
+
+@dataclass
 class Finding:
     id: str
     title: str
@@ -82,17 +95,24 @@ class Finding:
 
 @dataclass
 class Preflight:
-    commands_attempted: list = field(default_factory=list)
+    commands_attempted: list[CommandRecord] = field(default_factory=list)
+    containers_seen: list[str] = field(default_factory=list)
     input_set: str = ""
-    exit_summary: str = "ok"  # ok | degraded
-    container_set: list = field(default_factory=list)
+    exit_summary: str = "ok"  # ok | degraded — plan extension on top of spec §4 contract
 
-def emit(preflight: Preflight, findings: list[Finding]) -> None:
-    json.dump({"preflight": asdict(preflight), "findings": [asdict(f) for f in findings]}, sys.stdout, indent=2)
+def emit(preflight: Preflight, findings: list[Finding], method_notes: str = "") -> None:
+    json.dump(
+        {
+            "preflight": asdict(preflight),
+            "findings": [asdict(f) for f in findings],
+            "method_notes": method_notes,
+        },
+        sys.stdout, indent=2,
+    )
     sys.stdout.write("\n")
 ```
 
-- [ ] **Step 2:** `python3 -c "from scripts.smell._findings import Finding, Preflight, emit; emit(Preflight(input_set='smoke'), [])"` — expect `{"preflight": ..., "findings": []}` and exit 0.
+- [ ] **Step 2:** `python3 -c "from scripts.smell._findings import Finding, Preflight, emit; emit(Preflight(input_set='smoke'), [], method_notes='ok')"` — expect `{"preflight": ..., "findings": [], "method_notes": "ok"}` and exit 0.
 
 - [ ] **Step 3:** Commit:
 ```bash
@@ -147,6 +167,21 @@ git commit -m "smell: unmounted-routes scanner (dimension §3.1)"
 - [ ] **Step 2:** Smoke: `node scripts/smell/unrouted_pages.js | jq .preflight.input_set` — expect a string.
 
 - [ ] **Step 3:** Commit: `git add scripts/smell/unrouted_pages.js && git commit -m "smell: unrouted-react-pages scanner (dimension §3.1)"`
+
+### Task 0.5b — `migration_drift.py` (§3.1)
+
+**Files:**
+- Create: `scripts/smell/migration_drift.py`
+
+- [ ] **Step 1:** CLI flags `--container` (default `agentprovision-agents-db-1`), `--db` (default `agentprovision`). Run `docker exec <container> psql -U postgres <db> -t -c "SELECT filename FROM _migrations ORDER BY filename;"`. Record exact command + exit code in `preflight.commands_attempted`. If exit != 0 OR container not in `docker ps`, emit `preflight.exit_summary="degraded"` with `containers_seen=` actual list and an empty findings array — Task 1.1 will catch this as degraded, NOT swallow it. On success, diff against `ls apps/api/migrations/*.sql | xargs -n1 basename | sort`; either side missing the other emits a Finding (`title="migration drift: <name>"`, `where=apps/api/migrations/<name>` or `_migrations row`, `suggested_action: refactor`/`document`).
+
+- [ ] **Step 2:** Smoke (DB present): `python3 scripts/smell/migration_drift.py | jq '.preflight.exit_summary, (.findings | length)'` — expect `"ok"` (or `"degraded"` if DB not running, still exit 0).
+
+- [ ] **Step 3:** Commit:
+```bash
+git add scripts/smell/migration_drift.py
+git commit -m "smell: migration-drift scanner with degraded preflight (dimension §3.1)"
+```
 
 ### Task 0.6 — `reexport_only.py` (§3.2)
 
@@ -234,8 +269,9 @@ git commit -m "smell: unmounted-routes scanner (dimension §3.1)"
 
 - [ ] **Step 2:** Run it: `bash scripts/smell/run_dimension.sh` — every script must exit 0 with valid JSON.
 
-- [ ] **Step 3:** Commit:
+- [ ] **Step 3:** Explicit gate before commit — the runner exit code is the test, so abort if non-zero:
 ```bash
+bash scripts/smell/run_dimension.sh || { echo "Phase-0 smoke failed; aborting before commit"; exit 1; }
 git add scripts/smell/run_dimension.sh
 git commit -m "smell: run_dimension smoke runner — Phase 0 complete"
 git push
@@ -287,12 +323,12 @@ Expected: every dimension prints `"ok"` or `"degraded"` plus a count.
 
 - [ ] **Step 2:** Save to `/tmp/smell_aggregated.json`.
 
-### Task 2.2 — Rank by (risk × blast × suggested_action) / effort
+### Task 2.2 — Rank by (risk × blast_radius) / effort  *(spec §4 formula verbatim)*
 
 **Files:**
 - Modify: `/tmp/smell_aggregated.json` (in-place rank).
 
-- [ ] **Step 1:** Map risk → {low:1, med:3, high:9}; blast_radius → {small:1, medium:3, large:9}; effort → {S:1, M:3, L:9}; suggested_action weights {delete: 2, refactor: 1.5, document: 0.5, leave: 0}. Score = (risk × blast × action) / effort. Sort findings desc by score.
+- [ ] **Step 1:** Map risk → {low:1, med:3, high:9}; blast_radius → {small:1, medium:3, large:9}; effort → {S:1, M:3, L:9}. Score = (risk × blast_radius) / effort, matching spec §4 verbatim. **No `suggested_action` multiplier** (kept out of the formula to avoid drifting from spec; if two findings tie, break by alphabetical `where`).
 
 - [ ] **Step 2:** Take top 10 for the "Top-10 ranked findings" report section.
 
