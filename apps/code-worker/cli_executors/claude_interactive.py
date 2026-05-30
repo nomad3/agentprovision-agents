@@ -59,17 +59,18 @@ def clean_interactive_transcript(raw: str, prompt: str = "") -> str:
     return "\n".join(cleaned).strip()
 
 
-def _signal_tree(proc: subprocess.Popen, sig: int) -> None:
-    """Signal Claude's whole process group so children it spawned (MCP servers,
-    helper procs) are reaped too — not just the top-level PID. Falls back to
-    signalling the bare process if the group is already gone."""
+def _signal_tree(pgid: int, sig: int) -> None:
+    """Signal Claude's whole process group (cached PGID) so children it spawned
+    (MCP servers, helper procs) are reaped too — not just the top-level PID.
+
+    Takes the PGID captured while the leader was alive, NOT a live
+    ``os.getpgid(pid)`` lookup: if Claude exits before one of its children, that
+    lookup raises ``ProcessLookupError`` even though the group is still alive,
+    and we'd leak the orphaned children this is meant to reap."""
     try:
-        os.killpg(os.getpgid(proc.pid), sig)
+        os.killpg(pgid, sig)
     except (ProcessLookupError, PermissionError, OSError):
-        try:
-            proc.send_signal(sig)
-        except (ProcessLookupError, OSError):
-            pass
+        pass
 
 
 def run_claude_interactive_with_heartbeat(
@@ -124,6 +125,13 @@ def run_claude_interactive_with_heartbeat(
         start_new_session=True,
     )
     os.close(slave_fd)
+    # Capture the PGID now, while the leader is alive, and reuse it for every
+    # cleanup signal — a later os.getpgid() off a dead leader would miss a
+    # still-running child group. start_new_session makes pgid == proc.pid.
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        pgid = proc.pid
 
     chunks: list[str] = []
     start = time.monotonic()
@@ -139,7 +147,7 @@ def run_claude_interactive_with_heartbeat(
                 heartbeat(f"{label} interactive ({int(now - start)}s elapsed)")
                 last_heartbeat = now
             if now - start >= timeout:
-                _signal_tree(proc, signal.SIGKILL)
+                _signal_tree(pgid, signal.SIGKILL)
                 break
 
             ready, _, _ = select.select([master_fd], [], [], 0.25)
@@ -166,7 +174,7 @@ def run_claude_interactive_with_heartbeat(
             # mid-startup. Fail fast only if nothing arrives within the cap.
             if not seen_output:
                 if now - start >= first_output_seconds:
-                    _signal_tree(proc, signal.SIGKILL)
+                    _signal_tree(pgid, signal.SIGKILL)
                     break
                 continue
 
@@ -177,11 +185,11 @@ def run_claude_interactive_with_heartbeat(
                 continue
 
             if exit_sent_at is not None and now - exit_sent_at >= exit_grace_seconds:
-                _signal_tree(proc, signal.SIGTERM)
+                _signal_tree(pgid, signal.SIGTERM)
                 try:
                     proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    _signal_tree(proc, signal.SIGKILL)
+                    _signal_tree(pgid, signal.SIGKILL)
                 break
     finally:
         try:
@@ -192,7 +200,7 @@ def run_claude_interactive_with_heartbeat(
     try:
         returncode = proc.wait(timeout=1)
     except subprocess.TimeoutExpired:
-        _signal_tree(proc, signal.SIGKILL)
+        _signal_tree(pgid, signal.SIGKILL)
         returncode = proc.wait(timeout=1)
 
     raw = "".join(chunks)
