@@ -33,18 +33,17 @@ Net: Claude Code is connected, picker-selectable, routable, and the runner times
 - `apps/api/app/services/cli_session_manager.py::generate_mcp_config` points Claude at the **whole** server (auth headers only — no tool filtering).
 - `apps/mcp-server/src/tool_audit.py` enforces scope by **wrapping tool handlers (call-time)** and a tenant `enforce_strict_tool_scope` flag — it does **not** filter `tools/list`. So Claude is handed all 168 schemas even though it can only *call* its scoped subset.
 
-**Conclusion:** interactive Claude's first response is gated on ingesting 168 tool schemas; that's the 90s stall. The fix is to shrink what `tools/list` returns to the agent's actual tool set.
+**Conclusion (strongly suspected — confirm before coding):** interactive Claude's first response is most likely gated on ingesting the full tool list. The *mechanism* is code-confirmed (FastMCP `list_tools()` returns the full registry unfiltered; only the call handler is patched — `tool_audit.py:334`). The *causation* (tool-count = the 90s stall) is **not yet measured** — both Codex and Luna flagged this, and the live count is environment-specific (Codex counted 161 built-ins in the checkout; the worker shows 168). So **Step 0 is a measurement** (§4.0) before implementing the fix.
 
 ## 3. Proposed fix — scope `tools/list` by agent
 
 Filter the advertised tool list to the agent's `tool_groups`, resolved from the agent-scoped JWT the chat already plumbs (`generate_mcp_config(agent_token=…)` → `mcp_auth.resolve_auth_context`).
 
-Two layers, smallest-blast-radius first:
+**Patch the `ListToolsRequest` handler** (NOT `mcp.list_tools` after startup — FastMCP binds handlers at init, exactly like `call_tool`, so a post-hoc reassignment is ignored; `tool_audit.py:334` already replaces the call handler this way). Filter the returned tools to the caller's allowed set, drawn from the **already-minted `agent_token` JWT scope claim** resolved by `mcp_auth.resolve_auth_context` — **do NOT re-read `agent.tool_groups` in the MCP server** (keeps the permission model single-sourced and list-time aligned with call-time). When the auth context has **no agent scope** (X-Internal-Key only — non-chat callers), **no-op / return all** so nothing else changes.
 
-1. **MCP server `tools/list` filter (primary).** In the FastMCP list path, intersect registered tools with the caller's allowed set (same source `tool_audit` uses for call-time enforcement). When the auth context has no agent scope (X-Internal-Key only), fall back to current behavior (return all) so non-chat callers are unaffected.
-2. **Ensure the chat passes the agent-scoped token.** Confirm `generate_mcp_config` is called with `agent_token` for the interactive Claude chat path (the resilient-executor flag). If it currently sends only `X-Internal-Key`, the server can't scope — so this must be on for chat sessions.
+`agent_token` already flows on this path (Codex-verified): minted in `run_agent_session()` → MCP headers → `mcp.json` → interactive Claude's `--mcp-config`. **Edge case to handle:** if the agent-slug lookup misses, it falls back to *no* token → the server would return all tools (full stall). Make that case loud (log + metric) rather than silent.
 
-Both reuse the existing scope source — no new permission model.
+Per-request filtering is feasible: the MCP request context is available for `list_tools`, not just tool calls. No cross-turn cache risk (each turn is a fresh `claude` process, no `--resume`).
 
 ### Concrete surface (to verify during impl)
 | File | Change |
@@ -57,6 +56,12 @@ Both reuse the existing scope source — no new permission model.
 
 ## 4. Verification
 
+### 4.0 Measure FIRST (gate the whole fix — both reviewers flagged this)
+Before coding, prove the tool-list load is the stall. A/B timing probe on the worker: instrument (or log around) the interactive `claude` launch and capture MCP `initialize` time, `tools/list` start→end + payload size, the prompt write, and the **first PTY byte**. Compare full-list (~161–168 tools) vs a hand-trimmed config (e.g. 5 tools).
+- If first byte is fast with the trimmed list and slow with the full list → tool-schema ingestion confirmed → proceed with the fix.
+- If `tools/list` itself is slow → server-side listing is the bottleneck.
+- If both lists stall → the cause is elsewhere (injected system-prompt size, model warm-up) and the fix below won't help — revisit.
+
 1. **Unit:** MCP `tools/list` with an agent-scoped token returns only that agent's tools; with `X-Internal-Key` returns all.
 2. **Smoke (worker):** interactive `claude --mcp-config <scoped>` → `/mcp` shows a small tool count (e.g. <20), and a prompt answers in <15s.
 3. **E2E:** set `default_cli_platform=claude_code`, `alpha chat send` → worker logs `Using platform: claude_code` **and the turn completes** (no `exit 143` / `exit -9`); restore default.
@@ -65,6 +70,7 @@ Both reuse the existing scope source — no new permission model.
 ## 5. Risks / rollback
 
 - **Over-filtering:** if scope resolution is wrong, an agent loses tools it should have. Mitigate: filter only when an agent scope is present; default-open for internal-key; gate behind `enforce_strict_tool_scope` if needed.
+- **Observability (Luna):** audit-log per list request — agent id, allowed groups, listed-tool count, and denied-call count — so over/under-scoping and the agent-slug-miss fallback are visible, not silent.
 - **Latency is still high but bounded:** if even the scoped set is large for some agents, also consider a `first_output_seconds` bump as a secondary guard (already env-configurable).
 - **Rollback:** the list filter is additive + scope-gated; disable by reverting the filter or flipping `enforce_strict_tool_scope` off — call-time enforcement (today's behavior) remains.
 
