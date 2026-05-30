@@ -99,6 +99,7 @@ from app.api.v1 import (
     usage_costs,
     dashboard_tasks,
     luna_impact,
+    provision,
 )
 
 _logger = logging.getLogger(__name__)
@@ -306,6 +307,10 @@ router.include_router(onboarding.router, tags=["onboarding"])
 # dispatch. Hot path that alpha quickstart hits after the wedge picker
 # completes (POST /memory/training/bulk-ingest with the source items).
 router.include_router(memory_training.router, tags=["memory-training"])
+# Vet-practice provisioner (v1) — operator-run internal endpoint
+# (POST /api/v1/provision/vet-practice/internal). Thin route over
+# provision_vet_practice; X-Internal-Key + X-Tenant-Id auth.
+router.include_router(provision.router, prefix="/provision", tags=["provision"])
 # Public MCP gateway (Phase 1 of #175) — JWT-auth wrapper that
 # forwards SSE + JSON-RPC POSTs to the in-cluster mcp-tools server,
 # so external MCP clients (Claude.ai, custom integrations) can
