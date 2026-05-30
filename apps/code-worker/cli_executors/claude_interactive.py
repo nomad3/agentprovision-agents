@@ -11,12 +11,16 @@ Claude attached would be heavier than a per-turn PTY bridge.
 """
 from __future__ import annotations
 
+import errno
+import fcntl
 import os
 import pty
 import re
 import select
 import signal
+import struct
 import subprocess
+import termios
 import time
 from collections.abc import Callable
 
@@ -27,10 +31,47 @@ _OSC_RE = re.compile(r"\x1b\].*?(?:\x07|\x1b\\)")
 # when input collapses, and the Read tool-call chrome around the turn-file read.
 _PASTED_RE = re.compile(r"^\[Pasted text\b.*\]$")
 _READ_CALL_RE = re.compile(r"^[⏺·•*-]?\s*Read\(.*\)\s*$")
-_READ_RESULT_RE = re.compile(r"^[⎿|]?\s*Read(?:\s+\d|ing\b).*$")
+# I3: the Read tool-result line is ALWAYS prefixed by the tool gutter glyph
+# (``⎿``/``|``). Requiring it — rather than making it optional — stops the
+# ``ing\b`` branch from deleting legit prose answers that merely START with
+# "Reading…" (e.g. "Reading the logs, I found three errors:").
+_READ_RESULT_RE = re.compile(r"^[⎿|]\s*Read(?:\s+\d+\s+line|ing\b).*$")
 # Folder-trust dialog markers — if one appears before we submit we send a bare
 # Enter to accept (belt-and-suspenders; #732 normally pre-seeds trust).
 _TRUST_RE = re.compile(r"\b(do you trust|trust this folder|trust the files)\b", re.I)
+# N1: the REPL has rendered its input box once we see the prompt caret ``❯`` or
+# the ``Try "…"`` placeholder. Seeing either lets us submit after a brief settle
+# instead of waiting for the full quiet-settle a chatty banner keeps resetting.
+_INPUT_BOX_RE = re.compile(r'❯|Try "')
+
+# I2: a wrapped trigger echo fragment must be at least this many normalized
+# characters before we'll drop it, so a short real answer that happens to
+# share a couple of words with the trigger is never eaten.
+_MIN_TRIGGER_FRAGMENT_CHARS = 12
+
+
+def _normalize_ws(s: str) -> str:
+    """Lower-case + collapse runs of whitespace to single spaces (for
+    wrap-tolerant comparison — a hard wrap turns one space into a newline)."""
+    return " ".join(s.split()).lower()
+
+
+def _is_trigger_fragment(line: str, norm_trigger: str) -> bool:
+    """True if ``line`` (whitespace-normalized) is a non-trivial fragment of the
+    normalized trigger — i.e. a physical row of a wrapped trigger echo.
+
+    Guards against eating real answers: the fragment must be reasonably long
+    (``_MIN_TRIGGER_FRAGMENT_CHARS``) AND a genuine substring of the trigger.
+    """
+    if not norm_trigger:
+        return False
+    norm_line = _normalize_ws(line)
+    # A leading REPL echo prefix ("> ") is chrome, not part of the trigger.
+    if norm_line.startswith("> "):
+        norm_line = norm_line[2:].strip()
+    if len(norm_line) < _MIN_TRIGGER_FRAGMENT_CHARS:
+        return False
+    return norm_line in norm_trigger
 
 
 def clean_interactive_transcript(raw: str, prompt: str = "") -> str:
@@ -50,6 +91,9 @@ def clean_interactive_transcript(raw: str, prompt: str = "") -> str:
         text = _ANSI_RE.sub("", text)
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         prompt = (prompt or "").strip()
+        # I2: precompute the normalized trigger so a wrapped (multi-line) echo
+        # is stripped even when no single line matches the trigger verbatim.
+        norm_trigger = _normalize_ws(prompt) if prompt else ""
 
         cleaned: list[str] = []
         for line in text.splitlines():
@@ -59,6 +103,10 @@ def clean_interactive_transcript(raw: str, prompt: str = "") -> str:
                     cleaned.append("")
                 continue
             if prompt and stripped in {prompt, f"> {prompt}"}:
+                continue
+            # Wrap-tolerant trigger-echo strip (a narrow PTY wraps the ~185-char
+            # trigger onto several rows; the exact-match above misses those).
+            if _is_trigger_fragment(stripped, norm_trigger):
                 continue
             if stripped in {"/exit", "exit"}:
                 continue
@@ -94,6 +142,8 @@ def decide_pty_action(
     idle_exit_seconds: float,
     exit_grace_seconds: float,
     submitted_at: float | None = None,
+    input_box_seen: bool = False,
+    first_output_at: float | None = None,
 ) -> str:
     """Decide the next PTY action for one loop tick (pure — no I/O).
 
@@ -103,9 +153,14 @@ def decide_pty_action(
 
     State machine (post-#735, Approach C):
       1. Readiness — wait for the banner; if none within ``first_output_seconds``
-         → kill. Once seen, require ``submit_settle_seconds`` of quiet (input box
-         rendered + stable) before typing.
-      2. Submit (once) — when settled and not yet submitted → submit.
+         → kill. Once seen, decide submit-readiness (see #2).
+      2. Submit (once) — submit when EITHER (a) the input box was seen
+         (``input_box_seen`` — ``❯`` / ``Try "`` placeholder rendered) followed
+         by a brief settle, OR (b) ``submit_settle_seconds`` of pure quiet, OR
+         (c) a bounded ceiling since first output (``max(settle*3, 5.0)``). The
+         ceiling stops a chatty banner / blinking spinner from resetting the
+         quiet timer forever and starving submit ~90s (N1). All three are well
+         under ``first_output_seconds``.
       3. Await response — after submit, suppress the idle ``/exit`` until the
          FIRST post-submit output; if none within ``first_output_seconds`` after
          submit → kill.
@@ -124,9 +179,22 @@ def decide_pty_action(
             return "kill"
         return "wait"
 
-    # 2. Not yet submitted: type the trigger once the input box has settled.
+    # 2. Not yet submitted: type the trigger once the REPL is ready. Readiness
+    #    is satisfied by any of three paths (N1) so a never-quieting banner
+    #    can't starve us — but a half-rendered box still gets a brief settle.
     if not submitted:
-        if now - last_output >= submit_settle_seconds:
+        quiet = now - last_output
+        # Brief settle: once the input box is visibly rendered we only need a
+        # short stable window (not the full quiet-settle) before typing. Clamp
+        # to the configured settle so a caller passing a tinier settle still
+        # wins.
+        brief_settle = min(submit_settle_seconds, 0.15)
+        if input_box_seen and quiet >= brief_settle:
+            return "submit"
+        if quiet >= submit_settle_seconds:
+            return "submit"
+        ceiling = max(submit_settle_seconds * 3, 5.0)
+        if first_output_at is not None and now - first_output_at >= ceiling:
             return "submit"
         return "wait"
 
@@ -155,6 +223,29 @@ def _signal_tree(pgid: int, sig: int) -> None:
         os.killpg(pgid, sig)
     except (ProcessLookupError, PermissionError, OSError):
         pass
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write EVERY byte of ``data`` to ``fd`` (I1).
+
+    A single ``os.write`` to a PTY master can short-write, silently truncating
+    the trigger while the caller's ``submitted`` latch flips true (never
+    retried) — so a partial trigger would never submit. Loop over a
+    ``memoryview`` until the buffer is drained. ``EAGAIN`` (non-blocking master)
+    is retried; other ``OSError``s propagate to the caller's existing guard."""
+    if not data:
+        return
+    view = memoryview(data)
+    while view:
+        try:
+            n = os.write(fd, view)
+        except OSError as exc:
+            if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                continue
+            raise
+        if n <= 0:
+            break
+        view = view[n:]
 
 
 def run_claude_interactive_with_heartbeat(
@@ -206,6 +297,19 @@ def run_claude_interactive_with_heartbeat(
     submit_bytes = ((prompt or "").encode() + b"\r") if prompt else b""
 
     master_fd, slave_fd = pty.openpty()
+    # B1: size the PTY wide BEFORE launch. A default 80-col window wraps the
+    # ~185-char single-line trigger onto ~3 physical rows, so the exact-match
+    # echo strip in clean_interactive_transcript() leaks the trigger into the
+    # returned transcript. Set a 200x50 window on the slave + matching env so
+    # apps that read COLUMNS/LINES agree with the ioctl. Guarded — harmless on
+    # odd platforms where the ioctl isn't supported.
+    try:
+        fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 200, 0, 0))
+    except OSError:
+        pass
+    env["COLUMNS"] = "200"
+    env["LINES"] = "50"
+    env.setdefault("TERM", "xterm-256color")
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -240,6 +344,10 @@ def run_claude_interactive_with_heartbeat(
     submitted_at: float | None = None
     response_seen = False
     trust_acked = False
+    # N1 readiness state: when the input box first rendered, and the timestamp
+    # of the first output (for the bounded submit ceiling).
+    input_box_seen = False
+    first_output_at: float | None = None
 
     try:
         while True:
@@ -262,6 +370,12 @@ def run_claude_interactive_with_heartbeat(
                     chunks.append(text)
                     last_output = now
                     seen_output = True
+                    if first_output_at is None:
+                        first_output_at = now
+                    # N1: note the input box rendering so submit can fire after a
+                    # brief settle rather than the full (banner-resettable) quiet.
+                    if not input_box_seen and _INPUT_BOX_RE.search(text):
+                        input_box_seen = True
                     # First output AFTER submit = Claude is responding; this
                     # un-suppresses the idle `/exit`.
                     if submitted and not response_seen:
@@ -273,7 +387,7 @@ def run_claude_interactive_with_heartbeat(
                     # Enter so the input box renders before we type the trigger.
                     if not submitted and not trust_acked and _TRUST_RE.search(text):
                         try:
-                            os.write(master_fd, b"\r")
+                            _write_all(master_fd, b"\r")
                         except OSError:
                             pass
                         trust_acked = True
@@ -295,13 +409,15 @@ def run_claude_interactive_with_heartbeat(
                 submit_settle_seconds=submit_settle_seconds,
                 idle_exit_seconds=idle_exit_seconds,
                 exit_grace_seconds=exit_grace_seconds,
+                input_box_seen=input_box_seen,
+                first_output_at=first_output_at,
             )
 
             if action == "wait":
                 continue
             if action == "submit":
                 if submit_bytes:
-                    os.write(master_fd, submit_bytes)
+                    _write_all(master_fd, submit_bytes)
                 submitted = True
                 submitted_at = now
                 # Reset the idle baseline so the post-submit response gate (not a
@@ -309,7 +425,7 @@ def run_claude_interactive_with_heartbeat(
                 last_output = now
                 continue
             if action == "exit":
-                os.write(master_fd, b"\n/exit\n")
+                _write_all(master_fd, b"\n/exit\n")
                 exit_sent_at = now
                 continue
             if action == "terminate":

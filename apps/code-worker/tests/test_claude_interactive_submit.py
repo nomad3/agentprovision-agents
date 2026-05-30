@@ -172,6 +172,35 @@ class TestClaudeExecutorInteractiveSubmit:
         assert "PERSONA" not in submit
         assert "do the thing" not in submit
 
+    def test_turn_prompt_and_claude_md_written_0600(
+        self, monkeypatch, tmp_path, interactive_env
+    ):
+        """N2: the turn blob (persona + conversation history) is secret-grade,
+        so ``turn_prompt.md`` and ``CLAUDE.md`` must be mode 0o600."""
+        import stat
+
+        self._patch_credential(monkeypatch)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        monkeypatch.setattr(
+            claude_interactive,
+            "run_claude_interactive_with_heartbeat",
+            lambda cmd, **kw: _completed(0, stdout="ok"),
+        )
+
+        task = _make_input(
+            instruction_md_content="PERSONA: Luna",
+            message="secret history",
+        )
+        wf._execute_claude_chat(task, session_dir=str(session_dir))
+
+        for name in ("turn_prompt.md", "CLAUDE.md"):
+            p = session_dir / name
+            assert p.is_file(), name
+            mode = stat.S_IMODE(p.stat().st_mode)
+            assert mode == 0o600, f"{name} mode is {oct(mode)}"
+
     def test_print_mode_unchanged_appends_minus_p_and_no_turn_file(
         self, monkeypatch, tmp_path
     ):
@@ -259,6 +288,56 @@ class TestCleanInteractiveTranscript:
         # Defensive contract — best-effort, never raises.
         out = clean_interactive_transcript("\x1b[0m\x00garbage\r\n", "trigger")
         assert isinstance(out, str)
+
+    # ── I2: wrap-tolerant trigger-echo strip ─────────────────────────────
+    def test_strips_wrapped_trigger_echo_across_multiple_lines(self):
+        """When the PTY is narrow (e.g. an 80-col fallback) the ~185-char
+        trigger echo wraps onto several physical rows, so the old exact-match
+        strip leaks it. The cleaner must drop each wrapped fragment while
+        preserving the real answer line."""
+        trigger = (
+            "Read the file /scratch/turn_prompt.md and respond to the user "
+            "request it contains. Reply directly — do not ask for confirmation."
+        )
+        # Simulate an 80-col wrap: the single trigger split across 3 rows.
+        raw = (
+            "> Read the file /scratch/turn_prompt.md and respond to the user\n"
+            "request it contains. Reply directly — do not ask for\n"
+            "confirmation.\n"
+            "The answer is 4.\n"
+        )
+        out = clean_interactive_transcript(raw, trigger)
+        assert "The answer is 4." in out
+        # No fragment of the wrapped trigger survives.
+        assert "Read the file /scratch/turn_prompt.md" not in out
+        assert "request it contains" not in out
+        assert "do not ask for" not in out
+
+    def test_wrap_strip_preserves_short_answer_fragments(self):
+        """Wrap-tolerant stripping must NOT eat a legit short answer that
+        happens to share a couple of words with the trigger."""
+        trigger = (
+            "Read the file /scratch/turn_prompt.md and respond to the user "
+            "request it contains. Reply directly — do not ask for confirmation."
+        )
+        raw = "Read it.\nThe file is fine.\n"
+        out = clean_interactive_transcript(raw, trigger)
+        assert "The file is fine." in out
+
+    # ── I3: _READ_RESULT_RE must require the tool gutter glyph ────────────
+    def test_strips_gutter_read_result_line(self):
+        raw = "⎿ Read 120 lines\nThe answer is 4.\n"
+        out = clean_interactive_transcript(raw, "")
+        assert "Read 120 lines" not in out
+        assert "The answer is 4." in out
+
+    def test_preserves_prose_starting_with_reading(self):
+        """A prose answer that begins 'Reading…' has no gutter glyph and must
+        survive (regression: the old `ing\\b` branch deleted it)."""
+        raw = "Reading the logs, I found three errors:\n- one\n- two\n"
+        out = clean_interactive_transcript(raw, "")
+        assert "Reading the logs, I found three errors:" in out
+        assert "- one" in out
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -422,6 +501,89 @@ class TestDecidePtyAction:
         )
         assert action == "terminate"
 
+    # ── N1: readiness must not be starved by a chatty banner ─────────────
+    def test_submits_quickly_when_input_box_seen(self):
+        """Input-box marker seen → submit after only a BRIEF settle, even if
+        the chatty banner keeps the full quiet-settle from elapsing."""
+        action = decide_pty_action(
+            now=1.6,
+            start=0.0,
+            last_output=1.4,  # only 0.2s quiet — under the 1.0s full settle
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=True,
+            first_output_at=0.4,
+        )
+        assert action == "submit"
+
+    def test_input_box_seen_still_needs_brief_settle(self):
+        """Even with the input-box marker, a still-streaming box (zero quiet)
+        should wait a brief settle before typing."""
+        action = decide_pty_action(
+            now=1.41,
+            start=0.0,
+            last_output=1.4,  # ~0.01s quiet — under the brief settle
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=True,
+            first_output_at=0.4,
+        )
+        assert action == "wait"
+
+    def test_submits_on_bounded_ceiling_when_banner_never_quiets(self):
+        """No input-box marker AND the banner emits faster than the full
+        settle forever → the bounded ceiling since first output forces a
+        submit so the turn isn't starved ~90s."""
+        # first output at t=0.4; ceiling = max(1.0*3, 5.0) = 5.0 → fires at 5.4.
+        action = decide_pty_action(
+            now=5.5,
+            start=0.0,
+            last_output=5.2,  # 0.3s quiet — under full 1.0s settle, never quiets
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=False,
+            first_output_at=0.4,
+        )
+        assert action == "submit"
+
+    def test_no_ceiling_submit_before_ceiling_elapses(self):
+        """Before the bounded ceiling, with no input-box marker and a chatty
+        banner, keep waiting (don't submit prematurely)."""
+        action = decide_pty_action(
+            now=3.0,
+            start=0.0,
+            last_output=2.8,  # 0.2s quiet — under settle; ceiling (5.0) not hit
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=False,
+            first_output_at=0.4,
+        )
+        assert action == "wait"
+
 
 # ════════════════════════════════════════════════════════════════════════
 # Change 2c — runner submit integration (fake PTY)
@@ -431,7 +593,7 @@ class _FakePty:
     uses, so we can assert WHAT bytes get written and WHEN, deterministically
     (monotonic time is faked, so no real sleeping)."""
 
-    def __init__(self, script, exit_after_reads=None):
+    def __init__(self, script, exit_after_reads=None, short_write=False):
         # ``script`` is a list of byte chunks the PTY "emits" on successive
         # reads; an entry of None means "no data ready this tick".
         self._script = list(script)
@@ -443,6 +605,10 @@ class _FakePty:
         self._reads_done = 0
         self.master_fd = 11
         self.slave_fd = 12
+        # When True, os.write only accepts the FIRST byte each call (simulates
+        # a PTY short-write) so the drain helper (I1) must loop to deliver all.
+        self._short_write = short_write
+        self.ioctl_calls: list[tuple] = []
 
     # time ----------------------------------------------------------------
     def monotonic(self):
@@ -474,12 +640,23 @@ class _FakePty:
         return b""
 
     def write(self, fd, data):
+        data = bytes(data)
+        if self._short_write and len(data) > 1:
+            # Accept only the first byte; the drain helper must retry the rest.
+            self.writes.append(data[:1])
+            self.write_times.append(self._t)
+            return 1
         self.writes.append(data)
         self.write_times.append(self._t)
         return len(data)
 
     def close(self, fd):
         self._closed = True
+
+    def ioctl(self, fd, request, arg):
+        # Record the TIOCSWINSZ payload (HHHH: rows, cols, x, y).
+        self.ioctl_calls.append((fd, request, arg))
+        return 0
 
 
 class _FakeProc:
@@ -502,9 +679,14 @@ class _FakeProc:
 @pytest.fixture
 def fake_pty_wiring(monkeypatch):
     """Patch the runner's pty/os/select/subprocess/time surface with fakes."""
-    def _apply(script, poll_after_reads=None):
-        fake = _FakePty(script)
+    def _apply(script, poll_after_reads=None, short_write=False):
+        fake = _FakePty(script, short_write=short_write)
         proc = _FakeProc(fake, poll_after_reads=poll_after_reads)
+        captured: dict = {}
+
+        def _popen(*a, **k):
+            captured["env"] = k.get("env")
+            return proc
 
         monkeypatch.setattr(claude_interactive.time, "monotonic", fake.monotonic)
         monkeypatch.setattr(claude_interactive.pty, "openpty", fake.openpty)
@@ -512,6 +694,7 @@ def fake_pty_wiring(monkeypatch):
         monkeypatch.setattr(claude_interactive.os, "read", fake.read)
         monkeypatch.setattr(claude_interactive.os, "write", fake.write)
         monkeypatch.setattr(claude_interactive.os, "close", fake.close)
+        monkeypatch.setattr(claude_interactive.fcntl, "ioctl", fake.ioctl)
         monkeypatch.setattr(
             claude_interactive.os, "getpgid", lambda pid: pid
         )
@@ -519,8 +702,9 @@ def fake_pty_wiring(monkeypatch):
             claude_interactive.os, "killpg", lambda pgid, sig: None
         )
         monkeypatch.setattr(
-            claude_interactive.subprocess, "Popen", lambda *a, **k: proc
+            claude_interactive.subprocess, "Popen", _popen
         )
+        fake.popen_capture = captured
         return fake, proc
 
     return _apply
@@ -585,3 +769,84 @@ class TestRunnerSubmitsTrigger:
 
         # Trigger was never typed because the banner never appeared.
         assert not any(trigger.encode() in w for w in fake.writes), fake.writes
+
+
+# ════════════════════════════════════════════════════════════════════════
+# B1 — PTY sized wide so the long trigger echo does not wrap
+# ════════════════════════════════════════════════════════════════════════
+class TestRunnerSizesPtyWide:
+    def test_sets_wide_winsize_and_env(self, fake_pty_wiring):
+        import struct
+        import termios
+
+        trigger = "Read the file /scratch/turn_prompt.md and respond."
+        script = [
+            b"Welcome to Claude Code\n",
+            None, None, None, None, None,
+            b"The answer is 4.\n",
+            None, None, None, None, None, None,
+        ]
+        fake, proc = fake_pty_wiring(script)
+
+        claude_interactive.run_claude_interactive_with_heartbeat(
+            ["claude"],
+            prompt=trigger,
+            label="Claude Code",
+            timeout=1500,
+            env={},
+            cwd="/tmp",
+            submit_settle_seconds=0.2,
+            idle_exit_seconds=0.5,
+            exit_grace_seconds=0.5,
+            first_output_seconds=90.0,
+        )
+
+        # The slave PTY was resized to a wide window before Popen.
+        assert fake.ioctl_calls, "TIOCSWINSZ never called"
+        fd, request, arg = fake.ioctl_calls[0]
+        assert fd == fake.slave_fd
+        assert request == termios.TIOCSWINSZ
+        rows, cols, _x, _y = struct.unpack("HHHH", arg)
+        assert cols == 200
+        assert rows == 50
+
+        # Env handed to the subprocess agrees with the ioctl.
+        env = fake.popen_capture["env"]
+        assert env["COLUMNS"] == "200"
+        assert env["LINES"] == "50"
+        assert env.get("TERM")  # set (default xterm-256color) if not provided
+
+
+# ════════════════════════════════════════════════════════════════════════
+# I1 — PTY writes are fully drained (no silent short-write truncation)
+# ════════════════════════════════════════════════════════════════════════
+class TestRunnerDrainsWrites:
+    def test_short_write_still_delivers_full_trigger(self, fake_pty_wiring):
+        trigger = "Read the file /scratch/turn_prompt.md and respond."
+        script = [
+            b"Welcome to Claude Code\n",
+            None, None, None, None, None,
+            b"The answer is 4.\n",
+            None, None, None, None, None, None,
+        ]
+        # short_write=True → os.write accepts 1 byte/call; the drain helper
+        # must loop until every trigger byte is written.
+        fake, proc = fake_pty_wiring(script, short_write=True)
+
+        claude_interactive.run_claude_interactive_with_heartbeat(
+            ["claude"],
+            prompt=trigger,
+            label="Claude Code",
+            timeout=1500,
+            env={},
+            cwd="/tmp",
+            submit_settle_seconds=0.2,
+            idle_exit_seconds=0.5,
+            exit_grace_seconds=0.5,
+            first_output_seconds=90.0,
+        )
+
+        # Reassemble everything written and confirm the full trigger + \r landed
+        # despite the PTY only accepting one byte per write call.
+        joined = b"".join(fake.writes)
+        assert (trigger.encode() + b"\r") in joined, joined

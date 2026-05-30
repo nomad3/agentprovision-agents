@@ -40,6 +40,27 @@ from tenant_feature_flags import is_enabled as _feature_enabled
 logger = logging.getLogger(__name__)
 
 
+def _write_secret_file(path: str, content: str) -> None:
+    """Write ``content`` to ``path`` with mode 0o600 (N2).
+
+    The interactive turn blob (``turn_prompt.md``) and ``CLAUDE.md`` hold the
+    persona + full conversation history, so they are secret-grade. ``os.open``
+    with ``O_CREAT|0o600`` sets the perms atomically on create; an explicit
+    ``chmod`` re-tightens a pre-existing world-readable file from an earlier
+    turn. Interactive path only — the print path keeps its plain ``open``."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(content)
+    finally:
+        # Re-assert perms in case the file pre-existed (O_CREAT mode is ignored
+        # for an existing file).
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+
+
 def _ensure_claude_onboarding(home: str, trusted_cwd: str | None = None) -> None:
     """Seed ``$HOME/.claude.json`` so interactive Claude Code skips its
     first-run onboarding wizard (theme → login-method → folder-trust).
@@ -291,8 +312,16 @@ def execute_claude_chat(task_input, session_dir: str):
     interactive_submit = None
     if interactive_mode:
         turn_file = os.path.join(session_dir, "turn_prompt.md")
-        with open(turn_file, "w") as f:
-            f.write(prompt)
+        # N2: turn blob is secret-grade (persona + conversation history) → 0o600.
+        _write_secret_file(turn_file, prompt)
+        # Re-tighten CLAUDE.md (written above with a plain `open`) on the
+        # interactive path for consistency — it carries the same blob.
+        _claude_md = os.path.join(session_dir, "CLAUDE.md")
+        if os.path.exists(_claude_md):
+            try:
+                os.chmod(_claude_md, 0o600)
+            except OSError:
+                pass
         interactive_submit = (
             f"Read the file {turn_file} and respond to the user request it "
             "contains. Reply directly — do not ask for confirmation."
