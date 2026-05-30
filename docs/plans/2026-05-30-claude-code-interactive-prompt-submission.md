@@ -60,15 +60,23 @@ The turn blob = `instruction_md_content` (persona + instructions + conversation 
 ### 4.1 `apps/code-worker/cli_executors/claude.py`
 - For interactive mode, **write the turn blob (`prompt`) to a session file** — e.g. `session_dir/turn_prompt.md` (`session_dir` is already `--add-dir`'d at L212, so Claude's `Read` tool can reach it by absolute path).
 - **Stop appending the blob positionally** (drop `cmd.append(prompt)` at L280-281). Print mode (`-p prompt`) unchanged.
-- Build a **single-line trigger** and pass it to the runner as `prompt=` (the runner both types it and strips its echo): `Read the file {abs_turn_file} and respond to the user request it contains. Reply directly — do not ask for confirmation.`
+- Build a **single-line trigger** and pass it to the runner as `prompt=`. The trigger also names an **answer file** so the response comes back out-of-band (see §4.4): `Read the file {abs_turn_file} and respond to the user request it contains. Write ONLY your final answer to {abs_answer_file} (overwrite it); no preamble. Reply directly — do not ask for confirmation.`
+- Pass `answer_file={abs_answer_file}` (under `session_dir`) to the runner so it can read the clean answer back.
 - Keep writing `session_dir/CLAUDE.md` (harmless belt-and-suspenders; **not** relied on for delivery per §4.0).
 
 ### 4.2 `apps/code-worker/cli_executors/claude_interactive.py`
 - After launch, **wait until the input box is rendered and stable** before typing (Codex #4): detect the bottom prompt/suggestion line (e.g. the `❯`/`Try "…"` placeholder or the input box border) and require a short stable settle window; ensure no trust/onboarding dialog text is present. Do **not** type into a not-yet-ready REPL.
-- **Type the single-line trigger + `\r`** (plain `os.write`; no bracketed paste needed — the trigger has no embedded newlines, which is the whole point of Approach C).
+- **Type the trigger as TWO separate writes** — the text, a short settle (~0.5 s), then `\r` on its own (smoke-proven §4.4 / Defect 1). The REPL runs bracketed-paste mode on; a long line glued to `\r` in one write is swallowed as paste content and the `\r` becomes a literal newline, never Enter → the turn never submits. Separated, it submits and answers in ~2 s with MCP attached.
 - Belt-and-suspenders: if a folder-trust prompt appears despite #732's seed, answer it (it precedes the input box).
 - Keep the existing idle-`/exit` + first-output + process-group logic (#735) unchanged.
-- **Tighten transcript cleaning** (Codex #5): `clean_interactive_transcript()` must drop the typed trigger echo (already strips exact prompt echo) **and** the `Read` tool-call chrome / any `[Pasted text +N lines]` placeholder, so the returned answer is just Claude's reply.
+- **Read the answer from `answer_file`, not the transcript** (§4.4 / Defect 2): once the turn goes idle, read `answer_file` and return it as the response (normalize returncode to success when it's non-empty). The TUI transcript is a **fallback only** — `clean_interactive_transcript()` (hardened to drop trigger echo / `[Pasted text]` / `Read` chrome) is best-effort and **cannot** reliably reconstruct a cursor-addressed TUI redraw (spinner frames, box rules), so it must not be the primary answer source.
+
+### 4.4 Smoke-gate findings (the gate fired — two defects in the first build)
+The pre-merge worker smoke (§5.0) drove the patched runner against the live worker + 168-tool MCP with a realistic blob and **failed**, surfacing two issues the unit tests (with non-wrapping fakes + no real REPL) could not:
+- **Defect 1 — glued submit never fires.** Writing `trigger + "\r"` in one buffer: the REPL's bracketed-paste mode absorbs the long line as paste and the trailing `\r` becomes a newline inside the box, not Enter. Result: trigger echoes, no submit, returncode 143. **Proven fix:** text → ~0.5 s settle → `\r` as a separate write → submits, MCP attaches, file is read, Claude answers (`"2+2 is 4, and I'm Luna…"`). → §4.2.
+- **Defect 2 — the cleaner can't beat the TUI.** Interactive Claude is a full cursor-addressed TUI (spinner frames, redrawn input box, box rules); a line-based `clean_interactive_transcript` returned 3150 chars of chrome with the answer buried. A terminal-emulator replay (e.g. `pyte`) would work but violates the module's stdlib-only constraint. **Fix:** out-of-band answer file (§4.1/§4.2) — Claude writes its final answer to a file we read back; the scrape stays only as a fallback.
+
+Both are now in the fix; the re-smoke must pass before merge.
 
 ## 5. Verification
 0. **Smoke (worker, pre-merge — the gate for this fix):** drive the patched runner against the deployed worker with a **realistic large multi-line blob** written to the turn file + the single-line trigger; confirm the turn submits and answers < 15 s, transcript is Claude's real reply (no trigger/Read chrome, no `[Pasted text]`), with the full 168-tool MCP attached. Confirm Claude actually `Read` the file (persona/history honored, e.g. it answers in Luna's voice).
