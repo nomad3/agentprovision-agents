@@ -15,6 +15,7 @@ import os
 import pty
 import re
 import select
+import signal
 import subprocess
 import time
 from collections.abc import Callable
@@ -56,6 +57,19 @@ def clean_interactive_transcript(raw: str, prompt: str = "") -> str:
         cleaned.append(stripped)
 
     return "\n".join(cleaned).strip()
+
+
+def _signal_tree(proc: subprocess.Popen, sig: int) -> None:
+    """Signal Claude's whole process group so children it spawned (MCP servers,
+    helper procs) are reaped too — not just the top-level PID. Falls back to
+    signalling the bare process if the group is already gone."""
+    try:
+        os.killpg(os.getpgid(proc.pid), sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            pass
 
 
 def run_claude_interactive_with_heartbeat(
@@ -104,6 +118,10 @@ def run_claude_interactive_with_heartbeat(
         stderr=slave_fd,
         text=False,
         close_fds=True,
+        # Own session/process group so we can signal Claude AND any children it
+        # spawned (MCP servers, helper procs) as a unit — a bare proc.kill()
+        # would orphan them and leak resources on repeated timeouts.
+        start_new_session=True,
     )
     os.close(slave_fd)
 
@@ -121,7 +139,7 @@ def run_claude_interactive_with_heartbeat(
                 heartbeat(f"{label} interactive ({int(now - start)}s elapsed)")
                 last_heartbeat = now
             if now - start >= timeout:
-                proc.kill()
+                _signal_tree(proc, signal.SIGKILL)
                 break
 
             ready, _, _ = select.select([master_fd], [], [], 0.25)
@@ -148,7 +166,7 @@ def run_claude_interactive_with_heartbeat(
             # mid-startup. Fail fast only if nothing arrives within the cap.
             if not seen_output:
                 if now - start >= first_output_seconds:
-                    proc.kill()
+                    _signal_tree(proc, signal.SIGKILL)
                     break
                 continue
 
@@ -159,11 +177,11 @@ def run_claude_interactive_with_heartbeat(
                 continue
 
             if exit_sent_at is not None and now - exit_sent_at >= exit_grace_seconds:
-                proc.terminate()
+                _signal_tree(proc, signal.SIGTERM)
                 try:
                     proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
+                    _signal_tree(proc, signal.SIGKILL)
                 break
     finally:
         try:
@@ -174,7 +192,7 @@ def run_claude_interactive_with_heartbeat(
     try:
         returncode = proc.wait(timeout=1)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _signal_tree(proc, signal.SIGKILL)
         returncode = proc.wait(timeout=1)
 
     raw = "".join(chunks)
