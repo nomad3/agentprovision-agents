@@ -258,6 +258,7 @@ class TestExecuteClaudeChat:
             captured["cmd"] = cmd
             captured["env"] = kw["env"]
             captured["prompt"] = kw["prompt"]
+            captured["answer_file"] = kw.get("answer_file")
             return sp.CompletedProcess(
                 args=cmd,
                 returncode=0,
@@ -299,6 +300,12 @@ class TestExecuteClaudeChat:
         assert "\n" not in captured["prompt"]
         assert str(tmp_path / "turn_prompt.md") in captured["prompt"]
         assert (tmp_path / "turn_prompt.md").read_text() == "hello"
+        # Defect 2 (plan 2026-05-30): the trigger also instructs Claude to write
+        # its answer out-of-band, and the runner is handed that ``answer_file``
+        # to read back (the TUI transcript can't be reliably cleaned).
+        assert str(tmp_path / "answer.md") in captured["prompt"]
+        assert "Write ONLY your final answer" in captured["prompt"]
+        assert captured.get("answer_file") == str(tmp_path / "answer.md")
         assert "ANTHROPIC_API_KEY" not in captured["env"]
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in captured["env"]
 

@@ -172,6 +172,49 @@ class TestClaudeExecutorInteractiveSubmit:
         assert "PERSONA" not in submit
         assert "do the thing" not in submit
 
+    def test_trigger_instructs_read_turn_and_write_answer_file(
+        self, monkeypatch, tmp_path, interactive_env
+    ):
+        """Defect 2: the single-line trigger must instruct Claude to BOTH read
+        the turn file AND write its final answer out-of-band to the answer
+        file, and the runner must receive ``answer_file`` so it reads it back."""
+        self._patch_credential(monkeypatch)
+        session_dir = tmp_path / "session"
+        session_dir.mkdir()
+
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["kwargs"] = kwargs
+            return _completed(0, stdout="ok")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_run
+        )
+
+        task = _make_input(
+            instruction_md_content="PERSONA: Luna",
+            message="What is 2+2?",
+        )
+        wf._execute_claude_chat(task, session_dir=str(session_dir))
+
+        submit = captured["kwargs"]["prompt"]
+        turn_file = str(session_dir / "turn_prompt.md")
+        answer_file = str(session_dir / "answer.md")
+        # Single line still.
+        assert "\n" not in submit
+        # Read-turn-file instruction.
+        assert "Read the file" in submit
+        assert turn_file in submit
+        # Write-answer-file instruction (Defect 2).
+        assert answer_file in submit
+        assert "Write ONLY your final answer" in submit
+        # The runner is handed the answer-file path to read back.
+        assert captured["kwargs"].get("answer_file") == answer_file
+        assert os.path.isabs(answer_file)
+        # The answer file lives under session_dir (ephemeral scratch).
+        assert os.path.dirname(answer_file) == str(session_dir)
+
     def test_turn_prompt_and_claude_md_written_0600(
         self, monkeypatch, tmp_path, interactive_env
     ):
@@ -239,8 +282,9 @@ class TestClaudeExecutorInteractiveSubmit:
         # The blob is the positional arg right after -p.
         assert cmd[p_idx + 1] == "SYS\n\n# User Request\n\nhello"
         assert "--no-session-persistence" in cmd
-        # No turn file in print mode.
+        # No turn file or answer file in print mode (Defect 2 is interactive-only).
         assert not (session_dir / "turn_prompt.md").exists()
+        assert not (session_dir / "answer.md").exists()
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -399,7 +443,8 @@ class TestDecidePtyAction:
         assert action == "wait"
 
     def test_submits_after_settle(self):
-        # Banner seen at t=1.0; 1.2s of quiet since — settle satisfied.
+        # Banner seen at t=1.0; 1.2s of quiet since — settle satisfied. Phase 1
+        # of the two-phase submit types the trigger TEXT first (Defect 1).
         action = decide_pty_action(
             now=2.2,
             start=0.0,
@@ -413,7 +458,7 @@ class TestDecidePtyAction:
             idle_exit_seconds=8.0,
             exit_grace_seconds=10.0,
         )
-        assert action == "submit"
+        assert action == "submit_text"
 
     def test_idle_exit_suppressed_after_submit_until_response(self):
         # Submitted, but Claude has not yet responded; do NOT /exit on idle.
@@ -503,8 +548,9 @@ class TestDecidePtyAction:
 
     # ── N1: readiness must not be starved by a chatty banner ─────────────
     def test_submits_quickly_when_input_box_seen(self):
-        """Input-box marker seen → submit after only a BRIEF settle, even if
-        the chatty banner keeps the full quiet-settle from elapsing."""
+        """Input-box marker seen → phase-1 ``submit_text`` after only a BRIEF
+        settle, even if the chatty banner keeps the full quiet-settle from
+        elapsing."""
         action = decide_pty_action(
             now=1.6,
             start=0.0,
@@ -520,7 +566,7 @@ class TestDecidePtyAction:
             input_box_seen=True,
             first_output_at=0.4,
         )
-        assert action == "submit"
+        assert action == "submit_text"
 
     def test_input_box_seen_still_needs_brief_settle(self):
         """Even with the input-box marker, a still-streaming box (zero quiet)
@@ -562,7 +608,7 @@ class TestDecidePtyAction:
             input_box_seen=False,
             first_output_at=0.4,
         )
-        assert action == "submit"
+        assert action == "submit_text"
 
     def test_no_ceiling_submit_before_ceiling_elapses(self):
         """Before the bounded ceiling, with no input-box marker and a chatty
@@ -584,6 +630,102 @@ class TestDecidePtyAction:
         )
         assert action == "wait"
 
+    # ── Defect 1: two-phase submit (text first, then Enter alone) ─────────
+    # The REPL runs bracketed-paste mode; a long trigger glued to ``\r`` is
+    # absorbed as paste and the ``\r`` becomes a literal newline, never Enter.
+    # So readiness now yields ``submit_text`` (type the text), and only after
+    # ``enter_delay_seconds`` of settle do we get ``submit_enter`` (the ``\r``).
+    def test_ready_returns_submit_text_not_submit(self):
+        """Once the input box is up + settled, the FIRST action is to write the
+        trigger TEXT — never a glued text+Enter ``submit``."""
+        action = decide_pty_action(
+            now=1.6,
+            start=0.0,
+            last_output=1.4,
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=True,
+            first_output_at=0.4,
+            text_written=False,
+            enter_delay_seconds=0.5,
+        )
+        assert action == "submit_text"
+
+    def test_submit_enter_only_after_enter_delay(self):
+        """After the text is written, the bare ``\\r`` (``submit_enter``) is
+        withheld until ``enter_delay_seconds`` elapse — the settle that lets the
+        REPL leave paste mode before Enter fires."""
+        # Text written at t=2.0; only 0.3s later — under the 0.5s enter delay.
+        action = decide_pty_action(
+            now=2.3,
+            start=0.0,
+            last_output=2.0,
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=True,
+            first_output_at=0.4,
+            text_written=True,
+            text_written_at=2.0,
+            enter_delay_seconds=0.5,
+        )
+        assert action == "wait"
+
+    def test_submit_enter_fires_after_enter_delay_elapsed(self):
+        """Once ``enter_delay_seconds`` have passed since the text write, send
+        the bare ``\\r`` as ``submit_enter``."""
+        # Text written at t=2.0; now t=2.6 — 0.6s ≥ 0.5s enter delay.
+        action = decide_pty_action(
+            now=2.6,
+            start=0.0,
+            last_output=2.0,
+            seen_output=True,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            input_box_seen=True,
+            first_output_at=0.4,
+            text_written=True,
+            text_written_at=2.0,
+            enter_delay_seconds=0.5,
+        )
+        assert action == "submit_enter"
+
+    def test_no_submit_text_before_readiness(self):
+        """``submit_text`` must never fire before the banner is seen — typing
+        into a not-yet-ready REPL drops the input."""
+        action = decide_pty_action(
+            now=0.5,
+            start=0.0,
+            last_output=0.0,
+            seen_output=False,
+            submitted=False,
+            response_seen=False,
+            exit_sent_at=None,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            text_written=False,
+            enter_delay_seconds=0.5,
+        )
+        assert action == "wait"
+
 
 # ════════════════════════════════════════════════════════════════════════
 # Change 2c — runner submit integration (fake PTY)
@@ -593,7 +735,13 @@ class _FakePty:
     uses, so we can assert WHAT bytes get written and WHEN, deterministically
     (monotonic time is faked, so no real sleeping)."""
 
-    def __init__(self, script, exit_after_reads=None, short_write=False):
+    def __init__(
+        self,
+        script,
+        exit_after_reads=None,
+        short_write=False,
+        answer_drop=None,
+    ):
         # ``script`` is a list of byte chunks the PTY "emits" on successive
         # reads; an entry of None means "no data ready this tick".
         self._script = list(script)
@@ -609,6 +757,12 @@ class _FakePty:
         # a PTY short-write) so the drain helper (I1) must loop to deliver all.
         self._short_write = short_write
         self.ioctl_calls: list[tuple] = []
+        # Defect 2: ``answer_drop`` is a ``(path, contents)`` pair. When the
+        # first "long" write (the trigger text, >1 byte) lands we write
+        # ``contents`` to ``path`` — simulating Claude reading the turn file and
+        # writing its answer out-of-band.
+        self._answer_drop = answer_drop
+        self._answer_dropped = False
 
     # time ----------------------------------------------------------------
     def monotonic(self):
@@ -641,6 +795,17 @@ class _FakePty:
 
     def write(self, fd, data):
         data = bytes(data)
+        # Defect 2: the trigger text is the first multi-byte write — when it
+        # lands, drop the out-of-band answer file (Claude's Read + Write).
+        if (
+            self._answer_drop is not None
+            and not self._answer_dropped
+            and len(data) > 1
+        ):
+            path, contents = self._answer_drop
+            with open(path, "w") as fh:
+                fh.write(contents)
+            self._answer_dropped = True
         if self._short_write and len(data) > 1:
             # Accept only the first byte; the drain helper must retry the rest.
             self.writes.append(data[:1])
@@ -679,8 +844,8 @@ class _FakeProc:
 @pytest.fixture
 def fake_pty_wiring(monkeypatch):
     """Patch the runner's pty/os/select/subprocess/time surface with fakes."""
-    def _apply(script, poll_after_reads=None, short_write=False):
-        fake = _FakePty(script, short_write=short_write)
+    def _apply(script, poll_after_reads=None, short_write=False, answer_drop=None):
+        fake = _FakePty(script, short_write=short_write, answer_drop=answer_drop)
         proc = _FakeProc(fake, poll_after_reads=poll_after_reads)
         captured: dict = {}
 
@@ -711,13 +876,17 @@ def fake_pty_wiring(monkeypatch):
 
 
 class TestRunnerSubmitsTrigger:
-    def test_types_trigger_after_settle_then_gates_exit(self, fake_pty_wiring):
+    def test_types_trigger_text_then_enter_separately(self, fake_pty_wiring):
+        """Defect 1: the trigger TEXT and the Enter (``\\r``) must be SEPARATE
+        writes — a glued ``text+\\r`` is absorbed by bracketed-paste mode and
+        never submits. The text write must NOT carry a trailing ``\\r``, and a
+        bare ``\\r`` write must follow it."""
         trigger = "Read the file /scratch/turn_prompt.md and respond."
-        # banner, then quiet (None ticks) to satisfy settle, then the
-        # post-submit answer, then quiet until idle /exit fires.
+        # banner, then quiet (None ticks) to satisfy settle + enter-delay, then
+        # the post-submit answer, then quiet until idle /exit fires.
         script = [
             b"Welcome to Claude Code\n",  # banner (read 1)
-            None, None, None, None, None,  # settle quiet
+            None, None, None, None, None, None, None, None,  # settle + enter delay
             b"The answer is 4.\n",         # post-submit response (read 2)
             None, None, None, None, None, None, None, None, None,  # idle
             None, None, None, None, None, None,
@@ -732,20 +901,28 @@ class TestRunnerSubmitsTrigger:
             env={},
             cwd="/tmp",
             submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
             idle_exit_seconds=0.5,
             exit_grace_seconds=0.5,
             first_output_seconds=90.0,
         )
 
-        # The trigger must have been typed (with a carriage return).
-        trigger_writes = [w for w in fake.writes if trigger.encode() in w]
-        assert trigger_writes, f"trigger never typed; writes={fake.writes!r}"
-        assert trigger_writes[0].endswith(b"\r")
-        # Exactly one submit of the trigger.
-        assert len(trigger_writes) == 1
+        # The trigger TEXT was typed exactly once, WITHOUT a trailing \r.
+        text_writes = [w for w in fake.writes if trigger.encode() in w]
+        assert text_writes, f"trigger text never typed; writes={fake.writes!r}"
+        assert len(text_writes) == 1
+        assert not text_writes[0].endswith(b"\r"), (
+            f"text must not be glued to \\r; got {text_writes[0]!r}"
+        )
+        # A bare \r (Enter) was written on its own, AFTER the text.
+        text_idx = fake.writes.index(text_writes[0])
+        enter_writes = [
+            i for i, w in enumerate(fake.writes) if w == b"\r" and i > text_idx
+        ]
+        assert enter_writes, f"bare \\r (Enter) never written; writes={fake.writes!r}"
         # An /exit was eventually sent (idle after the response).
         assert any(b"/exit" in w for w in fake.writes)
-        # The answer survives cleaning.
+        # The answer survives cleaning (transcript fallback — no answer file).
         assert "The answer is 4." in result.stdout
 
     def test_does_not_type_trigger_before_banner(self, fake_pty_wiring):
@@ -782,7 +959,7 @@ class TestRunnerSizesPtyWide:
         trigger = "Read the file /scratch/turn_prompt.md and respond."
         script = [
             b"Welcome to Claude Code\n",
-            None, None, None, None, None,
+            None, None, None, None, None, None, None, None,
             b"The answer is 4.\n",
             None, None, None, None, None, None,
         ]
@@ -796,6 +973,7 @@ class TestRunnerSizesPtyWide:
             env={},
             cwd="/tmp",
             submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
             idle_exit_seconds=0.5,
             exit_grace_seconds=0.5,
             first_output_seconds=90.0,
@@ -825,7 +1003,7 @@ class TestRunnerDrainsWrites:
         trigger = "Read the file /scratch/turn_prompt.md and respond."
         script = [
             b"Welcome to Claude Code\n",
-            None, None, None, None, None,
+            None, None, None, None, None, None, None, None,
             b"The answer is 4.\n",
             None, None, None, None, None, None,
         ]
@@ -841,12 +1019,140 @@ class TestRunnerDrainsWrites:
             env={},
             cwd="/tmp",
             submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
             idle_exit_seconds=0.5,
             exit_grace_seconds=0.5,
             first_output_seconds=90.0,
         )
 
-        # Reassemble everything written and confirm the full trigger + \r landed
-        # despite the PTY only accepting one byte per write call.
+        # Reassemble everything written and confirm the full trigger TEXT landed
+        # despite the PTY only accepting one byte per write call (Defect 1: text
+        # and \r are separate writes, so the \r is no longer glued to the text).
         joined = b"".join(fake.writes)
-        assert (trigger.encode() + b"\r") in joined, joined
+        assert trigger.encode() in joined, joined
+        # The bare \r (Enter) also landed as its own byte after the text.
+        assert b"\r" in joined, joined
+
+
+# ════════════════════════════════════════════════════════════════════════
+# Defect 2 — answer read out-of-band from a file, not the TUI transcript
+# ════════════════════════════════════════════════════════════════════════
+class TestRunnerReadsAnswerFile:
+    """Interactive Claude is a cursor-addressed TUI; the line-based cleaner
+    can't reliably reconstruct the answer from spinner/redraw chrome. So when
+    ``answer_file`` is set, Claude writes its final answer there and the runner
+    reads it back — normalizing the returncode to success (the answer was
+    produced even if ``/exit`` left a non-zero code). The scraped transcript is
+    a fallback only (``answer_file`` absent or empty)."""
+
+    def test_returns_answer_file_contents_normalizing_returncode(
+        self, fake_pty_wiring, tmp_path
+    ):
+        answer_file = tmp_path / "answer.md"
+        trigger = (
+            f"Read the file /scratch/turn_prompt.md and respond. Write ONLY your "
+            f"final answer to {answer_file}."
+        )
+        # The fake writes the answer file once the trigger TEXT is typed
+        # (simulating Claude's Read + Write). The TUI transcript is pure chrome.
+        script = [
+            b"Welcome to Claude Code\n",
+            None, None, None, None, None, None, None, None,
+            b"\x1b[2J\x1b[Hspinner frame chrome only\n",  # redraw noise, no answer
+            None, None, None, None, None, None, None, None, None,
+            None, None, None,
+        ]
+        fake, proc = fake_pty_wiring(
+            script, answer_drop=(str(answer_file), "2+2 is 4, and I'm Luna.")
+        )
+        # Simulate a non-zero /exit returncode to prove normalization.
+        proc.returncode = 143
+        proc.wait = lambda timeout=None: 143
+
+        result = claude_interactive.run_claude_interactive_with_heartbeat(
+            ["claude"],
+            prompt=trigger,
+            label="Claude Code",
+            timeout=1500,
+            env={},
+            cwd="/tmp",
+            answer_file=str(answer_file),
+            submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
+            idle_exit_seconds=0.5,
+            exit_grace_seconds=0.5,
+            first_output_seconds=90.0,
+        )
+
+        # The clean answer comes from the file, not the TUI chrome.
+        assert result.stdout == "2+2 is 4, and I'm Luna."
+        assert "spinner frame chrome" not in result.stdout
+        # Returncode normalized to success because the answer was produced.
+        assert result.returncode == 0
+
+    def test_falls_back_to_transcript_when_answer_file_absent(
+        self, fake_pty_wiring, tmp_path
+    ):
+        """No answer file on disk → use the cleaned transcript + real
+        returncode (the existing best-effort path)."""
+        answer_file = tmp_path / "answer.md"  # never created
+        trigger = "Read the file /scratch/turn_prompt.md and respond."
+        script = [
+            b"Welcome to Claude Code\n",
+            None, None, None, None, None, None, None, None,
+            b"The answer is 4.\n",
+            None, None, None, None, None, None,
+        ]
+        fake, proc = fake_pty_wiring(script)
+
+        result = claude_interactive.run_claude_interactive_with_heartbeat(
+            ["claude"],
+            prompt=trigger,
+            label="Claude Code",
+            timeout=1500,
+            env={},
+            cwd="/tmp",
+            answer_file=str(answer_file),
+            submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
+            idle_exit_seconds=0.5,
+            exit_grace_seconds=0.5,
+            first_output_seconds=90.0,
+        )
+
+        assert not answer_file.exists()
+        # Falls back to the cleaned transcript.
+        assert "The answer is 4." in result.stdout
+
+    def test_falls_back_to_transcript_when_answer_file_empty(
+        self, fake_pty_wiring, tmp_path
+    ):
+        """An empty answer file (Claude wrote nothing) → fall back to the
+        cleaned transcript rather than returning an empty success."""
+        answer_file = tmp_path / "answer.md"
+        answer_file.write_text("")  # empty
+        trigger = "Read the file /scratch/turn_prompt.md and respond."
+        script = [
+            b"Welcome to Claude Code\n",
+            None, None, None, None, None, None, None, None,
+            b"The answer is 4.\n",
+            None, None, None, None, None, None,
+        ]
+        fake, proc = fake_pty_wiring(script)
+
+        result = claude_interactive.run_claude_interactive_with_heartbeat(
+            ["claude"],
+            prompt=trigger,
+            label="Claude Code",
+            timeout=1500,
+            env={},
+            cwd="/tmp",
+            answer_file=str(answer_file),
+            submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
+            idle_exit_seconds=0.5,
+            exit_grace_seconds=0.5,
+            first_output_seconds=90.0,
+        )
+
+        assert "The answer is 4." in result.stdout

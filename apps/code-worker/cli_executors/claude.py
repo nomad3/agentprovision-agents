@@ -310,6 +310,7 @@ def execute_claude_chat(task_input, session_dir: str):
     # bracketed-paste ``[Pasted text +N lines]`` placeholder that needs a
     # second Enter. The runner types the trigger and strips its echo.
     interactive_submit = None
+    interactive_answer_file = None
     if interactive_mode:
         turn_file = os.path.join(session_dir, "turn_prompt.md")
         # N2: turn blob is secret-grade (persona + conversation history) → 0o600.
@@ -322,9 +323,17 @@ def execute_claude_chat(task_input, session_dir: str):
                 os.chmod(_claude_md, 0o600)
             except OSError:
                 pass
+        # Defect 2 (plan §4.1/§4.4): interactive Claude is a cursor-addressed
+        # TUI whose transcript can't be reliably cleaned, so have Claude write
+        # its final answer to a session-scratch file the runner reads back
+        # out-of-band. ``session_dir`` is already ``--add-dir``'d so the Write
+        # tool can reach it by absolute path.
+        interactive_answer_file = os.path.join(session_dir, "answer.md")
         interactive_submit = (
             f"Read the file {turn_file} and respond to the user request it "
-            "contains. Reply directly — do not ask for confirmation."
+            f"contains. Write ONLY your final answer to {interactive_answer_file} "
+            "(overwrite it); no preamble. Reply directly — do not ask for "
+            "confirmation."
         )
 
     # ── tenant HOME on workspaces volume (task #267 Phase 1) ────────────
@@ -391,6 +400,7 @@ def execute_claude_chat(task_input, session_dir: str):
                 cwd=cli_cwd,
                 on_chunk=on_chunk,
                 heartbeat=cli_runtime.activity.heartbeat,
+                answer_file=interactive_answer_file,
             )
         else:
             result = cli_runtime.run_cli_with_heartbeat(

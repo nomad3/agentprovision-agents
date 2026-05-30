@@ -144,23 +144,34 @@ def decide_pty_action(
     submitted_at: float | None = None,
     input_box_seen: bool = False,
     first_output_at: float | None = None,
+    text_written: bool = False,
+    text_written_at: float | None = None,
+    enter_delay_seconds: float = 0.5,
 ) -> str:
     """Decide the next PTY action for one loop tick (pure — no I/O).
 
-    Returns one of: ``"wait"`` (keep reading), ``"submit"`` (type the trigger
-    once), ``"exit"`` (send ``/exit``), ``"terminate"`` (escalate to SIGTERM
-    after the exit grace), or ``"kill"`` (SIGKILL — nothing rendered in time).
+    Returns one of: ``"wait"`` (keep reading), ``"submit_text"`` (type the
+    trigger text — phase 1), ``"submit_enter"`` (write a bare ``\\r`` — phase 2),
+    ``"exit"`` (send ``/exit``), ``"terminate"`` (escalate to SIGTERM after the
+    exit grace), or ``"kill"`` (SIGKILL — nothing rendered in time).
 
-    State machine (post-#735, Approach C):
+    State machine (post-#735, Approach C, Defect-1 two-phase submit):
       1. Readiness — wait for the banner; if none within ``first_output_seconds``
          → kill. Once seen, decide submit-readiness (see #2).
-      2. Submit (once) — submit when EITHER (a) the input box was seen
+      2. Submit phase 1 (``submit_text``, once) — when NOT ``text_written`` and
+         readiness is satisfied by EITHER (a) the input box was seen
          (``input_box_seen`` — ``❯`` / ``Try "`` placeholder rendered) followed
          by a brief settle, OR (b) ``submit_settle_seconds`` of pure quiet, OR
          (c) a bounded ceiling since first output (``max(settle*3, 5.0)``). The
          ceiling stops a chatty banner / blinking spinner from resetting the
          quiet timer forever and starving submit ~90s (N1). All three are well
          under ``first_output_seconds``.
+      2b. Submit phase 2 (``submit_enter``, once) — DEFECT 1: the REPL runs
+         bracketed-paste mode, so a long trigger glued to ``\\r`` in one write
+         is swallowed as paste and the ``\\r`` becomes a newline, never Enter.
+         After the text is written we wait ``enter_delay_seconds`` (the REPL's
+         paste-settle window) and only THEN write the bare ``\\r`` that actually
+         submits the turn.
       3. Await response — after submit, suppress the idle ``/exit`` until the
          FIRST post-submit output; if none within ``first_output_seconds`` after
          submit → kill.
@@ -179,23 +190,30 @@ def decide_pty_action(
             return "kill"
         return "wait"
 
-    # 2. Not yet submitted: type the trigger once the REPL is ready. Readiness
-    #    is satisfied by any of three paths (N1) so a never-quieting banner
-    #    can't starve us — but a half-rendered box still gets a brief settle.
+    # 2/2b. Not yet submitted: two-phase submit. Phase 1 types the trigger text
+    #       once the REPL is ready; phase 2 sends a bare \r after the paste
+    #       settle (Defect 1). The Enter must be a SEPARATE write or the REPL
+    #       absorbs the text+\r as one bracketed paste and never submits.
     if not submitted:
-        quiet = now - last_output
-        # Brief settle: once the input box is visibly rendered we only need a
-        # short stable window (not the full quiet-settle) before typing. Clamp
-        # to the configured settle so a caller passing a tinier settle still
-        # wins.
-        brief_settle = min(submit_settle_seconds, 0.15)
-        if input_box_seen and quiet >= brief_settle:
-            return "submit"
-        if quiet >= submit_settle_seconds:
-            return "submit"
-        ceiling = max(submit_settle_seconds * 3, 5.0)
-        if first_output_at is not None and now - first_output_at >= ceiling:
-            return "submit"
+        if not text_written:
+            # Phase 1 — readiness gate (N1): any of three paths so a
+            # never-quieting banner can't starve us; a half-rendered box still
+            # gets a brief settle.
+            quiet = now - last_output
+            brief_settle = min(submit_settle_seconds, 0.15)
+            if input_box_seen and quiet >= brief_settle:
+                return "submit_text"
+            if quiet >= submit_settle_seconds:
+                return "submit_text"
+            ceiling = max(submit_settle_seconds * 3, 5.0)
+            if first_output_at is not None and now - first_output_at >= ceiling:
+                return "submit_text"
+            return "wait"
+        # Phase 2 — Enter alone, but only after the paste-settle window so the
+        # REPL has left bracketed-paste mode.
+        baseline = text_written_at if text_written_at is not None else now
+        if now - baseline >= enter_delay_seconds:
+            return "submit_enter"
         return "wait"
 
     # 3. Submitted but no response yet: suppress idle /exit, bound the wait.
@@ -262,6 +280,8 @@ def run_claude_interactive_with_heartbeat(
     exit_grace_seconds: float | None = None,
     first_output_seconds: float | None = None,
     submit_settle_seconds: float | None = None,
+    enter_delay_seconds: float | None = None,
+    answer_file: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run Claude Code attached to a PTY and return a CompletedProcess.
 
@@ -269,9 +289,24 @@ def run_claude_interactive_with_heartbeat(
     positional ``[prompt]`` arg, so the caller no longer appends one. Instead
     ``prompt`` is a single-line trigger we TYPE into the REPL once it's ready
     (Approach C, plan 2026-05-30): after the banner appears we wait a short
-    ``submit_settle_seconds`` quiet window (input box rendered + stable), then
-    write the trigger + ``\r``. Submission is gated so we never type into a
-    not-yet-ready REPL.
+    ``submit_settle_seconds`` quiet window (input box rendered + stable).
+
+    DEFECT 1 (smoke-proven): the trigger TEXT and the Enter must be SEPARATE
+    writes. The REPL runs bracketed-paste mode, so a long line glued to ``\r``
+    in one write is absorbed as paste and the ``\r`` becomes a newline inside
+    the box — never Enter, so the turn never submits (returncode 143). We write
+    the text, wait ``enter_delay_seconds`` (env
+    ``CLAUDE_CODE_INTERACTIVE_SUBMIT_ENTER_DELAY_SECONDS``, default 0.5), then
+    write a bare ``\r`` that actually submits. Submission is gated so we never
+    type into a not-yet-ready REPL.
+
+    DEFECT 2 (smoke-proven): interactive Claude is a cursor-addressed TUI
+    (spinner frames, redraws); the line-based ``clean_interactive_transcript``
+    can't reliably reconstruct the answer from the chrome. When ``answer_file``
+    is set, the trigger instructs Claude to write its final answer there, and we
+    read it back after the read loop — normalizing the returncode to success
+    (the answer was produced even if ``/exit`` left a non-zero code). The
+    scraped transcript is a fallback only (``answer_file`` absent or empty).
 
     Since the interactive CLI does not exit after a turn, we send ``/exit`` once
     the terminal has been quiet for ``idle_exit_seconds`` — but only *after* a
@@ -294,7 +329,11 @@ def run_claude_interactive_with_heartbeat(
     submit_settle_seconds = submit_settle_seconds if submit_settle_seconds is not None else float(
         os.environ.get("CLAUDE_CODE_INTERACTIVE_SUBMIT_SETTLE_SECONDS", "1.0")
     )
-    submit_bytes = ((prompt or "").encode() + b"\r") if prompt else b""
+    enter_delay_seconds = enter_delay_seconds if enter_delay_seconds is not None else float(
+        os.environ.get("CLAUDE_CODE_INTERACTIVE_SUBMIT_ENTER_DELAY_SECONDS", "0.5")
+    )
+    # Defect 1: text and Enter are written in two phases, so keep them apart.
+    text_bytes = (prompt or "").encode()
 
     master_fd, slave_fd = pty.openpty()
     # B1: size the PTY wide BEFORE launch. A default 80-col window wraps the
@@ -339,7 +378,9 @@ def run_claude_interactive_with_heartbeat(
     last_heartbeat = start
     exit_sent_at: float | None = None
     seen_output = False
-    # Approach C submission state.
+    # Approach C submission state (Defect 1: two-phase — text, then Enter).
+    text_written = False
+    text_written_at: float | None = None
     submitted = False
     submitted_at: float | None = None
     response_seen = False
@@ -348,6 +389,12 @@ def run_claude_interactive_with_heartbeat(
     # of the first output (for the bounded submit ceiling).
     input_box_seen = False
     first_output_at: float | None = None
+
+    # Empty-prompt guard: nothing to type → skip straight to submitted so the
+    # loop runs the response/idle gates rather than waiting to type forever.
+    if not text_bytes:
+        text_written = True
+        submitted = True
 
     try:
         while True:
@@ -411,13 +458,28 @@ def run_claude_interactive_with_heartbeat(
                 exit_grace_seconds=exit_grace_seconds,
                 input_box_seen=input_box_seen,
                 first_output_at=first_output_at,
+                text_written=text_written,
+                text_written_at=text_written_at,
+                enter_delay_seconds=enter_delay_seconds,
             )
 
             if action == "wait":
                 continue
-            if action == "submit":
-                if submit_bytes:
-                    _write_all(master_fd, submit_bytes)
+            # Defect 1, phase 1: write the trigger TEXT (no \r — gluing it makes
+            # bracketed-paste swallow the Enter).
+            if action == "submit_text":
+                if text_bytes:
+                    _write_all(master_fd, text_bytes)
+                text_written = True
+                text_written_at = now
+                # Reset the idle baseline so the enter-delay window (not a stale
+                # pre-text quiet) governs the next decision.
+                last_output = now
+                continue
+            # Defect 1, phase 2: write a bare \r ALONE after the paste settle —
+            # this is the keystroke that actually submits the turn.
+            if action == "submit_enter":
+                _write_all(master_fd, b"\r")
                 submitted = True
                 submitted_at = now
                 # Reset the idle baseline so the post-submit response gate (not a
@@ -451,6 +513,26 @@ def run_claude_interactive_with_heartbeat(
         returncode = proc.wait(timeout=1)
 
     raw = "".join(chunks)
+
+    # Defect 2: prefer the out-of-band answer file. Interactive Claude is a
+    # cursor-addressed TUI, so the cleaned transcript is a best-effort fallback
+    # only. If Claude wrote a non-empty answer file we return that and normalize
+    # the returncode to success — the answer was produced even if ``/exit`` left
+    # a non-zero code (e.g. 143 from the SIGTERM teardown).
+    if answer_file:
+        try:
+            with open(answer_file, encoding="utf-8", errors="replace") as fh:
+                answer = fh.read().strip()
+        except OSError:
+            answer = ""
+        if answer:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=0,
+                stdout=answer,
+                stderr="",
+            )
+
     return subprocess.CompletedProcess(
         args=cmd,
         returncode=returncode,
