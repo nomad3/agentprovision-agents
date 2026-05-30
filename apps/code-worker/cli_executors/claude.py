@@ -277,8 +277,26 @@ def execute_claude_chat(task_input, session_dir: str):
     if cli_cwd != _cwd_fallback:
         cmd.extend(["--add-dir", cli_cwd])
 
+    # ── interactive submission (Approach C, plan 2026-05-30) ────────────
+    # Claude Code v2.1.144's interactive REPL does NOT auto-execute a
+    # positional [prompt] arg, so appending the turn blob to ``cmd`` (as the
+    # old code did) submitted nothing and the turn died at the idle ``/exit``.
+    # Instead: write the blob to a session-scratch file (``session_dir`` is
+    # already ``--add-dir``'d at L212 so Claude's Read tool can reach it by
+    # absolute path) and hand the runner a single-line trigger to TYPE. A
+    # single line sidesteps both the unreliable CLAUDE.md auto-load (cwd-upward
+    # only; --add-dir grants access, not memory loading) and the multi-line
+    # bracketed-paste ``[Pasted text +N lines]`` placeholder that needs a
+    # second Enter. The runner types the trigger and strips its echo.
+    interactive_submit = None
     if interactive_mode:
-        cmd.append(prompt)
+        turn_file = os.path.join(session_dir, "turn_prompt.md")
+        with open(turn_file, "w") as f:
+            f.write(prompt)
+        interactive_submit = (
+            f"Read the file {turn_file} and respond to the user request it "
+            "contains. Reply directly — do not ask for confirmation."
+        )
 
     # ── tenant HOME on workspaces volume (task #267 Phase 1) ────────────
     # Redirect HOME onto the persistent workspaces volume so per-tenant
@@ -337,7 +355,7 @@ def execute_claude_chat(task_input, session_dir: str):
         if interactive_mode:
             result = claude_interactive.run_claude_interactive_with_heartbeat(
                 cmd,
-                prompt=prompt,
+                prompt=interactive_submit,
                 label="Claude Code",
                 timeout=1500,
                 env=env,
