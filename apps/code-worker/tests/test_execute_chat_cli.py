@@ -179,21 +179,30 @@ class TestGithubTokenIntegration:
 # ── git credential wiring (2026-05-31) ──────────────────────────────────
 
 class TestGitCredentialEnv:
-    """`_build_git_credential_env` — puts the tenant's GitHub OAuth token in the
+    """`_apply_git_credential_env` — puts the tenant's GitHub OAuth token in the
     turn env so the image's SYSTEM `!gh auth git-credential` helper authenticates
-    github.com clones. Unified across every CLI (gh is shared) — no claude-only
-    bespoke helper."""
+    github.com clones (unified across every CLI), and STRIPS any inherited token
+    when this tenant has none (cross-tenant bleed guard)."""
 
-    def test_no_token_returns_empty(self):
-        assert claude_executor._build_git_credential_env(None) == {}
-        assert claude_executor._build_git_credential_env("") == {}
+    def test_no_token_strips_inherited_token(self):
+        # CROSS-TENANT BLEED GUARD (Codex BLOCKER): a tenant with no token must
+        # have any inherited process-global token removed, so the system gh helper
+        # can't authenticate with a PRIOR tenant's credential.
+        env = {"GH_TOKEN": "stale_A", "GITHUB_TOKEN": "stale_A", "PATH": "/x"}
+        claude_executor._apply_git_credential_env(env, None)
+        assert "GH_TOKEN" not in env
+        assert "GITHUB_TOKEN" not in env
+        assert env["PATH"] == "/x"  # unrelated keys untouched
+        env2 = {"GITHUB_TOKEN": "stale_A"}
+        claude_executor._apply_git_credential_env(env2, "")  # empty also strips
+        assert "GITHUB_TOKEN" not in env2
 
-    def test_token_sets_gh_token_env_for_system_gh_helper(self):
-        env = claude_executor._build_git_credential_env("gho_secret_work_token")
-        # gh prefers GH_TOKEN; GITHUB_TOKEN is the broad fallback. The system gh
-        # credential helper reads either. Both carry the per-tenant OAuth token.
-        assert env["GH_TOKEN"] == "gho_secret_work_token"
-        assert env["GITHUB_TOKEN"] == "gho_secret_work_token"
+    def test_token_overwrites_stale_and_sets_both_names(self):
+        env = {"GITHUB_TOKEN": "stale_A"}
+        claude_executor._apply_git_credential_env(env, "gho_fresh_B")
+        # Fresh token OVERWRITES the stale one (no bleed), under both names gh reads.
+        assert env["GH_TOKEN"] == "gho_fresh_B"
+        assert env["GITHUB_TOKEN"] == "gho_fresh_B"
         # No bespoke per-turn GIT_CONFIG_* helper — auth is wired system-wide.
         assert not any(k.startswith("GIT_CONFIG") for k in env)
 
@@ -458,14 +467,16 @@ class TestExecuteClaudeChat:
         assert env.get("GH_TOKEN") == "gho_work_repo_token"
         assert env.get("GITHUB_TOKEN") == "gho_work_repo_token"
 
-    def test_interactive_no_github_token_leaves_git_env_clean(self, monkeypatch, tmp_path):
-        # No connected GitHub token → no token injected; the image's
-        # GIT_TERMINAL_PROMPT=0 then makes an unauthenticated clone fail fast.
+    def test_interactive_no_token_strips_inherited_token_no_bleed(self, monkeypatch, tmp_path):
+        # CROSS-TENANT BLEED (Codex BLOCKER): a STALE process-global GITHUB_TOKEN
+        # (left by a prior tenant's turn, workflows.py:1188) must NOT reach this
+        # tenant's subprocess env when this tenant has no token — else the system
+        # gh helper would authenticate with the wrong tenant's credential.
         monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setenv("GITHUB_TOKEN", "gho_STALE_other_tenant")  # the leak
         monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
         monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
         monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: None)
-        monkeypatch.delenv("GH_TOKEN", raising=False)
         captured = {}
         import subprocess as sp
 
@@ -481,9 +492,10 @@ class TestExecuteClaudeChat:
                         tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a"),
             session_dir=str(tmp_path),
         )
-        # No connected token → we don't inject GH_TOKEN (caller may still have a
-        # process-level GITHUB_TOKEN, which is a separate, pre-existing concern).
+        # The stale token must be STRIPPED from the subprocess env (no bleed).
         assert "GH_TOKEN" not in captured["env"]
+        assert captured["env"].get("GITHUB_TOKEN") != "gho_STALE_other_tenant"
+        assert "GITHUB_TOKEN" not in captured["env"]
 
     def test_interactive_mode_can_use_worker_home_for_native_auth(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")

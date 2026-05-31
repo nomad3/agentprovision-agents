@@ -41,30 +41,35 @@ from tenant_feature_flags import is_enabled as _feature_enabled
 logger = logging.getLogger(__name__)
 
 
-def _build_git_credential_env(github_token: str | None) -> dict[str, str]:
-    """Return env vars so ``git clone https://github.com/...`` authenticates with
-    the tenant's GitHub OAuth ``github_token`` — Claude can pull repos the
-    connected account can read (2026-05-31).
+def _apply_git_credential_env(env: dict, github_token: str | None) -> None:
+    """Set this turn's GitHub token in ``env`` (mutating it in place), or STRIP
+    any inherited token when there is none (2026-05-31).
 
     Unified gh-based auth (Simon's steer — every CLI on the code-worker shares the
     same ``gh``): the image wires a SYSTEM credential helper
     ``credential.https://github.com.helper = !gh auth git-credential`` (Dockerfile),
     so git delegates github.com auth to ``gh``, and ``gh`` resolves its token from
     ``GH_TOKEN``/``GITHUB_TOKEN`` in the env. We therefore only need to put the
-    tenant's token in the turn env — HOME-independent (system config), and the
-    SAME mechanism every other CLI gets (codex/gemini/copilot), instead of a
-    claude-only bespoke helper. Fetched FRESH per-tenant by the caller (NOT the
-    process-global ``os.environ`` set at workflows.py:1188, which leaks across
-    tenants), so this is leak-free.
+    tenant's token in the turn env — HOME-independent, and the SAME mechanism
+    every other CLI gets, instead of a claude-only bespoke helper.
 
-    Empty dict when there is no token — the Dockerfile's ``GIT_TERMINAL_PROMPT=0``
-    etc. then make an unauthenticated clone fail fast instead of hanging.
+    CROSS-TENANT BLEED GUARD (Codex BLOCKER): ``execute_claude_chat`` starts from
+    ``os.environ.copy()``, and the chat dispatcher writes a process-global
+    ``os.environ["GITHUB_TOKEN"]`` (workflows.py:1188). If THIS tenant has no
+    token we must POP both names from the turn env — otherwise a stale token from
+    a PRIOR tenant's turn would let the system gh helper authenticate the wrong
+    tenant's clone. With a fresh token we overwrite both. Either way the turn env
+    carries ONLY this tenant's credential (or none → an unauthenticated clone
+    fails fast via ``GIT_TERMINAL_PROMPT=0``).
     """
-    if not github_token:
-        return {}
-    # Both names: gh prefers GH_TOKEN; GITHUB_TOKEN is the broad fallback other
-    # tools read. The system `!gh auth git-credential` helper reads either.
-    return {"GH_TOKEN": github_token, "GITHUB_TOKEN": github_token}
+    if github_token:
+        # gh prefers GH_TOKEN; GITHUB_TOKEN is the broad fallback. Both = this
+        # tenant's token; the system `!gh auth git-credential` helper reads either.
+        env["GH_TOKEN"] = github_token
+        env["GITHUB_TOKEN"] = github_token
+    else:
+        env.pop("GH_TOKEN", None)
+        env.pop("GITHUB_TOKEN", None)
 
 
 def _write_secret_file(path: str, content: str) -> None:
@@ -499,7 +504,7 @@ def execute_claude_chat(task_input, session_dir: str):
     except Exception as exc:  # noqa: BLE001 - never block the turn on token fetch
         logger.warning("github token fetch failed (%s); clones will be unauthenticated", exc)
         _gh_token = None
-    env.update(_build_git_credential_env(_gh_token))
+    _apply_git_credential_env(env, _gh_token)
 
     # ---- streaming emitter (no-op if flag off / chat_session_id missing) ----
     emitter = SessionEventEmitter(
