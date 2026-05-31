@@ -1508,6 +1508,41 @@ class TestRunnerSubmitsTrigger:
         # The answer survives cleaning (transcript fallback — no answer file).
         assert "The answer is 4." in result.stdout
 
+    def test_frozen_launch_returns_empty_not_chrome(self, fake_pty_wiring):
+        """STARTUP FREEZE: Claude paints its banner + input box (incl. the
+        alpha-bearing ``Try "..."`` placeholder + ``❯`` caret) then dies with NO
+        post-submit output and no answer file. The runner must return EMPTY
+        stdout — not the chrome scrape — so the caller relaunches a fresh process.
+
+        Gating the scraped fallback on ``response_substantive`` closes the WHOLE
+        chrome class (``❯``, ``Try "..."``, status bar) that per-glyph stripping
+        would miss (Codex review of #744): the alnum-bearing placeholder would
+        otherwise leak as a non-empty "answer" and suppress the recovery."""
+        trigger = "Read the file /scratch/turn_prompt.md and respond."
+        # Banner + input box (❯ + Try-placeholder) on read 1, then DEAD SILENCE:
+        # no post-submit byte ever, so response_substantive stays False.
+        script = [b'Welcome to Claude Code\n\xe2\x9d\xaf Try "edit a file"\n'] + [None] * 50
+        fake, proc = fake_pty_wiring(script)
+
+        result = claude_interactive.run_claude_interactive_with_heartbeat(
+            ["claude"],
+            prompt=trigger,
+            label="Claude Code",
+            timeout=1500,
+            env={},
+            cwd="/tmp",
+            submit_settle_seconds=0.2,
+            enter_delay_seconds=0.1,
+            idle_exit_seconds=0.5,
+            exit_grace_seconds=0.3,
+            first_output_seconds=5.0,
+            post_submit_first_output_seconds=1.0,
+            # no answer_dir → pure scraped-transcript path
+        )
+
+        # The frozen chrome (banner, ❯, Try-placeholder) must NOT leak as content.
+        assert result.stdout == "", f"frozen launch must return empty, got {result.stdout!r}"
+
     def test_submits_trigger_under_chrome_flood(self, fake_pty_wiring):
         """ROOT CAUSE regression: a CONTINUOUS chrome flood (auto-updater /
         marketplace / trust / "1 MCP server failed") that NEVER quiets must
