@@ -501,6 +501,17 @@ class TestCleanInteractiveTranscript:
         out = clean_interactive_transcript("\x1b[0m\x00garbage\r\n", "trigger")
         assert isinstance(out, str)
 
+    def test_strips_bare_input_box_caret_so_frozen_transcript_is_empty(self):
+        # A startup-frozen launch paints just the v2.1.x input-box caret ``❯``
+        # then dies. If the cleaner leaves it, the transcript is a non-empty
+        # ``"❯"`` that masks the freeze from the caller's recovery guard. It must
+        # clean to empty (and the legacy ``>`` caret too).
+        assert clean_interactive_transcript("❯ \n", "") == ""
+        assert clean_interactive_transcript("Welcome to Claude Code\n❯ \n", "") == ""
+        assert clean_interactive_transcript("> \n", "") == ""
+        # A real caret-prefixed line is NOT a bare caret and must survive.
+        assert "answer" in clean_interactive_transcript("❯ the answer\n", "")
+
     # ── I2: wrap-tolerant trigger-echo strip ─────────────────────────────
     def test_strips_wrapped_trigger_echo_across_multiple_lines(self):
         """When the PTY is narrow (e.g. an 80-col fallback) the ~185-char

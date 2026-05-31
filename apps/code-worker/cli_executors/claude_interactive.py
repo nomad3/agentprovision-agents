@@ -114,7 +114,12 @@ def clean_interactive_transcript(raw: str, prompt: str = "") -> str:
                 continue
             if stripped.startswith(("╭", "╰", "│", "┌", "└", "┃", "┗", "┏")):
                 continue
-            if stripped in {"?", ">", "Welcome to Claude Code"}:
+            # Bare prompt chrome: the legacy ``>``/``?`` carets AND the v2.1.x
+            # input-box caret ``❯`` (U+276F). A startup-frozen launch paints just
+            # this glyph then dies, so leaving it un-stripped makes the cleaned
+            # transcript a non-empty ``"❯"`` — which would mask the freeze from
+            # the caller's recovery guard. Strip it (and a stray prompt arrow).
+            if stripped in {"?", ">", "❯", "Welcome to Claude Code"}:
                 continue
             if stripped.startswith(("Claude Code", "By using Claude Code")):
                 continue
