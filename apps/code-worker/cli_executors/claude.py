@@ -41,6 +41,48 @@ from tenant_feature_flags import is_enabled as _feature_enabled
 logger = logging.getLogger(__name__)
 
 
+def _build_git_credential_env(github_token: str | None) -> dict[str, str]:
+    """Return env vars that make ``git clone https://github.com/...`` authenticate
+    with the tenant's GitHub OAuth ``github_token`` — so Claude can actually pull
+    repos the connected account can read (2026-05-31).
+
+    Why this exists: the chat path fetches the token and runs ``gh auth login``,
+    but git itself is never wired to use it (no ``gh auth setup-git`` /
+    ``credential.helper`` / ``insteadOf`` anywhere), so a plain HTTPS clone has no
+    helper, prompts ``Username:`` on the PTY, and hangs the full 25-min timeout.
+
+    Design (Codex + Luna review):
+    - **Ephemeral, process-scoped** via ``GIT_CONFIG_COUNT``/``GIT_CONFIG_KEY_n``/
+      ``GIT_CONFIG_VALUE_n`` — the token is never written to a git config FILE and
+      we never mutate ``os.environ`` (that leaks across tenants). HOME-independent,
+      so it works regardless of which HOME the turn resolves.
+    - ``credential.helper`` is first reset to empty (clears any inherited helper
+      that could itself prompt/hang — Codex BLOCKER), then a github.com-scoped
+      helper echoes ``x-access-token`` + the token from a private env var.
+    - ``credential.interactive=never`` belt-and-suspenders.
+
+    Empty dict when there is no token — the Dockerfile's ``GIT_TERMINAL_PROMPT=0``
+    etc. then make an unauthenticated clone fail fast instead of hanging.
+    """
+    if not github_token:
+        return {}
+    helper = '!f(){ echo username=x-access-token; echo "password=$GH_AUTH_TOKEN"; };f'
+    return {
+        # The helper's ONLY source for the secret — kept out of the config keys.
+        "GH_AUTH_TOKEN": github_token,
+        "GIT_CONFIG_COUNT": "3",
+        # 0: reset any inherited/global helper so only ours runs for github.com.
+        "GIT_CONFIG_KEY_0": "credential.helper",
+        "GIT_CONFIG_VALUE_0": "",
+        # 1: github.com-scoped token helper.
+        "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
+        "GIT_CONFIG_VALUE_1": helper,
+        # 2: never drop to an interactive prompt (fail fast instead).
+        "GIT_CONFIG_KEY_2": "credential.interactive",
+        "GIT_CONFIG_VALUE_2": "never",
+    }
+
+
 def _write_secret_file(path: str, content: str) -> None:
     """Write ``content`` to ``path`` with mode 0o600 (N2).
 
@@ -160,6 +202,7 @@ def execute_claude_chat(task_input, session_dir: str):
     from workflows import (
         _fetch_claude_token,
         _fetch_claude_credential,
+        _fetch_github_token,
         _INTEGRATION_NOT_CONNECTED_MESSAGES,
         _build_allowed_tools_from_mcp,
         ChatCliResult,
@@ -456,6 +499,23 @@ def execute_claude_chat(task_input, session_dir: str):
     # OAuth login the headless PTY can't finish.
     if interactive_mode and home_resolved:
         _ensure_claude_onboarding(env["HOME"], cli_cwd)
+
+    # ── git auth for the turn (2026-05-31) ──────────────────────────────
+    # Wire the tenant's GitHub OAuth token (the /integrations connection) into
+    # this subprocess's git so Claude's ``git clone https://github.com/…`` for
+    # "pull my repos" authenticates as the user — instead of prompting for a
+    # username on the PTY and hanging the full 25-min timeout. Fetched FRESH
+    # per-tenant (never trusting the process-global ``os.environ["GITHUB_TOKEN"]``
+    # the chat dispatcher sets — that leaks across tenants). Injected into the
+    # per-subprocess ``env`` only (ephemeral GIT_CONFIG_* — no on-disk token).
+    # No token → empty patch → the Dockerfile's GIT_TERMINAL_PROMPT=0 et al. make
+    # an unauthenticated clone fail fast rather than hang.
+    try:
+        _gh_token = _fetch_github_token(task_input.tenant_id)
+    except Exception as exc:  # noqa: BLE001 - never block the turn on token fetch
+        logger.warning("github token fetch failed (%s); clones will be unauthenticated", exc)
+        _gh_token = None
+    env.update(_build_git_credential_env(_gh_token))
 
     # ---- streaming emitter (no-op if flag off / chat_session_id missing) ----
     emitter = SessionEventEmitter(

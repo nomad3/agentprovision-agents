@@ -12,6 +12,7 @@ helpers themselves) so the test stays a unit test and never hits the network.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 
 import pytest
@@ -20,6 +21,10 @@ import cli_runtime
 import cli_executors.claude as claude_executor
 from cli_executors import claude_interactive
 import workflows as wf
+
+# Captured at import — the autouse `_stub_github_token` fixture monkeypatches
+# `subprocess.run` to a no-op, so the real-git test below holds a live reference.
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 
 def _make_input(**overrides) -> wf.ChatCliInput:
@@ -174,6 +179,63 @@ class TestGithubTokenIntegration:
         assert any("gh" in s and "auth" in s and "login" in s for s in joined)
         # Token must be exported into the env.
         assert os.environ.get("GITHUB_TOKEN") == "ghp_abc"
+
+
+# ── git credential wiring (2026-05-31) ──────────────────────────────────
+
+class TestGitCredentialEnv:
+    """`_build_git_credential_env` — wires the tenant GitHub OAuth token into a
+    turn's git so `git clone https://github.com/…` authenticates as the user."""
+
+    def test_no_token_returns_empty(self):
+        assert claude_executor._build_git_credential_env(None) == {}
+        assert claude_executor._build_git_credential_env("") == {}
+
+    def test_token_builds_ephemeral_helper_without_leaking_into_config_keys(self):
+        env = claude_executor._build_git_credential_env("gho_secret_work_token")
+        # The secret lives ONLY in GH_AUTH_TOKEN — never embedded in a config key
+        # (so it isn't exposed by `git config --list`-style key enumeration).
+        assert env["GH_AUTH_TOKEN"] == "gho_secret_work_token"
+        assert all(
+            "gho_secret_work_token" not in v
+            for k, v in env.items()
+            if k.startswith("GIT_CONFIG_KEY")
+        )
+        # 0 resets any inherited helper (Codex BLOCKER — a stale helper can hang);
+        # 1 is the github.com-scoped helper reading the token from the env var;
+        # 2 forbids dropping to an interactive prompt.
+        assert env["GIT_CONFIG_COUNT"] == "3"
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper"
+        assert env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_KEY_1"] == "credential.https://github.com.helper"
+        assert "$GH_AUTH_TOKEN" in env["GIT_CONFIG_VALUE_1"]
+        assert env["GIT_CONFIG_KEY_2"] == "credential.interactive"
+        assert env["GIT_CONFIG_VALUE_2"] == "never"
+
+    def test_real_git_resolves_token_for_github_https(self):
+        # NIT (Codex): env-shape alone wouldn't catch a bad URL match key. Drive
+        # REAL `git credential fill` with the built env and assert git actually
+        # hands back the token for a github.com HTTPS clone — the behavior that
+        # makes "pull my repos" authenticate instead of prompting.
+        import shutil
+
+        if not shutil.which("git"):
+            pytest.skip("git not available")
+        env = {**os.environ, **claude_executor._build_git_credential_env("gho_REALGITTEST")}
+        proc = _REAL_SUBPROCESS_RUN(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True, text=True, env=env, timeout=15,
+        )
+        assert "username=x-access-token" in proc.stdout
+        assert "password=gho_REALGITTEST" in proc.stdout
+        # A different host must NOT receive the github-scoped credential.
+        proc2 = _REAL_SUBPROCESS_RUN(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=example.com\n\n",
+            capture_output=True, text=True, env=env, timeout=15,
+        )
+        assert "gho_REALGITTEST" not in proc2.stdout
 
 
 # ── _execute_claude_chat smoke (covers JSON parse path) ─────────────────
@@ -406,6 +468,58 @@ class TestExecuteClaudeChat:
         )
 
         assert calls["n"] == 1, "a terse but real scraped answer (has alnum) must NOT relaunch"
+
+    def test_interactive_wires_github_oauth_token_into_subprocess_git_env(self, monkeypatch, tmp_path):
+        # The per-tenant GitHub OAuth token must reach the CLI subprocess's env as
+        # a git credential helper, so Claude's `git clone https://github.com/…`
+        # authenticates instead of prompting + hanging.
+        monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
+        monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "gho_work_repo_token")
+        captured = {}
+        import subprocess as sp
+
+        def fake_interactive(cmd, **kw):
+            captured["env"] = kw["env"]
+            return sp.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_interactive
+        )
+        wf._execute_claude_chat(
+            _make_input(platform="claude_code", message="hi",
+                        tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a"),
+            session_dir=str(tmp_path),
+        )
+        env = captured["env"]
+        assert env.get("GH_AUTH_TOKEN") == "gho_work_repo_token"
+        assert env.get("GIT_CONFIG_KEY_1") == "credential.https://github.com.helper"
+
+    def test_interactive_no_github_token_leaves_git_env_clean(self, monkeypatch, tmp_path):
+        # No connected GitHub token → no credential helper injected; the image's
+        # GIT_TERMINAL_PROMPT=0 then makes an unauthenticated clone fail fast.
+        monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
+        monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: None)
+        monkeypatch.delenv("GH_AUTH_TOKEN", raising=False)
+        captured = {}
+        import subprocess as sp
+
+        def fake_interactive(cmd, **kw):
+            captured["env"] = kw["env"]
+            return sp.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_interactive
+        )
+        wf._execute_claude_chat(
+            _make_input(platform="claude_code", message="hi",
+                        tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a"),
+            session_dir=str(tmp_path),
+        )
+        assert "GH_AUTH_TOKEN" not in captured["env"]
 
     def test_interactive_mode_can_use_worker_home_for_native_auth(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")

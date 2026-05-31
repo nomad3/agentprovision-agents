@@ -224,7 +224,11 @@ services:
       # See apps/code-worker/workflows.py::_prepare_codex_home and
       # docs/plans/2026-05-16-codex-mcp-tool-access-fix.md.
       - CODEX_USE_RMCP_CLIENT=${CODEX_USE_RMCP_CLIENT:-true}
-      - GITHUB_TOKEN=${GITHUB_TOKEN:-ghp_placeholder}
+      # Empty default (NOT a fake ghp_placeholder): the per-turn tenant GitHub
+      # OAuth token is fetched at runtime (cli_executors/claude.py); a real
+      # static token is optional. A fake token makes gh/git retry against a bad
+      # credential; empty + the image's GIT_TERMINAL_PROMPT=0 fails fast instead.
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - OPENCODE_OLLAMA_URL=http://host.docker.internal:11434/v1
       - OPENCODE_MODEL=${OPENCODE_MODEL:-gemma4}
       - GIT_BRANCH=${GIT_BRANCH:-feat/memory-first-phase-1}

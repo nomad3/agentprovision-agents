@@ -21,7 +21,7 @@ FROM python:3.11-slim
 # packages/cli_orchestrator/; legacy from an earlier port-forwarding
 # experiment that never shipped).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl gnupg ca-certificates libgomp1 libsndfile1 ffmpeg && \
+    git openssh-client curl gnupg ca-certificates libgomp1 libsndfile1 ffmpeg && \
     # Node.js 22
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
@@ -192,6 +192,27 @@ RUN useradd -m -u 1000 codeworker && \
     mkdir -p /workspace && chown codeworker:codeworker /workspace && \
     mkdir -p /home/codeworker/.config /home/codeworker/.claude/session-env && \
     chown -R codeworker:codeworker /home/codeworker
+# ── git: non-interactive / fail-fast (2026-05-31) ───────────────────────────
+# A credential-less or stalled clone must error in SECONDS, never hang the
+# worker's 25-min turn timeout (the "pull my work repos gets stuck" bug). These
+# kill every prompt path Codex flagged: GIT_TERMINAL_PROMPT/ASKPASS for HTTPS
+# username/password; BatchMode + pre-scanned github host keys for SSH host-key/
+# passphrase prompts; system gitconfig adds an HTTPS low-speed abort + disables
+# interactive credential flows. The per-turn OAuth credential helper that makes
+# AUTHORIZED clones succeed is injected at runtime by cli_executors/claude.py.
+ENV GIT_TERMINAL_PROMPT=0 \
+    GIT_ASKPASS=/bin/false \
+    SSH_ASKPASS=/bin/false \
+    GCM_INTERACTIVE=never \
+    GIT_LFS_SKIP_SMUDGE=1 \
+    GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10"
+RUN mkdir -p /etc/ssh && \
+    (ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> /etc/ssh/ssh_known_hosts 2>/dev/null || true) && \
+    git config --system http.lowSpeedLimit 1000 && \
+    git config --system http.lowSpeedTime 30 && \
+    git config --system credential.interactive never && \
+    git config --system core.askPass /bin/false
+
 USER codeworker
 
 ENTRYPOINT ["/app/entrypoint.sh"]
