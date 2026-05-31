@@ -158,6 +158,7 @@ def decide_pty_action(
     resend_after_seconds: float = 15.0,
     resent: bool = False,
     response_substantive: bool = False,
+    post_submit_first_output_seconds: float | None = None,
 ) -> str:
     """Decide the next PTY action for one loop tick (pure — no I/O).
 
@@ -255,8 +256,34 @@ def decide_pty_action(
         return "wait"
 
     # 3. Submitted but no response yet: suppress idle /exit, bound the wait.
-    if not response_seen:
+    #    STARTUP-FREEZE detector (2026-05-30): under host starvation Claude can
+    #    paint its banner+input box, accept the typed trigger, then its Node
+    #    event loop FREEZES — zero post-submit bytes, no spinner, no answer file.
+    #    The cold-launch ``first_output_seconds`` (90s) is far too long to wait
+    #    on a process that will never respond, so this NO-OUTPUT-AT-ALL gate uses
+    #    a SHORTER ``post_submit_first_output_seconds`` (default 35s). It only
+    #    bounds the dead-silent case: the instant Claude emits ANY post-submit
+    #    byte, ``response_seen`` flips and we move to the answer-await path (4b),
+    #    which keeps the full ``first_output_seconds`` for a slow-but-ALIVE reply.
+    #    So a genuinely slow turn is never killed here — only a frozen one — and
+    #    the caller relaunches a fresh process (a resend into a frozen REPL is
+    #    useless; only a new process cures the freeze).
+    #
+    #    ``answer_ready`` short-circuits this gate (Codex review): ``response_seen``
+    #    is trust-filtered, so a REAL reply whose FIRST chunk happens to contain a
+    #    trust-like phrase ("do you trust", "trust this folder") would not flip it
+    #    and could be killed here mid-write — even though its answer file is ready.
+    #    Yielding to ``answer_ready`` moves a written-but-trust-worded reply to the
+    #    completion path (4a) instead of a spurious freeze-kill. The resend still
+    #    lives in this gate (no answer file yet → not ``answer_ready``), so a trust
+    #    redraw that eats the submit is still recovered.
+    if not response_seen and not answer_ready:
         baseline = submitted_at if submitted_at is not None else start
+        post_cap = (
+            post_submit_first_output_seconds
+            if post_submit_first_output_seconds is not None
+            else first_output_seconds
+        )
         # Post-submit RESEND (root-cause recovery, 2026-05-30): a submit can be
         # silently consumed by a trust / auto-update / permission prompt that
         # pops over the input box, so the trigger lands in the prompt instead of
@@ -269,10 +296,10 @@ def decide_pty_action(
             and not response_substantive
             and not answer_ready
             and now - baseline >= resend_after_seconds
-            and now - baseline < first_output_seconds
+            and now - baseline < post_cap
         ):
             return "resend"
-        if now - baseline >= first_output_seconds:
+        if now - baseline >= post_cap:
             return "kill"
         return "wait"
 
@@ -407,6 +434,7 @@ def run_claude_interactive_with_heartbeat(
     submit_settle_seconds: float | None = None,
     enter_delay_seconds: float | None = None,
     resend_after_seconds: float | None = None,
+    post_submit_first_output_seconds: float | None = None,
     answer_dir: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run Claude Code attached to a PTY and return a CompletedProcess.
@@ -474,6 +502,18 @@ def run_claude_interactive_with_heartbeat(
     # eaten by a trust / auto-update / permission prompt).
     resend_after_seconds = resend_after_seconds if resend_after_seconds is not None else float(
         os.environ.get("CLAUDE_CODE_INTERACTIVE_RESEND_SECONDS", "15")
+    )
+    # Startup-freeze cap: how long to wait for ANY post-submit byte before
+    # declaring the launch frozen and killing it (the caller relaunches a fresh
+    # process). Much shorter than the cold-launch ``first_output_seconds`` (90s)
+    # because a frozen Node event loop will NEVER respond — waiting the full 90s
+    # just delays the curative relaunch. Only bounds the dead-silent case; a
+    # slow-but-alive reply emits a byte, flips ``response_seen``, and gets the
+    # full ``first_output_seconds`` on the answer-await path.
+    post_submit_first_output_seconds = (
+        post_submit_first_output_seconds
+        if post_submit_first_output_seconds is not None
+        else float(os.environ.get("CLAUDE_CODE_INTERACTIVE_POST_SUBMIT_FIRST_OUTPUT_SECONDS", "35"))
     )
     # Defect 1: text and Enter are written in two phases, so keep them apart.
     text_bytes = (prompt or "").encode()
@@ -585,8 +625,15 @@ def run_claude_interactive_with_heartbeat(
                         input_box_seen = True
                         input_box_seen_at = now
                     # First output AFTER submit = Claude is responding; this
-                    # un-suppresses the idle `/exit`.
-                    if submitted and not response_seen:
+                    # un-suppresses the idle `/exit` AND moves us off the
+                    # post-submit freeze gate (section 3) into the answer-await
+                    # path (4b). A folder-trust dialog redraw is chrome, NOT a
+                    # real response, so it must NOT flip ``response_seen`` —
+                    # otherwise a submit eaten by a trust overlay would (a) escape
+                    # the freeze gate without ever producing an answer and (b)
+                    # skip the whole ``not response_seen`` branch, disabling the
+                    # recovery resend. Same trust-filter the substantive gate uses.
+                    if submitted and not response_seen and not _TRUST_RE.search(text):
                         response_seen = True
                     # Substantive-response signal (gates the resend): a folder-
                     # trust dialog redraw is chrome, not a real answer, so it must
@@ -664,6 +711,7 @@ def run_claude_interactive_with_heartbeat(
                 resend_after_seconds=resend_after_seconds,
                 resent=resent,
                 response_substantive=response_substantive,
+                post_submit_first_output_seconds=post_submit_first_output_seconds,
             )
 
             if action == "wait":
@@ -740,23 +788,26 @@ def run_claude_interactive_with_heartbeat(
     # returncode to success — the answer was produced even if ``/exit`` left a
     # non-zero code (e.g. 143 from the SIGTERM teardown).
     if answer_dir:
-        match = _find_answer_file(answer_dir)
         answer = ""
-        if match:
-            try:
-                with open(match, encoding="utf-8", errors="replace") as fh:
-                    answer = fh.read().strip()
-            except OSError:
-                answer = ""
-        # Remove the WHOLE per-turn scratch dir (best-effort, never raise) so the
-        # persistent per-tenant ``session_dir`` doesn't accumulate one
-        # ``turn_<hex>/`` dir per turn. Done whether or not an answer was found —
-        # the turn_prompt blob and any partial answer are this turn's leftover.
-        # The dir is unique per turn, so we only ever remove OUR scratch.
         try:
-            shutil.rmtree(answer_dir, ignore_errors=True)
-        except OSError:
-            pass
+            match = _find_answer_file(answer_dir)
+            if match:
+                try:
+                    with open(match, encoding="utf-8", errors="replace") as fh:
+                        answer = fh.read().strip()
+                except OSError:
+                    answer = ""
+        finally:
+            # Remove the WHOLE per-turn scratch dir in a ``finally`` (NIT, Codex
+            # review) so a raise in the read above still cleans up — the
+            # persistent per-tenant ``session_dir`` must not accumulate one
+            # ``turn_<hex>/`` dir per turn. Done whether or not an answer was
+            # found; the dir is unique per turn, so we only ever remove OUR
+            # scratch. Best-effort, never raises.
+            try:
+                shutil.rmtree(answer_dir, ignore_errors=True)
+            except OSError:
+                pass
         if answer:
             return subprocess.CompletedProcess(
                 args=cmd,
