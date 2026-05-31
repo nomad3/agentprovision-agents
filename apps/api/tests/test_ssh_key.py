@@ -51,6 +51,12 @@ def test_empty_is_rejected():
         assert err
 
 
+def test_oversized_key_rejected():
+    ok, fp, err = validate_and_fingerprint_ssh_key("x" * 40000)
+    assert ok is False
+    assert "too large" in (err or "").lower()
+
+
 def test_fingerprint_is_stable_for_same_key():
     k = _gen_openssh_key()
     _, fp1, _ = validate_and_fingerprint_ssh_key(k)
@@ -130,3 +136,47 @@ def test_save_overwrites_previous_key(db_session, tenant_id):
 def test_no_key_clean_status_and_fetch(db_session, tenant_id):
     assert sshmod.ssh_key_status(db_session, tenant_id) == {"present": False, "fingerprint": None}
     assert sshmod.read_ssh_key_for_worker(db_session, tenant_id) is None
+
+
+@_PG_ONLY
+def test_token_endpoint_does_not_leak_ssh_key(db_session, tenant_id):
+    # Codex BLOCKER: the OAuth-token endpoint reads creds wholesale, so storing the
+    # SSH key on the github config must NOT let /internal/token/github return it.
+    from app.api.v1.oauth import get_integration_token
+    from app.services.orchestration.credential_vault import store_credential
+
+    sshmod.save_ssh_key(db_session, tenant_id, _gen_openssh_key())
+    cfg = sshmod._config_holding_ssh_key(db_session, tenant_id)
+    store_credential(
+        db_session, integration_config_id=cfg.id, tenant_id=tenant_id,
+        credential_key="oauth_token", plaintext_value="gho_fake_token", credential_type="oauth_token",
+    )
+    db_session.commit()
+    result = get_integration_token("github", str(tenant_id), None, db_session, None)
+    assert result.get("oauth_token") == "gho_fake_token"
+    assert "ssh_private_key" not in result
+    assert "ssh_key_fingerprint" not in result
+
+
+@_PG_ONLY
+def test_save_revokes_stale_key_on_sibling_config(db_session, tenant_id):
+    # Codex IMPORTANT: a multi-account tenant must never keep a stale SSH key on a
+    # sibling github config. Put a key on a second config, then save → exactly one
+    # active key tenant-wide.
+    from app.models.integration_config import IntegrationConfig
+
+    sib = IntegrationConfig(tenant_id=tenant_id, integration_name="github", account_email="b@x.com", enabled=True)
+    db_session.add(sib)
+    db_session.commit()
+    from app.services.orchestration.credential_vault import store_credential
+    store_credential(
+        db_session, integration_config_id=sib.id, tenant_id=tenant_id,
+        credential_key=sshmod.SSH_KEY_CRED, plaintext_value=_gen_openssh_key(), credential_type="ssh_key",
+    )
+    db_session.commit()
+    # now save a fresh key — it must revoke the stale sibling key
+    fp = sshmod.save_ssh_key(db_session, tenant_id, _gen_openssh_key())
+    active = sshmod._active_ssh_credential_rows(db_session, tenant_id)
+    active_keys = [c for c in active if c.credential_key == sshmod.SSH_KEY_CRED]
+    assert len(active_keys) == 1
+    assert sshmod.ssh_key_status(db_session, tenant_id)["fingerprint"] == fp

@@ -949,6 +949,12 @@ def get_integration_token(
         raise HTTPException(status_code=404, detail=f"No active config for '{integration_name}'")
 
     creds = retrieve_credentials_for_skill(db, config.id, tid)
+    # SECURITY (Codex review): the SSH PRIVATE key is stored on the github config
+    # too, but this OAuth-token endpoint must NEVER return it — it has its own
+    # dedicated, separately-audited fetch (/internal/ssh-key/github). Strip it so a
+    # token caller can't receive raw key material wholesale.
+    creds.pop("ssh_private_key", None)
+    creds.pop("ssh_key_fingerprint", None)
     logger.info("Retrieved credentials for %s (tenant %s): keys=%s", integration_name, tid, list(creds.keys()))
 
     # For OAuth integrations, require oauth_token; for manual, require any credential

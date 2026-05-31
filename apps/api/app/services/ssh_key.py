@@ -48,6 +48,10 @@ def validate_and_fingerprint_ssh_key(private_key: str) -> tuple[bool, str | None
 
     if not private_key or not private_key.strip():
         return False, None, "empty SSH key"
+    # A real OpenSSH private key is < ~4 KiB; cap the payload so an authenticated
+    # user can't force avoidable parse/encrypt work with a huge blob (Codex NIT).
+    if len(private_key) > 32768:
+        return False, None, "SSH key too large (max 32 KiB)"
     try:
         key = serialization.load_ssh_private_key(private_key.encode(), password=None)
     except (TypeError, ValueError) as exc:
@@ -97,13 +101,32 @@ def _config_holding_ssh_key(db: Session, tenant_id) -> IntegrationConfig | None:
     )
 
 
+def _active_ssh_credential_rows(db: Session, tenant_id) -> list[IntegrationCredential]:
+    """ALL active ssh_private_key/fingerprint rows across the tenant's github
+    configs. A tenant may have several github configs (one per account), but the
+    SSH key is tenant-level — so we never want a stale key lingering on a sibling
+    config that the worker could read (Codex review)."""
+    return (
+        db.query(IntegrationCredential)
+        .join(IntegrationConfig, IntegrationConfig.id == IntegrationCredential.integration_config_id)
+        .filter(
+            IntegrationConfig.tenant_id == tenant_id,
+            IntegrationConfig.integration_name == GITHUB,
+            IntegrationCredential.credential_key.in_([SSH_KEY_CRED, SSH_FP_CRED]),
+            IntegrationCredential.status == "active",
+        )
+        .all()
+    )
+
+
 def get_or_create_github_config(db: Session, tenant_id) -> IntegrationConfig:
-    """The tenant's github IntegrationConfig (preferring an enabled one), creating
-    a minimal one if none exists (SSH-only, no prior OAuth connect required)."""
+    """The tenant's github IntegrationConfig (preferring an enabled one, oldest
+    first for determinism), creating a minimal one if none exists (SSH-only, no
+    prior OAuth connect required)."""
     cfg = (
         db.query(IntegrationConfig)
         .filter(IntegrationConfig.tenant_id == tenant_id, IntegrationConfig.integration_name == GITHUB)
-        .order_by(IntegrationConfig.enabled.desc())
+        .order_by(IntegrationConfig.enabled.desc(), IntegrationConfig.created_at.asc())
         .first()
     )
     if cfg:
@@ -121,16 +144,9 @@ def save_ssh_key(db: Session, tenant_id, private_key: str) -> str:
     if not ok:
         raise ValueError(err)
     cfg = get_or_create_github_config(db, tenant_id)
-    for cred in (
-        db.query(IntegrationCredential)
-        .filter(
-            IntegrationCredential.tenant_id == tenant_id,
-            IntegrationCredential.integration_config_id == cfg.id,
-            IntegrationCredential.credential_key.in_([SSH_KEY_CRED, SSH_FP_CRED]),
-            IntegrationCredential.status == "active",
-        )
-        .all()
-    ):
+    # Revoke ANY existing key across ALL the tenant's github configs first, so a
+    # multi-account tenant never ends up with two active keys / a stale one.
+    for cred in _active_ssh_credential_rows(db, tenant_id):
         revoke_credential(db, credential_id=cred.id, tenant_id=tenant_id)
     store_credential(
         db, integration_config_id=cfg.id, tenant_id=tenant_id,
@@ -156,23 +172,13 @@ def ssh_key_status(db: Session, tenant_id) -> dict:
 
 
 def delete_ssh_key(db: Session, tenant_id) -> bool:
-    """Revoke the stored SSH key + its fingerprint. Returns whether anything was removed."""
-    removed = False
-    for cred in (
-        db.query(IntegrationCredential)
-        .join(IntegrationConfig, IntegrationConfig.id == IntegrationCredential.integration_config_id)
-        .filter(
-            IntegrationConfig.tenant_id == tenant_id,
-            IntegrationConfig.integration_name == GITHUB,
-            IntegrationCredential.credential_key.in_([SSH_KEY_CRED, SSH_FP_CRED]),
-            IntegrationCredential.status == "active",
-        )
-        .all()
-    ):
+    """Revoke the stored SSH key + its fingerprint across ALL the tenant's github
+    configs. Returns whether anything was removed."""
+    rows = _active_ssh_credential_rows(db, tenant_id)
+    for cred in rows:
         revoke_credential(db, credential_id=cred.id, tenant_id=tenant_id)
-        removed = True
     db.commit()
-    return removed
+    return bool(rows)
 
 
 def read_ssh_key_for_worker(db: Session, tenant_id) -> str | None:
