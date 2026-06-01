@@ -645,6 +645,24 @@ def post_message_start(
                     "elapsed_s": _time.perf_counter() - t0,
                 },
             )
+            # ── Post-chat memory on the CLI path (2026-06-01) ──────────────
+            # The memory write-back (entity/observation extraction + commitment/
+            # goal detection) is dispatched by the LEGACY agentic path
+            # (chat.py service _generate_agentic_response) — but the CLI/alpha
+            # path (this job handler) never dispatched it, so EVERY CLI chat turn
+            # silently skipped memory write-back + commitment capture (the E2E
+            # test gap: recall worked, write-back didn't). Dispatch the same
+            # Temporal workflow here, fire-and-forget; never fail the turn on it.
+            try:
+                from app.memory.dispatch import dispatch_post_chat_memory
+                dispatch_post_chat_memory(
+                    tenant_id=wsession.tenant_id,
+                    session_id=wsession.id,
+                    user_message_id=user_msg.id,
+                    assistant_message_id=assistant_msg.id,
+                )
+            except Exception as _mem_exc:  # noqa: BLE001
+                logger.error("[chat-job %s] post-chat memory dispatch failed: %s", job_uuid, _mem_exc)
             if _bail_if_cancelled():
                 return
             # finish_job is gated on status NOT IN terminal; even if the
