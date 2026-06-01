@@ -15,7 +15,6 @@ import logging
 import os
 import re
 import threading
-import time
 from typing import Optional
 
 import httpx
