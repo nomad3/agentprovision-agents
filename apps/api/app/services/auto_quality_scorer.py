@@ -120,6 +120,20 @@ async def _score_and_log(
     chat_session_id: Optional[str] = None,
 ):
     """Score the response with multi-dimensional rubric + consensus council, log as RL reward."""
+    # Numeric telemetry can arrive as None (e.g. gemini_cli/codex don't surface
+    # cost_usd/tokens) even though the signature defaults are numeric — a caller
+    # passing None explicitly overrides the default. A None reaching an f-string
+    # like ``{cost_usd:.4f}`` raises "unsupported format string passed to
+    # NoneType.__format__", which killed the ENTIRE RL-log block silently (the
+    # consensus event still emitted, so scoring LOOKED fine while
+    # rl_experiences.response_generation stopped writing — regression since
+    # 2026-05-16). Coerce to safe numerics up front so every downstream
+    # format/math is None-proof.
+    tokens_used = tokens_used or 0
+    response_time_ms = response_time_ms or 0
+    cost_usd = cost_usd or 0.0
+    prompt_tokens = prompt_tokens or 0
+    entity_count = entity_count or 0
     logger.info("Auto-quality scorer: starting for tenant %s (platform=%s, model=%s)", str(tenant_id)[:8], platform, QUALITY_MODEL)
 
     if not _USE_HAIKU:

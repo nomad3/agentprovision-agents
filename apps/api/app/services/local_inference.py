@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import threading
+import time
 from typing import Optional
 
 import httpx
@@ -460,18 +461,39 @@ def extract_knowledge_with_prompt_sync(prompt: str) -> Optional[dict]:
     # 4096 tokens (~16KB JSON) — chat transcripts with many entities were
     # truncating mid-string at the previous 1200-token cap. Timeout bumped
     # to 90s to match: at ~57 tok/s on M4 GPU, 4096 tokens is ~72s worst case.
-    result = generate_sync(
-        prompt=prompt,
-        model=QUALITY_MODEL,
-        system="You are a knowledge extraction agent. Output valid JSON only.",
-        temperature=0.0,
-        max_tokens=4096,
-        timeout=90.0,
-        response_format="json",
-    )
+    #
+    # Resilience (2026-06-01): under concurrent load, the process-wide
+    # ``_ollama_sync_lock`` serializes every sync Ollama call, so extraction can
+    # lose its slot and ``generate_sync`` returns None — which silently DROPPED
+    # the memory write-back (no entities/observations persisted). The model is
+    # available; the failure is transient contention. Retry a bounded number of
+    # times with a short backoff so a busy moment doesn't cost us the memory.
+    result = None
+    _attempts = 3
+    for _i in range(_attempts):
+        result = generate_sync(
+            prompt=prompt,
+            model=QUALITY_MODEL,
+            system="You are a knowledge extraction agent. Output valid JSON only.",
+            temperature=0.0,
+            max_tokens=4096,
+            timeout=90.0,
+            response_format="json",
+        )
+        if result:
+            break
+        if _i + 1 < _attempts:
+            logger.info(
+                "extract_knowledge_with_prompt_sync: empty result (attempt %s/%s) — "
+                "likely Ollama contention; retrying", _i + 1, _attempts,
+            )
+            time.sleep(1.5 * (_i + 1))
 
     if not result:
-        logger.warning("extract_knowledge_with_prompt_sync: generate_sync returned empty result")
+        logger.warning(
+            "extract_knowledge_with_prompt_sync: generate_sync returned empty after %s attempts",
+            _attempts,
+        )
         return None
 
     try:

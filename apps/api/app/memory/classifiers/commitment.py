@@ -7,6 +7,7 @@ JSON response and parse it deterministically.
 """
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Literal
@@ -53,19 +54,31 @@ Respond with JSON only:
 def classify_commitment(text: str, role: str = "user") -> CommitmentClassification:
     """Run Gemma4 against a single message. Returns a parsed classification."""
     user_prompt = f"[role={role}] {text}"
-    try:
-        raw = generate_sync(
-            prompt=user_prompt,
-            model=QUALITY_MODEL,  # gemma4 by default
-            system=SYSTEM_PROMPT,
-            temperature=0.0,
-            max_tokens=200,
-            timeout=20.0,
-            response_format="json",
-        )
-    except Exception as e:
-        logger.warning("classify_commitment ollama failure: %s", e)
-        return CommitmentClassification(is_commitment=False, confidence=0.0)
+    # Resilience (2026-06-01): the process-wide Ollama sync lock serializes calls,
+    # so under concurrent chat load this can lose its slot and return empty —
+    # which silently DROPPED commitment capture (no commitment_record persisted,
+    # the gap the E2E test caught: "send James the demo script by Wednesday" was
+    # never structured). The model is available; retry a couple of times before
+    # giving up so a busy moment doesn't cost us the commitment.
+    raw = None
+    for _i in range(3):
+        try:
+            raw = generate_sync(
+                prompt=user_prompt,
+                model=QUALITY_MODEL,  # gemma4 by default
+                system=SYSTEM_PROMPT,
+                temperature=0.0,
+                max_tokens=200,
+                timeout=20.0,
+                response_format="json",
+            )
+        except Exception as e:
+            logger.warning("classify_commitment ollama failure (attempt %s): %s", _i + 1, e)
+            raw = None
+        if raw:
+            break
+        if _i < 2:
+            time.sleep(1.0 * (_i + 1))
 
     if not raw:
         return CommitmentClassification(is_commitment=False, confidence=0.0)
