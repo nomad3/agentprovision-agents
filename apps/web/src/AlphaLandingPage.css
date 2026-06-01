@@ -93,27 +93,30 @@
 }
 .alpha-hero__install-copy:hover { filter: brightness(1.1); }
 .alpha-hero__ctas { display: flex; gap: 12px; flex-wrap: wrap; }
+/* CTAs are <a> styled as buttons (a11y: no <button> nested in <a>). */
+.alpha-hero__cta-primary,
+.alpha-hero__cta-ghost {
+  display: inline-block;
+  border-radius: 9999px;
+  padding: 12px 26px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1.2;
+}
 .alpha-hero__cta-primary {
   background: var(--land-blue);
   color: #fff;
   border: none;
-  border-radius: 9999px;
-  padding: 12px 26px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
 }
+.alpha-hero__cta-primary:hover { color: #fff; filter: brightness(1.08); }
 .alpha-hero__cta-ghost {
   background: transparent;
   color: rgba(244, 246, 251, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 9999px;
-  padding: 12px 26px;
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
 }
-.alpha-hero__cta-ghost:hover { background: rgba(255, 255, 255, 0.06); }
+.alpha-hero__cta-ghost:hover { background: rgba(255, 255, 255, 0.06); color: rgba(244, 246, 251, 0.9); }
 
 .alpha-hero__terminal {
   background: #0e1426;

@@ -15,10 +15,9 @@
  * approval gate visibly PAUSES (the honesty beat) before the run completes.
  *
  * Craft constraints (so it reads bespoke + ships safe):
- *  - Deterministic, GPU-light: SVG + CSS transforms/opacity only; no canvas,
- *    no per-frame React state, no particle system. The pulse is a single
- *    <circle> animated along each edge via SMIL-free CSS keyframes keyed off a
- *    CSS custom property, so the browser compositor owns it.
+ *  - Deterministic, GPU-light: SVG + native <animateMotion> (SMIL) for the
+ *    traveling pulses (broadly supported incl. Safari/iOS), CSS keyframes for
+ *    node light-up. No canvas, no per-frame React state, no particle system.
  *  - Reduced motion: the graph renders fully formed and static (no traveling
  *    pulse, no shimmer) — the diagram still tells the story.
  *  - Self-contained: one component, its own CSS in AlphaLandingPage.css under

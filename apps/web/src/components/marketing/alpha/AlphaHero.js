@@ -79,18 +79,24 @@ export default function AlphaHero() {
             {/* One primary CTA before trust is earned (Codex review): start with
                 the product. The install one-liner above is the secondary path for
                 the CLI-native. Absolute href to the apex so the auth flow always
-                resolves — cloudflared only routes /api/* on the apex. PR #450 B1. */}
+                resolves — cloudflared only routes /api/* on the apex. PR #450 B1.
+                a11y (Codex re-review): the CTA is a styled <a>, not a <button>
+                nested in an <a> (invalid interactive nesting). */}
             <a
               href={APEX_REGISTER}
+              className="alpha-hero__cta-primary"
+              role="button"
               onClick={() => track('alpha_get_started_click', { location: 'hero' })}
             >
-              <button className="alpha-hero__cta-primary">Start free →</button>
+              Start free →
             </a>
             <a
               href="#engines"
+              className="alpha-hero__cta-ghost"
+              role="button"
               onClick={() => track('alpha_how_click', { location: 'hero' })}
             >
-              <button className="alpha-hero__cta-ghost">How it works</button>
+              How it works
             </a>
           </div>
         </motion.div>
