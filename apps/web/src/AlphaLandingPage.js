@@ -13,6 +13,8 @@ import LandingNav from './components/marketing/LandingNav';
 import LandingFooter from './components/marketing/LandingFooter';
 import CTASection from './components/marketing/CTASection';
 import AlphaHero from './components/marketing/alpha/AlphaHero';
+import AlphaEngines from './components/marketing/alpha/AlphaEngines';
+import AlphaMetrics from './components/marketing/alpha/AlphaMetrics';
 import AlphaDifferentiators from './components/marketing/alpha/AlphaDifferentiators';
 import AlphaCommands from './components/marketing/alpha/AlphaCommands';
 import AlphaPlatformPower from './components/marketing/alpha/AlphaPlatformPower';
@@ -33,9 +35,11 @@ const APEX_SIGNIN = 'https://agentprovision.com/login';
 
 // Anchors that actually exist on this page. The shared LandingNav and
 // LandingFooter default to the main landing's set; we pass our own so
-// clicks don't scroll to nowhere.
-const ALPHA_NAV_LINKS = ['differentiators', 'commands', 'platform'];
+// clicks don't scroll to nowhere. `engines` leads the set — it's the
+// spine of the 2026-05-31 redesign (the four-engine substrate).
+const ALPHA_NAV_LINKS = ['engines', 'differentiators', 'commands', 'platform'];
 const ALPHA_FOOTER_LINKS = [
+  { key: 'engines', href: '#engines' },
   { key: 'differentiators', href: '#differentiators' },
   { key: 'commands', href: '#commands' },
   { key: 'platform', href: '#platform' },
@@ -56,6 +60,8 @@ export default function AlphaLandingPage() {
       />
       <main className="alpha-landing">
         <AlphaHero />
+        <AlphaEngines />
+        <AlphaMetrics />
         <AlphaDifferentiators />
         <AlphaCommands />
         <AlphaPlatformPower />

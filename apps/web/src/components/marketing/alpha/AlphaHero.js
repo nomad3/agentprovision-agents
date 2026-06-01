@@ -3,8 +3,13 @@
  *
  * Different shape from the main landing's scroll-scrub video hero:
  * terminal-themed, with the install one-liner as a copyable command.
- * Marketing pitch: "the orchestrator CLI for AI agents" — frames alpha
- * as `kubectl for agents`, not "yet another coding CLI".
+ *
+ * Narrative (2026-05-31 redesign): alpha is the kernel of a NETWORK of
+ * AI agents that runs whole operations — not a chatbot, not a GenAI
+ * wrapper. The differentiator is a coordination substrate (memory +
+ * emotions + teamwork, orchestrated) — the same loops a human
+ * organization took millennia to evolve, now built into software. The
+ * terminal binary is one viewport onto that substrate.
  */
 import { useState } from 'react';
 import { motion, useReducedMotion } from 'framer-motion';
@@ -44,15 +49,18 @@ export default function AlphaHero() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: 'easeOut' }}
         >
-          <span className="alpha-hero__badge">$ alpha</span>
+          <span className="alpha-hero__badge">$ alpha — the agent network kernel</span>
           <h1 className="alpha-hero__title">
-            The orchestrator CLI<br />for AI agents.
+            A network of AI agents<br />that runs your operations.
           </h1>
           <p className="alpha-hero__subtitle">
-            One terminal binary that orchestrates Claude Code, Codex, Gemini CLI,
-            Copilot, and OpenCode — across machines, providers, and time.
+            Not a chatbot. Not a GenAI wrapper. AgentProvision gives a fleet of agents
+            a <strong>coordination substrate</strong> — durable memory, a real internal
+            mood, and team structure — orchestrated from one terminal binary across
+            Claude Code, Codex, Gemini CLI, and Copilot.
             <br />
-            <strong>kubectl for agents,</strong> not yet another coding CLI.
+            <strong>The substrate human organizations took millennia to evolve,</strong>{' '}
+            now built into software.
           </p>
 
           <div className="alpha-hero__install">
@@ -99,20 +107,20 @@ export default function AlphaHero() {
             <span className="alpha-hero__terminal-dot alpha-hero__terminal-dot--red" />
             <span className="alpha-hero__terminal-dot alpha-hero__terminal-dot--yellow" />
             <span className="alpha-hero__terminal-dot alpha-hero__terminal-dot--green" />
-            <span className="alpha-hero__terminal-title">~ alpha run --fanout claude,codex,gemini</span>
+            <span className="alpha-hero__terminal-title">~ alpha coalition run --pattern incident_investigation</span>
           </div>
           <pre className="alpha-hero__terminal-body">
-{`[alpha] dispatched fanout task t_a4f3 with 3 children:
-       • t_a4f3a (claude)
-       • t_a4f3b (codex)
-       • t_a4f3c (gemini)
-[alpha] estimated 8m, $0.42 via Claude Sonnet
-[alpha] close this terminal any time —
-       resume with: alpha watch t_a4f3
+{`[alpha] recalled 14 prior observations from tenant memory
+[alpha] spun up coalition c_91b — shared blackboard:
+       • analyst   (claude)   mood: alert ▲  — careful mode
+       • researcher (gemini)   trust: 0.82
+       • supervisor (luna)     reading the room…
+[alpha] phase gather_facts → hypothesize → prescribe
+[alpha] ⏸  human approval gate: apply remediation? [y/N]
 
-> opened PR #432: refactor(auth): adopt Depends pattern
-> consensus: all three reviewers converged on...
-[alpha] t_a4f3 COMPLETE — 7 findings, 2 blockers`}
+> luna: arousal high across the team — staying precise.
+> recorded 6 observations · 1 commitment to memory
+[alpha] c_91b COMPLETE — audit trail written`}
           </pre>
         </motion.div>
       </div>

@@ -43,12 +43,14 @@ export default function AlphaPlatformPower() {
     <section className="alpha-power" id="platform">
       <div className="alpha-power__inner">
         <h2 className="alpha-power__title">
-          The platform behind the prompt.
+          The platform behind the network.
         </h2>
         <p className="alpha-power__subtitle">
-          alpha is the surface. Everything underneath has been running
-          in production for months — and no leaf CLI can copy it without
-          becoming a multi-tenant SaaS first.
+          alpha is the surface; the substrate underneath has been running in
+          production for months. It learns from every response, remembers across the
+          whole fleet, and runs durably — always with human-in-the-loop approval gates
+          and a full audit trail. The operating system for an AI agent network, not
+          autonomous-everything.
         </p>
 
         <div className="alpha-power__grid">
