@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import List, Optional
 
@@ -1942,11 +1942,19 @@ async def finalize_provider_council(tenant_id: str, experience_id: str, result_j
 
 @dataclass
 class ProviderCouncilInput:
-    tenant_id: str
-    user_message: str
-    providers: List[str]
-    agent_slug: str
-    channel: str
+    # Every field is optional with a default so a version-skewed dispatch can
+    # NEVER fail to decode. The api dispatcher (auto_quality_scorer) starts this
+    # workflow with a dict that omits `providers`; a required field there made
+    # Temporal raise `TypeError: missing 1 required positional argument` during
+    # workflow-input decode, and a workflow-task decode failure retries FOREVER
+    # (poison pill — it silently loads the orchestration/code queue). Defaulting
+    # every field keeps the input decode-tolerant; the review activities pick the
+    # provider set themselves, so `providers` is advisory only.
+    tenant_id: str = ""
+    user_message: str = ""
+    providers: List[str] = field(default_factory=list)
+    agent_slug: str = ""
+    channel: str = ""
     original_experience_id: Optional[str] = None
 
 
