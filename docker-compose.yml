@@ -269,6 +269,14 @@ services:
       - DISABLE_AUTOUPDATER=1
       - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
       - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      # We use OAuth / Max-subscription auth for Claude Code, NOT the Anthropic
+      # API key. The shared env_file (apps/api/.env) carries ANTHROPIC_API_KEY
+      # for the API; blank it for the WORKER (environment overrides env_file) so a
+      # stray key can't hijack Claude to Console (API) billing ahead of the
+      # subscription. claude.py also pops it per-subprocess (belt-and-suspenders);
+      # api_key tenants get their key per-turn from the credential vault, not this
+      # var, so this is safe for all tenant types. (Codex + Luna review, 2026-06-01.)
+      - ANTHROPIC_API_KEY=
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
