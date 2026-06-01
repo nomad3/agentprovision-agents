@@ -296,6 +296,17 @@ async def pull_model(model_name: str) -> bool:
 # Synchronous helpers (for use in sync code paths like services/context_manager)
 # ---------------------------------------------------------------------------
 
+def is_available_sync(timeout: float = 3.0) -> bool:
+    """Quick sync check that Ollama is reachable (distinguishes 'model returned
+    empty under contention' from 'model is down' so a real outage isn't masked as
+    transient — Codex review 2026-06-01). Cheap GET /api/tags; never raises."""
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            return client.get(f"{OLLAMA_BASE_URL}/api/tags").status_code == 200
+    except Exception:
+        return False
+
+
 def generate_sync(
     prompt: str,
     model: str = None,
@@ -462,37 +473,43 @@ def extract_knowledge_with_prompt_sync(prompt: str) -> Optional[dict]:
     # truncating mid-string at the previous 1200-token cap. Timeout bumped
     # to 90s to match: at ~57 tok/s on M4 GPU, 4096 tokens is ~72s worst case.
     #
-    # Resilience (2026-06-01): under concurrent load, the process-wide
-    # ``_ollama_sync_lock`` serializes every sync Ollama call, so extraction can
-    # lose its slot and ``generate_sync`` returns None — which silently DROPPED
-    # the memory write-back (no entities/observations persisted). The model is
-    # available; the failure is transient contention. Retry a bounded number of
-    # times with a short backoff so a busy moment doesn't cost us the memory.
-    result = None
-    _attempts = 3
-    for _i in range(_attempts):
+    # Resilience (2026-06-01, Codex-reviewed): the post-chat memory extraction
+    # was silently dropping write-back when ``generate_sync`` returned empty. The
+    # naive fix (3×90s retries) is UNSAFE — ``generate_sync`` holds the process-
+    # wide ``_ollama_sync_lock`` for the whole call, so 3×90s = ~270s blows past
+    # the 60s Temporal activity timeout AND hogs the lock for every other caller.
+    # Instead: ONE bounded retry with a SHORTER timeout so the total stays within
+    # the activity budget, and only when the FIRST attempt returned empty (not
+    # when the model was unavailable — distinguishing the two so a real Ollama
+    # outage isn't masked as contention). The durable-queue rework (decouple from
+    # the post-chat critical path) is the proper P1 follow-up (Luna).
+    result = generate_sync(
+        prompt=prompt,
+        model=QUALITY_MODEL,
+        system="You are a knowledge extraction agent. Output valid JSON only.",
+        temperature=0.0,
+        max_tokens=4096,
+        timeout=45.0,
+        response_format="json",
+    )
+    if not result and is_available_sync():
+        # Model is up but returned empty (transient — e.g. it lost the lock race
+        # or produced an empty body). One more shorter attempt fits the budget.
+        logger.info("extract_knowledge_with_prompt_sync: empty but Ollama is up — one retry")
         result = generate_sync(
             prompt=prompt,
             model=QUALITY_MODEL,
             system="You are a knowledge extraction agent. Output valid JSON only.",
             temperature=0.0,
             max_tokens=4096,
-            timeout=90.0,
+            timeout=45.0,
             response_format="json",
         )
-        if result:
-            break
-        if _i + 1 < _attempts:
-            logger.info(
-                "extract_knowledge_with_prompt_sync: empty result (attempt %s/%s) — "
-                "likely Ollama contention; retrying", _i + 1, _attempts,
-            )
-            time.sleep(1.5 * (_i + 1))
 
     if not result:
         logger.warning(
-            "extract_knowledge_with_prompt_sync: generate_sync returned empty after %s attempts",
-            _attempts,
+            "extract_knowledge_with_prompt_sync: generate_sync returned empty "
+            "(ollama_up=%s)", is_available_sync(),
         )
         return None
 

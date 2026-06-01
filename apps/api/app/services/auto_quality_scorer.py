@@ -129,11 +129,20 @@ async def _score_and_log(
     # rl_experiences.response_generation stopped writing — regression since
     # 2026-05-16). Coerce to safe numerics up front so every downstream
     # format/math is None-proof.
-    tokens_used = tokens_used or 0
-    response_time_ms = response_time_ms or 0
-    cost_usd = cost_usd or 0.0
-    prompt_tokens = prompt_tokens or 0
-    entity_count = entity_count or 0
+    # Type-safe coercion (Codex review): ``x or 0`` leaves a truthy STRING
+    # untouched, so a stray ``"1.23"`` would still blow up ``{:.4f}``. Force the
+    # numeric types via float()/int() with a fallback so the format/math below is
+    # genuinely None- AND type-proof.
+    def _num(v, cast, default):
+        try:
+            return cast(v) if v is not None else default
+        except (TypeError, ValueError):
+            return default
+    tokens_used = _num(tokens_used, int, 0)
+    response_time_ms = _num(response_time_ms, int, 0)
+    cost_usd = _num(cost_usd, float, 0.0)
+    prompt_tokens = _num(prompt_tokens, int, 0)
+    entity_count = _num(entity_count, int, 0)
     logger.info("Auto-quality scorer: starting for tenant %s (platform=%s, model=%s)", str(tenant_id)[:8], platform, QUALITY_MODEL)
 
     if not _USE_HAIKU:
