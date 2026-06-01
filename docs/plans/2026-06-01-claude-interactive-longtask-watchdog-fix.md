@@ -65,3 +65,15 @@ We use OAuth/subscription, not the Anthropic API key. Today the worker has `ANTH
 1. Is `long_task_idle_seconds ≈ 120s` the right inactivity gap for git network stalls, or should it key off the **Temporal activity heartbeat** (which already proves liveness) instead of a wall-clock gap?
 2. Should heavy git/coding turns route to the **code-task path** (CodeTaskWorkflow) rather than the interactive chat turn entirely (bigger, cleaner separation — but more work)?
 3. Is there a cleaner completion signal than the answer-file (e.g. REPL prompt-returned + idle), so we don't depend on Claude reliably writing the file on long turns?
+
+## Review outcome (Codex + Luna adversarial panel, 2026-06-01) + as-built
+
+Four-lens review (regression vs #736–#744, code-correctness, Claude Code internals, ops). Verdict: **approve_with_changes**, no blocker to the approach. Key changes folded in:
+
+- **Contested core assumption (internals lens):** Claude Code buffers bash stdout (no live streaming), so the PTY *can* go silent during a long clone — a pure `last_output` window could still false-kill. Mitigated by a **generous 180s** activity window (≫ typical git stalls) and validated for real by the post-deploy pull test; if the PTY proves to go silent >180s, the follow-up is child-process / heartbeat liveness, not a wider wall-clock gap.
+- **Wedged-but-trickling regression (regression lens):** a pure activity window let a TUI that paints chrome forever but never writes the file burn the full 900s (×relaunch). Fixed with an **explicit absolute ceiling** `answer_file_max_seconds` (480s) that fires regardless of output.
+- **Invariant enforced (correctness lens):** `idle_exit_seconds(8) < long_task_idle_seconds(180) < answer_file_max_seconds(480) < timeout(900)`, `max()`-floored in the runner so a misconfigured env knob can't invert it. New behavior is **opt-in**: `decide_pty_action` keeps exact legacy behavior when the knobs aren't passed (existing direct callers/tests unaffected).
+- **`ANTHROPIC_API_KEY` (ops BLOCKER fixed):** do **not** touch `apps/api/.env` (shared with the API). Scoped to a worker-only empty `environment:` override in `docker-compose.yml` (overrides the env_file). Safe for *all* tenant types — api_key tenants get their key per-turn from the vault (`claude.py:349`), not this var. Helm code-worker never set it (no drift).
+- **Deferred (ops):** routing heavy git turns to `CodeTaskWorkflow` is tracked as a separate, larger follow-up; the PTY path is the only execution mode for subscription chat turns, so this watchdog fix is needed either way.
+
+**As-built:** `apps/code-worker/cli_executors/claude_interactive.py` (`decide_pty_action` 4b + two env-tunable knobs `CLAUDE_CODE_INTERACTIVE_LONG_TASK_IDLE_SECONDS`/`_ANSWER_FILE_MAX_SECONDS`) + `docker-compose.yml` worker `ANTHROPIC_API_KEY=` override.
