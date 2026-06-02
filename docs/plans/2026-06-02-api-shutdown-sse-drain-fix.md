@@ -18,7 +18,16 @@ These never complete on their own, so uvicorn sits in *"Waiting for connections 
 uvicorn's request-drain is unbounded, and the only long-lived requests are infinite SSE/WebSocket streams. The shutdown ordering (request-drain → lifespan shutdown) means an unbounded request-drain starves the lifespan drain.
 
 ## Fix
-Add `--timeout-graceful-shutdown 10` to the uvicorn CMD (`apps/api/Dockerfile`). uvicorn then waits ≤10s for in-flight requests, **cancels** the lingering SSE/WebSocket streams, and proceeds to the lifespan shutdown (the WhatsApp drain).
+Make uvicorn wait ≤10s for in-flight requests on SIGTERM, then **cancel** the lingering SSE/WebSocket streams and proceed to the lifespan shutdown (the WhatsApp drain).
+
+### Delivery mechanism — ENV var, not just the image CMD (post-deploy correction)
+The first cut added `--timeout-graceful-shutdown 10` to the uvicorn CMD in `apps/api/Dockerfile`. **That change is inert in this deployment** and was verified so on 2026-06-02: the Docker-Desktop deploy **bind-mounts `apps/api` and does not rebuild the api image** (the running image `agentprovision-agents-api:latest` is days old; the "Building api" step hits `#6 CACHED` and produces no new image). A CMD-only change therefore never reaches the running container — `docker inspect` showed the live container still on the old CMD after a successful deploy.
+
+The operative fix is to set the value as an **environment variable**, which the deploy applies on every container recreate (no rebuild needed):
+```
+UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=10
+```
+uvicorn's CLI is a click command with `context_settings={"auto_envvar_prefix": "UVICORN"}`, so every option is settable via `UVICORN_<OPTION>`; `UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN` == `--timeout-graceful-shutdown`. Verified empirically in-container (`RESOLVED=33` for a 33 env value). Set in `docker-compose.yml` (api `environment:`) and `helm/values/agentprovision-api.yaml` (api `env:`), kept in sync per the no-drift rule. The Dockerfile CMD flag is retained as a consistent default for a plain `docker run` / a future real image rebuild, but the **env var is what takes effect** in the live deploy.
 
 ### What gets cut, and why a 10s cap is an acceptable trade (corrected — Luna + superpowers review)
 An earlier draft claimed "no long-blocking HTTP request exists / chat is job-based." **That is false for the live path** and is corrected here:

@@ -233,6 +233,14 @@ externalSecret:
 env:
   - name: TEMPORAL_ADDRESS
     value: "temporal:7233"
+  # Bound uvicorn's request-drain on SIGTERM so never-ending SSE streams
+  # can't hang shutdown and the WhatsApp clean-shutdown drain runs. uvicorn
+  # reads this via auto_envvar_prefix=UVICORN (== --timeout-graceful-shutdown).
+  # Set as ENV (mirrors docker-compose.yml) so it applies on pod recreate
+  # without an image rebuild. See
+  # docs/plans/2026-06-02-api-shutdown-sse-drain-fix.md.
+  - name: UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN
+    value: "10"
   # Kill-switch (2026-06-01): skip the per-tenant monitor auto-launch on API
   # startup (startup_proactive_workflows) — they starved the orchestration queue.
   # "1" while monitors are reworked onto a dedicated queue; flip to "0" to re-enable.
