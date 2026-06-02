@@ -48,6 +48,13 @@ A single uvicorn timeout **cannot** distinguish an infinite SSE stream from a fi
 
 Idle restart (no in-flight chat turn): uvicorn waits ~≤10s to cut the ever-present dashboard SSE, drain completes in seconds → **~13s restart** (down from ~180s), and the validated shutdown save runs.
 
+## Second hang found in live verification: neonize's Go runtime won't release PID 1
+Applying the env var live (2026-06-02) and restart-testing proved the SSE half is fixed — uvicorn logged `Cancel 2 running task(s), timeout graceful shutdown exceeded` at exactly 10s, then `WhatsApp drain: starting` → `Saved validated WhatsApp session … (shutdown …)` for both accounts → `WhatsApp drain: complete` in **~11s**. **But the restart still took 175s:** after `Application shutdown complete` / `Finished server process [1]`, the process did **not** exit (~165s to the docker SIGKILL). `threading.enumerate()` in the api shows only `MainThread`, so it is not a rogue Python thread — it is **neonize's Go runtime**: its cgo worker threads (loaded once as a shared `.so` via `ctypes.CDLL`) survive `client.disconnect()` and keep PID 1 alive, and neonize exposes no symbol to stop the cgo scheduler (verified against neonize 0.3.14 — `stop()` only tears down one client's connection).
+
+**Fix:** at the END of `shutdown_whatsapp` (after the drain + bounded fallback), gated on `IN_DOCKER == "1"`, flush the root log handlers and `os._exit(0)`. The drain has already done the only shutdown-critical work (the validated session saves, committed durably to Postgres before the call returns); everything else (DB/redis sockets) is OS-reaped on exit, and there are no other `@app.on_event("shutdown")` hooks or `atexit` handlers. This is the standard escape hatch for a cgo library that holds the process. Reviewed + approved by Luna (Codex-5.5) and the superpowers code-reviewer.
+
+**Operational caveat (Luna):** because a *failed* drain also ends in `_exit(0)`, restart verification + alerting must key off the **drain logs**, not the container exit code. The process may exit before uvicorn prints its normal final shutdown lines — the proof is `WhatsApp drain: starting → validated saves (busy=0) → WhatsApp drain: complete`, then the container exiting at ~12s.
+
 ## Acceptance criteria
 - `docker restart api` with a dashboard SSE connected → restart completes in ~10–15s (not ~180s).
 - Shutdown logs show `WhatsApp drain: starting` → per-account `Saved validated WhatsApp session … (shutdown …)` → `WhatsApp drain: complete` (the drain actually runs).
