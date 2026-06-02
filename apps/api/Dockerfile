@@ -124,5 +124,19 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/api/v1/ || exit 1
 
-# Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# Run the application.
+#
+# --timeout-graceful-shutdown 10: bound uvicorn's request-drain on SIGTERM.
+# The api serves several never-ending SSE/WebSocket streams (v2 session
+# events, chat-job events, collaborations, …) as `while True` loops; with
+# uvicorn's default (wait forever) it sits in "Waiting for connections to
+# close" until docker's 180s stop_grace_period SIGKILLs it — and the
+# FastAPI shutdown hook (the WhatsApp clean-shutdown drain in
+# shutdown_whatsapp -> whatsapp_service.drain_and_shutdown) runs only AFTER
+# that request-drain, so it never gets to do its validated session save.
+# Bounding the request-drain to 10s force-closes those streams (all are
+# reconnect+replay safe; the chat POST is job-based and returns in <200ms,
+# so nothing long-blocking is cut), then the drain runs. Budget: 10s +
+# drain (self-limits ~100s, 165s hard cap in main.py) < 180s grace. See
+# docs/plans/2026-06-02-api-shutdown-sse-drain-fix.md.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "10"]
