@@ -106,16 +106,22 @@ The wire protocol is identical; the trust posture differs because ownership diff
 - **P3 — Parallel sub-agents.** Panes/sessions fan-out + MCP inbox `assign`/`collect`; wire into A2A coalitions.
 - **P4 — Local substrate.** `ap-broker` + the broker `SessionEndpoint`; Claudia-bridge becomes a broker client. Same protocol, deny-by-default profile.
 
-## Pod-redeploy survival (open design point)
+## Session continuity — AgentProvision session ↔ CLI session, restored via the interactive `/resume`
 
-`code-worker` pods restart on every deploy; tmux sessions die with them. tmux-resurrect does **not** restore live agent state. So: the `session_substrate` registry + each CLI's own session id are the source of truth; on pod restart the substrate **re-creates** the tmux session and the per-CLI adapter resumes the CLI's conversation (`--resume`/`--continue` where supported) — the user sees continuity, the tmux session is disposable. Detail to settle in P1.
+**Each AgentProvision conversation maps 1:1 to a CLI-side session** — a Claude Code session id, a Codex session, a Gemini session. That CLI session (in the CLI's own on-disk session store) is the **durable conversation**; the `session_substrate` row holds the mapping `(ap_session_id, agent, cli_platform) → cli_session_id`. tmux is genuinely disposable — it holds no conversation state.
+
+`code-worker` pods restart on every deploy and the tmux session dies with them, but the **CLI session persists on disk**, so continuity does not depend on tmux or on tmux-resurrect (which doesn't restore agent state anyway). On (re)creation — pod redeploy, or the first turn after an idle reap — the substrate launches the CLI's interactive REPL in a fresh tmux session and drives the **interactive `/resume <cli_session_id>` slash command** to restore the conversation.
+
+Critically this is the **interactive `/resume` command, NOT the `--resume` startup flag**. `--resume` was removed (`claude.py:306`) because, used per-turn, it reloaded a 16+ MB JSONL on *every* turn → slow startup, lossy compaction. With a **persistent** session, `/resume` runs **at most once per session lifetime** (on recreate), never per-turn — the bloat-per-turn problem that killed `--resume` does not arise. Within a live conversation the REPL stays alive and accumulates context with no reload.
+
+**Live spike required before P1** (verification discipline — do not assume): does interactive, subscription-authed Claude Code honour `/resume <id>` and faithfully restore context, and what is the resume cost for a long conversation? Repeat per CLI (Codex/Gemini `/resume` equivalents) as P2 input.
 
 ## Risks / open questions for the spec review
 
 1. **MCP-callback reliability** — what if an agent ends its turn without calling `submit_result`? Mitigation: frame the MCP call as *the only way to deliver*; backstop with control-mode liveness + a bounded "no callback and pane idle at the REPL prompt" escalation that **asks**, never kills.
 2. **Per-CLI interactive differences** — not every CLI's REPL injects/submits identically; the adapter boundary must absorb that without leaking into the substrate.
 3. **Control-mode backpressure** — a chatty agent floods `%output`; need `refresh-client -f pause-after=N`.
-4. **Pod-redeploy continuity** — the re-create-and-resume flow above.
+4. **`/resume` fidelity (live spike, gates P1)** — does interactive subscription Claude restore context via the `/resume <id>` slash command, and at what cost for a long conversation? Per the section above, this uses the interactive command on recreate (not the removed `--resume` flag), so the per-turn-bloat reason for its removal doesn't apply — but it must be live-verified, not assumed.
 5. **Subscription credit (2026-06-15)** — interactive avoids the new Agent-SDK credit pool; confirm interactive limits are unaffected.
 
 ## Verification discipline (the lesson from today)
