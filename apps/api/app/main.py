@@ -406,3 +406,23 @@ async def shutdown_whatsapp():
             await asyncio.wait_for(whatsapp_service.shutdown(), timeout=_FALLBACK_CAP_S)
         except Exception:
             pass
+
+    # Force a clean process exit. After lifespan shutdown completes, neonize's
+    # Go runtime keeps PID 1 alive — its cgo worker threads are NOT Python
+    # threads (threading.enumerate() shows only MainThread) and survive
+    # client.disconnect(), so uvicorn finishes but the process never exits;
+    # docker then SIGKILLs it at the stop grace, re-introducing the ~180s
+    # "restart hang" AFTER the validated saves (verified live 2026-06-02:
+    # drain completed in ~11s, then the process hung ~165s to SIGKILL). The
+    # drain above already did the only shutdown-critical work (validated
+    # session saves), so exiting now is safe and gives a ~12s restart.
+    # Gated to the container (IN_DOCKER) so test/local imports that never run
+    # under uvicorn are unaffected. flush first since _exit skips buffers.
+    if _os.environ.get("IN_DOCKER"):
+        _log.info("WhatsApp drain done — forcing clean process exit (neonize Go runtime blocks normal termination)")
+        for _h in logging.getLogger().handlers:
+            try:
+                _h.flush()
+            except Exception:
+                pass
+        _os._exit(0)
