@@ -21,6 +21,14 @@ strategy:
 # run 30-90s against Codex (longer when Gemini quota cooldown forces
 # a fallback chain); the prior default killed responses mid-stream on
 # every merge-triggered redeploy. See concern memory 25307912.
+#
+# DO NOT drop toward 30s: the WhatsApp clean-shutdown drain
+# (shutdown_whatsapp -> whatsapp_service.drain_and_shutdown, capped at
+# 165s) bounded-waits for in-flight turns, then does a per-account
+# disconnect + VALIDATED session save. 180s is the ceiling that contains
+# that budget; a shorter grace would SIGKILL the api mid-SQLite-write and
+# re-introduce WhatsApp session corruption -> forced QR re-pair. See
+# docs/plans/2026-06-02-whatsapp-session-durability-design.md.
 terminationGracePeriodSeconds: 180
 
 container:

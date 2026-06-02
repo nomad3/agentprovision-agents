@@ -368,9 +368,32 @@ async def startup_proactive_workflows():
 
 @app.on_event("shutdown")
 async def shutdown_whatsapp():
-    """Gracefully disconnect all neonize clients."""
+    """Clean WhatsApp drain on shutdown (session-durability design §1).
+
+    Bounded-waits for in-flight chat turns, then per-account disconnect +
+    VALIDATED session save under the session lock, so a restart never
+    SIGKILLs a mid-write neonize SQLite — the root cause of session
+    corruption → forced QR re-pair, and of the ~180s restart hang. Bounded
+    by an overall timeout (< the 180s container stop grace) so it can never
+    hang pod termination; falls back to a plain shutdown on overrun.
+    """
+    import asyncio
+    import logging
+    _log = logging.getLogger(__name__)
     try:
         from app.services.whatsapp_service import whatsapp_service
-        await whatsapp_service.shutdown()
+        await asyncio.wait_for(whatsapp_service.drain_and_shutdown(), timeout=165)
+    except asyncio.TimeoutError:
+        _log.warning("WhatsApp drain exceeded 165s budget — falling back to plain shutdown")
+        try:
+            from app.services.whatsapp_service import whatsapp_service
+            await asyncio.wait_for(whatsapp_service.shutdown(), timeout=10)
+        except Exception:
+            pass
     except Exception:
-        pass
+        # Never block pod termination on WhatsApp teardown.
+        try:
+            from app.services.whatsapp_service import whatsapp_service
+            await whatsapp_service.shutdown()
+        except Exception:
+            pass
