@@ -654,19 +654,34 @@ class WhatsAppService:
         if not os.path.exists(path):
             return False
 
-        # 1. Checkpoint MUST succeed. A locked/mid-write DB means the file may
-        #    be inconsistent — abort rather than persist a torn snapshot.
+        # 1. Checkpoint MUST actually COMPLETE — not merely return. A
+        #    locked/mid-write DB means the file may be inconsistent; abort
+        #    rather than persist a torn snapshot.
         try:
             conn = sqlite3.connect(path, timeout=5)
             try:
-                conn.execute("PRAGMA wal_checkpoint(FULL)")
+                ckpt = conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
             finally:
                 conn.close()
         except Exception as e:  # noqa: BLE001
             logger.warning(
-                "WhatsApp save ABORTED for %s:%s — checkpoint failed (DB locked / mid-write): %s. "
+                "WhatsApp save ABORTED for %s:%s — checkpoint raised (DB locked / mid-write): %s. "
                 "Keeping last known-good session, no overwrite.",
                 tenant_id[:8], account_id, e,
+            )
+            return False
+        # PRAGMA wal_checkpoint(FULL) returns (busy, log_frames, checkpointed).
+        # busy != 0 means it could NOT merge all WAL frames into the main .db
+        # (another connection held it) — so the .db we're about to read is
+        # missing the latest writes. "Returned" is not "completed" (review):
+        # abort and keep the last known-good rather than persist a stale/torn
+        # snapshot. busy == 0 with log == -1 (no WAL in use) is success.
+        busy = ckpt[0] if ckpt else 1
+        if busy != 0:
+            logger.warning(
+                "WhatsApp save ABORTED for %s:%s — WAL checkpoint incomplete "
+                "(busy=%s, result=%s); keeping last known-good, no overwrite.",
+                tenant_id[:8], account_id, busy, ckpt,
             )
             return False
 
@@ -930,6 +945,10 @@ class WhatsAppService:
         @client.event(PairStatusEv)
         async def on_pair_status(c: NewAClient, event: PairStatusEv):
             logger.info(f"Pair status event for {key}: {event}")
+            # During a graceful drain the shutdown handler owns the teardown —
+            # don't update status, save, or otherwise re-arm a writer (review C1).
+            if self._draining:
+                return
             self._statuses[key] = "connected"
             self._qr_codes.pop(key, None)
             phone = None
@@ -947,6 +966,11 @@ class WhatsAppService:
         @client.event(ConnectedEv)
         async def on_connected(c: NewAClient, event: ConnectedEv):
             logger.info(f"ConnectedEv fired for {key}")
+            # During a graceful drain, refuse to re-arm: no status flip, no
+            # save, no heartbeat start (review C1). The drain set status to
+            # logged_out and is tearing this client down.
+            if self._draining:
+                return
             self._statuses[key] = "connected"
             # 2026-05-20 fix: do NOT reset reconnect_counts here. The
             # previous version reset on every ConnectedEv, which let a

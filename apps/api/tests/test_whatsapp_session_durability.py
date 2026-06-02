@@ -149,6 +149,30 @@ class TestSaveNeverOverwrites:
         monkeypatch.setattr(service, "_get_db", _boom)
         assert service._save_session_to_db("tenant-abc", "default") is False
 
+    def test_busy_checkpoint_aborts_before_db(self, service, tmp_session, monkeypatch):
+        # PRAGMA wal_checkpoint(FULL) returning busy=1 means the WAL was NOT
+        # fully merged — "returned" is not "completed". Must abort, not promote
+        # a stale .db as known-good (Luna lead-review: checkpoint invariant).
+        _make_session_db(tmp_session)
+
+        def _boom():
+            raise AssertionError("_get_db called after a busy checkpoint — would overwrite")
+        monkeypatch.setattr(service, "_get_db", _boom)
+
+        class _FakeResult:
+            def fetchone(self):
+                return (1, 5, 0)  # busy=1, 5 log frames, 0 checkpointed
+
+        class _FakeConn:
+            def execute(self, sql):
+                return _FakeResult()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(sqlite3, "connect", lambda *a, **k: _FakeConn())
+        assert service._save_session_to_db("tenant-abc", "default") is False
+
     def test_read_failure_aborts_before_db(self, service, tmp_session, monkeypatch):
         _make_session_db(tmp_session)  # valid file → checkpoint succeeds
 
@@ -320,6 +344,13 @@ class TestDrain:
         # The true inbound entrypoint rejects before the expensive media path.
         code = _source_without_comments(wa_mod.WhatsAppService._handle_inbound)
         assert "self._draining" in code
+
+    def test_all_lifecycle_callbacks_have_draining_guard(self):
+        # on_connected, on_disconnected, on_pair_status (closures defined inside
+        # _create_client) must each short-circuit on _draining so no callback
+        # re-arms a writer/heartbeat mid-shutdown (Luna lead-review C1).
+        code = _source_without_comments(wa_mod.WhatsAppService._create_client)
+        assert code.count("self._draining") >= 3
 
     async def test_drain_waits_for_inflight_then_completes(self, service):
         service._inflight_turns = 1
