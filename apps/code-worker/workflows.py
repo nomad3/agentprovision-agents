@@ -1479,7 +1479,7 @@ def _fetch_claude_credential(tenant_id: str) -> Optional[tuple]:
     return None
 
 
-def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: str) -> str:
+def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: str, model: str | None = None) -> str:
     """Materialize tenant-scoped CODEX_HOME with auth.json and MCP config.toml.
 
     2026-05-16 incident: Codex still couldn't discover MCP tools after the
@@ -1503,6 +1503,17 @@ def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: s
     # ── top-level Codex config keys (must precede any [section]) ──────
     use_rmcp_client = os.environ.get("CODEX_USE_RMCP_CLIENT", "true").lower() == "true"
     config_lines: list[str] = []
+    # Pin the Codex model (top-level key; must precede any [section]). Codex's
+    # built-in default (gpt-5.3-codex) is an API-tier model that ChatGPT-account
+    # (subscription) auth REJECTS — "model not supported when using Codex with a
+    # ChatGPT account" -> every turn exits 1 (the 2026-06-02 outage). gpt-5.5 IS
+    # supported on ChatGPT-account auth. Precedence: per-tenant selection (set on
+    # the /integrations Codex connect flow, threaded in via `model`) -> CODEX_MODEL
+    # env -> gpt-5.5 default.
+    _codex_model = (model or os.environ.get("CODEX_MODEL") or "gpt-5.5").strip()
+    if _codex_model:
+        config_lines.append(f'model = "{_codex_model}"')
+        config_lines.append("")
     if mcp_config_json and use_rmcp_client:
         # Opt in to the Rust MCP client so SSE / streamable_http
         # ``[mcp_servers.*]`` entries below are actually honoured.

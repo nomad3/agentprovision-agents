@@ -234,6 +234,12 @@ services:
       # See apps/code-worker/workflows.py::_prepare_codex_home and
       # docs/plans/2026-05-16-codex-mcp-tool-access-fix.md.
       - CODEX_USE_RMCP_CLIENT=${CODEX_USE_RMCP_CLIENT:-true}
+      # Codex model default. Codex's built-in default (gpt-5.3-codex) is an
+      # API-tier model that ChatGPT-account (subscription) auth REJECTS — every
+      # turn exits 1 (the 2026-06-02 outage). gpt-5.5 is supported on subscription
+      # auth. A per-tenant selection from the /integrations Codex connect flow
+      # overrides this default once wired. Mirrors helm code-worker values (no drift).
+      - CODEX_MODEL=${CODEX_MODEL:-gpt-5.5}
       # Empty default (NOT a fake ghp_placeholder): the per-turn tenant GitHub
       # OAuth token is fetched at runtime (cli_executors/claude.py); a real
       # static token is optional. A fake token makes gh/git retry against a bad
