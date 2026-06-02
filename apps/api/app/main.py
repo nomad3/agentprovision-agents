@@ -370,30 +370,39 @@ async def startup_proactive_workflows():
 async def shutdown_whatsapp():
     """Clean WhatsApp drain on shutdown (session-durability design §1).
 
-    Bounded-waits for in-flight chat turns, then per-account disconnect +
+    Bounded-waits for in-flight WhatsApp turns, then per-account disconnect +
     VALIDATED session save under the session lock, so a restart never
     SIGKILLs a mid-write neonize SQLite — the root cause of session
-    corruption → forced QR re-pair, and of the ~180s restart hang. Bounded
-    by an overall timeout (< the 180s container stop grace) so it can never
-    hang pod termination; falls back to a plain shutdown on overrun.
+    corruption → forced QR re-pair.
+
+    Budget — must fit the 180s container stop_grace_period. uvicorn's
+    --timeout-graceful-shutdown (10s, apps/api/Dockerfile) runs BEFORE this
+    lifespan hook, so the drain + its fallback share the remaining ~170s.
+    Worst case = uvicorn(10) + drain(_DRAIN_CAP_S) + fallback(_FALLBACK_CAP_S)
+    + teardown margin. We keep 10 + 140 + 8 = 158s < 180s with ~22s margin.
+    (Luna review: the prior 10 + 165 + 10 = 185s overflowed and could
+    SIGKILL the fallback mid-run.) Both fallbacks are timeout-bounded so the
+    handler can never itself hang pod termination.
     """
     import asyncio
     import logging
     _log = logging.getLogger(__name__)
+    _DRAIN_CAP_S = 140
+    _FALLBACK_CAP_S = 8
     try:
         from app.services.whatsapp_service import whatsapp_service
-        await asyncio.wait_for(whatsapp_service.drain_and_shutdown(), timeout=165)
+        await asyncio.wait_for(whatsapp_service.drain_and_shutdown(), timeout=_DRAIN_CAP_S)
     except asyncio.TimeoutError:
-        _log.warning("WhatsApp drain exceeded 165s budget — falling back to plain shutdown")
+        _log.warning("WhatsApp drain exceeded %ss budget — falling back to plain shutdown", _DRAIN_CAP_S)
         try:
             from app.services.whatsapp_service import whatsapp_service
-            await asyncio.wait_for(whatsapp_service.shutdown(), timeout=10)
+            await asyncio.wait_for(whatsapp_service.shutdown(), timeout=_FALLBACK_CAP_S)
         except Exception:
             pass
     except Exception:
         # Never block pod termination on WhatsApp teardown.
         try:
             from app.services.whatsapp_service import whatsapp_service
-            await whatsapp_service.shutdown()
+            await asyncio.wait_for(whatsapp_service.shutdown(), timeout=_FALLBACK_CAP_S)
         except Exception:
             pass

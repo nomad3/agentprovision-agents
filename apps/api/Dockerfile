@@ -134,9 +134,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
 # FastAPI shutdown hook (the WhatsApp clean-shutdown drain in
 # shutdown_whatsapp -> whatsapp_service.drain_and_shutdown) runs only AFTER
 # that request-drain, so it never gets to do its validated session save.
-# Bounding the request-drain to 10s force-closes those streams (all are
-# reconnect+replay safe; the chat POST is job-based and returns in <200ms,
-# so nothing long-blocking is cut), then the drain runs. Budget: 10s +
-# drain (self-limits ~100s, 165s hard cap in main.py) < 180s grace. See
+# Bounding the request-drain to 10s force-closes those streams (the
+# long-lived ones are all reconnect+replay-safe SSE), then the drain runs.
+# NOTE: this also cuts an in-flight BLOCKING chat turn (/messages/stream et
+# al.) that has run >10s when a deploy lands — an accepted, retryable,
+# deploy-time trade (see the design doc). Budget: 10s + drain (140s cap) +
+# fallback (8s) = 158s < 180s grace. See
 # docs/plans/2026-06-02-api-shutdown-sse-drain-fix.md.
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--proxy-headers", "--forwarded-allow-ips", "*", "--timeout-graceful-shutdown", "10"]
