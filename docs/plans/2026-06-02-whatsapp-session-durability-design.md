@@ -111,3 +111,18 @@ The original 180s grace existed to let 30–90s chat turns finish. WhatsApp inbo
 5. `main.py` lifespan shutdown handler (drain → disconnect → validated-save under lock) + SSE close.
 6. Tune `stop_grace_period` (+ helm mirror) to the bounded drain budget.
 7. Tests for each acceptance criterion (esp. the "checkpoint-fail must NOT overwrite" and "corrupt-current falls back to backup" cases).
+
+## 8. Implementation + review round 2 (built; adversarial panel + Codex-5.5)
+
+Built on `docs/whatsapp-session-durability`. After implementing, a 5-dimension adversarial review (each finding verified against the source) surfaced 3 blockers + 4 important + nits — all folded in:
+
+- **Grace stays 180s (NOT 30s).** Codex's "30s unsafe" holds: WhatsApp inbound turns run in a non-cancellable `asyncio.to_thread`. The fix is the bounded drain, not a shorter grace. The drain bounded-waits in-flight turns (deadline 90s), then disconnects+saves; `main.py` caps the whole thing at 165s < 180s. compose + helm comments pin this so nobody drops it.
+- **C1-1/C1-2 (blockers) — concurrent-writer race.** `on_disconnected` no longer resets status / schedules reconnect while `_draining`; `_auto_reconnect` and `reconnect` hard short-circuit on `_draining`; the drain cancels all recovery tasks (heartbeat/stable-reset/watchdog/connect) up front before the wait.
+- **C1-3 (important) — drain bounded for N accounts.** Per-account disconnect+save runs concurrently (`asyncio.gather`), so total ≈ one disconnect window regardless of account count.
+- **C1-4 (important) — drain gate at the true entrypoint.** `_handle_inbound` rejects on `_draining` before the up-to-90s media download, not only at the chat-turn boundary.
+- **FG-1 (blocker) — `start_pairing(force=True)` deadlock.** Disconnect moved OUTSIDE the session lock (same hazard the drain avoids); destructive file/DB teardown stays under the lock.
+- **C2-VALIDATE (important) — no false-positive.** A device-less / unrecognised-schema blob is now a HARD FAIL in `_validate_sqlite_bytes` (integrity-only is no longer "known-good"), so it can never become current or an `ok` backup.
+- **MTR-1 (important) — loud self-heal failure;** **MTR-3 (important) — on total-failure, normalise on-disk state** (stash torn `.db` → `.corrupt-backup`, drop `-wal/-shm`) so neonize starts deterministically.
+- **Nits folded:** MTR-5 stable order tiebreaker, MTR-6 close DB before the slow validate/write loop, FG-3 prune comment, FG-4 meaningful `source_event`, FG-5 redundant imports, F1/F2 model↔migration parity (timezone-aware NOT NULL `created_at`, CHECK + composite index + server_defaults). 26 unit tests cover validation, never-overwrite, multi-tier restore, on-disk normalisation, the force guard, and drain behaviour.
+
+**Deferred (surfaced to Luna):** the residual restart-hang lever is closing the v2 `/api/v2/sessions/{id}/events` SSE streams on shutdown so uvicorn drains immediately. The corruption fix already makes any SIGKILL recoverable (restore falls back to a validated backup → no QR), so this is a latency/UX follow-up, not a durability one — tracked separately rather than expanding this PR into the SSE path.

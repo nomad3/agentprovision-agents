@@ -15,6 +15,7 @@ from .agent_skill import AgentSkill
 from .agent_task import AgentTask
 from .channel_account import ChannelAccount
 from .channel_event import ChannelEvent
+from .whatsapp_session_backup import WhatsappSessionBackup
 from .chat import ChatSession, ChatMessage
 from .session_event import SessionEvent
 from .connector import Connector
@@ -99,7 +100,7 @@ __all__ = [
     "Tenant", "User",
     "Agent", "AgentGroup", "AgentMemory", "AgentPermission", "AgentPerformanceSnapshot", "AgentVersion", "AgentAuditLog",
     "AgentRelationship", "AgentSkill", "AgentTask",
-    "ChannelAccount", "ChannelEvent",
+    "ChannelAccount", "ChannelEvent", "WhatsappSessionBackup",
     "ChatSession", "ChatMessage",
     "Connector",
     "DataPipeline", "DataSource", "Dataset", "DatasetGroup",
