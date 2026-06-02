@@ -18,7 +18,16 @@ These never complete on their own, so uvicorn sits in *"Waiting for connections 
 uvicorn's request-drain is unbounded, and the only long-lived requests are infinite SSE/WebSocket streams. The shutdown ordering (request-drain → lifespan shutdown) means an unbounded request-drain starves the lifespan drain.
 
 ## Fix
-Add `--timeout-graceful-shutdown 10` to the uvicorn CMD (`apps/api/Dockerfile`). uvicorn then waits ≤10s for in-flight requests, **cancels** the lingering SSE/WebSocket streams, and proceeds to the lifespan shutdown (the WhatsApp drain).
+Make uvicorn wait ≤10s for in-flight requests on SIGTERM, then **cancel** the lingering SSE/WebSocket streams and proceed to the lifespan shutdown (the WhatsApp drain).
+
+### Delivery mechanism — ENV var, not just the image CMD (post-deploy correction)
+The first cut added `--timeout-graceful-shutdown 10` to the uvicorn CMD in `apps/api/Dockerfile`. **That change is inert in this deployment** and was verified so on 2026-06-02: the Docker-Desktop deploy **bind-mounts `apps/api` and does not rebuild the api image** (the running image `agentprovision-agents-api:latest` is days old; the "Building api" step hits `#6 CACHED` and produces no new image). A CMD-only change therefore never reaches the running container — `docker inspect` showed the live container still on the old CMD after a successful deploy.
+
+The operative fix is to set the value as an **environment variable**, which the deploy applies on every container recreate (no rebuild needed):
+```
+UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=10
+```
+uvicorn's CLI is a click command with `context_settings={"auto_envvar_prefix": "UVICORN"}`, so every option is settable via `UVICORN_<OPTION>`; `UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN` == `--timeout-graceful-shutdown`. Verified empirically in-container (`RESOLVED=33` for a 33 env value). Set in `docker-compose.yml` (api `environment:`) and `helm/values/agentprovision-api.yaml` (api `env:`), kept in sync per the no-drift rule. The Dockerfile CMD flag is retained as a consistent default for a plain `docker run` / a future real image rebuild, but the **env var is what takes effect** in the live deploy.
 
 ### What gets cut, and why a 10s cap is an acceptable trade (corrected — Luna + superpowers review)
 An earlier draft claimed "no long-blocking HTTP request exists / chat is job-based." **That is false for the live path** and is corrected here:
@@ -38,6 +47,13 @@ A single uvicorn timeout **cannot** distinguish an infinite SSE stream from a fi
 - **Invariant for future edits:** `uvicorn_graceful + _DRAIN_CAP_S + _FALLBACK_CAP_S` must stay **≤ ~160s** (≤180 with margin). Bumping `WHATSAPP_DRAIN_DEADLINE_SECONDS` or the caps without revisiting the 180s grace re-introduces the SIGKILL-mid-write window.
 
 Idle restart (no in-flight chat turn): uvicorn waits ~≤10s to cut the ever-present dashboard SSE, drain completes in seconds → **~13s restart** (down from ~180s), and the validated shutdown save runs.
+
+## Second hang found in live verification: neonize's Go runtime won't release PID 1
+Applying the env var live (2026-06-02) and restart-testing proved the SSE half is fixed — uvicorn logged `Cancel 2 running task(s), timeout graceful shutdown exceeded` at exactly 10s, then `WhatsApp drain: starting` → `Saved validated WhatsApp session … (shutdown …)` for both accounts → `WhatsApp drain: complete` in **~11s**. **But the restart still took 175s:** after `Application shutdown complete` / `Finished server process [1]`, the process did **not** exit (~165s to the docker SIGKILL). `threading.enumerate()` in the api shows only `MainThread`, so it is not a rogue Python thread — it is **neonize's Go runtime**: its cgo worker threads (loaded once as a shared `.so` via `ctypes.CDLL`) survive `client.disconnect()` and keep PID 1 alive, and neonize exposes no symbol to stop the cgo scheduler (verified against neonize 0.3.14 — `stop()` only tears down one client's connection).
+
+**Fix:** at the END of `shutdown_whatsapp` (after the drain + bounded fallback), gated on `IN_DOCKER == "1"`, flush the root log handlers and `os._exit(0)`. The drain has already done the only shutdown-critical work (the validated session saves, committed durably to Postgres before the call returns); everything else (DB/redis sockets) is OS-reaped on exit, and there are no other `@app.on_event("shutdown")` hooks or `atexit` handlers. This is the standard escape hatch for a cgo library that holds the process. Reviewed + approved by Luna (Codex-5.5) and the superpowers code-reviewer.
+
+**Operational caveat (Luna):** because a *failed* drain also ends in `_exit(0)`, restart verification + alerting must key off the **drain logs**, not the container exit code. The process may exit before uvicorn prints its normal final shutdown lines — the proof is `WhatsApp drain: starting → validated saves (busy=0) → WhatsApp drain: complete`, then the container exiting at ~12s.
 
 ## Acceptance criteria
 - `docker restart api` with a dashboard SSE connected → restart completes in ~10–15s (not ~180s).

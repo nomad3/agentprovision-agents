@@ -376,8 +376,11 @@ async def shutdown_whatsapp():
     corruption → forced QR re-pair.
 
     Budget — must fit the 180s container stop_grace_period. uvicorn's
-    --timeout-graceful-shutdown (10s, apps/api/Dockerfile) runs BEFORE this
-    lifespan hook, so the drain + its fallback share the remaining ~170s.
+    --timeout-graceful-shutdown (10s, delivered via the
+    UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN env in docker-compose/helm — the
+    Dockerfile CMD flag is INERT in this bind-mount deploy, which never
+    rebuilds the image) runs BEFORE this lifespan hook, so the drain + its
+    fallback share the remaining ~170s.
     Worst case = uvicorn(10) + drain(_DRAIN_CAP_S) + fallback(_FALLBACK_CAP_S)
     + teardown margin. We keep 10 + 140 + 8 = 158s < 180s with ~22s margin.
     (Luna review: the prior 10 + 165 + 10 = 185s overflowed and could
@@ -406,3 +409,23 @@ async def shutdown_whatsapp():
             await asyncio.wait_for(whatsapp_service.shutdown(), timeout=_FALLBACK_CAP_S)
         except Exception:
             pass
+
+    # Force a clean process exit. After lifespan shutdown completes, neonize's
+    # Go runtime keeps PID 1 alive — its cgo worker threads are NOT Python
+    # threads (threading.enumerate() shows only MainThread) and survive
+    # client.disconnect(), so uvicorn finishes but the process never exits;
+    # docker then SIGKILLs it at the stop grace, re-introducing the ~180s
+    # "restart hang" AFTER the validated saves (verified live 2026-06-02:
+    # drain completed in ~11s, then the process hung ~165s to SIGKILL). The
+    # drain above already did the only shutdown-critical work (validated
+    # session saves), so exiting now is safe and gives a ~12s restart.
+    # Gated to the container (IN_DOCKER) so test/local imports that never run
+    # under uvicorn are unaffected. flush first since _exit skips buffers.
+    if _os.environ.get("IN_DOCKER") == "1":
+        _log.info("WhatsApp drain done — forcing clean process exit (neonize Go runtime blocks normal termination)")
+        for _h in logging.getLogger().handlers:
+            try:
+                _h.flush()
+            except Exception:
+                pass
+        _os._exit(0)
