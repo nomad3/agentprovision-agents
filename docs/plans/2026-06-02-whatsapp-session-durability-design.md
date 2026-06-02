@@ -1,7 +1,7 @@
 # WhatsApp session durability — never force a QR re-pair from server-side corruption
 
-**Date:** 2026-06-02 · **Status:** Design (for Codex-5.5 + Luna review before implementing)
-**Files:** `apps/api/app/services/whatsapp_service.py`, `apps/api/app/main.py` (lifespan), `docker-compose.yml` + `helm` (grace), neonize session storage.
+**Date:** 2026-06-02 · **Status:** Design v2 (Codex-5.5 review incorporated — see §7)
+**Files:** `apps/api/app/services/whatsapp_service.py`, `apps/api/app/main.py` (lifespan), `apps/api/app/models/channel_account.py` (+ new `whatsapp_session_backups` table / migration), `docker-compose.yml` + `helm` (grace), neonize session storage.
 **Related memories:** whatsapp_silent_disconnect_recovery, whatsapp_auto_restore_handler, whatsapp_pairing_qr_regen_race.
 
 ## The problem (recurring, operator-confirmed)
@@ -12,46 +12,102 @@ WhatsApp on AgentProvision has a long tail of reliability pain, all converging o
 - **The api hangs ~180s on restart** (`stop_grace_period: 180s` + WhatsApp/SSE connections never close on SIGTERM → uvicorn waits → SIGKILL).
 
 ## Root cause (the hang and the corruption are the SAME bug)
-The neonize device session is an **on-disk SQLite file** (`_client_name(...)`), persisted to Postgres as a blob (`_save_session_to_db` → "Saved neonize session to DB"). Saves are serialized by a per-account lock and a `_socket_heartbeat` detects silent death. **But nothing protects against a process death mid-write.** Corruption vectors:
-1. **SIGKILL mid-SQLite-write** — today's `restart` → 180s hung grace → SIGKILL lands *during* a session write → corrupt SQLite → corrupt blob → QR.
-2. **The on-disk SQLite is the fragile artifact** — partial writes, `readonly database` lock states, concurrent access.
-3. **A corrupt SQLite blob saved to Postgres overwrites the good one** — restore then rehydrates corruption → QR.
+The neonize device session is an **on-disk SQLite file** (`_client_name(...)`), persisted to Postgres as a gzip blob in `channel_accounts.session_blob` (`_save_session_to_db`). Saves are serialized by a per-account lock and a `_socket_heartbeat` detects silent death. **But nothing protects against a process death mid-write, and nothing validates a blob before it overwrites the good one.** Verified corruption vectors in the current code:
 
-So the shutdown hang is not separate from the corruption — it *causes* it.
+1. **SIGKILL mid-SQLite-write** — today's `restart` → 180s hung grace → SIGKILL lands *during* a session write → corrupt SQLite → corrupt blob → QR.
+2. **The "corruption amplifier" in `_save_session_to_db`** (lines 542–562, verified): it attempts `PRAGMA wal_checkpoint(FULL)` with `timeout=2`; **on failure it logs at `debug` ("likely locked") and then unconditionally reads the file and overwrites `session_blob`.** No `integrity_check`, no validation, no backup. A locked / mid-write / inconsistent SQLite therefore **silently replaces the last known-good Postgres copy.**
+3. **The restore path** (`_restore_session_from_db`, lines 571–602, verified) decompresses and writes **whatever blob is stored** with zero validation → a corrupt blob round-trips straight back onto disk → QR.
+4. **A single `session_blob` field** (`channel_account.py`) means there is no second copy to fall back to once it's been overwritten.
+
+So the shutdown hang is not separate from the corruption — it *triggers* it, and the unvalidated save/restore path *amplifies and persists* it.
 
 ## Design — the proper fix
-Guarantee: **a re-scan is required ONLY when WhatsApp itself revoked the device** (user unlinks / 30-day inactivity / `LoggedOutEv`). Server crashes, restarts, and concurrency must always recover from a durable copy — never QR.
+Guarantee: **a re-scan is required ONLY when WhatsApp itself revoked the device** (user unlinks / 30-day inactivity / `LoggedOutEv`). Server crashes, restarts, and concurrency must always recover from a durable, *validated* copy — never QR.
 
-### 1. Clean shutdown (kills the #1 corruption vector AND the hang)
-A FastAPI `lifespan`/shutdown handler that on SIGTERM, before the process exits:
-- stops accepting new inbound work,
-- for each connected account: WAL-checkpoint the SQLite, **cleanly disconnect** the neonize client, then **persist the validated session to Postgres**,
-- closes SSE event streams so uvicorn drains immediately.
-Then drop `stop_grace_period` to a sane value (e.g. 30s) — the handler does the draining, so a `restart` comes back in seconds with a clean, flushed session. No 180s hang, no SIGKILL-mid-write.
+Two contracts make this testable, and both came directly out of the Codex-5.5 review:
+- **C1 — Drain barrier (do not trust silent disconnect).** `client.disconnect()` is **not** a proven flush barrier for whatsmeow's SQLite/WAL. We never assume it succeeded; we **validate after** it returns and treat any timeout/failure as "keep the known-good backup, do not overwrite."
+- **C2 — Never overwrite known-good.** A blob becomes the **current** session only if it passes validation. A failed checkpoint/validation **must preserve** the existing current + backups. This is the inverse of today's behaviour.
 
-### 2. Validated, backed-up Postgres persistence (recover-never-QR)
-- Before writing a blob as the **current** session: run `PRAGMA integrity_check` (and assert the device-identity keys are present). Only a passing blob becomes "current".
-- Keep **N rolling known-good backups** in Postgres (e.g. last 3).
-- On restore: current → if `integrity_check` fails, fall back to the newest known-good backup → … . QR is reached only if *every* copy is corrupt (effectively never) or the device was genuinely revoked.
-- A corrupt local SQLite can therefore **never overwrite a good Postgres session**.
+### 1. Clean shutdown with an explicit, bounded drain barrier (kills the #1 corruption vector AND the hang)
+A FastAPI `lifespan` shutdown handler that, on SIGTERM, **before** the process exits:
+1. **Mark the service `draining`** — reject *new* inbound WhatsApp work and cancel the reconnect/heartbeat tasks (so no concurrent writer races the shutdown save).
+2. **Bounded-wait for in-flight chat turns** (see §5) up to a `DRAIN_DEADLINE` that is strictly **less** than the container stop grace.
+3. For each connected account, **under the per-account `_session_lock`**:
+   - `await asyncio.wait_for(client.disconnect(), timeout=DISCONNECT_TIMEOUT)`,
+   - `PRAGMA wal_checkpoint(FULL)` (assert it returns success, not just "tried"),
+   - **validate** the SQLite (§2), and only on PASS persist it as the new current + push a backup;
+   - **on disconnect timeout OR checkpoint/validate failure → do NOT write.** Leave the last known-good current + backups untouched (C1/C2).
+4. Close SSE event streams so uvicorn drains immediately.
 
-### 3. SQLite hardening
-- `journal_mode=WAL`, `synchronous=FULL` (or NORMAL+explicit checkpoint), `busy_timeout` to kill the `readonly database` races, checkpoint-before-save. Single-writer guaranteed by the existing `_session_lock`; assert no second process opens the same file.
+Then set `stop_grace_period` to `DRAIN_DEADLINE + DISCONNECT_TIMEOUT + margin` (a *bounded* value, **not** a blind 30s — see §5), so a `restart` comes back in seconds with a clean, flushed, validated session. No 180s hang, no SIGKILL-mid-write.
 
-### 4. Keep + sharpen the heartbeat
-Keep `_socket_heartbeat` (silent-death detection → reconnect). On reconnect failure, **recover the session from the durable Postgres blob**, never QR.
+### 2. Mandatory validation before a blob becomes "current" (C2 — recover-never-QR)
+Replace the debug-log-and-continue in `_save_session_to_db` with a hard gate. Before a blob is written as **current**:
+- checkpoint must have **succeeded** (a failed/locked checkpoint means the on-disk file may be mid-write → abort the save);
+- `PRAGMA integrity_check` must return `ok`;
+- the **device-identity assertion**: the expected whatsmeow auth/device tables and key rows are present and non-empty (a structurally-valid-but-keyless DB is useless — Codex's note: "check expected auth/device tables/keys, not only `integrity_check`").
+Only a blob passing **all three** replaces current. Any failure → keep current, log **loudly** (warning/error, not debug), and leave recovery to the backups.
 
-### 5. Make "needs QR" explicit and rare
-Only surface a QR on a true `LoggedOutEv` / explicit operator unlink. A recoverable server-side corruption must *self-heal* from backup and log loudly, never prompt the user.
+### 3. Validated, backed-up Postgres persistence — dedicated table
+Backups live in **Postgres, not filesystem sidecars** (the FS is the fragile artifact we're trying to escape). New `whatsapp_session_backups` table:
 
-## Acceptance criteria
+| column | purpose |
+|---|---|
+| `tenant_id`, `account_id` | scope |
+| `created_at` | ordering / prune key |
+| `blob` (gzip) | the validated SQLite snapshot |
+| `sha256`, `size_bytes` | integrity + dedupe |
+| `validation_status` | `ok` (only `ok` rows are restore candidates) |
+| `source_event` | `shutdown` / `periodic` / `post_pair` / `pre_repair` |
+
+- `channel_accounts.session_blob` stays as the **current** pointer/cache.
+- Every validated save also inserts a backup row; **prune to the last N `ok` rows** (e.g. N=3).
+- **Restore order:** current (re-validate on read) → newest `ok` backup → next → … QR is reached only if *every* `ok` copy fails validation (effectively never) or the device was genuinely revoked.
+- A corrupt local SQLite can therefore **never overwrite a good Postgres session**, and a corrupt **current** can always fall back to a good backup.
+
+### 4. SQLite hardening
+- `journal_mode=WAL`, `synchronous=FULL` (or NORMAL + explicit checkpoint-before-save), `busy_timeout` to kill the `readonly database` races, checkpoint-before-save. Single-writer is guaranteed by the existing `_session_lock`; assert no second process/connection opens the same file during the shutdown save.
+
+### 5. Decouple chat turns from shutdown (why 30s alone is unsafe)
+The original 180s grace existed to let 30–90s chat turns finish. WhatsApp inbound runs `post_user_message` in `asyncio.to_thread`, and **that thread is not cancellable once started** (Codex). So a blind 30s grace can still kill an in-flight response. Two acceptable resolutions:
+- **Now (fold in):** the drain handler (§1.1–1.2) stops accepting new WhatsApp work and **bounded-waits** for active turns up to `DRAIN_DEADLINE`; the stop grace is sized to cover that deadline + the disconnect/save. Bounded, not blind.
+- **Later (follow-up, bigger change):** move WhatsApp turns onto durable Temporal/chat jobs so an api restart never interrupts a turn at all. Tracked separately.
+
+### 6. Keep + sharpen the heartbeat; QR only on true revoke
+- Keep `_socket_heartbeat` (silent-death detection → reconnect). On reconnect failure, **recover from the durable validated Postgres copy**, never QR.
+- **Recovery code must NEVER call the destructive path.** `start_pairing(force=True)` deletes `.db/-wal/-shm` and **nulls `session_blob`** (lines 1455–1484) — that path is reserved for **explicit operator unlink / re-pair only**. Add a guard/assert so no auto-recovery, heartbeat, or restore branch can reach `force=True` or the blob-clearing branch.
+- Surface a QR **only** on a true `LoggedOutEv` / explicit operator unlink. A recoverable server-side corruption must *self-heal* from backup and log loudly, never prompt the user.
+
+## Acceptance criteria (testable)
 - `docker compose restart api` → WhatsApp reconnects in **seconds**, no corruption, no QR.
-- `kill -9` the api mid-operation → on restart, session restores from the last known-good Postgres blob, **no QR**.
-- Inject a corrupt SQLite → recovery from backup, **no QR**; loud log, no user prompt.
-- A real device unlink → QR shown (the *only* legitimate QR path).
+- `kill -9` the api mid-operation → on restart, session restores from the last known-good Postgres copy, **no QR**.
+- **Inject a checkpoint failure / locked DB at save time** → the save is **aborted**, current + backups are **untouched** (C2), loud warning logged — *no* silently-corrupt overwrite.
+- **Inject a corrupt `current` blob** → restore falls back to a good backup, **no QR**; loud log, no user prompt.
+- **Disconnect that hangs past `DISCONNECT_TIMEOUT`** → save aborts, known-good preserved (C1), process still exits within grace.
+- An in-flight WhatsApp chat turn at SIGTERM is **allowed to finish** within `DRAIN_DEADLINE` (not truncated by a blind grace).
+- A real device unlink → QR shown (the *only* legitimate QR path). Auto-recovery never reaches `force=True`/blob-clearing.
 
-## Open questions for Codex-5.5 + Luna review
-1. Is the neonize SQLite safely closable on SIGTERM from the async handler (does whatsmeow expose a clean `Disconnect()`/close that flushes), or do we need to checkpoint the file directly?
-2. Rolling-backup count + where (a `whatsapp_session_backups` table vs versioned rows) — and pruning.
-3. Should WhatsApp eventually move out of the api process into a dedicated resilient sidecar (so api restarts never touch the socket at all)? Bigger change — track as a follow-up vs fold in now.
-4. The 30s grace vs in-flight chat-turn draining (the original 180s existed to let chat turns finish) — does the lifespan handler need to also drain in-flight chat requests, or are those already bounded elsewhere?
+## 7. Codex-5.5 review — verdict + resolutions (incorporated)
+**Verdict: Request Changes → addressed.** Highest-risk gap and all five findings are folded in above. Verified each claim against the source before integrating:
+
+1. *Highest-risk gap — disconnect-as-drain-barrier is unproven.* → **C1 / §1.3:** `wait_for(disconnect)` + validate-after; timeout ⇒ keep known-good.
+2. *Shutdown disconnects but never persists/validates/checkpoints under lock.* → **§1:** new lifespan handler does mark-draining → bounded-wait → `disconnect` → checkpoint → validate → save, all under `_session_lock`.
+3. *`_save_session_to_db` overwrites good state on checkpoint failure (corruption amplifier).* → **C2 / §2:** mandatory checkpoint-success + `integrity_check` + device-key assertion before a blob becomes current; failure preserves known-good and logs loudly (was `debug`).
+4. *Backups belong in Postgres, not FS sidecars; single `session_blob` is insufficient.* → **§3:** dedicated `whatsapp_session_backups` table (sha256/size/validation_status/source_event), prune to N `ok` rows, multi-tier restore.
+5. *30s grace risky — `post_user_message` in `asyncio.to_thread` is not cancellable.* → **§5:** drain-and-bounded-wait + grace sized to the drain deadline (not blind 30s); durable-turn migration tracked as follow-up.
+6. *`start_pairing(force=True)` can still force a QR.* → **§6:** destructive path reserved for explicit operator unlink only; guard added so recovery code can never reach it.
+
+**Pressure-test answers (Codex), now design contracts:**
+- Clean disconnect: *plausible, not proven* → wrapped in `wait_for`; validate/checkpoint after; timeout ⇒ "do not overwrite good backup."
+- Integrity check + rolling backup: *sound if validation gates writes and backups live in Postgres with metadata; check auth/device tables/keys, not just `integrity_check`.* → §2 + §3.
+- 30s grace: *not safe by itself; safe only with draining semantics or durable async chat execution.* → §5.
+- Still-QR set: *true `LoggedOutEv`, user unlink, 30-day device expiry, all backups missing/corrupt, or accidental `force=True`/blob-clearing.* → §6 closes the accidental-`force=True` path; the rest are the legitimate (rare) QR cases.
+
+## Implementation order (for the build PR)
+1. Migration + model: `whatsapp_session_backups` table.
+2. `_save_session_to_db` → validated-save (checkpoint-success + integrity_check + device-key assert + backup insert + prune). **Inverts the current overwrite behaviour.**
+3. `_restore_session_from_db` → re-validate current, multi-tier fallback to backups.
+4. Guard `force=True`/blob-clearing to operator-only.
+5. `main.py` lifespan shutdown handler (drain → disconnect → validated-save under lock) + SSE close.
+6. Tune `stop_grace_period` (+ helm mirror) to the bounded drain budget.
+7. Tests for each acceptance criterion (esp. the "checkpoint-fail must NOT overwrite" and "corrupt-current falls back to backup" cases).
