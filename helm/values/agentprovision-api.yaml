@@ -16,19 +16,22 @@ strategy:
     maxSurge: 1
     maxUnavailable: 0
 
-# Bumped from k8s default 30s so uvicorn can drain in-flight chat
-# requests on SIGTERM before docker SIGKILLs. Luna chat turns can
-# run 30-90s against Codex (longer when Gemini quota cooldown forces
-# a fallback chain); the prior default killed responses mid-stream on
-# every merge-triggered redeploy. See concern memory 25307912.
+# Ceiling for the whole SIGTERM->exit sequence. Mirrors docker-compose.yml
+# stop_grace_period per the no-drift rule. See concern memory 25307912.
 #
-# DO NOT drop toward 30s: the WhatsApp clean-shutdown drain
-# (shutdown_whatsapp -> whatsapp_service.drain_and_shutdown, capped at
-# 165s) bounded-waits for in-flight turns, then does a per-account
-# disconnect + VALIDATED session save. 180s is the ceiling that contains
-# that budget; a shorter grace would SIGKILL the api mid-SQLite-write and
-# re-introduce WhatsApp session corruption -> forced QR re-pair. See
-# docs/plans/2026-06-02-whatsapp-session-durability-design.md.
+# Budget that must fit inside this 180s (do NOT drop toward 30s):
+#   1. uvicorn --timeout-graceful-shutdown 10 (apps/api/Dockerfile) bounds
+#      the request-drain so never-ending SSE streams can't hang shutdown;
+#      this also cuts a blocking chat turn (/messages/stream et al.) that
+#      has run >10s — an accepted, retryable, deploy-time trade.
+#   2. then the WhatsApp drain (shutdown_whatsapp ->
+#      whatsapp_service.drain_and_shutdown, _DRAIN_CAP_S=140) + fallback
+#      shutdown() (_FALLBACK_CAP_S=8) does per-account disconnect +
+#      VALIDATED session save.
+# Worst case 10 + 140 + 8 = 158s < 180s (~22s margin); a shorter grace would
+# SIGKILL the api mid-SQLite-write and re-introduce WhatsApp session
+# corruption -> forced QR re-pair. See
+# docs/plans/2026-06-02-api-shutdown-sse-drain-fix.md.
 terminationGracePeriodSeconds: 180
 
 container:
