@@ -11,7 +11,7 @@
     |                Luna desktop (Tauri 2.0)  ·  alpha CLI         |
     |                WhatsApp  ·  Microsoft Teams                   |
     |  Substrate     Memory · Emotion · Teamwork · Trust            |
-    |  Capabilities  90+ MCP tools · 92+ skills · 26 workflows      |
+    |  Capabilities  90+ MCP tools · skill library · 26 workflows   |
     |                RL auto-scoring on every reply                 |
     +---------------------------------------------------------------+
 ```
@@ -99,7 +99,7 @@ Full reference: [`docs/cli/README.md`](docs/cli/README.md) · roadmap: [`docs/pl
 
 ### Channels
 
-WhatsApp (Neonize, with live typing presence) and Microsoft Teams (Graph + `TeamsMonitorWorkflow`) hit the **same agents** as web and terminal. Every channel is a viewport onto one orchestrator.
+WhatsApp (Neonize — durable validated sessions that survive restarts without a QR re-pair, plus live typing presence) and Microsoft Teams (Graph + `TeamsMonitorWorkflow`) hit the **same agents** as web and terminal. Every channel is a viewport onto one orchestrator.
 
 ---
 
@@ -172,4 +172,4 @@ FastAPI · React 18 · Tauri 2.0 (Rust) · Three.js + Framer Motion · PostgreSQ
 
 ---
 
-*Built with Claude Code · Codex · Gemini CLI · MCP · Temporal · Ollama · pgvector · Neonize · Cloudflare · FastAPI · React · Tauri*
+*Orchestrates Claude Code · Codex · Gemini CLI · GitHub Copilot CLI. Built on FastAPI · React · Tauri · MCP · Temporal · Ollama · pgvector · Neonize · Cloudflare.*
