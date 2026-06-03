@@ -11,7 +11,7 @@
     |                Luna desktop (Tauri 2.0)  ·  alpha CLI         |
     |                WhatsApp  ·  Microsoft Teams                   |
     |  Substrate     Memory · Emotion · Teamwork · Trust            |
-    |  Capabilities  90+ MCP tools · skill library · 26 workflows   |
+    |  Capabilities  90+ MCP tools · skill library · 35 workflows   |
     |                RL auto-scoring on every reply                 |
     +---------------------------------------------------------------+
 ```
@@ -44,7 +44,7 @@ AgentProvision is a <b>memory-first, multi-tenant</b> platform that orchestrates
 ### Platform capabilities
 
 - **Agent Lifecycle Management (ALM)** — ownership, status (draft→staging→production→deprecated), versioning + rollback, compliance audit log, hourly performance snapshots, Redis capability registry, RBAC, external-agent adapters (OpenAI Assistants, MCP, webhooks). ([`docs/plans/2026-04-18-agent-lifecycle-management-platform-plan.md`](docs/plans/2026-04-18-agent-lifecycle-management-platform-plan.md))
-- **Dynamic Workflows** — JSON-defined workflows interpreted at runtime by one executor; ReactFlow visual builder; **26 native templates**; step types incl. `cli_execute`, `human_approval`, `internal_api`. ([`docs/plans/2026-04-03-dynamic-workflows-visual-builder-design.md`](docs/plans/2026-04-03-dynamic-workflows-visual-builder-design.md))
+- **Dynamic Workflows** — JSON-defined workflows interpreted at runtime by one executor; ReactFlow visual builder; **35 native templates**; step types incl. `cli_execute`, `human_approval`, `internal_api`. ([`docs/plans/2026-04-03-dynamic-workflows-visual-builder-design.md`](docs/plans/2026-04-03-dynamic-workflows-visual-builder-design.md))
 - **Skills Marketplace v2** — file-based library (`_bundled/` + `_tenant/<uuid>/`), Claude-Code-format `SKILL.md`, four engines (python/shell/markdown/tool), pgvector auto-trigger, audited to `library_revisions`.
 - **90+ MCP tools** (FastMCP over SSE) — ads, analytics, calendar, connectors, data, devices, drive, email, github, jira, knowledge, reports, sales, shell, skills, webhooks, and more. Auth via `X-Internal-Key` + `X-Tenant-Id`.
 - **Knowledge graph + vector search** — lead scoring, entity extraction, semantic search, memory-activity audit log.
@@ -76,11 +76,11 @@ Left card toggles **Chats ↔ Files** (workspace tree, tenant + platform scopes)
 
 ### Luna — native desktop client
 
-A 4.9 MB Tauri 2.0 macOS menu-bar app (`apps/luna-client`): system tray, `Cmd+Shift+Space` command palette, SSE-streamed chat, emotion-reactive `LunaAvatar`, episodic memory panel, screenshot capture, trust-gated local actions, and a `Cmd+Shift+L` **Spatial HUD** (transparent Three.js knowledge nebula + MediaPipe hand tracking). PWA fallback; auto-updates via GitHub Releases.
+A native Tauri 2.0 macOS menu-bar app (`apps/luna-client`): system tray, `Cmd+Shift+Space` command palette, SSE-streamed chat, emotion-reactive `LunaAvatar`, episodic memory panel, screenshot capture, trust-gated local actions, and a `Cmd+Shift+L` **Spatial HUD** (transparent Three.js knowledge nebula + MediaPipe hand tracking). PWA fallback; auto-updates via GitHub Releases.
 
 ```bash
 cd apps/luna-client && npm install
-VITE_API_BASE_URL=http://localhost:8000 cargo tauri dev        # dev (hot reload)
+VITE_API_BASE_URL=http://localhost:8000 npm run tauri dev      # dev (hot reload)
 ```
 
 ### `alpha` — terminal client
@@ -125,7 +125,7 @@ Internet ─▶ Cloudflare Tunnel ─▶ agentprovision.com (web + API) · luna.
    Rust gRPC: embedding-service (:50051) · memory-core (:50052)
 ```
 
-**Flow:** Chat → Agent Router → Memory Recall (pre-loaded context) → Temporal → code-worker (CLI fleet) → MCP tools → response → async entity/commitment extraction. Every response auto-scored by a local Gemma 4 council; all scores logged as RL experiences. **Performance:** API ~80 ms, chat p50 ~5.5 s.
+**Flow:** Chat → Agent Router → Memory Recall (pre-loaded context) → Temporal → code-worker (CLI fleet) → MCP tools → response → async entity/commitment extraction. Every response auto-scored by a local Gemma 4 council; all scores logged as RL experiences. **Performance** (2026-04-10 baseline): API ~80 ms, chat p50 ~5.5 s.
 
 Full architecture, models, services, and dev commands: [`CLAUDE.md`](CLAUDE.md).
 
