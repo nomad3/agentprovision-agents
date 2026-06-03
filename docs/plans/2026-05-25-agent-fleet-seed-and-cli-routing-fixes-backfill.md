@@ -1,0 +1,35 @@
+# Agent Fleet Seeding + Multi-CLI Routing / Identity Correctness
+
+**Date:** 2026-05-25 · **Status:** Backfilled (shipped)
+**PRs:** #710, #712 (fleet seeding) · #716, #711, #717 (multi-CLI routing/identity correctness)
+**Files:** `apps/api/migrations/154_expand_luna_supervisor_tool_groups.sql`, `apps/api/migrations/155_seed_simon_work_fleet_agents.sql` (+ `.down.sql` + 5 `apps/api/app/agents/_bundled/*/skill.md`), `apps/mcp-server/src/mcp_auth.py`, `apps/code-worker/cli_executors/opencode.py`
+
+## Problem / context
+
+Two threads converged the night of 2026-05-24 from Luna's WhatsApp work for Simon (Innovus role starting Mon 5/26, plus standing Integral + Levi tracks):
+
+1. **Fleet gap.** Simon asked Luna to ship day-to-day DevOps subagents for the Innovus, Integral, and Levi tracks. The live MCP creation path couldn't persist them because chat→external-MCP dispatch was landing as `tier=anonymous` (scope-denied). The work had to be brought into git as migration + bundled skill files instead.
+2. **Routing/identity breakage.** The same `tier=anonymous` symptom blocked Luna's calendar write (she had no `calendar`/`email` tool_groups, AND the server-side auth reader was broken). Separately, when all cloud CLIs were quota-out and Luna fell back to OpenCode (the last-resort local Gemma 4 floor), two bugs surfaced: the executor returned the CLI's `--help` text as the answer, and — once fixed — replied "I'm OpenCode" instead of as Luna.
+
+## What shipped
+
+**#710 — expand Luna Supervisor tool_groups (migration 154).** `UPDATE agents` on Simon's tenant (`752626d9-…`) grows Luna's set from 6 → 18 groups: adds `calendar, email, drive, data, reports, bookings, monitor, jira, github, workflows, skills, ecommerce`; keeps `competitor, knowledge, meta, sales, web_research, higgsfield`. Deliberately **not** added: `shell` (operator-curated agents only, per PR #705 posture — Luna delegates execution to code-worker) and `knowledge_readonly` (superseded by `knowledge`, which is read+write for a supervisor). `review_required=FALSE` (operator-curated, not a default backfill). The `WHERE` clause matches the exact legacy shape so it's idempotent and won't clobber further edits; applied live via psql first, the migration is the git/helm replication per the drift rule.
+
+**#712 — seed Simon's work fleet (migration 155 + 5 bundled skills).** Five `production`-status agents on Simon's tenant only, each `INSERT … SELECT … FROM (VALUES …)` with `gen_random_uuid()`, `tool_groups=[github, knowledge_readonly, drive, meta]` (read-only posture), and `tool_groups_review_required=TRUE` (P0a default per migration 153 — operator clears after review): **Innovus AWS Platform**, **Innovus Terraform Infrastructure**, **Integral SRE Ops**, **Levi SRE Platform**, **Levi MDM PC9 Triage**. Each binds a bundled FileSkill at `apps/api/app/agents/_bundled/<slug>/skill.md` (`engine: agent`, `platform_affinity: claude_code`, `auto_trigger` keyword list). `NOT EXISTS` guard per VALUES row + `BEGIN/COMMIT`; `.down.sql` deletes the 5 rows and clears the `_migrations` row. Authored end-to-end by Luna in her container workspace; renumbered 154→**155** in git to avoid collision with the already-merged #710's `154_`.
+
+**#716 — mcp-auth header reader (one-attribute fix).** Root cause of *every* tenant's tool calls landing as `tier=anonymous`: `_get_header()` in `apps/mcp-server/src/mcp_auth.py` read `getattr(rc, 'headers', None)`, but FastMCP's `RequestContext` exposes the Starlette `Request` at `rc.request` — headers live at `rc.request.headers`. The fix adds that primary lookup (case-insensitive `.get`) ahead of three preserved legacy fallbacks (dict-shaped `request_context`, `.headers` on `rc`, direct attr). The agent_token JWT had been arriving all along (mint surface P0a/#692 + per-CLI MCP config emission were correct); only the reader was wrong. The `tenant=<UUID>` seen in `SHADOW tier-denial` logs came from an LLM-supplied tool argument, not auth context. 14 existing + 6 new tests pass; this superseded the planned subprocess env-propagation Phase 1.
+
+**#711 — opencode argv + JSON parser align to v1.15.x.** The Dockerfile bumped `opencode-ai` 1.0.107 → 1.15.5 on 2026-05-18 without updating `cli_executors/opencode.py`. argv went `["opencode","run","-p",prompt,"-y","--output-format","json"]` → `["opencode","run","--format","json","--",prompt]` — in 1.15.x `-p` is `--password` (so the message was silently set as basic-auth password while the real positional stayed empty → CLI emitted `--help` text and exited 0), `-y` no longer exists, `--output-format` → `--format`, and `--` guards against a `-`-prefixed user prompt parsing as a flag. The parser was rewritten from a single `json.loads` to a line-by-line event-stream walker concatenating `part.text` from `type=="text"` events. Review hardening folded in: `type=="error"` events surface as `success=False` (1.15.x returns exit 0 even on hard errors like model-not-found), and empty output is treated as failure per the GLM precedent. 6 tests.
+
+**#717 — opencode persona prepend (closes "I'm OpenCode" leak).** Both opencode dispatch paths (`execute_opencode_chat` server path on :8200 and `_execute_opencode_chat_cli` fallback) did `prompt = task_input.message` directly, skipping `task_input.instruction_md_content` (the agent persona) that codex + claude_code already prepend as `f"{persona}\n\n# User Request\n\n{msg}"`. Without it Gemma 4 had no identity to anchor on and replied as itself. Both paths now prepend persona, with an empty-persona pass-through matching codex. Review ordering fix: persona sits at the top (system-level identity) and the `[Context: tenant_id=…]` MCP block moves inside the User Request block. Same class as the cloud-side persona fixes #677/#678; opencode was missed because it only fires when cloud CLIs are quota-out.
+
+## Outcome
+
+Simon's tenant gained a 5-agent DevOps work fleet (read-only, review-gated) plus a Luna Supervisor with 18 integration tool_groups, both replicated into git/migrations. The platform-wide `tier=anonymous` regression closed with a single server-side attribute hop (#716), and the OpenCode last-resort fallback was restored end-to-end: it now executes the user's real prompt (#711) and answers in the agent's persona (#717) instead of emitting `--help` or "I'm OpenCode". All five merged to main on 2026-05-25.
+
+## Related
+
+- `docs/plans/2026-05-25-subprocess-mcp-agent-token-propagation.md` + `…-phase0-baseline.md` — investigation that surfaced #716 was a lower-layer reader bug (Phase 1 no longer needed); §6 Phases 2–4 (opencode static-config, gemini audit, enforce-strict ramp) remain
+- `docs/plans/2026-05-week-small-pr-changelog.md` — #711 changelog entry
+- PR #705 (tool_groups security split / shell posture), migration 153 (P0a `tool_groups_review_required` default), PRs #677/#678 (cloud-side persona-leak fixes), PR #692 (P0a agent_token mint surface)
+- Memories: `empathic_teammate_fleet.md`, `vet_os_initiative.md` (sibling fleet-seeding work), `feedback_address_all_review_findings.md` (review findings folded into the same PRs)
