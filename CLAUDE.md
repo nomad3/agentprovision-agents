@@ -315,7 +315,7 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 - **Visual Builder**: ReactFlow tree canvas at `/workflows/builder/:id` with drag-and-drop step palette, node inspector panel, test console (dry_run validation), integration awareness layer. 6 custom node types: Trigger, Step, Condition (diamond with then/else), ForEach, Parallel, Approval.
 - **Step types**: `mcp_tool`, `agent`, `condition`, `for_each`, `parallel`, `wait`, `transform`, `human_approval`, `webhook_trigger`, `workflow`, `continue_as_new` (infinite-duration), `cli_execute` (dispatches CodeTaskWorkflow on agentprovision-code queue), `internal_api` (calls internal API endpoints).
 - **Triggers**: `cron`, `interval`, `webhook`, `event`, `manual`, `agent`.
-- **26 native templates**: 5 original + 20 migrated from static workflows across 4 tiers (linear, branching, continue_as_new, infrastructure) + **Cardiac Report Generator** (HealthPets, 2026-04-19) that pulls a patient echo PDF from Gmail, extracts content, generates a DACVIM cardiac evaluation report, and saves it as a Google Doc.
+- **35 native templates** (`NATIVE_TEMPLATES` in `workflow_templates.py`): the original 26 — 5 base + 20 migrated from static workflows across 4 tiers (linear, branching, continue_as_new, infrastructure) + **Cardiac Report Generator** (HealthPets, 2026-04-19) that pulls a patient echo PDF from Gmail, extracts content, generates a DACVIM cardiac evaluation report, and saves it as a Google Doc — plus 9 added since.
 - **Luna full CRUD**: 8 MCP tools for workflow management via chat (create, list, update, delete, run, get_status, activate, install_template).
 - **Integration awareness**: `GET /integrations/status` returns connected integrations per tenant. `GET /integrations/tool-mapping` maps MCP tools to required integrations. Activation gate blocks workflows with disconnected integrations.
 - **RL wiring**: Every workflow run logs `workflow_execution` RL experience, every step logs `workflow_step` RL experience, creation events logged as `workflow_creation`.
@@ -491,7 +491,7 @@ Business logic layer (one service per model):
 - `local_inference.py`: Local Ollama-based inference for scoring, summarization, extraction, triage (zero cloud cost)
 - `dynamic_workflows.py`: Workflow definition validation (`validate_workflow_definition`) for dry_run test console. Checks step ID uniqueness, tool name validity, template variable references.
 - `integration_status.py`: `TOOL_INTEGRATION_MAP` (MCP tool → integration name), `get_connected_integrations()`, `check_workflow_integrations()` for activation gate.
-- `workflow_templates.py`: 26 native workflow templates (Daily Briefing, Lead Pipeline, Competitor Watch, Code Review, Weekly Report + 20 migrated static workflows + Cardiac Report Generator).
+- `workflow_templates.py`: 35 native workflow templates (Daily Briefing, Lead Pipeline, Competitor Watch, Code Review, Weekly Report + 20 migrated static workflows + Cardiac Report Generator + 9 added since).
 - `agent_registry.py`: Redis-backed capability discovery. `register_agent(agent_id, capabilities, status)`, `discover(capability, tenant_id)`.
 - `agent_audit.py`: Audit log write helper. `write_audit_log(action, actor, target_agent, before, after, reason)`.
 - `external_agent_adapter.py`: Protocol adapters for non-native agents — OpenAI Assistants API, generic webhook dispatch, MCP protocol placeholder.
