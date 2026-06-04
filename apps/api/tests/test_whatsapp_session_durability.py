@@ -336,8 +336,12 @@ class TestRecoveryNeverForces:
 class TestDrain:
     async def test_draining_gate_refuses_new_chat_turn(self, service):
         service._draining = True
-        # Returns None before touching the DB / agent pipeline.
-        result = await service._process_through_agent("tenant-abc", "sender", "hi")
+        # Returns None before touching the DB / agent pipeline. (The blocking
+        # _process_through_agent was replaced by the fire-and-forget _build_turn
+        # in the 2026-06-04 thread-pool wedge fix; the drain gate moved with it.)
+        result = await service._build_turn(
+            "tenant-abc", "default", "sender", object(), "hi", None, "tenant-abc:default",
+        )
         assert result is None
 
     def test_handle_inbound_has_draining_gate(self):
