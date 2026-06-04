@@ -1538,6 +1538,12 @@ def _run_agent_session_legacy(
 
     try:
         temporal_address = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
+        # Real, cancellable wait bound on the Temporal result. A chat turn
+        # must never hold the calling thread indefinitely — an unbounded wait
+        # here saturates the shared thread pool and wedges the whole tenant's
+        # chat (incl. WhatsApp Luna). This is the chat-wait SLA, NOT the
+        # 180min execution_timeout. (Luna review 2026-06-04, C1.)
+        dispatch_timeout = float(os.environ.get("CHAT_CLI_DISPATCH_TIMEOUT", "600"))
 
         async def _run_workflow():
             client = await TemporalClient.connect(temporal_address)
@@ -1600,13 +1606,38 @@ def _run_agent_session_legacy(
                 attempt=attempt,
             )
 
-            return await client.execute_workflow(
+            # start + bounded wait (NOT execute_workflow) so the wait is a
+            # real asyncio.wait_for the coroutine self-terminates on, and so
+            # we hold a handle to cancel the server-side run on timeout
+            # instead of orphaning it. (Luna review 2026-06-04, C1.)
+            handle = await client.start_workflow(
                 "ChatCliWorkflow",
                 task_input,
                 id=f"chat-cli-{uuid.uuid4()}",
                 task_queue="agentprovision-code",
                 execution_timeout=timedelta(minutes=180),
             )
+            try:
+                return await asyncio.wait_for(
+                    handle.result(), timeout=dispatch_timeout
+                )
+            except asyncio.TimeoutError:
+                _run_id = getattr(handle, "result_run_id", None) or getattr(
+                    handle, "first_execution_run_id", "?"
+                )
+                logger.warning(
+                    "ChatCliWorkflow wait exceeded %ss — abandoning (workflow_id=%s "
+                    "run_id=%s); requesting server-side cancel",
+                    dispatch_timeout, handle.id, _run_id,
+                )
+                try:
+                    await handle.cancel()
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "ChatCliWorkflow cancel-after-timeout failed (workflow_id=%s)",
+                        handle.id,
+                    )
+                raise
 
         try:
             running_loop = asyncio.get_running_loop()
@@ -1618,8 +1649,16 @@ def _run_agent_session_legacy(
             # Run the workflow in a separate thread with its own loop.
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                # Increased timeout to 600s (10 min) to allow for complex tasks like PDF ingestion
-                result = pool.submit(lambda: asyncio.run(_run_workflow())).result(timeout=600)
+                # The REAL bound is the asyncio.wait_for inside _run_workflow.
+                # This outer .result() timeout sits a margin ABOVE it so the
+                # inner wait always fires first and the worker thread has
+                # already returned (asyncio.run completed) before we stop
+                # waiting — so the `with` exit's shutdown(wait=True) never
+                # joins a still-running thread and can't re-wedge.
+                # (Luna review 2026-06-04, C1.)
+                result = pool.submit(
+                    lambda: asyncio.run(_run_workflow())
+                ).result(timeout=dispatch_timeout + 30)
         else:
             # `asyncio.run` (vs manual new_event_loop/close) drains pending
             # tasks before closing — manual close was leaving httpx aclose()
