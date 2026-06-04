@@ -196,17 +196,14 @@ def list_reflections(
     """Return reflections in the tenant, optionally filtered.
 
     Filters:
-      - day:    exact match on YYYY-MM-DD; SQLite-compat is handled by
-                a post-filter on the deserialized object (the tags
-                JSON column's contains() doesn't work under SQLite).
-      - kind:   one of REFLECTION_KINDS; same SQLite-compat story.
+      - day:    exact match on YYYY-MM-DD, applied after deserialization.
+      - kind:   one of REFLECTION_KINDS, applied after deserialization.
       - agent_id: real FK column, pushed down to SQL.
 
-    On Postgres both day and kind push down via the tags @> operator;
-    on SQLite the queries return all reflection rows and the
-    post-filter loop drops mismatches. The post-filter is the safety
-    net — even on Postgres, malformed tag arrays would otherwise leak
-    rows that don't match.
+    The tag column is generic JSON, not JSONB/ARRAY, so SQLAlchemy's
+    tags.contains(...) does not compile to valid containment SQL on
+    Postgres. Reflections are low-volume tenant rows, so day/kind stay
+    as Python post-filters for consistent Postgres + SQLite behavior.
 
     UUID filters cast to str so the ORM's compiled bind processor
     works under both Postgres (native uuid column) and SQLite
@@ -227,20 +224,6 @@ def list_reflections(
         if agent_id_param is not None:
             q = q.filter(AgentMemory.agent_id == agent_id_param)
 
-        try:
-            dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
-        except AttributeError:
-            dialect_name = ""
-        is_postgres = dialect_name.startswith("postgres")
-
-        if is_postgres:
-            # Push tag filters down on Postgres; SQLite's JSON contains
-            # silently returns false so we keep the post-filter.
-            if kind is not None:
-                q = q.filter(AgentMemory.tags.contains([kind]))
-            if day is not None:
-                q = q.filter(AgentMemory.tags.contains([f"day:{day}"]))
-
         rows = q.order_by(AgentMemory.created_at.desc()).all()
     except SQLAlchemyError as exc:
         logger.warning(
@@ -254,8 +237,6 @@ def list_reflections(
         r = deserialize_reflection(row.content)
         if r is None:
             continue
-        # Post-filter safety net (covers SQLite + any malformed tag
-        # arrays that slipped past Postgres' pushdown).
         if kind is not None and r.kind != kind:
             continue
         if day is not None and r.day != day:
@@ -274,8 +255,9 @@ def list_reflection_steps(
 ) -> List[ReflectionStep]:
     """Return pre-action reflection traces for a tenant.
 
-    Mirrors list_reflections: Postgres gets tag pushdown, SQLite test
-    shims rely on post-filtering. Tenant_id is always caller-derived.
+    Mirrors list_reflections: tenant/agent filters are pushed down,
+    while tag-derived filters stay as Python post-filters because the
+    tags column is generic JSON. Tenant_id is always caller-derived.
     """
     tenant_id_param = str(tenant_id)
     agent_id_param = str(agent_id) if agent_id is not None else None
@@ -286,18 +268,6 @@ def list_reflection_steps(
         )
         if agent_id_param is not None:
             q = q.filter(AgentMemory.agent_id == agent_id_param)
-
-        try:
-            dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
-        except AttributeError:
-            dialect_name = ""
-        is_postgres = dialect_name.startswith("postgres")
-
-        if is_postgres:
-            if action_kind is not None:
-                q = q.filter(AgentMemory.tags.contains([action_kind]))
-            if session_id is not None:
-                q = q.filter(AgentMemory.tags.contains([f"session:{session_id}"]))
 
         rows = q.order_by(AgentMemory.created_at.desc()).all()
     except SQLAlchemyError as exc:
