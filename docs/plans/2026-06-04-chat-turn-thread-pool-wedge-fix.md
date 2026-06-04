@@ -28,9 +28,9 @@ Three **independent** changes — each insufficient alone, ship all three:
 
 | Part | What | Why |
 |---|---|---|
-| **A. Bound the wait** | `cli_session_manager.py:1628` — wrap the bare `asyncio.run(_run_workflow())` in the same bounded `ThreadPoolExecutor(max_workers=1).result(timeout=…)` pattern as the loop branch. | **Liveness** — guarantees the worker thread is always released; a hung dispatch becomes `fail_job`, never an infinite hang. |
-| **B. Dedicated WhatsApp executor** | Give the WhatsApp path its own bounded `ThreadPoolExecutor(max_workers=N)` instead of the shared default. | **Blast-radius containment** — a WhatsApp backlog can never starve the default pool the rest of the api depends on, and bounded `max_workers` gives natural backpressure. |
-| **C. Fire-and-forget delivery** | WhatsApp inbound enqueues a `chat_job` and returns immediately; a watcher coroutine polls the job to terminal state and sends the reply, keeping "typing…" alive until then. | **Architectural fix** — no API thread is held across the multi-minute CLI run at all. |
+| **A. Bound the wait (correctly)** | `cli_session_manager.py` — bound the **Temporal await itself** with `asyncio.wait_for(execute_workflow(...), timeout=…)` inside `_run_workflow`, so the coroutine completes (raises `TimeoutError`) and both branches (`asyncio.run` and the `submit().result()`) return promptly with **no thread left to join**. Do **not** rely on `with ThreadPoolExecutor(...).result(timeout=…)` (see Review 1, C1). | **Liveness** — a timeout actually releases the caller thread and fails the chat_job; never an infinite hang or a `shutdown(wait=True)` re-wedge. |
+| **B. Dedicated WhatsApp executor + bounded admission** | Give the WhatsApp path its own `ThreadPoolExecutor(max_workers=N)` **and** an `asyncio.Semaphore(QUEUE_CAP)` gating submission (the executor's internal submit queue is unbounded). Over-cap → immediate "I'm a bit overloaded, try again" fallback, not unbounded queueing. | **Blast-radius containment + backpressure** — a WhatsApp burst can never starve the default pool *or* pile up watchers that time out before starting. |
+| **C. Fire-and-forget delivery, ordered per sender** | WhatsApp inbound enqueues a `chat_job` and returns immediately; a watcher polls the job to terminal state and sends the reply, keeping "typing…" alive. **Full job execution is serialized per `session_key`** (a per-sender single-consumer queue), so turn N completes before N+1 starts — replies and history can't invert. | **Architectural fix** — no API thread is held across the multi-minute CLI run, and a linear DM thread stays linear. |
 
 ## Completion mechanism (chosen)
 
@@ -39,16 +39,17 @@ Hook the **chat_jobs terminal state** (in-process), not SSE/HTTP, not the v2 ses
 - Watcher polls `chat_jobs_service.get_job(...)` (`chat_jobs.py:115-154`) ~1s until terminal; on `done` reads `read_events(from_seq=0)` (`chat_jobs.py:355-399`) and takes the `chunk` `payload['text']` as the reply body (`result_message_id` → `chat_messages.content` as fallback).
 - Terminal status (`done`/`failed`/`cancelled`) is the single source of truth for "done, and did it succeed" — which the SSE/session_event paths don't cleanly carry.
 
-## Implementation steps
+## Implementation steps (revised after Review 1)
 
-1. **(A)** `cli_session_manager.py:1623-1628` — bound the no-loop branch with `.result(timeout=CHAT_CLI_DISPATCH_TIMEOUT)` (env, default 600s to match the loop branch). On timeout → existing rollback/`(None, metadata)` failure path → `fail_job`.
-2. **Extract** `chat_jobs.run_job_blocking(job_uuid, *, session_id, tenant_id, user_id, content, media_parts=None, sender_phone=None)` containing the exact body of `chat.py:550-678`, with `media_parts`/`sender_phone` threaded into `post_user_message` (WhatsApp media/voice).
-3. **Point the web endpoint at it** — `chat.py` inline `_run_job` body → call `run_job_blocking(...)`, keep the `threading.Thread(daemon=True)` dispatch. Proves the extraction is behavior-preserving for web.
-4. **(B)** `whatsapp_service.py.__init__` — `self._chat_executor = ThreadPoolExecutor(max_workers=N, thread_name_prefix='wa-chat')`; shut down in `drain_and_shutdown`/`shutdown`.
-5. **(C)** `_process_through_agent` — keep db/user/agent/session resolution (`1601-1657`); replace the `_run_chat`+`to_thread` block (`1674-1703`) with: snapshot primitives → `create_job(...)` → submit `run_job_blocking` to `self._chat_executor` → return `job_uuid`.
-6. **(C)** Add `async def _await_job_and_reply(...)` watcher: poll `get_job` to terminal/`WHATSAPP_JOB_WATCH_TIMEOUT` (~600s backstop); on `done` read chunk text → existing send block (`whatsapp_service.py:1487-1517`); on `failed`/`cancelled`/timeout/empty → fallback message; `finally` stop typing + decrement inflight.
-7. **(C)** Rewrite inbound (`whatsapp_service.py:1477-1519`): `job_uuid = await _process_through_agent(...)`; spawn `asyncio.create_task(_await_job_and_reply(...))`; **move the typing-stop out of the inbound finally into the watcher finally** so "typing…" survives the whole async run.
-8. **Drain correctness** — move `_inflight_turns += 1 / -= 1` to bracket the **watcher** lifetime (not the old `to_thread`), so `drain_and_shutdown`'s bounded wait (`2206`) still sees mid-CLI turns.
+1. **(A) — real timeout.** In `cli_session_manager.py`, wrap the Temporal wait inside `_run_workflow` with `await asyncio.wait_for(client.execute_workflow(...), timeout=CHAT_CLI_DISPATCH_TIMEOUT)` (env, default 600s — the chat-wait SLA, **never** the 180min `execution_timeout`). Because the coroutine now self-terminates on timeout, **both** call sites resolve cleanly: the no-loop branch (`asyncio.run(_run_workflow())`, line 1628) returns on `TimeoutError`; the loop branch's `submit(...).result()` (1616-1622) gets a result/exception so its worker thread finishes — no `shutdown(wait=True)` join on a hung thread. `TimeoutError` → existing rollback/`(None, metadata)` failure path → `fail_job`. (The orphaned Temporal workflow keeps running server-side; acceptable — no consumer, and it self-expires. Optionally fire `handle.cancel()` on timeout.)
+2. **Extract** `chat_jobs.run_job_blocking(job_uuid, *, session_id, tenant_id, user_id, content, media_parts=None, sender_phone=None)` from `chat.py:550-678`. **Ownership guard:** only run the body if `start_job(...)` transitions `queued→running` (it owns the job); otherwise return. Thread `media_parts`/`sender_phone` into `post_user_message`. **Concatenate all `chunk` events in seq order** for the reply text (don't assume a single chunk).
+3. **Point the web endpoint at it** — `chat.py` inline `_run_job` body → `run_job_blocking(...)`, keep the `threading.Thread(daemon=True)` dispatch (web stays unbounded-daemon this PR; the helper makes a later migration trivial). Proves the extraction is behavior-preserving for web.
+4. **(B)** `whatsapp_service.py.__init__` — `self._chat_executor = ThreadPoolExecutor(max_workers=N=4, thread_name_prefix='wa-chat')` **+** `self._chat_admit = asyncio.Semaphore(QUEUE_CAP)` (bounded admission). Shut the executor down in `drain_and_shutdown`/`shutdown`.
+5. **(C) ordered per-sender dispatch.** `_process_through_agent` keeps db/user/agent/session resolution (`1601-1657`); replace the `_run_chat`+`to_thread` block (`1674-1703`) with: snapshot primitives → `create_job(...)` → return `job_uuid`. Submission goes through a **per-`session_key` single-consumer task** (an `asyncio.Queue` per `whatsapp:{sender_id}`) that runs jobs strictly sequentially: acquire `_chat_admit` (non-blocking; over-cap → terminalize job + overloaded-fallback), submit `run_job_blocking` to `self._chat_executor`, await its completion, send the reply, then take the next queued turn. This serializes **execution and send** per sender.
+6. **(C) watcher / completion.** The per-sender consumer awaits the job to terminal state (poll `get_job` ~1s up to `WHATSAPP_JOB_WATCH_TIMEOUT`≈600s). On `done` → concatenated chunk text → existing send block (`whatsapp_service.py:1487-1517`), **re-reading `self._clients.get(key)` at send time**; on `failed`/`cancelled`/timeout/empty → fallback message; `finally` stop typing + release `_chat_admit` + decrement inflight.
+7. **(C) inbound rewrite + typing ownership.** `whatsapp_service.py:1477-1519`: enqueue onto the per-sender consumer; **move typing-stop into the consumer's per-turn finally** so "typing…" survives the async run. **If enqueue/`_process_through_agent` fails *before* a consumer turn starts, the inbound handler itself stops typing + sends a fallback** (covers the pre-watcher failure path).
+8. **Submit-failure terminalization.** Wrap `executor.submit(...)` in try/except (e.g. `RuntimeError` during shutdown) → immediate `fail_job(job_uuid)` → consumer sends fallback. Never leave a `queued` job to rot until the watch timeout.
+9. **Drain correctness + mid-turn policy.** Track per-sender consumer + in-flight tasks in a set; bracket `_inflight_turns` around the **consumer turn** lifetime. On `drain_and_shutdown` deadline (`2206`): cancel pending consumer tasks and send each affected sender a best-effort "I'm restarting — please resend that in a moment" before disconnect (or document the deliberate no-send).
 
 ## Failure / ordering / edge handling
 
@@ -58,15 +59,28 @@ Hook the **chat_jobs terminal state** (in-process), not SSE/HTTP, not the v2 ses
 - **Audio:** transcription stays on the inbound path (`whatsapp_service.py:1406-1446`, already async) — the job `content` is the transcript; enqueue happens after.
 - **Ordering:** WhatsApp DMs are one linear thread per sender. Recommend serializing replies per `session_key` (`whatsapp:{sender_id}`) with an `asyncio.Lock` map so turn N+1's reply waits for turn N. (The per-tenant CLI slot already serializes the CLI runs themselves.)
 
-## Open questions for review (Luna lead + Codex-5.5)
+## Review 1 — Luna (lead, Codex-5.5), 2026-06-04 — BLOCK → addressed
 
-1. Extract `_run_job` shared vs WhatsApp copy — confirm `post_user_message` accepts `media_parts`+`sender_phone` on the web path without regression.
-2. Web daemon-thread (unbounded) vs WhatsApp bounded executor — keep web as-is or migrate web onto a bounded pool too?
-3. Ordering: per-`session_key` serialization required, or accept out-of-order short replies?
-4. Inflight accounting: is `drain_and_shutdown`'s 90s bounded wait long enough for a mid-CLI turn, or should draining mid-watch send a "service restarting" notice first?
-5. Part A timeout value: 600s vs the 180min `execution_timeout` — confirm long PDF-ingestion turns aren't truncated.
-6. `read_events` 2000-row / 24h purge ceiling — confirm the watcher always reads the chunk well within the window (it does; completes in minutes).
-7. `N` for the dedicated executor `max_workers` — sized to expected concurrent WhatsApp turns (start 4?).
+**Verdict:** block as written. Critical bug + 6 required changes, all now folded into the Approach + Implementation steps above.
+
+- **C1 (critical):** the `with ThreadPoolExecutor(...).result(timeout=600)` pattern doesn't bound the wait — on timeout the context manager's `shutdown(wait=True)` joins the still-running `asyncio.run()` thread and re-wedges. The existing loop-branch has the same latent bug. → **Step 1 rewritten** to bound the Temporal await with `asyncio.wait_for` so the coroutine self-terminates and no thread is left to join.
+- **R2:** dedicated executor needs **bounded admission** (the submit queue is unbounded) → **Step 4** adds `asyncio.Semaphore(QUEUE_CAP)` + overloaded-fallback.
+- **R3:** ordering is **required**, covering execution + send, per `session_key` → **Step 5** uses a per-sender single-consumer queue.
+- **R4:** `run_job_blocking` must check `start_job` **ownership** and **concatenate all chunks** → **Step 2**.
+- **R5:** **submit failure must terminalize** the job immediately → **Step 8**.
+- **R6:** **drain mid-turn policy** — track tasks, cancel + best-effort notice on deadline → **Step 9**.
+- **R7:** **typing ownership** on the pre-watcher failure path → **Step 7**.
+
+**Open questions resolved by Luna:**
+1. Extract `_run_job` shared — **yes**; `post_user_message` already accepts `sender_phone`+`media_parts`.
+2. Web bounded pool — **not mandatory** this PR; keep web daemon-thread, make the helper migration-ready.
+3. Ordering — **required** per `session_key`, execution + send.
+4. Inflight/drain — watcher-bracketed accounting correct; **add deadline fallback/cancel**.
+5. Timeout — **never 180min on the API wait**; 600s only as the env-configured chat SLA, and it must be a **real** (cancellable) timeout.
+6. `read_events` ceiling — fine for one chunk; **concatenate** to future-proof.
+7. Executor `N` — **start 4**, paired with the bounded semaphore + metrics.
+
+**Status:** revised plan pending Luna re-confirm (→ approve-with-changes), then implement.
 
 ## Test plan
 
