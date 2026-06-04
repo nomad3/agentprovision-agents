@@ -25,14 +25,25 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.agent_memory import AgentMemory
-from app.schemas.reflection import NightlyReflection
+from app.schemas.reflection import NightlyReflection, ReflectionStep
 from app.services.reflection import (
     REFLECTION_MEMORY_TYPE,
+    REFLECTION_STEP_MEMORY_TYPE,
     deserialize_reflection,
+    deserialize_reflection_step,
     serialize_reflection,
+    serialize_reflection_step,
 )
 
 logger = logging.getLogger(__name__)
+
+
+_RISK_IMPORTANCE = {
+    "low": 0.35,
+    "medium": 0.55,
+    "high": 0.8,
+    "irreversible": 1.0,
+}
 
 
 # ── Write path ────────────────────────────────────────────────────────
@@ -103,6 +114,68 @@ def write_reflection(
         logger.warning(
             "reflection_io.write_reflection: commit failed, rolling back. "
             "err=%s",
+            exc,
+        )
+        db.rollback()
+        return None
+
+
+def write_reflection_step(
+    db: Session,
+    *,
+    step: ReflectionStep,
+    current_tenant_id: Optional[uuid.UUID] = None,
+) -> Optional[uuid.UUID]:
+    """Persist a ReflectionStep as an agent_memory trace row.
+
+    PR 1 is trace-only: writing a row never blocks the action by
+    itself. The hard boundary here is tenant isolation. If a caller
+    passes the JWT-derived tenant and the step carries a different
+    tenant_id, the write is refused.
+    """
+    try:
+        tenant_id = uuid.UUID(step.tenant_id)
+        agent_id = uuid.UUID(step.agent_id)
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "reflection_io.write_reflection_step: bad tenant/agent UUID — %s",
+            exc,
+        )
+        return None
+
+    if current_tenant_id is not None and tenant_id != current_tenant_id:
+        logger.warning(
+            "reflection_io.write_reflection_step: tenant boundary "
+            "violation — step.tenant_id=%s != current_tenant_id=%s; "
+            "refusing write",
+            tenant_id, current_tenant_id,
+        )
+        return None
+
+    row = AgentMemory(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        memory_type=REFLECTION_STEP_MEMORY_TYPE,
+        content=serialize_reflection_step(step),
+        importance=_RISK_IMPORTANCE.get(step.risk_level, 0.5),
+        confidence=1.0,
+        source="trusted_teammate_reflection_step",
+        tags=[
+            "reflection_step",
+            step.action_kind,
+            f"session:{step.session_id}",
+            f"risk:{step.risk_level}",
+            f"affordance:{step.recommended_affordance}",
+        ],
+    )
+    try:
+        db.add(row)
+        db.commit()
+        return row.id
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "reflection_io.write_reflection_step: commit failed, "
+            "rolling back. err=%s",
             exc,
         )
         db.rollback()
@@ -191,6 +264,63 @@ def list_reflections(
     return out
 
 
+def list_reflection_steps(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: Optional[str] = None,
+    action_kind: Optional[str] = None,
+    agent_id: Optional[uuid.UUID] = None,
+) -> List[ReflectionStep]:
+    """Return pre-action reflection traces for a tenant.
+
+    Mirrors list_reflections: Postgres gets tag pushdown, SQLite test
+    shims rely on post-filtering. Tenant_id is always caller-derived.
+    """
+    tenant_id_param = str(tenant_id)
+    agent_id_param = str(agent_id) if agent_id is not None else None
+    try:
+        q = db.query(AgentMemory).filter(
+            AgentMemory.tenant_id == tenant_id_param,
+            AgentMemory.memory_type == REFLECTION_STEP_MEMORY_TYPE,
+        )
+        if agent_id_param is not None:
+            q = q.filter(AgentMemory.agent_id == agent_id_param)
+
+        try:
+            dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
+        except AttributeError:
+            dialect_name = ""
+        is_postgres = dialect_name.startswith("postgres")
+
+        if is_postgres:
+            if action_kind is not None:
+                q = q.filter(AgentMemory.tags.contains([action_kind]))
+            if session_id is not None:
+                q = q.filter(AgentMemory.tags.contains([f"session:{session_id}"]))
+
+        rows = q.order_by(AgentMemory.created_at.desc()).all()
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "reflection_io.list_reflection_steps: query failed tenant=%s "
+            "err=%s",
+            tenant_id, exc,
+        )
+        return []
+
+    out: List[ReflectionStep] = []
+    for row in rows:
+        step = deserialize_reflection_step(row.content)
+        if step is None:
+            continue
+        if action_kind is not None and step.action_kind != action_kind:
+            continue
+        if session_id is not None and step.session_id != session_id:
+            continue
+        out.append(step)
+    return out
+
+
 def get_reflection_count(
     db: Session,
     *,
@@ -209,6 +339,8 @@ def get_reflection_count(
 
 __all__ = [
     "write_reflection",
+    "write_reflection_step",
     "list_reflections",
+    "list_reflection_steps",
     "get_reflection_count",
 ]
