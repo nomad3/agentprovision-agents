@@ -1546,7 +1546,16 @@ def _run_agent_session_legacy(
         dispatch_timeout = float(os.environ.get("CHAT_CLI_DISPATCH_TIMEOUT", "600"))
 
         async def _run_workflow():
-            client = await TemporalClient.connect(temporal_address)
+            # Bound connect + start too (not just the result wait). If Temporal
+            # is unreachable — exactly the condition that produces the hang —
+            # an unbounded connect/start would keep _run_workflow from
+            # returning and re-pin the worker thread via the loop branch's
+            # `with` exit shutdown(wait=True). 30s each; the outer
+            # .result() margin (+90s) covers connect(30)+start(30)+cancel(10).
+            # (Luna code-review IMPORTANT, 2026-06-04.)
+            client = await asyncio.wait_for(
+                TemporalClient.connect(temporal_address), timeout=30
+            )
 
             @_dc
             class _ChatCliInput:
@@ -1610,12 +1619,15 @@ def _run_agent_session_legacy(
             # real asyncio.wait_for the coroutine self-terminates on, and so
             # we hold a handle to cancel the server-side run on timeout
             # instead of orphaning it. (Luna review 2026-06-04, C1.)
-            handle = await client.start_workflow(
-                "ChatCliWorkflow",
-                task_input,
-                id=f"chat-cli-{uuid.uuid4()}",
-                task_queue="agentprovision-code",
-                execution_timeout=timedelta(minutes=180),
+            handle = await asyncio.wait_for(
+                client.start_workflow(
+                    "ChatCliWorkflow",
+                    task_input,
+                    id=f"chat-cli-{uuid.uuid4()}",
+                    task_queue="agentprovision-code",
+                    execution_timeout=timedelta(minutes=180),
+                ),
+                timeout=30,
             )
             try:
                 return await asyncio.wait_for(
@@ -1657,16 +1669,17 @@ def _run_agent_session_legacy(
             # Run the workflow in a separate thread with its own loop.
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                # The REAL bound is the asyncio.wait_for inside _run_workflow.
-                # This outer .result() timeout sits a margin ABOVE it so the
-                # inner wait always fires first and the worker thread has
-                # already returned (asyncio.run completed) before we stop
-                # waiting — so the `with` exit's shutdown(wait=True) never
+                # The REAL bound is the asyncio.wait_for chain inside
+                # _run_workflow (connect 30s + start 30s + result
+                # dispatch_timeout + cancel 10s). This outer .result() timeout
+                # sits a margin ABOVE that sum so the inner waits always fire
+                # first and the worker thread has already returned before we
+                # stop waiting — so the `with` exit's shutdown(wait=True) never
                 # joins a still-running thread and can't re-wedge.
-                # (Luna review 2026-06-04, C1.)
+                # (Luna review 2026-06-04, C1 + connect/start IMPORTANT.)
                 result = pool.submit(
                     lambda: asyncio.run(_run_workflow())
-                ).result(timeout=dispatch_timeout + 30)
+                ).result(timeout=dispatch_timeout + 90)
         else:
             # `asyncio.run` (vs manual new_event_loop/close) drains pending
             # tasks before closing — manual close was leaving httpx aclose()
