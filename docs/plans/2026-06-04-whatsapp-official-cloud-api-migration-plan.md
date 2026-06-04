@@ -3,7 +3,7 @@
 **Date:** 2026-06-04
 **Owner:** Simon Aguilera
 **Reviewers (full council):** superpowers, Codex-5.5, Luna
-**Status:** plan — **superpowers + Codex-5.5 reviewed (approve-with-changes; all findings folded in 2026-06-04)**; Luna product/commercial lens pending. Date-sensitive figures (§10) still MUST be re-confirmed against Meta's live rate card before any number is committed to billing.
+**Status:** plan — **full council complete 2026-06-04 (superpowers + Codex-5.5 + Luna, all approve-with-changes; all findings folded in)**. Luna's product lens added §5a (the migration changes the product contract). Date-sensitive figures (§10) still MUST be re-confirmed against Meta's live rate card before any number is committed to billing.
 **Builds on (design only):** `docs/plans/2026-05-20-whatsapp-waha-migration-design.md` **specified** the `AbstractWhatsAppBackend` interface, the `channel_accounts.backend` column, and a webhook-receiver shape — but **none of it was ever implemented** (verified 2026-06-04: no `apps/api/app/services/whatsapp_backends/` package, no `channel_accounts.backend` column, migration head is **157**; the WAHA doc predicted migration 143 for `backend`, but 143 is actually `creative_reflections_optin`). So this plan **builds the abstraction the WAHA design specified but never shipped**, then implements the Cloud API backend against it. Where this doc says "reuse the WAHA seam," read it as **"construct that seam (net-new) + extract a `NeonizeBackend` from the current 2,684-line `whatsapp_service.py`"** — the P0 effort estimate (§6) absorbs that construction.
 
 > ⚠️ **Every pricing/rule figure here is date- and version-sensitive** (Graph API ~v23.0; rates revised ~quarterly, last Jan 1 + Apr 1 2026; Chile moved to CLP billing Apr 1 2026; Mar-2026 preemptive enforcement). The council review **must re-confirm against Meta's live WhatsApp Manager rate card + first-party docs** before any number is committed to billing. Several figures (esp. Chile rates, throughput, the request_code/register payloads) are single- or secondary-sourced.
@@ -81,7 +81,12 @@ Split the single neonize socket into **two HTTP halves** behind an `AbstractWhat
 
 **Tech-Provider prerequisites:** **Business Verification + App Review** for advanced access to `whatsapp_business_messaging` + `whatsapp_business_management` (+ `business_management`). **Plan weeks, not minutes, for first approval.**
 
-**vs Solution Partner/BSP:** takes a Meta credit-line, is billed for all tenants, re-invoices with 5–20% markup, becomes merchant-of-record (credit + collections + lock-in). The old On-Behalf-Of single-WABA-for-all-clients model is **deprecated** — Meta now expects per-tenant WABAs. Avoid unless we want to monetize a per-message margin.
+**vs Solution Partner/BSP:** takes a Meta credit-line, is billed for all tenants, re-invoices with 5–20% markup, becomes merchant-of-record (credit + collections + lock-in). The old On-Behalf-Of single-WABA-for-all-clients model is **deprecated** — Meta now expects per-tenant WABAs. Avoid unless we want to monetize a per-message margin. **Luna (product) is strongly Tech-Provider:** reselling templates is low-quality commodity revenue (we inherit Meta-pricing complaints, billing/support burden, template-category disputes, margin pressure) — *"I would not want AgentProvision to become a WhatsApp toll booth."* We sell the assistant/workflows/outcomes; the tenant owns the number, card, and Meta relationship.
+
+**Pricing & onboarding framing (Luna).** ~$248/mo is sellable **only if framed as operating cost tied to revenue protection** (appointment recovery, fewer missed appts, automated follow-ups, churn reduction, receptionist-labor offset) — **never** as "Meta may charge you $248/mo in messaging fees." If the value is just "AI sends nicer texts," it's a dealbreaker. Onboarding should present **three automation tiers** + a **hard monthly spend cap with pre-cap warnings** (SMBs tolerate usage pricing far better when they feel in control):
+- **Low** — critical reminders + task-complete pings only.
+- **Recommended** — reminders, delivery pings, follow-ups, high-value reactivation.
+- **Aggressive growth** — more marketing/CRM templates, with explicit spend controls.
 
 **Shortcut option:** Phase-1 onboarding *may* ride a flat-fee pass-through partner (**360dialog ~€49-99/number, no Meta markup**) or an onboarding-only layer (Dualhook/Chakra — they sell just the Embedded-Signup + webhook-override + tenant-mapping plumbing; tenants still pay Meta directly), then bring it in-house once volume justifies.
 
@@ -93,6 +98,17 @@ Every item is a **hard, non-negotiable** Cloud API constraint vs neonize's send-
 2. **No typing indicator:** Cloud API has no `send_chat_presence(COMPOSING)`. **Adapt:** delete `_keep_typing` (~1849) + the PAUSED tail. Luna's p50 ~5s makes the loss tolerable; optionally send a quick in-window "Working on it…" ack for long queries.
 3. **Opt-in (net-new):** explicit opt-in is **mandatory before any first business-initiated contact**; pre-checked boxes / prior SMS consent don't count; easy opt-out required. **Adapt:** gate proactive first-contact on a recorded opt-in.
 4. **Quality rating + tier ladder:** Meta scores the number (GREEN/YELLOW/RED). Too many unwanted proactive sends → quality drops → tier freezes/cuts (business-initiated unique-recipient cap per rolling 24h: 250 → 1K → 10K → 100K → unlimited; per-**portfolio** since Oct 2025). **In-window replies are uncapped.** Mar-2026 "preemptive enforcement" can restrict *before* violations are confirmed (rapid list growth, high template velocity without engagement). **Adapt:** Luna must throttle/target proactive sends, never blast; respect ~1 msg/6s per recipient; validate media before send (image ≤5MB, video/audio ≤16MB, doc ≤100MB).
+
+### 5a. Product-contract reframe (Luna's product lens — approve-with-changes)
+
+**Headline (Luna):** this migration **changes the product contract**, and the doc must say so. WhatsApp becomes a **governed customer-operations channel** — a structured notification + conversation-*entry* surface — **not the "unlimited proactive brainstem"** it is on neonize. The *intelligence* lives inside the 24h session, the app, or email. *"Less magical, but more commercially durable."* The move does **not** gut the product, but it kills the implicit promise that Luna can always reach out with rich ad-hoc prose over WhatsApp.
+
+- **Split "proactive" into two modes** (drives every template/defer decision):
+  - **Operational proactive** — reminders, delivery pings, follow-ups, payment prompts, "task complete" nudges → naturally **template-shaped**. Migrate as templates.
+  - **Cognitive proactive** — rich summaries, reasoning, nuanced results → keep **inside the 24h window**, or in app/email, or **after the user replies**. Never force these out-of-window as templates.
+- **Highest product risk = agent-task result pushes** (`agent_tasks.py:84`, §9.0). A genuinely useful result reduced to a canned template *feels broken*. **Required UX:** template states task-complete + an explicit unlock — e.g. *"Your requested task is complete. Reply 'details' to view the result."* — and the reply opens a fresh 24h window that delivers the rich answer immediately. **Don't** send low-value templates just to "stay proactive."
+- **Per-behavior adaptation** (Luna, refining §9.0): delivery pings → template (natural). **Nightly "morning report" → do NOT send the full report out-of-window; send a template teaser or move it to email/app.** CRM follow-ups → template, tightly governed by campaign settings + cost caps. Agent-task → template + reply-for-details (above).
+- **Template-or-defer UX guardrails:** every deferred item must be visible in the **web/app inbox** (so nothing silently disappears); the template states its category + the required action; the reply unlocks the rich answer; tenants configure **which events justify a paid template**.
 
 ## 6. Migration phases (the WAHA abstraction is built in P0, not inherited)
 
