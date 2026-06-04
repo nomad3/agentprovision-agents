@@ -15,8 +15,8 @@ Brett's **cardiology referral-report loop**: Gmail-in → extract → draft → 
 
 Net-new (this plan):
 1. **Deterministic echo-table extractor** — text-anchored parser of the "Adult Echo: Measurements and Calculations" block. Real format (machine export): multi-column text, up to 3 `label value unit` triples/line; **`extract_tables()` does NOT capture it** — must parse text. Split PDF→text (pdfplumber) from text→measurements (pure, unit-testable).
-2. **Measurement-QA contract** — `Measurement{field,label,value,unit,modality,source_page,confidence,outlier_flag,outlier_reason}` + `EchoExtraction`. Outlier rules (Luna): `LA:Ao >1.6 or <0.8 ⇒ review`; `FS% <25 or >55 ⇒ review`.
-3. **Completeness gate** — block draft if LVIDd / LVIDs (or FS/EF) / LA:Ao / species / weight missing or LOW confidence.
+2. **Measurement-QA contract** — `Measurement{field,label,value,unit,modality,source_page,confidence,outlier_flag,outlier_reason}` + `EchoExtraction`. Outlier rules (Luna + ACVIM MMVD consensus, JVIM 2019 33(3):1127): `LA:Ao ≥1.6 or <0.8 ⇒ review`; `LVIDdN ≥1.7 ⇒ review`; `FS% <25 or >55 ⇒ review`. Derived **LVIDdN = LVIDd(cm)/weight(kg)^0.294** computed when both inputs exist. We **never auto-conclude a stage** — at/above B2 thresholds we *escalate to clinician review* (staging also needs murmur grade/VHS).
+3. **Completeness gate** — block draft if LVIDd / LVIDs (or FS/EF) / LA:Ao / species / weight missing or LOW confidence. **Species** is inferred from explicit dog/cat signal or a known breed map; an **unknown breed leaves species unset** (forces human confirm) — never default unknown→canine.
 4. **Approval-review surface** — interim = existing dashboard run-detail; polished surface pending operator pick.
 
 Wire existing (later steps): reshape Cardiac Report Generator template (`extract_echo_structured → generate_dacvim_report → human_approval → send_email`); KG case-artifact persistence; `download_attachment` per-page/bytes contract change (one line, at integration time).
@@ -47,7 +47,7 @@ Wire existing (later steps): reshape Cardiac Report Generator template (`extract
 
 - **Attachment-byte corruption** — on-disk prototype won't catch a byte-mangling `download_attachment`; verify at integration test vs a real Gmail PDF.
 - **Echo-layout brittleness** — parser built against one export; keep it **label-anchored, not positional**; require a 2nd export pair before production.
-- **Soft safety floor** — for v1 the enforced floor is `human_approval` + user-principal `AgentPermission` only; `_DIAGNOSTICS_VALUES` are declared (audit) not runtime-enforced (`value_arbitration.py` pure-library); rejection/timeout must be wired to a `condition` that structurally halts `send_email`. Be honest; harden before multi-specialty scale.
+- **Soft safety floor** — for v1 the enforced floor is `human_approval` + user-principal `AgentPermission` only. **`human_approval` is UNCONDITIONAL before `send_email`** — every report is human-approved; `needs_review` only *escalates/decorates* the approval (a flagged banner + review reasons), it never bypasses it when False (Luna clinical review). `_DIAGNOSTICS_VALUES` are **audit metadata**, not runtime-enforced (`value_arbitration.py` is pure-library). Rejection/timeout must be wired to a `condition` that structurally halts `send_email`. Be honest; harden before multi-specialty scale.
 - **Thin RAG corpus** — only Winnie + MR B2 template; first-case draft quality may be weak; get 2-3 more real cases.
 
 ## Open questions for operator + Luna

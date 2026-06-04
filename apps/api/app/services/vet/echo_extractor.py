@@ -193,6 +193,20 @@ _WEIGHT_RE = re.compile(r"\bwt[:\s]*([\d.]+)\s*kg\b", re.I)
 _FELINE_BREEDS = {
     "dsh", "dlh", "domestic shorthair", "domestic longhair",
     "siamese", "maine coon", "persian", "ragdoll", "bengal", "sphynx",
+    "devon rex", "cornish rex", "abyssinian", "british shorthair",
+    "russian blue", "scottish fold", "norwegian forest", "birman",
+    "burmese", "tonkinese", "oriental", "himalayan", "exotic shorthair",
+}
+# Common cardiology-referral dog breeds (MMVD small-breed + DCM large-breed).
+_CANINE_BREEDS = {
+    "chihuahua", "cavalier king charles spaniel", "cavalier", "king charles spaniel",
+    "dachshund", "poodle", "toy poodle", "miniature poodle", "maltese",
+    "yorkshire terrier", "yorkie", "cocker spaniel", "doberman",
+    "doberman pinscher", "boxer", "great dane", "shih tzu", "pomeranian",
+    "papillon", "schnauzer", "miniature schnauzer", "bichon frise",
+    "lhasa apso", "pug", "beagle", "labrador retriever", "labrador",
+    "golden retriever", "german shepherd", "border collie", "whippet",
+    "irish wolfhound", "newfoundland", "saint bernard",
 }
 _FELINE_TEXT_RE = re.compile(
     r"\b(feline|cat|dsh|dlh|domestic short ?hair|domestic long ?hair|siamese|maine coon)\b",
@@ -239,10 +253,12 @@ def parse_signalment_from_text(text: str) -> Dict[str, object]:
     breed_l = str(sig.get("breed", "")).strip().lower()
     if breed_l in _FELINE_BREEDS or _FELINE_TEXT_RE.search(text):
         sig["species"] = "feline"
-    elif sig.get("breed") or _CANINE_TEXT_RE.search(text):
-        # Cardiology referrals are dog-dominant; a found, non-feline breed
-        # defaults canine. A rare misclassification is caught at human approval.
+    elif breed_l in _CANINE_BREEDS or _CANINE_TEXT_RE.search(text):
         sig["species"] = "canine"
+    # else: an UNKNOWN breed with no explicit dog/cat signal leaves species
+    # UNSET, so the completeness gate forces a human to confirm it. We do NOT
+    # default unknown→canine — that would let cat breeds (Devon Rex, Abyssinian)
+    # silently pass as dogs. (Luna clinical review, 2026-06-04.)
 
     return sig
 
@@ -253,16 +269,31 @@ def parse_signalment_from_text(text: str) -> Dict[str, object]:
 def _apply_outliers(by_field: Dict[str, Measurement]) -> List[str]:
     """Flag physiologic-range outliers in place; return human review reasons.
 
-    Rules per Luna's QA contract:
-      LA:Ao > 1.6 or < 0.8  ⇒ review (left-atrial enlargement / implausible)
-      FS%   < 25 or > 55    ⇒ review (systolic function out of range)
+    Rules (per Luna's QA contract + ACVIM MMVD consensus thresholds, JVIM 2019
+    33(3):1127): LA:Ao ≥1.6 and LVIDdN ≥1.7 are Stage-B2 criteria — at/above
+    them we escalate to clinician review (we never auto-conclude B2; staging
+    also needs murmur grade/VHS). FS outside 25–55% is out of range.
+      LA:Ao  ≥1.6 or <0.8   ⇒ review
+      LVIDdN ≥1.7           ⇒ review
+      FS%    <25 or >55     ⇒ review
     """
     reasons: List[str] = []
     la_ao = by_field.get("la_ao")
-    if la_ao is not None and (la_ao.value > 1.6 or la_ao.value < 0.8):
+    if la_ao is not None and (la_ao.value >= 1.6 or la_ao.value < 0.8):
         la_ao.outlier_flag = True
-        la_ao.outlier_reason = f"LA:Ao {la_ao.value} outside 0.8–1.6"
+        la_ao.outlier_reason = (
+            f"LA:Ao {la_ao.value} ≥1.6 (ACVIM Stage-B2 threshold) — clinician review"
+            if la_ao.value >= 1.6
+            else f"LA:Ao {la_ao.value} <0.8 — implausible, verify"
+        )
         reasons.append(la_ao.outlier_reason)
+    lviddn = by_field.get("lviddn")
+    if lviddn is not None and lviddn.value >= 1.7:
+        lviddn.outlier_flag = True
+        lviddn.outlier_reason = (
+            f"LVIDdN {lviddn.value} ≥1.7 (ACVIM Stage-B2 threshold) — clinician review"
+        )
+        reasons.append(lviddn.outlier_reason)
     fs = by_field.get("fs")
     if fs is not None and (fs.value < 25 or fs.value > 55):
         fs.outlier_flag = True
@@ -324,13 +355,31 @@ def build_extraction(
     """Assemble a full EchoExtraction from the measurement-block text and the
     (optional) finalised-report narrative.
 
-    ``needs_review`` is the gate the workflow's human_approval step keys on: it
-    is True if any QA outlier fired OR the completeness gate failed. The CLI
-    draft must NOT be sent without a human clearing this.
+    ``needs_review`` ESCALATES the human_approval step (extra scrutiny / a
+    flagged banner); it does NOT gate it. The workflow ALWAYS routes through
+    human_approval before send_email regardless of ``needs_review`` — a human
+    must approve every report. ``needs_review`` is True if any QA outlier fired
+    OR the completeness gate failed. (Luna clinical review: approval is
+    unconditional; needs_review decorates, never bypasses.)
     """
     measurements = parse_measurements_from_text(measurement_text, source_page=source_page)
     by_field = _pick_canonical(measurements)
     signalment = parse_signalment_from_text(report_text or measurement_text)
+
+    # Derived: normalized LVIDd = LVIDd(cm) / weight(kg)^0.294 — an ACVIM MMVD
+    # Stage-B2 criterion (≥1.7). Computed only when both inputs are present;
+    # added to by_field + measurements so it's flagged + shown in the QA table.
+    lvidd = by_field.get("lvidd")
+    weight = signalment.get("weight_kg")
+    if lvidd is not None and isinstance(weight, (int, float)) and weight > 0:
+        lviddn_val = round(lvidd.value / (float(weight) ** 0.294), 2)
+        lviddn = Measurement(
+            field="lviddn", label="LVIDdN (derived)", value=lviddn_val, unit="",
+            modality=lvidd.modality, source_page=lvidd.source_page,
+            confidence=lvidd.confidence,
+        )
+        by_field["lviddn"] = lviddn
+        measurements.append(lviddn)
 
     review_reasons = _apply_outliers(by_field)
     completeness = _check_completeness(by_field, signalment)

@@ -119,6 +119,43 @@ def test_la_ao_outlier_triggers_review():
     assert x.needs_review is True
 
 
+def test_la_ao_boundary_1_6_triggers_review():
+    """ACVIM Stage-B2 threshold is LA:Ao ≥1.6 — exactly 1.60 must escalate
+    (Luna clinical review: >= not >)."""
+    text = WINNIE_MEASUREMENTS.replace("LA/Ao (2D) 1.49", "LA/Ao (2D) 1.60")
+    x = ee.build_extraction(measurement_text=text, report_text=WINNIE_REPORT)
+    assert x.by_field["la_ao"].outlier_flag is True
+    assert "B2" in (x.by_field["la_ao"].outlier_reason or "")
+    assert x.needs_review is True
+
+
+def test_lviddn_computed_for_winnie():
+    """LVIDdN = LVIDd(cm)/weight^0.294 = 2.06/4.0^0.294 ≈ 1.37 → below B2 (1.7)."""
+    x = _extract()
+    lviddn = x.by_field["lviddn"]
+    assert abs(lviddn.value - 1.37) < 0.02
+    assert lviddn.outlier_flag is False
+
+
+def test_lviddn_b2_threshold_triggers_review():
+    text = WINNIE_MEASUREMENTS.replace("LVIDd (2D) 2.06 cm", "LVIDd (2D) 2.60 cm")
+    x = ee.build_extraction(measurement_text=text, report_text=WINNIE_REPORT)
+    # 2.60/4.0^0.294 ≈ 1.73 ≥ 1.7
+    assert x.by_field["lviddn"].value >= 1.7
+    assert x.by_field["lviddn"].outlier_flag is True
+    assert x.needs_review is True
+
+
+def test_unknown_breed_leaves_species_unset():
+    """An unknown breed with no explicit dog/cat signal must NOT default canine
+    — species stays missing so a human confirms it (Luna clinical review)."""
+    report = "3y MN Keeshond, presented for a murmur."
+    x = ee.build_extraction(measurement_text=WINNIE_MEASUREMENTS, report_text=report)
+    assert "species" not in x.signalment
+    assert "species" in x.completeness.missing
+    assert x.needs_review is True
+
+
 def test_fs_outlier_triggers_review():
     text = WINNIE_MEASUREMENTS.replace("FS (MM-Teich)35.5 %", "FS (MM-Teich)18.0 %")
     x = ee.build_extraction(measurement_text=text, report_text=WINNIE_REPORT)
