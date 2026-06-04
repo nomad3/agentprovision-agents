@@ -93,6 +93,19 @@ No remaining architectural blocker. Implement from this plan, tightening these i
 
 **Status:** APPROVED to implement (approve-with-changes). Build → code-review the implementation with Luna (lead) + Codex-5.5 + superpowers → PR (nomad3).
 
+## Review 3 — code review of the implementation (Luna lead, Codex-5.5 + superpowers), 2026-06-04
+
+Implementation pushed; reviewed the real diff. Luna BLOCK → APPROVE-WITH-CHANGES → (after fixes) APPROVE. superpowers: APPROVE-WITH-CHANGES (converged on the same top findings). All addressed in-PR:
+
+- **BLOCKER (Luna) / IMPORTANT-1 (superpowers):** unbounded `handle.cancel()` on timeout re-pins the thread → **bounded** `asyncio.wait_for(handle.cancel(), 10s)` + regression test (cancel never returns).
+- **IMPORTANT (Luna final):** `connect()`/`start_workflow()` weren't bounded → wrapped each in `asyncio.wait_for(30s)`, outer margin `+90s`. Whole connect→start→result→cancel sequence now bounded; foot-gun fully removed.
+- **IMPORTANT:** `_run_turn` terminalizes the job on watch-timeout/non-done before fallback; watch-fire logged at error (signals a Part-A escape).
+- **IMPORTANT:** `_drain_chat_consumers` terminalizes queued jobs + resets the global counter under the lock; restart notices concurrent + per-send 3s-bounded (can't starve the #765 validated save).
+- **IMPORTANT (superpowers):** inbound sends a fallback when `_build_turn` fails for a non-draining reason (no dead air).
+- **NITs:** PAUSED on fallback; over-cap log reads the counter inside the lock; `_build_turn` terminalizes an already-created job on post-`create_job` failure; documented the deliberate fast-PK-on-loop trade-off.
+
+**Tests:** 13 in `test_chat_turn_thread_pool_wedge.py` (incl. 2 foot-gun regressions, capacity gate, ordering, GC, submit-failure, drain terminalize+notice, build-failure fallback, watch-timeout terminalize) + 28 durability + chat_jobs — green. **Final verdict: approved for PR (nomad3).** Not merged pending operator go-ahead.
+
 ## Test plan
 
 - Unit: watcher sends reply on `done`, fallback on `failed`/`cancelled`/empty/timeout; typing stops on every path; inflight decremented on every path; client re-read at send time.
