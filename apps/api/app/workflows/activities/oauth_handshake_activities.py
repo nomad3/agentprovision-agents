@@ -146,7 +146,7 @@ def run_oauth_handshake(
 
         from app.db.session import SessionLocal
         from app.models.integration_config import IntegrationConfig
-        from app.services.integration_secrets import store_credential
+        from app.services.orchestration.credential_vault import store_credential
 
         tid = _uuid.UUID(tenant_id)
         db = SessionLocal()
