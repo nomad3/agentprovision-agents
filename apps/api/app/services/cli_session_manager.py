@@ -1647,7 +1647,7 @@ def _run_agent_session_legacy(
                 # RPC hangs, _run_workflow never returns, asyncio.run() hangs in
                 # the no-loop branch, and the loop branch's `with` exit's
                 # shutdown(wait=True) joins the still-running thread. The cancel
-                # timeout (10s) stays < the outer margin (+30s), so the worker
+                # timeout (10s) stays well within the outer margin (+90s), so the worker
                 # thread always finishes before the outer .result() trips.
                 # (Luna code-review BLOCKER, 2026-06-04.)
                 try:
