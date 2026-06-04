@@ -150,9 +150,9 @@ def test_higgsfield_happy_path_persists_both_tokens(monkeypatch):
 
     store_calls: list[dict] = []
 
-    def _capture_store(db, *, config_id, tenant_id, credential_key, plaintext_value):
+    def _capture_store(db, *, integration_config_id, tenant_id, credential_key, plaintext_value):
         store_calls.append({
-            "config_id": config_id,
+            "integration_config_id": integration_config_id,
             "tenant_id": tenant_id,
             "credential_key": credential_key,
             "plaintext_value": plaintext_value,
@@ -161,7 +161,7 @@ def test_higgsfield_happy_path_persists_both_tokens(monkeypatch):
     fake_secrets = MagicMock()
     fake_secrets.store_credential = _capture_store
     monkeypatch.setitem(
-        sys.modules, "app.services.integration_secrets", fake_secrets,
+        sys.modules, "app.services.orchestration.credential_vault", fake_secrets,
     )
 
     with patch.object(oha.httpx, "Client", return_value=client):
@@ -207,13 +207,13 @@ def test_higgsfield_happy_path_without_refresh_token(monkeypatch):
 
     store_calls: list[str] = []
 
-    def _capture_store(db, *, config_id, tenant_id, credential_key, plaintext_value):
+    def _capture_store(db, *, integration_config_id, tenant_id, credential_key, plaintext_value):
         store_calls.append(credential_key)
 
     fake_secrets = MagicMock()
     fake_secrets.store_credential = _capture_store
     monkeypatch.setitem(
-        sys.modules, "app.services.integration_secrets", fake_secrets,
+        sys.modules, "app.services.orchestration.credential_vault", fake_secrets,
     )
 
     with patch.object(oha.httpx, "Client", return_value=client):
