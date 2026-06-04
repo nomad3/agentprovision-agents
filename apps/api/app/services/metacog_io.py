@@ -185,10 +185,15 @@ def list_predictions(
     consumers see freshest first.
 
     decision_kind is applied after deserialization. The tags column is
-    generic JSON, not JSONB/ARRAY, so SQLAlchemy's tags.contains(...)
-    does not compile to valid containment SQL on Postgres. Metacog
-    prediction rows are low-volume tenant rows, so this keeps behavior
-    consistent across Postgres and the SQLite test shim.
+    generic JSON, not JSONB/ARRAY, so SQLAlchemy's tags.contains(...) does
+    not compile to valid containment SQL on Postgres (it emits an invalid
+    `tags LIKE ... ::JSON`). decision_kind has low cardinality (a small locked
+    DECISION_KINDS set) and this read is a tenant-scoped, on-demand calibration
+    call (no hot loop), so the Python post-filter over tenant-scoped rows is
+    acceptable and behaves consistently across Postgres + the SQLite test shim.
+    The genuinely scalable path — a JSONB cast pushdown + a GIN expression
+    index on ((tags::jsonb)) — is a tracked follow-up, not needed at current
+    volume (verified: tenant-scoped index scan, no GIN index on tags today).
 
     UUID filters are cast to str so the bind value works under both
     Postgres (native uuid column, implicit string→uuid cast) and the
