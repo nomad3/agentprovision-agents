@@ -1511,6 +1511,13 @@ class WhatsAppService:
             )
             if turn is not None:
                 await self._enqueue_turn(turn)
+            elif not self._draining:
+                # Build failed for a non-draining reason (no user/agent, or a
+                # DB error during session resolution / create_job). Don't leave
+                # the sender in dead air — a fallback beats silence. (Plan
+                # Step 7 / superpowers code-review IMPORTANT-2.) When draining,
+                # stay silent: _drain_chat_consumers owns the restart notice.
+                await self._send_text(key, reply_jid, WHATSAPP_TURN_FAILED_FALLBACK)
         except Exception:
             logger.exception(
                 "Failed to enqueue WhatsApp turn for %s (jid=%s)", sender_phone, sender_jid,
@@ -1606,6 +1613,7 @@ class WhatsAppService:
             from app.models.user import User
 
             tid = uuid.UUID(tenant_id)
+            created_job_id = None   # set once create_job commits (NIT-2 guard)
 
             user = db.query(User).filter(User.tenant_id == tid).first()
             if not user:
@@ -1660,6 +1668,7 @@ class WhatsAppService:
                 user_id=user.id,
                 content=message,
             )
+            created_job_id = uuid.UUID(job["id"])
             logger.info(
                 "[chat-trace] enqueue: job=%s session=%s sender=%s",
                 job["id"][:8], str(session.id)[:8], sender_id,
@@ -1672,7 +1681,7 @@ class WhatsAppService:
                 account_id=account_id,
                 sender_phone=sender_id,
                 reply_jid=reply_jid,
-                job_uuid=uuid.UUID(job["id"]),
+                job_uuid=created_job_id,
                 session_id=session.id,
                 user_id=user.id,
                 content=message,
@@ -1681,6 +1690,14 @@ class WhatsAppService:
         except Exception:
             logger.exception("Failed to build WhatsApp chat turn")
             db.rollback()
+            # NIT-2: if create_job already committed, terminalize it so a build
+            # failure after that point can't orphan a 'queued' row.
+            if created_job_id is not None:
+                try:
+                    from app.services import chat_jobs as _cj
+                    _cj.fail_job(db, job_id=created_job_id, error="build failed")
+                except Exception:
+                    logger.exception("Failed to terminalize orphaned job %s", created_job_id)
             return None
         finally:
             db.close()
@@ -1690,9 +1707,11 @@ class WhatsAppService:
         consumer if needed. Over-cap (global OR per-sender) → terminalize the
         job + overloaded fallback, never an unbounded in-memory pile-up."""
         accepted = False
+        snapshot_global = 0
         async with self._chat_dispatch_lock:
             q = self._chat_queues.get(turn.queue_key)
             pending = q.qsize() if q is not None else 0
+            snapshot_global = self._chat_inflight_global   # exact under the lock (NIT-3)
             if (self._chat_inflight_global < WHATSAPP_CHAT_GLOBAL_CAP
                     and pending < WHATSAPP_CHAT_PER_SENDER_CAP):
                 if q is None:
@@ -1709,7 +1728,7 @@ class WhatsAppService:
         if not accepted:
             logger.warning(
                 "WhatsApp chat over capacity (global=%d, sender=%s) — rejecting turn",
-                self._chat_inflight_global, turn.sender_phone,
+                snapshot_global, turn.sender_phone,
             )
             self._fail_job_safe(turn, "over capacity")
             await self._send_text(turn.account_key, turn.reply_jid, WHATSAPP_OVERLOADED_FALLBACK)
@@ -1786,14 +1805,31 @@ class WhatsAppService:
                 self._fail_job_safe(turn, "executor unavailable")
                 await self._send_reply_or_fallback(turn, None, False)
                 return
+            watch_fired = False
             try:
                 await asyncio.wait_for(fut, timeout=WHATSAPP_JOB_WATCH_TIMEOUT)
             except asyncio.TimeoutError:
-                logger.warning(
-                    "WhatsApp turn watch timed out (%.0fs) for job=%s — sending fallback",
+                watch_fired = True
+                # error-level: the watch should NEVER fire if Part A's bound is
+                # airtight (watch 660s > dispatch 600s). Firing means a turn
+                # escaped the dispatch bound and is leaking one of only N
+                # executor workers — observable signal, not just a warning.
+                # (superpowers code-review IMPORTANT-4.)
+                logger.error(
+                    "WhatsApp turn watch timed out (%.0fs) for job=%s — Part-A "
+                    "dispatch bound may have escaped; sending fallback",
                     WHATSAPP_JOB_WATCH_TIMEOUT, turn.job_uuid,
                 )
             reply, ok = self._read_job_reply(turn)
+            if not ok:
+                # Terminalize a stuck/queued job (watch-timeout, or a future
+                # cancelled before run_job_blocking started) so it can't orphan
+                # as 'queued'/'running'. Idempotent — a job that actually
+                # finished 'done' is read as ok=True above and never reaches
+                # here. (Luna + superpowers code-review.)
+                self._fail_job_safe(
+                    turn, "watch timeout" if watch_fired else "non-done terminal",
+                )
             await self._send_reply_or_fallback(turn, reply, ok)
         except Exception:
             logger.exception("WhatsApp turn failed for job=%s", turn.job_uuid)
@@ -1832,7 +1868,15 @@ class WhatsAppService:
 
     def _read_job_reply(self, turn: "_WaChatTurn") -> "tuple[Optional[str], bool]":
         """Read the terminal job → (reply_text, ok). ok=True only on status
-        'done' with non-empty concatenated chunk text."""
+        'done' with non-empty concatenated chunk text.
+
+        NIT-1 (deliberate trade-off): this and _build_turn/_fail_job_safe do
+        synchronous indexed-PK reads (~1-5ms) on the event loop, matching the
+        pre-existing chat pattern. The load-bearing fix removed the *multi-
+        minute* CLI hold from the loop; offloading every fast PK read to the
+        executor would add overhead/complexity for negligible benefit. If
+        Postgres degrades, revisit by wrapping these in run_in_executor.
+        """
         from app.services import chat_jobs as chat_jobs_service
         db = self._get_db()
         try:
@@ -1898,6 +1942,17 @@ class WhatsAppService:
         else:
             try:
                 await client.send_message(turn.reply_jid, WHATSAPP_TURN_FAILED_FALLBACK)
+                # Symmetric with the success path: explicitly PAUSE typing on
+                # the fallback too (the refresher is stopped separately, but a
+                # PAUSED presence dismisses "typing…" immediately). (NIT.)
+                try:
+                    await client.send_chat_presence(
+                        turn.reply_jid,
+                        ChatPresence.CHAT_PRESENCE_PAUSED,
+                        ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT,
+                    )
+                except Exception:
+                    pass
             except Exception:
                 logger.exception(
                     "WhatsApp fallback send failed for %s (job=%s)",
@@ -1928,30 +1983,53 @@ class WhatsAppService:
             db.close()
 
     async def _drain_chat_consumers(self) -> None:
-        """Shutdown: best-effort 'restarting' notice to every sender with a
-        pending or mid-flight turn, cancel all consumers, stop the executor."""
+        """Shutdown: terminalize queued (never-started) jobs so they can't
+        orphan as 'queued', best-effort 'restarting' notice (concurrent +
+        per-send bounded so a dead socket can't eat the drain budget and
+        starve the validated session save), cancel consumers, stop the
+        executor. (Luna + superpowers code-review.)"""
         async with self._chat_dispatch_lock:
             queues = list(self._chat_queues.items())
             consumers = list(self._chat_consumers.values())
             active = list(self._chat_active.values())
             self._chat_queues.clear()
             self._chat_consumers.clear()
-        notify: list[_WaChatTurn] = list(active)
+            self._chat_inflight_global = 0   # reset accounting under the lock
+
+        pending: list[_WaChatTurn] = []
         for _qk, q in queues:
             while True:
                 try:
-                    notify.append(q.get_nowait())
+                    pending.append(q.get_nowait())
                 except Exception:
                     break
-        notified: set = set()
-        for turn in notify:
-            if turn.queue_key in notified:
+        # Queued turns never ran — terminalize their chat_jobs. Active turns'
+        # jobs self-terminalize via the still-running run_job_blocking thread
+        # (bounded by Part A), so we must NOT fail those.
+        for turn in pending:
+            self._fail_job_safe(turn, "service draining")
+
+        # Notify each distinct sender once — concurrent + per-send bounded.
+        seen: set = set()
+        targets: list[_WaChatTurn] = []
+        for turn in list(active) + pending:
+            if turn.queue_key in seen:
                 continue
-            notified.add(turn.queue_key)
+            seen.add(turn.queue_key)
+            targets.append(turn)
+
+        async def _notify(turn: _WaChatTurn) -> None:
             try:
-                await self._send_text(turn.account_key, turn.reply_jid, WHATSAPP_RESTART_FALLBACK)
+                await asyncio.wait_for(
+                    self._send_text(turn.account_key, turn.reply_jid, WHATSAPP_RESTART_FALLBACK),
+                    timeout=3,
+                )
             except Exception:
                 pass
+
+        if targets:
+            await asyncio.gather(*[_notify(t) for t in targets], return_exceptions=True)
+
         for task in consumers:
             if task and not task.done():
                 task.cancel()

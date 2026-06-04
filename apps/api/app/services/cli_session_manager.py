@@ -1630,11 +1630,19 @@ def _run_agent_session_legacy(
                     "run_id=%s); requesting server-side cancel",
                     dispatch_timeout, handle.id, _run_id,
                 )
+                # BOUND the cancel too. An unbounded `await handle.cancel()`
+                # would re-wedge the exact thread this fix frees: if the cancel
+                # RPC hangs, _run_workflow never returns, asyncio.run() hangs in
+                # the no-loop branch, and the loop branch's `with` exit's
+                # shutdown(wait=True) joins the still-running thread. The cancel
+                # timeout (10s) stays < the outer margin (+30s), so the worker
+                # thread always finishes before the outer .result() trips.
+                # (Luna code-review BLOCKER, 2026-06-04.)
                 try:
-                    await handle.cancel()
-                except Exception:  # noqa: BLE001
+                    await asyncio.wait_for(handle.cancel(), timeout=10)
+                except Exception:  # noqa: BLE001  (incl. TimeoutError)
                     logger.warning(
-                        "ChatCliWorkflow cancel-after-timeout failed (workflow_id=%s)",
+                        "ChatCliWorkflow cancel-after-timeout failed/timed out (workflow_id=%s)",
                         handle.id,
                     )
                 raise

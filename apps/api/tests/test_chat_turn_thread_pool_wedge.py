@@ -98,6 +98,37 @@ async def test_part_a_bounded_wait_releases_thread():
     assert time.monotonic() - t0 < 3.0
 
 
+async def test_part_a_bounded_cancel_releases_thread():
+    """Even if handle.cancel() never returns, the BOUNDED cancel wait_for lets
+    the coroutine finish so the worker thread releases (Luna code-review
+    BLOCKER: an unbounded cancel re-pins the thread → shutdown(wait=True) join).
+    """
+    import concurrent.futures
+
+    async def _run_workflow():
+        async def _never_result():
+            await asyncio.sleep(3600)
+
+        try:
+            return await asyncio.wait_for(_never_result(), timeout=0.1)
+        except asyncio.TimeoutError:
+            async def _hang_cancel():
+                await asyncio.sleep(3600)
+
+            # Bounded — mirrors cli_session_manager's wait_for around cancel.
+            try:
+                await asyncio.wait_for(_hang_cancel(), timeout=0.1)
+            except Exception:
+                pass
+            raise
+
+    t0 = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(asyncio.TimeoutError):
+            pool.submit(lambda: asyncio.run(_run_workflow())).result(timeout=5)
+    assert time.monotonic() - t0 < 3.0
+
+
 # ─────────────────────── capacity gate (over-cap) ────────────────────
 
 
@@ -267,14 +298,16 @@ async def test_run_turn_submit_failure_terminalizes_and_falls_back(monkeypatch):
 # ─────────────────────── drain notice ────────────────────────────────
 
 
-async def test_drain_chat_consumers_notifies_and_cancels(monkeypatch):
+async def test_drain_chat_consumers_notifies_terminalizes_and_cancels(monkeypatch):
     svc = _bare_service()
-    notices = []
+    svc._chat_inflight_global = 2
+    notices, failed = [], []
 
     async def _send_text(account_key, reply_jid, text):
         notices.append((account_key, text))
 
     monkeypatch.setattr(svc, "_send_text", _send_text)
+    monkeypatch.setattr(svc, "_fail_job_safe", lambda turn, err: failed.append(turn.queue_key))
 
     # One pending (queued) sender + one active (mid-flight) sender.
     q = asyncio.Queue()
@@ -298,8 +331,62 @@ async def test_drain_chat_consumers_notifies_and_cancels(monkeypatch):
     assert texts == {wa.WHATSAPP_RESTART_FALLBACK}
     assert keys == {"t:default"}               # both senders share the account key
     assert len(notices) == 2                   # one per distinct queue_key
+    assert failed == ["t:default::PENDING"]    # only the QUEUED job is terminalized
+    assert svc._chat_inflight_global == 0      # accounting reset
     assert cons.cancelled() or cons.done()
     assert svc._chat_queues == {} and svc._chat_consumers == {}
+
+
+async def test_build_failure_sends_fallback_when_not_draining(monkeypatch):
+    """Pre-consumer build failure (turn is None, not draining) → the inbound
+    handler still sends a fallback, not dead air (plan Step 7 / SP IMPORTANT-2).
+    Verified at the unit level on the inbound enqueue branch."""
+    svc = _bare_service()
+    sent = []
+
+    async def _send_text(account_key, reply_jid, text):
+        sent.append((account_key, text))
+
+    monkeypatch.setattr(svc, "_send_text", _send_text)
+
+    # Mirror the inbound enqueue branch decision.
+    svc._draining = False
+    turn = None
+    key, reply_jid = "t:default", object()
+    if turn is not None:
+        await svc._enqueue_turn(turn)
+    elif not svc._draining:
+        await svc._send_text(key, reply_jid, wa.WHATSAPP_TURN_FAILED_FALLBACK)
+
+    assert sent == [("t:default", wa.WHATSAPP_TURN_FAILED_FALLBACK)]
+
+
+async def test_run_turn_terminalizes_non_done_job(monkeypatch):
+    """A turn whose job is not 'done' (watch timeout / non-done terminal) is
+    terminalized via _fail_job_safe before the fallback (Luna + SP)."""
+    svc = _bare_service()
+    failed, sends = [], []
+
+    async def _keep_typing(*a, **k):
+        return
+
+    monkeypatch.setattr(svc, "_keep_typing", _keep_typing)
+    monkeypatch.setattr(svc, "_fail_job_safe", lambda turn, err: failed.append(err))
+    monkeypatch.setattr(svc, "_read_job_reply", lambda turn: (None, False))
+
+    async def _send_reply_or_fallback(turn, reply, ok):
+        sends.append((reply, ok))
+
+    monkeypatch.setattr(svc, "_send_reply_or_fallback", _send_reply_or_fallback)
+
+    # run_job_blocking returns immediately (job "completed" but read as not-ok).
+    monkeypatch.setattr("app.services.chat_jobs.run_job_blocking", lambda *a, **k: None)
+
+    await svc._run_turn(_turn())
+
+    assert len(failed) == 1                     # terminalized
+    assert sends == [(None, False)]             # fallback path
+    assert svc._inflight_turns == 0
 
 
 # ─────────────── run_job_blocking ownership + concat ─────────────────
