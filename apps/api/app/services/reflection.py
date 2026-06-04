@@ -13,13 +13,14 @@ import json
 import logging
 from typing import Optional
 
-from app.schemas.reflection import NightlyReflection
+from app.schemas.reflection import NightlyReflection, ReflectionStep
 
 logger = logging.getLogger(__name__)
 
 
 # ── Memory type discriminator ─────────────────────────────────────────
 REFLECTION_MEMORY_TYPE = "nightly_reflection"
+REFLECTION_STEP_MEMORY_TYPE = "reflection_step"
 
 
 # ── Serialize / deserialize ───────────────────────────────────────────
@@ -51,8 +52,33 @@ def deserialize_reflection(blob: str) -> Optional[NightlyReflection]:
         return None
 
 
+def serialize_reflection_step(step: ReflectionStep) -> str:
+    """JSON-encode a ReflectionStep for agent_memory.content."""
+    return json.dumps(step.to_dict(), sort_keys=True)
+
+
+def deserialize_reflection_step(blob: str) -> Optional[ReflectionStep]:
+    """Best-effort decode for pre-action reflection traces.
+
+    Returns None instead of raising on malformed rows so read paths can
+    skip corrupted trace content without breaking operator surfaces.
+    """
+    try:
+        data = json.loads(blob)
+        return ReflectionStep(**data)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        logger.debug(
+            "reflection.deserialize_reflection_step: malformed blob — %s",
+            exc,
+        )
+        return None
+
+
 __all__ = [
     "REFLECTION_MEMORY_TYPE",
+    "REFLECTION_STEP_MEMORY_TYPE",
     "serialize_reflection",
     "deserialize_reflection",
+    "serialize_reflection_step",
+    "deserialize_reflection_step",
 ]

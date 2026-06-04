@@ -24,10 +24,12 @@ from app.db.session import SessionLocal
 from app.models.agent import Agent
 from app.models.agent_memory import AgentMemory  # noqa: F401 — FK chain
 from app.models.tenant import Tenant
-from app.schemas.reflection import NightlyReflection
+from app.schemas.reflection import NightlyReflection, ReflectionStep
 from app.services.reflection_io import (
     get_reflection_count,
+    list_reflection_steps,
     list_reflections,
+    write_reflection_step,
     write_reflection,
 )
 
@@ -88,6 +90,31 @@ def _make_reflection(
         source_memory_ids=source_memory_ids or [str(uuid.uuid4())],
         confidence=confidence,
         ts=_now(),
+    )
+
+
+def _make_step(
+    tenant_id,
+    agent_id,
+    *,
+    session_id="session-1",
+    action_kind="repo_edit_dirty_worktree",
+    risk_level="medium",
+    recommended_affordance="verify",
+) -> ReflectionStep:
+    return ReflectionStep(
+        tenant_id=str(tenant_id),
+        agent_id=str(agent_id),
+        session_id=session_id,
+        action_kind=action_kind,
+        user_intent="Implement a trace-only reflection step contract.",
+        evidence_refs=["docs/plans/2026-06-04-trusted-teammate-engines-implementation-plan.md"],
+        assumptions=["Existing dirty worktree changes are unrelated."],
+        uncertainty="medium",
+        risk_level=risk_level,
+        required_checks=["Inspect git status and scoped diff before editing."],
+        recommended_affordance=recommended_affordance,
+        created_at=_now(),
     )
 
 
@@ -249,6 +276,142 @@ def test_list_reflections_tenant_isolated(db, tenant_with_agent):
     db.commit()
     try:
         assert list_reflections(db, tenant_id=other_tenant.id) == []
+    finally:
+        db.execute(
+            __import__("sqlalchemy").text(
+                "DELETE FROM tenants WHERE id = :tid"
+            ),
+            {"tid": other_tenant.id},
+        )
+        db.commit()
+
+
+# ── ReflectionStep write/read paths ───────────────────────────────────
+
+
+def test_write_reflection_step_persists_and_roundtrips(db, tenant_with_agent):
+    tenant, agent = tenant_with_agent
+    step = _make_step(
+        tenant.id,
+        agent.id,
+        action_kind="pr_creation",
+        risk_level="high",
+        recommended_affordance="delegate",
+    )
+    row_id = write_reflection_step(db, step=step)
+    assert row_id is not None
+
+    fetched = list_reflection_steps(db, tenant_id=tenant.id)
+    assert len(fetched) == 1
+    assert fetched[0].action_kind == "pr_creation"
+    assert fetched[0].risk_level == "high"
+    assert fetched[0].recommended_affordance == "delegate"
+
+
+def test_write_reflection_step_rejects_tenant_boundary_violation(
+    db, tenant_with_agent,
+):
+    tenant, agent = tenant_with_agent
+    foreign = _make_step(uuid.uuid4(), agent.id)
+    row_id = write_reflection_step(
+        db,
+        step=foreign,
+        current_tenant_id=tenant.id,
+    )
+    assert row_id is None
+    assert list_reflection_steps(db, tenant_id=tenant.id) == []
+
+
+def test_write_reflection_step_rejects_malformed_uuids(db):
+    bad = ReflectionStep(
+        tenant_id="not-a-uuid",
+        agent_id="also-not-a-uuid",
+        session_id="session-1",
+        action_kind="user_specific_claim",
+        user_intent="Ground a user-specific claim before answering.",
+        evidence_refs=[],
+        assumptions=[],
+        uncertainty="high",
+        risk_level="medium",
+        required_checks=["Check memory or integration before claiming."],
+        recommended_affordance="verify",
+        created_at=_now(),
+    )
+    assert write_reflection_step(db, step=bad) is None
+
+
+def test_list_reflection_steps_filters_by_session_and_action(
+    db, tenant_with_agent,
+):
+    tenant, agent = tenant_with_agent
+    write_reflection_step(
+        db,
+        step=_make_step(
+            tenant.id,
+            agent.id,
+            session_id="session-a",
+            action_kind="tool_failure_retry",
+        ),
+    )
+    write_reflection_step(
+        db,
+        step=_make_step(
+            tenant.id,
+            agent.id,
+            session_id="session-a",
+            action_kind="pr_creation",
+        ),
+    )
+    write_reflection_step(
+        db,
+        step=_make_step(
+            tenant.id,
+            agent.id,
+            session_id="session-b",
+            action_kind="tool_failure_retry",
+        ),
+    )
+
+    hits = list_reflection_steps(
+        db,
+        tenant_id=tenant.id,
+        session_id="session-a",
+        action_kind="tool_failure_retry",
+    )
+    assert len(hits) == 1
+    assert hits[0].session_id == "session-a"
+    assert hits[0].action_kind == "tool_failure_retry"
+
+
+def test_list_reflection_steps_filters_by_agent(db, tenant_with_agent):
+    tenant, agent_a = tenant_with_agent
+    agent_b = Agent(
+        tenant_id=tenant.id, name=f"reflection-step-other-{uuid.uuid4()}"
+    )
+    db.add(agent_b)
+    db.commit()
+
+    write_reflection_step(db, step=_make_step(tenant.id, agent_a.id))
+    write_reflection_step(db, step=_make_step(tenant.id, agent_b.id))
+
+    a_only = list_reflection_steps(
+        db,
+        tenant_id=tenant.id,
+        agent_id=agent_a.id,
+    )
+    assert len(a_only) == 1
+    assert a_only[0].agent_id == str(agent_a.id)
+
+
+def test_list_reflection_steps_tenant_isolated(db, tenant_with_agent):
+    tenant, agent = tenant_with_agent
+    write_reflection_step(db, step=_make_step(tenant.id, agent.id))
+
+    other_tenant = Tenant(name=f"reflection-step-other-{uuid.uuid4()}")
+    db.add(other_tenant)
+    db.commit()
+    try:
+        assert list_reflection_steps(db, tenant_id=other_tenant.id) == []
     finally:
         db.execute(
             __import__("sqlalchemy").text(
