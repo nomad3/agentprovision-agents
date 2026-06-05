@@ -583,13 +583,21 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
 - [ ] Remove or narrow broad Tauri `shell:default` capability before adding
       desktop control.
 - [ ] Add local permission state for Observe and Assist tiers.
+- [x] Add local Tauri safety state for `control_locked`, `observe`, and
+      `stopped`.
+- [x] Add `control_get_safety_state`, `control_observe_status`, and
+      `control_stop_all` Tauri commands.
+- [x] Ensure `control_stop_all` clears gesture engine, global cursor mode, and
+      local capture state.
+- [x] Add visible Observe/Stop skeleton in the main chat nav.
 - [ ] Add visible Observe/Assist/Control/Stop control strip in main chat.
 - [ ] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
       shortcut before down-channel work.
 - [ ] Add persistent Observe/Assist indicator while either tier is active.
 - [x] Add durable random `desktop-<uuid>` shell identity persisted in Tauri app
       data, with browser/test fallback.
-- [x] Register shell capabilities through `useShellPresence`.
+- [x] Register conservative shell capabilities through `useShellPresence`
+      (`observe`, `stop`, `notify`; no pointer/keyboard/local-action claim).
 - [ ] Register macOS permission readiness for Screen Recording, Accessibility,
       Automation/System Events, Input Monitoring, camera, and microphone.
 - [ ] Add `desktop_control` tool group in `tool_groups.py`.

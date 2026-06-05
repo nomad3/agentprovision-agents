@@ -6,6 +6,7 @@ import LoginForm from './components/LoginForm';
 import NotificationBell from './components/NotificationBell';
 import TrustBadge from './components/TrustBadge';
 import ActionApproval from './components/ActionApproval';
+import ControlSafetyStrip from './components/ControlSafetyStrip';
 import CommandPalette from './components/CommandPalette';
 import ClipboardToast from './components/ClipboardToast';
 import WorkflowSuggestions from './components/WorkflowSuggestions';
@@ -218,6 +219,7 @@ function AuthenticatedApp() {
           <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
             {theme === 'dark' ? '\u2600' : '\u263E'}
           </button>
+          <ControlSafetyStrip />
           <TrustBadge trust={trust} />
           <button className="theme-toggle" onClick={() => setSuggestionsOpen(!suggestionsOpen)} title="Workflow suggestions">
             {'\u26A1'}

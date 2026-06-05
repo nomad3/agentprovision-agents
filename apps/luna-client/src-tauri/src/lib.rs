@@ -1,12 +1,19 @@
 use tauri::Manager;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 mod gesture;
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
+
+const CONTROL_MODE_LOCKED: u8 = 0;
+const CONTROL_MODE_OBSERVE: u8 = 1;
+const CONTROL_MODE_STOPPED: u8 = 2;
+
+static CONTROL_MODE: AtomicU8 = AtomicU8::new(CONTROL_MODE_LOCKED);
+static LAST_STOP_AT_MS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(desktop)]
 use tauri::{
@@ -22,6 +29,13 @@ fn get_platform() -> String {
 #[tauri::command]
 fn get_arch() -> String {
     std::env::consts::ARCH.to_string()
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn valid_desktop_shell_id(id: &str) -> bool {
@@ -50,6 +64,72 @@ fn get_or_create_shell_id(app: tauri::AppHandle) -> Result<String, String> {
     std::fs::write(&path, format!("{}\n", shell_id))
         .map_err(|e| format!("Failed to persist Luna desktop shell id: {}", e))?;
     Ok(shell_id)
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ControlSafetyState {
+    mode: String,
+    observe_enabled: bool,
+    stopped: bool,
+    control_locked: bool,
+    capture_running: bool,
+    gesture_state: String,
+    cursor_global: bool,
+    can_observe: bool,
+    can_control_pointer: bool,
+    can_control_keyboard: bool,
+    last_stop_at_ms: Option<u64>,
+}
+
+fn control_mode_name(mode: u8) -> &'static str {
+    match mode {
+        CONTROL_MODE_OBSERVE => "observe",
+        CONTROL_MODE_STOPPED => "stopped",
+        _ => "control_locked",
+    }
+}
+
+async fn current_control_safety_state() -> ControlSafetyState {
+    let mode = CONTROL_MODE.load(Ordering::SeqCst);
+    let last_stop = LAST_STOP_AT_MS.load(Ordering::SeqCst);
+    let gesture = gesture::engine_status().await;
+    ControlSafetyState {
+        mode: control_mode_name(mode).to_string(),
+        observe_enabled: mode == CONTROL_MODE_OBSERVE,
+        stopped: mode == CONTROL_MODE_STOPPED,
+        control_locked: mode != CONTROL_MODE_OBSERVE,
+        capture_running: CAPTURE_RUNNING.load(Ordering::SeqCst),
+        gesture_state: gesture.state,
+        cursor_global: gesture::global_mode(),
+        can_observe: mode != CONTROL_MODE_STOPPED,
+        can_control_pointer: false,
+        can_control_keyboard: false,
+        last_stop_at_ms: if last_stop == 0 { None } else { Some(last_stop) },
+    }
+}
+
+#[tauri::command]
+async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
+    Ok(current_control_safety_state().await)
+}
+
+#[tauri::command]
+async fn control_observe_status() -> Result<ControlSafetyState, String> {
+    if CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED {
+        return Ok(current_control_safety_state().await);
+    }
+    CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+    Ok(current_control_safety_state().await)
+}
+
+#[tauri::command]
+async fn control_stop_all() -> Result<ControlSafetyState, String> {
+    CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+    LAST_STOP_AT_MS.store(now_unix_ms(), Ordering::SeqCst);
+    CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    gesture::set_global_mode(false);
+    gesture::stop_engine().await?;
+    Ok(current_control_safety_state().await)
 }
 
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
@@ -854,6 +934,9 @@ pub fn run() {
             get_platform,
             get_arch,
             get_or_create_shell_id,
+            control_get_safety_state,
+            control_observe_status,
+            control_stop_all,
             capture_screenshot,
             get_active_app,
             read_clipboard,

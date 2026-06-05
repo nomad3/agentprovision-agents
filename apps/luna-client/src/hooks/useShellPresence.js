@@ -6,10 +6,14 @@ const HEARTBEAT_INTERVAL = 10000; // 10s
 const CAPABILITIES = {
   can_listen: true,
   can_notify: true,
-  can_capture_screen: true,
-  can_capture_audio: true,
+  can_observe: true,
+  can_stop: true,
+  can_capture_screen: false,
+  can_capture_audio: false,
   can_connect_ble: false,
-  can_run_local_actions: true,
+  can_run_local_actions: false,
+  can_control_pointer: false,
+  can_control_keyboard: false,
 };
 
 export function useShellPresence() {
