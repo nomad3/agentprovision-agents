@@ -24,6 +24,34 @@ fn get_arch() -> String {
     std::env::consts::ARCH.to_string()
 }
 
+fn valid_desktop_shell_id(id: &str) -> bool {
+    id.strip_prefix("desktop-")
+        .is_some_and(|rest| uuid::Uuid::parse_str(rest).is_ok())
+}
+
+#[tauri::command]
+fn get_or_create_shell_id(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve Luna app data dir: {}", e))?;
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create Luna app data dir: {}", e))?;
+
+    let path = app_data_dir.join("desktop-shell-id");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let shell_id = raw.trim();
+        if valid_desktop_shell_id(shell_id) {
+            return Ok(shell_id.to_string());
+        }
+    }
+
+    let shell_id = format!("desktop-{}", uuid::Uuid::new_v4());
+    std::fs::write(&path, format!("{}\n", shell_id))
+        .map_err(|e| format!("Failed to persist Luna desktop shell id: {}", e))?;
+    Ok(shell_id)
+}
+
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
 /// On iOS returns an error; the frontend should use the native share sheet instead.
 #[tauri::command]
@@ -498,27 +526,27 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // The tray "Open" verbs target the spatial_hud (Luna OS primary
-    // surface). The chat panel (`main`) is summonable separately so users
-    // who closed it can get it back without losing the podium.
-    let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS", true, None::<&str>)?;
-    let open_chat = MenuItem::with_id(app, "open_chat", "Open Chat Panel", true, None::<&str>)?;
+    // Chat/sessions are the primary product surface. The spatial HUD remains
+    // available as an explicit Labs surface, but it should not open from the
+    // default tray click.
+    let open_chat = MenuItem::with_id(app, "open_chat", "Open Luna", true, None::<&str>)?;
+    let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS / Labs", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Luna", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_os, &open_chat, &quit_item])?;
+    let menu = Menu::with_items(app, &[&open_chat, &open_os, &quit_item])?;
 
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("Luna OS — Conductor's Podium")
+        .tooltip("Luna")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "open_os" => {
-                if let Some(window) = app.get_webview_window("spatial_hud") {
+            "open_chat" => {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
             }
-            "open_chat" => {
-                if let Some(window) = app.get_webview_window("main") {
+            "open_os" => {
+                if let Some(window) = app.get_webview_window("spatial_hud") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -531,9 +559,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_tray_icon_event(|tray, event| {
             if let tauri::tray::TrayIconEvent::Click { .. } = event {
                 let app = tray.app_handle();
-                // Tray icon click goes to the OS surface; right-click
-                // opens the menu so users can pick the chat panel instead.
-                if let Some(window) = app.get_webview_window("spatial_hud") {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -566,10 +592,8 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
         }
     })?;
 
-    // Cmd+Shift+L now toggles the secondary `main` chat window (the comms
-    // panel of Luna OS). The spatial_hud is the primary surface and stays
-    // visible; pre-Luna-OS this shortcut toggled the HUD which no longer
-    // makes sense as a "show / hide" verb when the HUD IS the OS.
+    // Cmd+Shift+L toggles the primary `main` chat/session window.
+    // Spatial HUD is an explicit Labs surface opened from the tray/menu.
     app.global_shortcut().on_shortcut(hud_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             if let Some(window) = app.get_webview_window("main") {
@@ -829,6 +853,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_platform,
             get_arch,
+            get_or_create_shell_id,
             capture_screenshot,
             get_active_app,
             read_clipboard,

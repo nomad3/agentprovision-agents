@@ -336,12 +336,12 @@ Scores are logged as RL experiences (`rl_experience` table) with reward componen
 **Luna Native Client** (`apps/luna-client`, Tauri 2 + React + Vite): Desktop/mobile app with PWA fallback.
 - **Visual avatar**: `LunaAvatar` SVG component renders emotional states (idle, thinking, happy, alert) from LLM response metadata; wired into `ChatInterface` header.
 - **Voice input**: native `cpal`/PTT designed in PR #154 is **not currently in the tree** — `cpal` is not in `src-tauri/Cargo.toml`, and no `start_audio_capture`/`stop_audio_capture` functions exist. The `/api/v1/media/transcribe` endpoint is still wired to ingest audio when a client provides it.
-- **Global shortcuts** (`setup_global_shortcut` in `src-tauri/src/lib.rs:392`): `Cmd+Shift+Space` emits `toggle-palette` → React opens the `CommandPalette` (and un-hides the main window if needed). `Cmd+Shift+L` toggles the `spatial_hud` window's visibility. `tauri-plugin-global-shortcut`.
-- **System tray** (`setup_tray`): Open, Voice Input, Toggle Spatial HUD, Quit. Uses `PredefinedMenuItem::separator`.
+- **Global shortcuts** (`setup_global_shortcut` in `src-tauri/src/lib.rs:392`): `Cmd+Shift+Space` emits `toggle-palette` → React opens the `CommandPalette` (and un-hides the main window if needed). `Cmd+Shift+L` toggles the main chat/session window. `tauri-plugin-global-shortcut`.
+- **System tray** (`setup_tray`): Open Luna, Open Luna OS / Labs, Quit. Tray click focuses the main chat/session window.
 - **Auto-updater**: `tauri-plugin-updater`, checks on startup + every 30 min. Emits `update-available` → React banner.
 - **Clipboard watcher** + **activity tracker**: Background threads emit `clipboard-changed` and `activity-event`. Resolves real tool/project from terminal and editor window titles (Claude Code, Docker CLI, etc.).
 - **Device bridge + camera** (Phase 2, 2026-04-19, `apps/device-bridge`): IoT device registry + local camera integration.
-- Release workflow: `.github/workflows/luna-client-build.yaml` produces signed macOS ARM64 DMGs on main merge. GitHub Releases powers the auto-updater.
+- Release workflow: `.github/workflows/luna-client-build.yaml` produces macOS ARM64 DMGs on main merge, publishes versioned `luna-v*` GitHub Releases, and updates the stable `luna-latest/latest.json` updater manifest.
 
 **Luna OS Spatial Workstation** (shipped 2026-04-13, PR #138 + Phase 6/7 follow-ups): Game-inspired spatial HUD opened via `Cmd+Shift+L`. Transparent Tauri window rendering Three.js scenes for A2A combat visualization and knowledge exploration.
 - **SpatialHUD window**: separate Tauri window label `spatial_hud`. Detected in `App.jsx` via `getCurrentWebviewWindow().label` with a 1s safety fallback to `main`.
@@ -416,7 +416,7 @@ python -m src.server                   # Runs on http://localhost:8085
 ```bash
 cd apps/luna-client
 npm install
-npm run tauri dev                      # Desktop app with hot reload
+npm run tauri:dev                      # Desktop app with hot reload
 npm run build                          # Production Vite bundle
 cd src-tauri && cargo check            # Rust-side type check
 

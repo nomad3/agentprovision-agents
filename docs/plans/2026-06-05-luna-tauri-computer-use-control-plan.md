@@ -7,9 +7,9 @@
 
 Date: 2026-06-05
 Operator: Simon Aguilera
-Status: Proposed -- awaiting operator approval to implement
+Status: Implementation in progress
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-tauri-computer-use-control` once implementation starts
+Branch: `codex/luna-tauri-computer-use-control`
 
 ---
 
@@ -60,6 +60,17 @@ Additional discovery inputs:
 5. The web Alpha Control surface provides reusable UI patterns for session
    events, activity panels, terminal/action feeds, command palette behavior,
    and multi-pane chat workspaces.
+6. Local release verification on 2026-06-05 installed `luna-v0.1.71` from
+   GitHub Releases over local `0.1.68`. The app launched, but release smoke
+   found four shipping issues: startup still opens `Luna OS` instead of chat,
+   updater fetch fails because the manifest endpoint is not Luna-specific,
+   the release manifest had an empty updater signature, and the DMG was
+   ad-hoc signed rather than Developer ID signed/notarized.
+7. Claude Code Superpowers review on 2026-06-05 found plan-level blockers to
+   close before Phase 2: define `shell_id` generation/persistence, specify the
+   atomic approval-consumption mechanism, make migration-number lookup explicit,
+   include Ed25519 key lifecycle, and move Helm/env sync into the phase that
+   introduces signing/device secrets.
 
 ---
 
@@ -137,6 +148,28 @@ The WebView must not retain broad ambient desktop authority. Before desktop
 control ships, replace or remove broad Tauri `shell:default` capability and keep
 desktop control behind explicit allow-listed Tauri commands plus the
 `desktop_control` tool group.
+
+### Release Channel Rule
+
+Luna desktop releases are built only by GitHub Actions and distributed only
+through GitHub Releases. Do not build production Tauri releases locally.
+
+Release hardening requirements:
+
+1. The updater endpoint must be Luna-specific. It cannot use
+   `/releases/latest/download/latest.json` because CLI releases can become the
+   repository's latest release.
+2. The updater endpoint must point at `nomad3/agentprovision-agents`, not the
+   pre-rename `servicetsunami-agents` repository.
+3. Release `latest.json` must include a non-empty Tauri updater signature when
+   the app embeds a non-empty updater pubkey.
+4. The release workflow must fail rather than publish an unsigned updater
+   manifest.
+5. Before broad macOS control ships, the DMG should be Developer ID signed and
+   notarized, or the release must explicitly document that Gatekeeper will treat
+   it as an unsigned build.
+6. Local installation is allowed only as smoke verification of a GitHub Release
+   artifact.
 
 ### Alpha Control Reuse
 
@@ -263,6 +296,11 @@ Rules:
    success.
 7. Retries create new commands with new nonces and correlation to the original
    request.
+8. Approval consumption uses a database compare-and-swap update on the approval
+   row inside the same transaction as command claim. The update must include
+   `remaining_actions > 0`, `expires_at > now()`, target binding, capability,
+   and tenant/user/session predicates. If the update affects zero rows, the
+   command claim is denied.
 
 ### Device Trust Bootstrap
 
@@ -273,11 +311,15 @@ Desktop shell identity is durable and revocable:
 2. Enrollment creates a rotating desktop claim token and a local signing or
    verification keypair.
 3. The API stores only hashed claim secrets and public key material.
-4. Presence binds liveness to `device_id`, `shell_id`, app version, hostname
+4. `shell_id` is a random UUID generated on first successful desktop login and
+   persisted in Tauri app data storage. It is not derived from hostname, user
+   name, or hardware identifiers. Reinstall or explicit device reset can rotate
+   it.
+5. Presence binds liveness to `device_id`, `shell_id`, app version, hostname
    hash, OS username hash, and current capability manifest.
-5. Command claim requires both a logged-in user session and a valid desktop
+6. Command claim requires both a logged-in user session and a valid desktop
    device claim token.
-6. Operators can revoke or rotate desktop device tokens without disabling user
+7. Operators can revoke or rotate desktop device tokens without disabling user
    login.
 
 ### Up-Channel And Audit
@@ -417,6 +459,9 @@ apps/luna-client/src/hooks/useSessionEvents.js
 apps/luna-client/src-tauri/src/lib.rs
 apps/luna-client/src-tauri/src/gesture/cursor.rs
 apps/luna-client/src-tauri/capabilities/default.json
+apps/luna-client/README.md
+CLAUDE.md
+.github/workflows/luna-client-build.yaml
 apps/api/app/services/tool_groups.py
 apps/api/app/api/v1/devices.py
 apps/api/app/models/device_registry.py
@@ -444,12 +489,25 @@ apps/api/app/models/desktop_command_event.py
 apps/api/app/services/desktop_control_service.py
 apps/api/app/api/v1/desktop_control.py
 apps/api/migrations/NNN_desktop_control_commands.sql
+apps/api/migrations/NNN_device_registry_desktop.sql
 
 apps/mcp-server/src/mcp_tools/computer_use.py
 ```
 
 Migration number `NNN` must be chosen from the next available migration at
 implementation time, then inserted into `_migrations` per repo convention.
+Use:
+
+```bash
+ls apps/api/migrations/*.sql | sort | tail -1
+```
+
+Then force-add SQL files because migration files can be ignored by local/global
+gitignore rules:
+
+```bash
+git add -f apps/api/migrations/NNN_*.sql
+```
 
 ---
 
@@ -460,28 +518,59 @@ implementation time, then inserted into `_migrations` per repo convention.
 Goal: make the working chat/session UI the product surface and stop the broken
 orchestra hub from opening by default.
 
-- [ ] Set `main` visible on startup in `tauri.conf.json`.
-- [ ] Set `spatial_hud` hidden on startup, or gate it behind a feature flag.
-- [ ] Update tray click and "Open" menu to focus `main`, not `spatial_hud`.
-- [ ] Keep "Open Luna OS / Labs" as an explicit menu item if needed.
-- [ ] Update `Cmd+Shift+L` semantics to focus/toggle chat, not spatial HUD.
-- [ ] Remove "Luna OS Spatial Workstation" empty-state copy from the main chat.
-- [ ] Ensure login state is app-wide across Tauri windows.
-- [ ] Stop auto-starting `gesture_start` on generic login.
-- [ ] Gate camera/gesture startup behind an explicit setting or feature use.
+- [x] Set `main` visible on startup in `tauri.conf.json`.
+- [x] Set `spatial_hud` hidden on startup, or gate it behind a feature flag.
+- [x] Update tray click and "Open" menu to focus `main`, not `spatial_hud`.
+- [x] Keep "Open Luna OS / Labs" as an explicit menu item if needed.
+- [x] Update `Cmd+Shift+L` semantics to focus/toggle chat, not spatial HUD.
+- [ ] Verify `Cmd+Shift+Space` opens the command palette on `main`, not
+      `spatial_hud`.
+- [x] Update `CLAUDE.md` and `apps/luna-client/README.md` shortcut docs.
+- [x] Remove "Luna OS Spatial Workstation" empty-state copy from the main chat.
+- [x] Ensure login state is app-wide across Tauri windows.
+- [x] Stop auto-starting `gesture_start` on generic login.
+- [x] Gate camera/gesture startup behind an explicit setting or feature use.
 - [ ] Throttle gesture logs or move per-frame events to debug-only logs.
-- [ ] Confirm `App.jsx` no longer calls `gesture_start` or camera capture after
+- [x] Confirm `App.jsx` no longer calls `gesture_start` or camera capture after
       generic login.
 
 Exit criteria:
 
-- [ ] App opens directly to `Luna` chat/session window.
+- [x] App opens directly to `Luna` chat/session window.
 - [ ] Login once is enough for all Tauri windows.
-- [ ] `Luna OS` window does not open unless explicitly requested.
-- [ ] Camera indicator does not activate on login.
-- [ ] Gesture logs are quiet in normal runtime.
-- [ ] Gesture/camera off by default is verified before any observation feature
+- [x] `Luna OS` window does not open unless explicitly requested.
+- [x] Camera indicator does not activate on login.
+- [x] Gesture logs are quiet in normal runtime.
+- [x] Gesture/camera off by default is verified before any observation feature
       work begins.
+
+### Phase 0.5 -- Release channel hardening
+
+Goal: make the GitHub Actions/GitHub Releases path trustworthy before shipping
+desktop-control capabilities.
+
+- [x] Change Luna updater endpoint to a Luna-specific manifest URL, for example
+      a stable `luna-latest` release asset.
+- [x] Replace remaining `nomad3/servicetsunami-agents` release URLs with
+      `nomad3/agentprovision-agents`.
+- [x] Update `.github/workflows/luna-client-build.yaml` to publish or update a
+      stable Luna updater manifest that cannot be shadowed by CLI releases.
+- [x] Fail the release workflow if `TAURI_SIGNING_PRIVATE_KEY` is missing when
+      producing `latest.json`.
+- [ ] Add release smoke checks for `latest.json` non-empty signature, current
+      repo URL, downloadable DMG, and DMG SHA256.
+- [ ] Add Developer ID signing/notarization to the Luna workflow, or add a
+      tracked release-risk note that DMGs remain unsigned/ad-hoc until Apple
+      signing secrets are wired.
+
+Exit criteria:
+
+- [ ] Installed Luna can fetch a valid updater manifest.
+- [ ] `latest.json` points at `nomad3/agentprovision-agents` and includes a
+      non-empty signature.
+- [ ] The release path is documented as GitHub Actions/GitHub Releases only.
+- [ ] Local install smoke from the released DMG confirms version, launch, and
+      updater check behavior.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -498,7 +587,9 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
 - [ ] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
       shortcut before down-channel work.
 - [ ] Add persistent Observe/Assist indicator while either tier is active.
-- [ ] Register shell capabilities through `useShellPresence`.
+- [x] Add durable random `desktop-<uuid>` shell identity persisted in Tauri app
+      data, with browser/test fallback.
+- [x] Register shell capabilities through `useShellPresence`.
 - [ ] Register macOS permission readiness for Screen Recording, Accessibility,
       Automation/System Events, Input Monitoring, camera, and microphone.
 - [ ] Add `desktop_control` tool group in `tool_groups.py`.
@@ -537,6 +628,9 @@ Goal: add the missing API-to-Tauri path for action envelopes.
 - [ ] Add API service for enqueue, claim, complete, deny, expire.
 - [ ] Add desktop device enrollment, claim token hashing, rotation, and
       revocation through `device_registry`.
+- [ ] Add Ed25519 key lifecycle: key generation during enrollment, public key
+      storage in `device_registry`, private key storage in Tauri secure storage,
+      and rotation/revocation.
 - [ ] Bind shell presence to `device_id`, `shell_id`, app version, hostname hash,
       OS username hash, and current capability manifest.
 - [ ] Add authenticated Tauri polling/SSE hook for claimable-command notices.
@@ -549,8 +643,12 @@ Goal: add the missing API-to-Tauri path for action envelopes.
       transitions, retry limits, and duplicate completion handling.
 - [ ] Add atomic approval consumption/decrement during command claim or
       execution.
+- [ ] Implement approval consumption as a database compare-and-swap update inside
+      the command claim transaction.
 - [ ] Add command correlation IDs across API, Tauri, MCP, audit, and
       `session_events`.
+- [ ] Add config/env/Helm updates in the same PR as any signing, enrollment, or
+      device-token secret.
 - [ ] Emit `desktop_action_requested`, `started`, `completed`, `denied`, and
       `stopped`.
 - [ ] Add stale-shell rejection.

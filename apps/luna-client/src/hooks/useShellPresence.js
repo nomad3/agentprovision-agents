@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { apiFetch } from '../api';
+import { getOrCreateShellId } from '../utils/shellIdentity';
 
-const SHELL_TYPE = 'desktop';
 const HEARTBEAT_INTERVAL = 10000; // 10s
 const CAPABILITIES = {
   can_listen: true,
@@ -12,28 +12,19 @@ const CAPABILITIES = {
   can_run_local_actions: true,
 };
 
-// Unique per browser/app instance, persists across page reloads
-function getShellId() {
-  let id = sessionStorage.getItem('luna_shell_id');
-  if (!id) {
-    id = `${SHELL_TYPE}-${Date.now().toString(36)}`;
-    sessionStorage.setItem('luna_shell_id', id);
-  }
-  return id;
-}
-
 export function useShellPresence() {
   const registered = useRef(false);
   const intervalRef = useRef(null);
-  const shellId = useRef(getShellId());
+  const [shellId, setShellId] = useState(null);
   const [handoff, setHandoff] = useState(false);
 
   const register = useCallback(async () => {
+    if (!shellId) return;
     try {
       const res = await apiFetch('/api/v1/presence/shell/register', {
         method: 'POST',
         body: JSON.stringify({
-          shell: shellId.current,
+          shell: shellId,
           capabilities: CAPABILITIES,
         }),
       });
@@ -46,20 +37,20 @@ export function useShellPresence() {
     } catch (err) {
       console.warn('Shell register failed:', err.message);
     }
-  }, []);
+  }, [shellId]);
 
   const deregister = useCallback(async () => {
-    if (!registered.current) return;
+    if (!registered.current || !shellId) return;
     try {
       await apiFetch('/api/v1/presence/shell/deregister', {
         method: 'POST',
-        body: JSON.stringify({ shell: shellId.current }),
+        body: JSON.stringify({ shell: shellId }),
       });
     } catch {
       // best-effort on teardown
     }
     registered.current = false;
-  }, []);
+  }, [shellId]);
 
   const heartbeat = useCallback(async () => {
     if (!registered.current) return;
@@ -67,15 +58,24 @@ export function useShellPresence() {
       await apiFetch('/api/v1/presence/', {
         method: 'PUT',
         body: JSON.stringify({
-          active_shell: shellId.current,
+          active_shell: shellId,
         }),
       });
     } catch {
       // silent — heartbeat is best-effort
     }
+  }, [shellId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getOrCreateShellId().then((id) => {
+      if (!cancelled) setShellId(id);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
+    if (!shellId) return undefined;
     register();
     intervalRef.current = setInterval(heartbeat, HEARTBEAT_INTERVAL);
 
@@ -87,7 +87,7 @@ export function useShellPresence() {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       deregister();
     };
-  }, [register, deregister, heartbeat]);
+  }, [shellId, register, deregister, heartbeat]);
 
-  return { register, deregister, handoff };
+  return { register, deregister, handoff, shellId };
 }
