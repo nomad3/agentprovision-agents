@@ -920,7 +920,7 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
 - [ ] Ensure agent-initiated observations go through MCP/API governance, not
       direct frontend invokes.
   - [x] The registered MCP tools call
-        `/api/v1/desktop-control/observations/request` with internal-key,
+        `/api/v1/desktop-control/internal/observations/request` with internal-key,
         tenant, and user headers; they do not call native Tauri commands or
         return raw desktop content.
 - [ ] Emit authoritative observation events into `desktop_command_events` and

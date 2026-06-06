@@ -169,7 +169,7 @@ def create_local_observation_event(
 
 
 @router.post(
-    "/observations/request",
+    "/internal/observations/request",
     response_model=DesktopObservationRequestOut,
     status_code=status.HTTP_201_CREATED,
 )
@@ -178,9 +178,9 @@ def request_desktop_observation(
     request: Request,
     payload: DesktopObservationRequestIn,
     db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
     tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
     user_id: uuid.UUID = Depends(_resolve_internal_user_id),
-    _auth: None = Depends(_verify_internal_key),
 ):
     event, session_event = record_mcp_observation_request(
         db,

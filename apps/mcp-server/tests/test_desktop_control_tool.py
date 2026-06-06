@@ -58,7 +58,7 @@ async def test_desktop_observe_screen_posts_display_safe_request(patch_httpx):
     assert "down-channel" in out["message"]
     call = client.calls[0]
     assert call["method"] == "POST"
-    assert call["url"].endswith("/api/v1/desktop-control/observations/request")
+    assert call["url"].endswith("/api/v1/desktop-control/internal/observations/request")
     assert call["json"] == {
         "session_id": "33333333-3333-3333-3333-333333333333",
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",

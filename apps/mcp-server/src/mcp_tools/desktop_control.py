@@ -57,7 +57,7 @@ async def _request_observation(
         "X-Tenant-Id": tid,
         "X-User-Id": user_id,
     }
-    url = f"{API_BASE_URL}/api/v1/desktop-control/observations/request"
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/observations/request"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:

@@ -80,6 +80,15 @@ def _ensure_session_owned(db: Session, session_id: uuid.UUID, user: User) -> Non
     _ensure_session_for_tenant(db, session_id, user.tenant_id)
 
 
+def _ensure_user_for_tenant(db: Session, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+    exists = db.query(User.id).filter(
+        User.id == user_id,
+        User.tenant_id == tenant_id,
+    ).first()
+    if not exists:
+        raise HTTPException(status_code=404, detail="User not found")
+
+
 def _presence_for_tenant(tenant_id: uuid.UUID) -> dict[str, Any]:
     return luna_presence_service.get_presence(tenant_id)
 
@@ -239,6 +248,7 @@ def record_mcp_observation_request(
     auditability and display-safe session replay.
     """
     _ensure_session_for_tenant(db, request.session_id, tenant_id)
+    _ensure_user_for_tenant(db, user_id, tenant_id)
     shell_id, shell_capabilities = _select_connected_shell(tenant_id, request.shell_id)
 
     capability = _OBSERVATION_CAPABILITIES[request.action]

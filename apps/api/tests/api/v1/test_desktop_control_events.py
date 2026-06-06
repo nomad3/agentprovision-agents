@@ -305,6 +305,25 @@ def test_record_mcp_observation_request_rejects_no_connected_shell():
     db.add.assert_not_called()
 
 
+def test_record_mcp_observation_request_rejects_user_outside_tenant():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [
+        object(),  # session exists for tenant
+        None,  # user does not
+    ]
+
+    with pytest.raises(HTTPException) as exc:
+        record_mcp_observation_request(
+            db,
+            tenant_id=_user().tenant_id,
+            user_id=_user().id,
+            request=_mcp_request(),
+        )
+
+    assert exc.value.status_code == 404
+    db.add.assert_not_called()
+
+
 def _client_for_endpoint(user):
     app = FastAPI()
     app.include_router(desktop_control_router, prefix="/api/v1")
@@ -391,7 +410,7 @@ def test_local_observation_endpoint_returns_event_ids():
 def test_mcp_observation_endpoint_requires_internal_user_header():
     client, _db = _client_for_endpoint(_user())
     response = client.post(
-        "/api/v1/desktop-control/observations/request",
+        "/api/v1/desktop-control/internal/observations/request",
         headers={
             "X-Internal-Key": settings.API_INTERNAL_KEY,
             "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
@@ -407,10 +426,26 @@ def test_mcp_observation_endpoint_requires_internal_user_header():
     assert "X-User-Id required" in response.text
 
 
+def test_mcp_observation_endpoint_auth_short_circuits_header_contract():
+    client, _db = _client_for_endpoint(_user())
+    response = client.post(
+        "/api/v1/desktop-control/internal/observations/request",
+        json={
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "action": "capture_screenshot",
+            "tool_name": "desktop_observe_screen",
+        },
+    )
+
+    assert response.status_code == 401
+    assert "X-Tenant-Id required" not in response.text
+    assert "X-User-Id required" not in response.text
+
+
 def test_mcp_observation_endpoint_rejects_tool_action_mismatch():
     client, _db = _client_for_endpoint(_user())
     response = client.post(
-        "/api/v1/desktop-control/observations/request",
+        "/api/v1/desktop-control/internal/observations/request",
         headers={
             "X-Internal-Key": settings.API_INTERNAL_KEY,
             "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
@@ -441,7 +476,7 @@ def test_mcp_observation_endpoint_returns_display_safe_denial():
         return_value=(event, {"event_id": "session-event-2", "seq_no": 8}),
     ) as record:
         response = client.post(
-            "/api/v1/desktop-control/observations/request",
+            "/api/v1/desktop-control/internal/observations/request",
             headers={
                 "X-Internal-Key": settings.API_INTERNAL_KEY,
                 "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
