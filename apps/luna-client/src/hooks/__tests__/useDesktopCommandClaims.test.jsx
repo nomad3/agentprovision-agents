@@ -119,6 +119,65 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.status).toBe('failed');
     expect(body.metadata).toEqual({ result_kind: 'error' });
   });
+
+  it('retries terminal completion before letting executor errors escape', async () => {
+    apiFetchMock
+      .mockRejectedValueOnce(new Error('temporary completion failure'))
+      .mockResolvedValueOnce(jsonResponse({}));
+    invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+      { completeRetryDelayMs: 0 },
+    );
+
+    expect(completeCalls()).toHaveLength(2);
+    const body = JSON.parse(completeCalls()[1][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toContain('desktop observe locked');
+  });
+
+  it('completes claimed commands as failed when safety state hangs', async () => {
+    invokeMock.mockReturnValueOnce(new Promise(() => {}));
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+      { safetyTimeoutMs: 5 },
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).not.toHaveBeenCalledWith('get_active_app');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('failed');
+    expect(body.reason).toContain('timed out');
+    expect(body.metadata).toEqual({ result_kind: 'error' });
+  });
+
+  it('completes claimed commands as failed when a native observe command hangs', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
+      .mockReturnValueOnce(new Promise(() => {}));
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+      { nativeTimeoutMs: 5 },
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('get_active_app');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('failed');
+    expect(body.reason).toContain('timed out');
+    expect(body.metadata).toEqual({ result_kind: 'error' });
+  });
 });
 
 describe('useDesktopCommandClaims', () => {
@@ -159,6 +218,95 @@ describe('useDesktopCommandClaims', () => {
     });
     expect(JSON.stringify(completeBody)).not.toContain('Sensitive App');
     expect(JSON.stringify(completeBody)).not.toContain('Sensitive Title');
+  });
+
+  it('completes a claimed command instead of waiting for backend lease expiry when native observe hangs', async () => {
+    apiFetchMock.mockImplementation((url) => {
+      if (url === '/api/v1/desktop-control/commands/claim') {
+        return Promise.resolve(jsonResponse({
+          status: 'claimed',
+          command: claimedCommand('get_active_app'),
+        }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
+      .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
+      .mockReturnValueOnce(new Promise(() => {}));
+
+    renderHook(() => useDesktopCommandClaims(
+      '33333333-3333-3333-3333-333333333333',
+      'desktop-44444444-4444-4444-4444-444444444444',
+      { timeouts: { nativeTimeoutMs: 5 } },
+    ));
+
+    await waitFor(() => expect(completeCalls().length).toBe(1));
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('failed');
+    expect(body.reason).toContain('timed out');
+    expect(body.metadata).toEqual({ result_kind: 'error' });
+  });
+
+  it('denies a claimed command through the hook while observe mode is locked', async () => {
+    apiFetchMock.mockImplementation((url) => {
+      if (url === '/api/v1/desktop-control/commands/claim') {
+        return Promise.resolve(jsonResponse({
+          status: 'claimed',
+          command: claimedCommand('read_clipboard'),
+        }));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_observe: true })
+      .mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
+
+    renderHook(() => useDesktopCommandClaims(
+      '33333333-3333-3333-3333-333333333333',
+      'desktop-44444444-4444-4444-4444-444444444444',
+    ));
+
+    await waitFor(() => expect(completeCalls().length).toBe(1));
+    expect(invokeMock).not.toHaveBeenCalledWith('read_clipboard');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toContain('desktop observe locked');
+  });
+
+  it('preempts a claimed command if the hook is cancelled before execution', async () => {
+    let resolveClaim;
+    apiFetchMock.mockImplementation((url) => {
+      if (url === '/api/v1/desktop-control/commands/claim') {
+        return Promise.resolve({
+          json: () => new Promise((resolve) => {
+            resolveClaim = () => resolve({
+              status: 'claimed',
+              command: claimedCommand('get_active_app'),
+            });
+          }),
+        });
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    invokeMock.mockResolvedValueOnce({ mode: 'observe', can_observe: true });
+
+    const { unmount } = renderHook(() => useDesktopCommandClaims(
+      '33333333-3333-3333-3333-333333333333',
+      'desktop-44444444-4444-4444-4444-444444444444',
+    ));
+
+    await waitFor(() => expect(resolveClaim).toBeTypeOf('function'));
+    unmount();
+    await act(async () => {
+      resolveClaim();
+    });
+
+    await waitFor(() => expect(completeCalls().length).toBe(1));
+    expect(invokeMock).not.toHaveBeenCalledWith('get_active_app');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('preempted');
+    expect(body.reason).toContain('cancelled before execution');
   });
 
   it('preempts session commands when local Stop is latched', async () => {

@@ -8,12 +8,14 @@
 Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
-session ownership and device-bound shell identity merged; `luna-v0.1.94`
-installed-release validation complete; command down-channel implementation
-locally validated on branch `codex/luna-command-downchannel-gate`; PR #799
-update and CI validation pending
+session ownership and device-bound shell identity merged; observation-only
+command down-channel merged in PR #799; unsigned `luna-v0.1.95` installed
+locally; release, Docker mount, and chat/startup smoke passed; installed
+command-completion smoke found a claimed command expiring without client
+completion, now under follow-up branch
+`codex/luna-command-completion-smoke-fix`
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-command-downchannel-gate`
+Current implementation branch: `codex/luna-command-completion-smoke-fix`
 
 ---
 
@@ -330,6 +332,34 @@ Additional discovery inputs:
     SQLAlchemy nonce index with migration `160` and adding a pending-command
     TTL so stale queued observe commands expire before a later reconnect can
     claim them.
+34. PR #799 merged the observation-only command down-channel into `main` on
+    2026-06-06 UTC as merge commit `d6405f86`. PR checks passed for API unit,
+    API integration, Luna client, and aggregate status; post-merge broad
+    Tests, Docker Desktop Deployment, and Luna Client Tauri Build all passed.
+    The release workflow published unsigned development prerelease
+    `luna-v0.1.95`, intentionally ad-hoc signed with no Developer ID
+    notarization. Local install verified `Luna_0.1.95_aarch64.dmg` with its
+    `.sha256`, replaced `/Applications/Luna.app`, and confirmed bundle version
+    `0.1.95` with id `com.agentprovision.luna`.
+35. Installed-release smoke for `luna-v0.1.95` passed the non-command gates:
+    Luna launched chat-first, opened expanded across the visible desktop,
+    reported the expected unsigned development signature, served the public and
+    local API bases, kept the Docker stack healthy, and returned no output for
+    Luna's exact mount gate:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+    Computer Use verified `Stopped -> Resume -> Control Locked -> Stop`
+    behavior with Observe/Assist/Control still governed by TCC and local mode.
+36. Installed command down-channel smoke for `luna-v0.1.95` exposed a client
+    hardening gap: an internal `get_active_app` observation command was queued
+    and claimed by the installed app, but the Luna client never posted terminal
+    completion, so the backend lease expired it. The API correctly recorded
+    queued, claimed, and expired audit events, did not persist raw payload text,
+    and failed closed, but the installed smoke is not release-complete until a
+    claimed command always completes or explicitly fails from the client before
+    lease expiry. Follow-up branch `codex/luna-command-completion-smoke-fix`
+    adds client-side timeouts around safety checks, native observation invokes,
+    and completion POSTs so a stalled Tauri call records `failed` instead of
+    waiting for backend expiry.
 
 ---
 
@@ -1380,6 +1410,16 @@ Exit criteria:
       `npm run build` succeeded. The new tests cover device-token claim
       polling, local Stop preemption, Observe-mode gating, and metadata-only
       completion summaries.
+- [x] Phase 2 claimed-command timeout regression validation passed on branch
+      `codex/luna-command-completion-smoke-fix`:
+      `npm test -- --run src/hooks/__tests__/useDesktopCommandClaims.test.jsx`
+      (`11 passed`). The added tests cover hung post-claim safety checks,
+      hung native observation invokes, locked hook-level denial, cancellation
+      after claim, and completion retry before backend lease expiry.
+- [x] Full Luna client validation for
+      `codex/luna-command-completion-smoke-fix` passed:
+      `npm test -- --run` (`142 passed`) and `npm run build` succeeded with
+      only the existing Vite dynamic/static import and chunk-size warnings.
 
 ### React / UX
 
@@ -1416,6 +1456,14 @@ Exit criteria:
       keeps Assist/Control disabled, and `Stop` relatches the safe state.
 - [x] `luna-v0.1.94` Computer Use smoke: new chat/session creation works and
       Luna responded in Alpha Chat after the computer-use lead handoff.
+- [x] `luna-v0.1.95` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.95`, ad-hoc unsigned development signature confirmed,
+      chat-first expanded startup verified with Computer Use, API/tunnel stack
+      healthy, and Luna's exact Docker `_work` mount gate returned no output.
+- [ ] `luna-v0.1.95` command down-channel smoke: installed app claimed an
+      internal `get_active_app` command, but did not post terminal completion;
+      backend expired the lease. Keep this open until the follow-up branch is
+      merged, released, installed, and a claimed command completes locally.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1460,15 +1508,16 @@ Exit criteria:
 
 ## Next Actions
 
-1. Council review for `codex/luna-command-downchannel-gate` is complete:
-   Luna cleared the branch for PR update but not real actuation; Claude Opus
-   found no high/medium issues; Codex/Gauss findings were fixed in the local
-   branch before push.
-2. Push the updated branch to PR #799 and let GitHub Actions validate API unit,
-   API integration, Luna client, Docker deployment, and Luna Tauri build.
-3. After merge, install the unsigned development release DMG locally, verify
-   the `.sha256`, smoke Luna with Computer Use, and rerun the exact Docker
-   `_work` mount gate. The pass condition is zero output.
+1. Finish `codex/luna-command-completion-smoke-fix`: keep the branch scoped to
+   client-side claimed-command timeout completion plus plan updates, run focused
+   Luna tests, full Luna test/build, and any review requested by Luna/council.
+2. Create the follow-up PR, merge only after required GitHub Actions pass, then
+   install the next unsigned development release locally and rerun the command
+   down-channel smoke. Pass condition: the installed app claims the command and
+   posts terminal completion before backend lease expiry.
+3. Rerun the exact Docker `_work` mount gate after the post-merge deployment.
+   The pass condition remains zero output:
+   `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
 4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.

@@ -3,6 +3,13 @@ import { apiFetch } from '../api';
 import { enrollDesktopDevice } from '../utils/desktopDeviceEnrollment';
 
 export const DESKTOP_COMMAND_CLAIM_POLL_MS = 2000;
+export const DESKTOP_COMMAND_DEFAULT_TIMEOUTS = {
+  safetyTimeoutMs: 5000,
+  nativeTimeoutMs: 10000,
+  completeTimeoutMs: 8000,
+  completeAttempts: 2,
+  completeRetryDelayMs: 250,
+};
 
 const OBSERVATION_COMMANDS = {
   capture_screenshot: 'capture_screenshot',
@@ -22,6 +29,63 @@ function reasonText(error) {
   if (!error) return '';
   if (typeof error === 'string') return error;
   return error.message || String(error);
+}
+
+function timeoutError(label, timeoutMs) {
+  return new Error(`${label} timed out after ${timeoutMs}ms`);
+}
+
+async function withTimeout(task, timeoutMs, label) {
+  if (!timeoutMs || timeoutMs <= 0) return task();
+  let timer;
+  try {
+    return await Promise.race([
+      task(),
+      new Promise((_, reject) => {
+        timer = globalThis.setTimeout(() => reject(timeoutError(label, timeoutMs)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) globalThis.clearTimeout(timer);
+  }
+}
+
+async function apiFetchWithTimeout(path, options, timeoutMs, label) {
+  if (!timeoutMs || timeoutMs <= 0 || typeof AbortController === 'undefined') {
+    return withTimeout(() => apiFetch(path, options), timeoutMs, label);
+  }
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      apiFetch(path, { ...options, signal: controller.signal }),
+      new Promise((_, reject) => {
+        timer = globalThis.setTimeout(() => {
+          controller.abort();
+          reject(timeoutError(label, timeoutMs));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (controller.signal.aborted) throw timeoutError(label, timeoutMs);
+    throw error;
+  } finally {
+    if (timer) globalThis.clearTimeout(timer);
+  }
+}
+
+function resolveTimeouts(overrides = {}) {
+  return {
+    ...DESKTOP_COMMAND_DEFAULT_TIMEOUTS,
+    ...overrides,
+  };
+}
+
+function delay(ms) {
+  if (!ms || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    globalThis.setTimeout(resolve, ms);
+  });
 }
 
 function completionStatusFromReason(reason) {
@@ -59,19 +123,44 @@ function safeObservationMetadata(action, result) {
   return { result_kind: 'unknown' };
 }
 
-async function completeCommand(command, shellId, deviceToken, status, reason = null, metadata = {}) {
+async function completeCommand(
+  command,
+  shellId,
+  deviceToken,
+  status,
+  reason = null,
+  metadata = {},
+  timeoutOverrides = {},
+) {
   const id = commandId(command);
   if (!id) return;
-  await apiFetch(`/api/v1/desktop-control/commands/${id}/complete`, {
-    method: 'POST',
-    headers: { 'X-Device-Token': deviceToken },
-    body: JSON.stringify({
-      shell_id: shellId,
-      status,
-      reason,
-      metadata,
-    }),
-  });
+  const timeouts = resolveTimeouts(timeoutOverrides);
+  const attempts = Math.max(1, timeouts.completeAttempts || 1);
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await apiFetchWithTimeout(
+        `/api/v1/desktop-control/commands/${id}/complete`,
+        {
+          method: 'POST',
+          headers: { 'X-Device-Token': deviceToken },
+          body: JSON.stringify({
+            shell_id: shellId,
+            status,
+            reason,
+            metadata,
+          }),
+        },
+        timeouts.completeTimeoutMs,
+        'desktop command completion',
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt >= attempts) throw lastError;
+      await delay(timeouts.completeRetryDelayMs);
+    }
+  }
 }
 
 async function stopCommands(sessionId, shellId, deviceToken, reason = 'local Stop latched') {
@@ -87,7 +176,18 @@ async function stopCommands(sessionId, shellId, deviceToken, reason = 'local Sto
   });
 }
 
-export async function executeClaimedDesktopCommand(command, shellId, deviceToken, invoke) {
+async function invokeWithTimeout(invoke, command, timeoutMs) {
+  return withTimeout(() => invoke(command), timeoutMs, `Tauri command ${command}`);
+}
+
+export async function executeClaimedDesktopCommand(
+  command,
+  shellId,
+  deviceToken,
+  invoke,
+  timeoutOverrides = {},
+) {
+  const timeouts = resolveTimeouts(timeoutOverrides);
   const action = commandAction(command);
   const nativeCommand = OBSERVATION_COMMANDS[action];
   if (!nativeCommand) {
@@ -98,13 +198,14 @@ export async function executeClaimedDesktopCommand(command, shellId, deviceToken
       'denied',
       `unsupported desktop command action: ${action || 'unknown'}`,
       { result_kind: 'unsupported' },
+      timeouts,
     );
     return;
   }
 
   let safety;
   try {
-    safety = await invoke('control_get_safety_state');
+    safety = await invokeWithTimeout(invoke, 'control_get_safety_state', timeouts.safetyTimeoutMs);
   } catch (error) {
     await completeCommand(
       command,
@@ -113,6 +214,7 @@ export async function executeClaimedDesktopCommand(command, shellId, deviceToken
       'failed',
       reasonText(error) || 'desktop safety state unavailable',
       { result_kind: 'error' },
+      timeouts,
     );
     return;
   }
@@ -124,6 +226,7 @@ export async function executeClaimedDesktopCommand(command, shellId, deviceToken
       'preempted',
       `desktop control stopped; ${action} preempted`,
       { control_mode: safety?.mode || null },
+      timeouts,
     );
     return;
   }
@@ -135,12 +238,13 @@ export async function executeClaimedDesktopCommand(command, shellId, deviceToken
       'denied',
       `desktop observe locked; ${action} denied`,
       { control_mode: safety?.mode || null, can_observe: Boolean(safety?.can_observe) },
+      timeouts,
     );
     return;
   }
 
   try {
-    const result = await invoke(nativeCommand);
+    const result = await invokeWithTimeout(invoke, nativeCommand, timeouts.nativeTimeoutMs);
     await completeCommand(
       command,
       shellId,
@@ -148,6 +252,7 @@ export async function executeClaimedDesktopCommand(command, shellId, deviceToken
       'succeeded',
       null,
       safeObservationMetadata(action, result),
+      timeouts,
     );
   } catch (error) {
     const reason = reasonText(error) || `${action} failed`;
@@ -158,13 +263,15 @@ export async function executeClaimedDesktopCommand(command, shellId, deviceToken
       completionStatusFromReason(reason),
       reason,
       { result_kind: 'error' },
+      timeouts,
     );
   }
 }
 
-export function useDesktopCommandClaims(sessionId, shellId) {
+export function useDesktopCommandClaims(sessionId, shellId, options = {}) {
   const inFlight = useRef(false);
   const deviceTokenRef = useRef(null);
+  const timeoutsRef = useRef(resolveTimeouts(options.timeouts));
 
   useEffect(() => {
     if (!sessionId || !shellId) return undefined;
@@ -185,7 +292,11 @@ export function useDesktopCommandClaims(sessionId, shellId) {
       inFlight.current = true;
       try {
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('control_get_safety_state');
+        await invokeWithTimeout(
+          invoke,
+          'control_get_safety_state',
+          timeoutsRef.current.safetyTimeoutMs,
+        );
         const deviceToken = await ensureDeviceToken();
         const response = await apiFetch('/api/v1/desktop-control/commands/claim', {
           method: 'POST',
@@ -197,9 +308,39 @@ export function useDesktopCommandClaims(sessionId, shellId) {
           }),
         });
         const claim = await response.json();
-        if (cancelled || claim?.status !== 'claimed' || !claim.command) return;
+        if (claim?.status !== 'claimed' || !claim.command) return;
+        if (cancelled) {
+          await completeCommand(
+            claim.command,
+            shellId,
+            deviceToken,
+            'preempted',
+            'desktop command cancelled before execution',
+            { result_kind: 'cancelled' },
+            timeoutsRef.current,
+          );
+          return;
+        }
 
-        await executeClaimedDesktopCommand(claim.command, shellId, deviceToken, invoke);
+        try {
+          await executeClaimedDesktopCommand(
+            claim.command,
+            shellId,
+            deviceToken,
+            invoke,
+            timeoutsRef.current,
+          );
+        } catch (error) {
+          await completeCommand(
+            claim.command,
+            shellId,
+            deviceToken,
+            'failed',
+            reasonText(error) || 'desktop command execution failed after claim',
+            { result_kind: 'error' },
+            timeoutsRef.current,
+          );
+        }
       } catch (error) {
         console.warn('[Luna] desktop command claim loop failed:', reasonText(error));
       } finally {
