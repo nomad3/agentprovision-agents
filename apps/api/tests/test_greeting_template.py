@@ -23,11 +23,9 @@ def test_template_fires_on_short_spanish_greeting():
     assert "Luna" in out
 
 
-def test_template_fires_on_short_english_greeting():
-    out = _greeting_template(GR, "hi", "luna")
-    assert out is not None
-    assert out.startswith("Hi!")
-    assert "Luna" in out
+def test_template_skips_short_english_greeting():
+    """English greetings fall through to generation for better persona tone."""
+    assert _greeting_template(GR, "hi", "luna") is None
 
 
 def test_template_uses_agent_slug_friendly_name():

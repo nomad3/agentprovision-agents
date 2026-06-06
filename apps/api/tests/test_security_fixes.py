@@ -2,7 +2,10 @@ import pytest
 import os
 import sys
 import importlib
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 
@@ -61,10 +64,6 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-tests")
 os.environ.setdefault("MCP_API_KEY", "test-mcp-key")
 os.environ.setdefault("API_INTERNAL_KEY", "test-internal-key")
 os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/agentprovision")
-
-from unittest.mock import MagicMock, patch
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 
 def _make_oauth_test_client():
@@ -249,7 +248,14 @@ def _make_reset_test_client(mock_user_or_none):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.api import deps
+    from app.core.rate_limit import limiter
     import app.api.v1.auth as auth_module
+
+    try:
+        limiter.reset()
+        limiter._storage.reset()
+    except Exception:
+        pass
 
     class _StubQuery:
         def filter(self, *_a, **_k): return self
@@ -912,10 +918,14 @@ def test_reset_password_burns_token_after_three_wrong_attempts():
     # Reset the slowapi limiter — prior tests in this file hit
     # /reset-password and the 5/hour key is per-IP (same 127.0.0.1
     # for the entire TestClient suite).
-    try:
-        limiter.reset()
-    except Exception:
-        pass
+    def _reset_route_limiter():
+        try:
+            limiter.reset()
+            limiter._storage.reset()
+        except Exception:
+            pass
+
+    _reset_route_limiter()
 
     mock_user = MagicMock(spec=User)
     mock_user.id = uuid.uuid4()
@@ -930,6 +940,7 @@ def test_reset_password_burns_token_after_three_wrong_attempts():
 
     # Three wrong-token submissions.
     for i in range(3):
+        _reset_route_limiter()
         resp = client.post(
             "/api/v1/auth/reset-password",
             json={
@@ -950,6 +961,7 @@ def test_reset_password_burns_token_after_three_wrong_attempts():
     # A subsequent submission with the originally-correct token must
     # also 401-equivalent (400, "Invalid or expired token") because
     # the token was burned.
+    _reset_route_limiter()
     resp_after = client.post(
         "/api/v1/auth/reset-password",
         json={
