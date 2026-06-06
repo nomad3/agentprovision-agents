@@ -9,7 +9,8 @@ Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Implementation in progress
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-phase1-control-plane`
+Branch: `codex/luna-phase1-control-plane`; current follow-up branch:
+`codex/luna-desktop-command-events`
 
 ---
 
@@ -152,6 +153,65 @@ Additional discovery inputs:
     correctly reported denied/not-yet-granted Screen Recording and
     Accessibility (`TCC 1/3`). Pressing Stop latched the app into `Stopped`, and
     relaunch preserved the stopped posture with `Resume` visible.
+16. PR #788 merged the local observation policy/audit gate and PRs #790/#791
+    then landed global emergency Stop plus expanded TCC readiness details.
+    GitHub Actions published unsigned development prerelease `luna-v0.1.90`
+    on 2026-06-06 UTC. Local release validation downloaded the DMG and checksum,
+    verified `shasum -c`, installed `/Applications/Luna.app` version `0.1.90`,
+    and used Computer Use to confirm chat-first maximized startup, `Stopped`
+    relaunch persistence, TCC readiness details, `Resume -> Observe`, denied
+    screenshot metadata-only audit, and `Stop` relatch. The exact Docker mount
+    gate,
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`,
+    returned no output.
+17. Luna Supervisor reviewed the next branch scope on 2026-06-06 and confirmed
+    no product blocker for `codex/luna-desktop-command-events` as long as the PR
+    stays limited to authoritative `desktop_command_events` schema/API, active
+    session + shell binding, metadata-only local audit forwarding, display-safe
+    `session_events` mirror, and tests. She explicitly kept pointer/keyboard,
+    Assist, and Control actuation out of scope until signed envelopes,
+    approvals, replay protection, and policy enforcement are reviewed.
+18. PR #793 added the first API-backed local observation audit spine. The branch
+    creates `desktop_commands` and `desktop_command_events`, adds authenticated
+    local-observation ingestion, mirrors only display-safe summaries into
+    `session_events`, registers the `desktop_control` tool group, and forwards
+    Luna Tauri metadata-only audit events with active `chat_session_id` plus a
+    durable `desktop-<uuid>` shell id. The first GitHub Actions API unit gate
+    exposed stale unit expectations and SQLite-only test fragility rather than
+    a desktop-control schema defect: the test suite still expected the old
+    Claude setup-token flow, English canned greetings, non-fatal P0a token mint
+    failures, and raw PostgreSQL-only SQLAlchemy types under SQLite metadata
+    creation. The follow-up patch aligned those tests with current behavior,
+    added test-only SQLite compilers for PostgreSQL `UUID`, `JSONB`, `ARRAY`,
+    `INET`, and optional pgvector types, restored tenant-wide affect fallback
+    for agent emotion reads, made session affect reads ignore SQLite JSON-null
+    rows in Python, tightened the reflection safety block for "rate limiting",
+    and isolated reset-password limiter state in the security tests. Focused
+    validation passed locally with 105 API tests plus targeted `ruff`; full PR
+    CI remains the merge gate.
+19. Cross-CLI review on PR #793 completed with Codex findings; the Claude leaf
+    failed on the Alpha backend with `Unsupported platform: claude`, and Luna's
+    Alpha chat handoff hit a Cloudflare 524 timeout. Codex found two merge
+    blockers: client-controlled `event_id` could smuggle arbitrary display text
+    into the mirrored payload, and the Tauri bridge trusted native
+    `payload.shell_id` over the active app shell id while the API accepted
+    non-connected shell ids. The follow-up patch makes `event_id` a canonical
+    UUID at the API boundary, serializes only that UUID into
+    `local_event_id`, makes the bridge always use the active `shellId`, and
+    rejects audit rows for shells that are not currently connected in Luna
+    presence. Durable device-token/session binding remains a Phase 2
+    `device_registry` requirement.
+20. GitHub API unit CI on PR #793 exposed a long-standing Temporal test hang in
+    `SkillEvalIterationWorkflow`: the scaffold intends a failed leg to be
+    counted and skipped, but `workflow.execute_activity` used Temporal's default
+    retry policy, so the intentionally failing mocked activity retried instead
+    of reaching the workflow `except` block. The fix sets
+    `maximum_attempts=1` for the scaffold persist and aggregate activities.
+    Local validation of `tests/test_skill_eval_iteration_workflow.py` now exits
+    cleanly with 3 passing tests.
+21. Final PR #793 validation on head `945ccabf` passed GitHub Actions run
+    `27055003884`: API unit in 2m38s, API integration with PostgreSQL/pgvector
+    in 4m18s, Luna client jest+cargo in 1m10s, and aggregate status in 7s.
 
 ---
 
@@ -684,6 +744,11 @@ Current verification finding (2026-06-06):
       `/Applications/Luna.app` version `0.1.87`, maximized chat-first startup,
       Control Locked safety strip, disabled Assist/Control, native TCC readiness
       display, and durable Stop posture after relaunch.
+- [x] Verify `luna-v0.1.90` unsigned development release locally after PRs
+      #788/#790/#791: DMG checksum, `/Applications/Luna.app` version `0.1.90`,
+      maximized chat-first startup, durable `Stopped` relaunch, expanded TCC
+      details, `Resume -> Observe`, metadata-only denied screenshot audit, and
+      Stop relatch.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -706,6 +771,10 @@ Exit criteria:
 - [x] Local install smoke from GitHub Release `luna-v0.1.87` confirms version,
       checksum, maximized launch, locked passive control strip, TCC readiness
       reporting, and durable Stop after relaunch.
+- [x] Local install smoke from GitHub Release `luna-v0.1.90` confirms version,
+      checksum, maximized launch, TCC readiness detail, `Resume -> Observe`,
+      denied screenshot metadata-only audit, Stop relatch, and durable stopped
+      relaunch.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -734,8 +803,25 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
         granted.
   - [ ] Bind local observation requests to the active chat session before
         MCP/API-governed observations ship.
-  - [ ] Promote local audit events into authoritative API
+    - [x] Add branch `codex/luna-desktop-command-events` bridge that forwards
+          existing local `desktop-control-audit` events with active
+          `chat_session_id` and durable `desktop-<uuid>` shell id.
+  - [x] Promote local audit events into authoritative API
         `desktop_command_events` and display-safe `session_events`.
+    - [x] Add authenticated `/api/v1/desktop-control/events/local-observation`
+          endpoint that persists metadata-only local observation events into
+          `desktop_command_events` and mirrors display-safe payloads into
+          `session_events`.
+    - [x] Redact unrecognized client-supplied audit `reason` text before
+          persistence/mirroring so the reason field cannot smuggle raw
+          clipboard, screenshot, window-title, path, or prompt content.
+    - [x] Add focused API tests for authenticated ingestion, tenant/session
+          binding, allowed metadata keys, display-safe mirroring, and reason
+          redaction.
+    - [x] Constrain local observation `event_id` to UUID syntax before it can be
+          stored as `local_event_id` or mirrored into `session_events`.
+    - [x] Reject local observation audit rows for shell ids that are not
+          currently connected in Luna presence.
 - [x] Remove or narrow broad Tauri `shell:default` capability before adding
       desktop control.
 - [ ] Add local permission state for Observe and Assist tiers.
@@ -751,7 +837,7 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       `observe`; no pointer/keyboard action is exposed in this slice.
 - [x] Add visible Observe/Stop skeleton in the main chat nav.
 - [x] Add visible Observe/Assist/Control/Stop control strip in main chat.
-- [ ] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
+- [x] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
       shortcut before down-channel work.
 - [ ] Add persistent Observe/Assist indicator while either tier is active.
 - [x] Add durable random `desktop-<uuid>` shell identity persisted in Tauri app
@@ -760,6 +846,8 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       (`observe`, `stop`, `notify`; no pointer/keyboard/local-action claim).
 - [x] Sync shell presence capabilities from native control safety state so
       stopped shells do not advertise observation readiness.
+- [x] Ensure the local audit bridge uses the active app shell id instead of
+      trusting a native event payload shell override.
 - [x] Add explicit gesture engine start paths in calibration and gesture
       settings after removing login-time camera auto-start.
 - [x] Require Observe, not merely non-Stopped, for screenshot, active-app,
@@ -779,7 +867,12 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
         Events/Automation remains `unknown` until an explicit setup flow so
         Luna does not trigger TCC prompts by merely opening the chat window.
 - [x] Add unit coverage for the Phase 1 permission-readiness status contract.
-- [ ] Add `desktop_control` tool group in `tool_groups.py`.
+- [x] Add `desktop_control` tool group in `tool_groups.py`.
+  - [x] Add `desktop_control` group key for the planned read-only observation
+        MCP tools; no agent grants or actuation tools are added in this slice.
+  - [x] Add CI recovery coverage so existing unit jobs can compile
+        PostgreSQL-typed models under SQLite without weakening the real
+        PostgreSQL integration gate.
 - [ ] Add MCP tools:
   - [ ] `desktop_observe_screen`
   - [ ] `desktop_get_active_app`
@@ -788,6 +881,10 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       direct frontend invokes.
 - [ ] Emit authoritative observation events into `desktop_command_events` and
       display-safe summaries into `session_events`.
+  - [x] Add Phase 1 local-observation ingestion for `started`, `succeeded`,
+        `failed`, and `denied` metadata-only events.
+  - [x] Reject unknown/raw payload keys at the API schema boundary and redact
+        unrecognized reason text before writing audit rows.
 - [ ] Set screenshot retention default to ephemeral or short-lived object
       storage with TTL.
 - [ ] Store clipboard observations as metadata, hashes, and redacted summaries by
@@ -816,8 +913,12 @@ Exit criteria:
 Goal: add the missing API-to-Tauri path for action envelopes.
 
 - [ ] Add `desktop_commands` table with tenant/user/session/shell scoping.
-- [ ] Add append-only `desktop_command_events` table for authoritative audit.
+- [x] Add `desktop_commands` table with tenant/user/session/shell scoping.
+- [x] Add append-only `desktop_command_events` table for authoritative audit.
 - [ ] Add API service for enqueue, claim, complete, deny, expire.
+  - [x] Add API service for local metadata-only observation-event ingestion.
+        Enqueue/claim/complete/deny/expire remains pending for signed command
+        envelopes.
 - [ ] Add desktop device enrollment, claim token hashing, rotation, and
       revocation through `device_registry`.
 - [ ] Add Ed25519 key lifecycle: key generation during enrollment, public key
@@ -1002,6 +1103,9 @@ Exit criteria:
 
 - [ ] `desktop_commands` migration applies and records in `_migrations`.
 - [ ] `desktop_command_events` migration applies and records in `_migrations`.
+- [x] PR #793 includes migration files for `desktop_commands` and
+      `desktop_command_events`; applied-migration validation remains part of
+      the PostgreSQL CI/release gate.
 - [ ] Command enqueue requires authenticated user and valid session.
 - [ ] Command claim requires matching tenant and shell/device.
 - [ ] Cross-tenant command claim returns 404 or denial without leaking existence.
@@ -1021,6 +1125,24 @@ Exit criteria:
 - [ ] Rate limits are enforced per tenant/user/session/shell/capability.
 - [ ] Raw screenshot and clipboard values are not written to logs or
       `session_events`.
+- [x] Focused API validation for PR #793 passed locally:
+      `tests/api/v1/test_desktop_control_events.py`,
+      `tests/api/v1/test_claude_auth_setup_token.py`,
+      `tests/test_cli_dispatch_rollback_safety.py`,
+      `tests/test_emotion_engine_agent_affect_endpoint.py`,
+      `tests/test_emotion_engine_prompt_injection.py`,
+      `tests/test_greeting_template.py`,
+      `tests/test_reflection_validators.py`, and
+      `tests/test_security_fixes.py` all passed in one run.
+- [x] Targeted `ruff check` passed for the desktop-control API/model files and
+      touched API test/support files.
+- [x] Council-blocker regression checks passed locally after the review fix:
+      desktop-control API event tests, Luna audit bridge tests, and targeted
+      `ruff`.
+- [x] `SkillEvalIterationWorkflow` unit tests pass after disabling activity
+      retries for the scaffold failure-counting path.
+- [x] Fresh GitHub Actions API unit, API integration, and Luna client gates pass
+      on PR #793 after the CI recovery patch.
 
 ### Tauri / Rust
 
@@ -1104,15 +1226,17 @@ Exit criteria:
 
 ## Next Actions
 
-1. Start the next Phase 1 safety branch with Luna leading from Alpha chat and
-   local Codex CLI access.
-2. Prioritize Phase 1 in Luna's reviewed order: durable Stop across relaunch,
-   policy-gated screenshot/active-app/clipboard reads with audit, persistent
-   Observe/Assist indicator, then `Cmd+Shift+Space` command palette on `main`.
-3. Continue Phase 1 by moving screenshot, active-app, and clipboard-read
-   primitives fully behind the `computer_use` module and adding audit event
-   plumbing.
-4. Add the `desktop_control` tool group and read-only MCP/API observation tools
-   only after the local policy/audit boundary is in place.
-5. Do not implement pointer, keyboard, clipboard-write, or global control until
+1. Push the PR #793 CI recovery patch, rerun GitHub Actions, and keep the PR
+   unmerged until API unit, API integration, and Luna client gates are green.
+2. Ask Luna, Claude Code, and Codex council to review the pushed PR diff for
+   scope, privacy, tenant/session/shell binding, and release-readiness.
+3. Merge PR #793 only after the review gate and CI gate pass, then validate the
+   resulting unsigned GitHub Actions Luna release locally with Computer Use.
+4. Re-run Luna's exact Docker mount gate after the installed-release validation:
+   `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+   The pass condition is zero output.
+5. Continue Phase 1 by adding MCP/API-governed read-only observation tools
+   (`desktop_observe_screen`, `desktop_get_active_app`,
+   `desktop_read_clipboard`) only after the local audit spine has merged.
+6. Do not implement pointer, keyboard, clipboard-write, or global control until
    Phase 1 audit and Phase 2 command-governance exit criteria are satisfied.

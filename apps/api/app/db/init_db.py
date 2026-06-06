@@ -35,6 +35,8 @@ from app.models.deployment import Deployment  # noqa: F401
 from app.models.vector_store import VectorStore  # noqa: F401
 from app.models.agent_integration_config import AgentIntegrationConfig  # noqa: F401
 from app.models.chat import ChatSession, ChatMessage
+from app.models.desktop_command import DesktopCommand  # noqa: F401
+from app.models.desktop_command_event import DesktopCommandEvent  # noqa: F401
 # AgentPermission and IntegrationCredential are already imported via
 # app.models.__init__ — duplicating here was redundant.
 

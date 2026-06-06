@@ -18,6 +18,7 @@ import LunaCursor from './components/luna/LunaCursor';
 import PodiumScene from './components/spatial/PodiumScene';
 import { useShellPresence } from './hooks/useShellPresence';
 import { useSessionEvents } from './hooks/useSessionEvents';
+import { useDesktopControlAuditBridge } from './hooks/useDesktopControlAuditBridge';
 import { useTrustProfile } from './hooks/useTrustProfile';
 import { useActivityTracker } from './hooks/useActivityTracker';
 import { apiJson } from './api';
@@ -136,7 +137,7 @@ function useUpdateBanner() {
 
 function AuthenticatedApp() {
   const { logout } = useAuth();
-  const { handoff } = useShellPresence();
+  const { handoff, shellId } = useShellPresence();
   const { trust, needsConfirmation } = useTrustProfile();
   const { theme, toggle: toggleTheme } = useTheme();
   const { updateVersion, dismiss: dismissUpdate, restart: restartForUpdate } = useUpdateBanner();
@@ -148,6 +149,7 @@ function AuthenticatedApp() {
 
   useActivityTracker();
   useSessionEvents(activeSessionId);
+  useDesktopControlAuditBridge(activeSessionId, shellId);
 
   // Listen for session changes from ChatInterface
   useEffect(() => {
