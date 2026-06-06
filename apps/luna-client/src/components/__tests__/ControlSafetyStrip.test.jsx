@@ -118,6 +118,9 @@ describe('ControlSafetyStrip', () => {
 
     fireEvent(window, new CustomEvent('luna:activity-event', {
       detail: {
+        schema: 'agentprovision.macos_app_monitor_event.v1',
+        event_id: '11111111-1111-4111-8111-111111111111',
+        type: 'app_switch',
         to_app: 'Terminal',
         window_title: 'secret repo window title',
         subprocess: { active_processes: [{ args: 'secret args' }] },
@@ -127,6 +130,28 @@ describe('ControlSafetyStrip', () => {
     expect(screen.getByText('Terminal')).toBeInTheDocument();
     expect(screen.queryByText('secret repo window title')).toBeNull();
     expect(screen.queryByText('secret args')).toBeNull();
+  });
+
+  it('ignores malformed macOS monitor events before updating the UI', async () => {
+    invokeMock.mockResolvedValueOnce({
+      mode: 'observe',
+      macos_app_monitor: { status: 'ready' },
+    });
+
+    render(<ControlSafetyStrip />);
+
+    expect(await screen.findByText('Mac Ready')).toBeInTheDocument();
+
+    fireEvent(window, new CustomEvent('luna:activity-event', {
+      detail: {
+        type: 'app_switch',
+        to_app: 'Terminal',
+        window_title: 'secret repo window title',
+      },
+    }));
+
+    expect(screen.queryByText('Terminal')).toBeNull();
+    expect(screen.queryByText('secret repo window title')).toBeNull();
   });
 
   it('expands permission readiness details from the safety strip', async () => {

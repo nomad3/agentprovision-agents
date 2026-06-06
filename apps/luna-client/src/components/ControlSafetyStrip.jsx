@@ -1,4 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  activeAppLabelFromMonitorEvent,
+  sanitizeMacosAppMonitorEvent,
+} from '../utils/macosAppMonitor';
 
 const FALLBACK_STATE = {
   mode: 'control_locked',
@@ -129,14 +133,6 @@ export function labelForMacosMonitorStatus(status) {
   }
 }
 
-function safeActiveAppLabel(payload) {
-  const value = payload?.to_app || payload?.app_name || '';
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.length > 28 ? `${trimmed.slice(0, 27)}...` : trimmed;
-}
-
 export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
@@ -163,7 +159,8 @@ export default function ControlSafetyStrip() {
   }, [refresh]);
 
   const handleActivityPayload = useCallback((payload) => {
-    const label = safeActiveAppLabel(payload);
+    const safePayload = sanitizeMacosAppMonitorEvent(payload, null);
+    const label = activeAppLabelFromMonitorEvent(safePayload);
     if (label) setActiveApp(label);
   }, []);
 

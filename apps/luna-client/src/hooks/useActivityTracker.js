@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { apiFetch } from '../api';
+import { sanitizeMacosAppMonitorEvent } from '../utils/macosAppMonitor';
 import { getCachedShellId, getOrCreateShellId } from '../utils/shellIdentity';
 
 export function useActivityTracker() {
@@ -12,14 +13,13 @@ export function useActivityTracker() {
       try {
         const { listen } = await import('@tauri-apps/api/event');
         unlisten = await listen('activity-event', (event) => {
-          const data = event.payload;
-          // Post to API for server-side pattern analysis
+          const data = sanitizeMacosAppMonitorEvent(event.payload, shellId.current);
+          if (!data) return;
+
+          window.dispatchEvent(new CustomEvent('luna:activity-event', { detail: data }));
           apiFetch('/api/v1/activities/track', {
             method: 'POST',
-            body: JSON.stringify({
-              ...data,
-              source_shell: shellId.current,
-            }),
+            body: JSON.stringify(data),
           }).catch(() => {}); // best-effort
         });
       } catch {} // Not in Tauri (PWA mode)
