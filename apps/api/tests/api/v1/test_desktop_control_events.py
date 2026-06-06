@@ -12,10 +12,13 @@ from fastapi.testclient import TestClient
 
 from app.api import deps
 from app.api.v1.desktop_control import router as desktop_control_router
+from app.core.config import settings
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.services.desktop_control_service import (
     LocalObservationAudit,
+    McpObservationRequest,
     record_local_observation_event,
+    record_mcp_observation_request,
 )
 
 
@@ -64,6 +67,40 @@ def _connected_shell():
         "app.services.desktop_control_service.luna_presence_service.get_presence",
         return_value={"connected_shells": ["desktop-44444444-4444-4444-4444-444444444444"]},
     )
+
+
+def _observable_shell_presence():
+    return {
+        "active_shell": "desktop-44444444-4444-4444-4444-444444444444",
+        "connected_shells": ["desktop-44444444-4444-4444-4444-444444444444"],
+        "shell_capabilities": {
+            "desktop-44444444-4444-4444-4444-444444444444": {
+                "can_observe": True,
+                "can_stop": True,
+                "can_control_pointer": False,
+                "can_control_keyboard": False,
+            },
+        },
+    }
+
+
+def _locked_shell_presence():
+    presence = _observable_shell_presence()
+    presence["shell_capabilities"]["desktop-44444444-4444-4444-4444-444444444444"][
+        "can_observe"
+    ] = False
+    return presence
+
+
+def _mcp_request(**overrides):
+    values = {
+        "session_id": uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        "shell_id": None,
+        "action": "capture_screenshot",
+        "tool_name": "desktop_observe_screen",
+    }
+    values.update(overrides)
+    return McpObservationRequest(**values)
 
 
 def test_record_local_observation_rejects_cross_tenant_session():
@@ -179,6 +216,95 @@ def test_record_local_observation_reconstructs_permission_reason_without_client_
     assert "customer secret" not in str(publish.call_args.args[2])
 
 
+def test_record_mcp_observation_request_records_down_channel_denial_with_active_shell():
+    db = _db_with_session(found=True)
+
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_observable_shell_presence(),
+    ), patch(
+        "app.services.desktop_control_service.publish_session_event",
+        return_value={"event_id": "session-event-2", "seq_no": 8},
+    ) as publish:
+        event, session_event = record_mcp_observation_request(
+            db,
+            tenant_id=_user().tenant_id,
+            user_id=_user().id,
+            request=_mcp_request(),
+        )
+
+    persisted = db.add.call_args.args[0]
+    assert isinstance(persisted, DesktopCommandEvent)
+    assert persisted.source == "mcp"
+    assert persisted.event_type == "desktop_observation_denied"
+    assert persisted.action == "capture_screenshot"
+    assert persisted.capability == "screenshot"
+    assert persisted.outcome == "denied"
+    assert persisted.mode == "observe"
+    assert persisted.shell_id == "desktop-44444444-4444-4444-4444-444444444444"
+    assert persisted.reason == "desktop observation down-channel unavailable; capture_screenshot request denied"
+    assert persisted.event_metadata["tool_name"] == "desktop_observe_screen"
+    assert persisted.event_metadata["down_channel"] == {
+        "available": False,
+        "reason": "not_implemented",
+    }
+    assert "screenshot" not in persisted.event_metadata
+    assert "clipboard" not in persisted.event_metadata
+    assert event is persisted
+    assert session_event == {"event_id": "session-event-2", "seq_no": 8}
+    assert publish.call_args.args[1] == "desktop_observation_denied"
+    mirrored = publish.call_args.args[2]
+    assert mirrored["reason"] == persisted.reason
+    assert mirrored["shell_id"] == persisted.shell_id
+    assert "raw" not in mirrored
+    assert "clipboard_text" not in mirrored
+
+
+def test_record_mcp_observation_request_records_locked_shell_denial():
+    db = _db_with_session(found=True)
+
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_locked_shell_presence(),
+    ), patch(
+        "app.services.desktop_control_service.publish_session_event",
+        return_value=None,
+    ):
+        record_mcp_observation_request(
+            db,
+            tenant_id=_user().tenant_id,
+            user_id=_user().id,
+            request=_mcp_request(action="read_clipboard", tool_name="desktop_read_clipboard"),
+        )
+
+    persisted = db.add.call_args.args[0]
+    assert persisted.source == "mcp"
+    assert persisted.action == "read_clipboard"
+    assert persisted.capability == "clipboard_read"
+    assert persisted.mode == "control_locked"
+    assert persisted.reason == "desktop shell cannot observe; read_clipboard request denied"
+    assert persisted.event_metadata["down_channel"]["reason"] == "shell_not_observable"
+
+
+def test_record_mcp_observation_request_rejects_no_connected_shell():
+    db = _db_with_session(found=True)
+
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value={"connected_shells": [], "shell_capabilities": {}},
+    ):
+        with pytest.raises(HTTPException) as exc:
+            record_mcp_observation_request(
+                db,
+                tenant_id=_user().tenant_id,
+                user_id=_user().id,
+                request=_mcp_request(),
+            )
+
+    assert exc.value.status_code == 409
+    db.add.assert_not_called()
+
+
 def _client_for_endpoint(user):
     app = FastAPI()
     app.include_router(desktop_control_router, prefix="/api/v1")
@@ -260,3 +386,85 @@ def test_local_observation_endpoint_returns_event_ids():
         "session_event_id": "session-event-1",
         "session_seq_no": 7,
     }
+
+
+def test_mcp_observation_endpoint_requires_internal_user_header():
+    client, _db = _client_for_endpoint(_user())
+    response = client.post(
+        "/api/v1/desktop-control/observations/request",
+        headers={
+            "X-Internal-Key": settings.API_INTERNAL_KEY,
+            "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+        },
+        json={
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "action": "capture_screenshot",
+            "tool_name": "desktop_observe_screen",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "X-User-Id required" in response.text
+
+
+def test_mcp_observation_endpoint_rejects_tool_action_mismatch():
+    client, _db = _client_for_endpoint(_user())
+    response = client.post(
+        "/api/v1/desktop-control/observations/request",
+        headers={
+            "X-Internal-Key": settings.API_INTERNAL_KEY,
+            "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+            "X-User-Id": "22222222-2222-2222-2222-222222222222",
+        },
+        json={
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "action": "read_clipboard",
+            "tool_name": "desktop_observe_screen",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_mcp_observation_endpoint_returns_display_safe_denial():
+    client, _db = _client_for_endpoint(_user())
+    event = MagicMock()
+    event.id = uuid.UUID("66666666-6666-6666-6666-666666666666")
+    event.shell_id = "desktop-44444444-4444-4444-4444-444444444444"
+    event.action = "get_active_app"
+    event.capability = "active_app"
+    event.reason = "desktop observation down-channel unavailable; get_active_app request denied"
+    event.event_metadata = {"down_channel": {"available": False, "reason": "not_implemented"}}
+
+    with patch(
+        "app.api.v1.desktop_control.record_mcp_observation_request",
+        return_value=(event, {"event_id": "session-event-2", "seq_no": 8}),
+    ) as record:
+        response = client.post(
+            "/api/v1/desktop-control/observations/request",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "action": "get_active_app",
+                "tool_name": "desktop_get_active_app",
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {
+        "status": "denied",
+        "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+        "session_event_id": "session-event-2",
+        "session_seq_no": 8,
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "action": "get_active_app",
+        "capability": "active_app",
+        "reason": "desktop observation down-channel unavailable; get_active_app request denied",
+        "down_channel_available": False,
+    }
+    saved_request = record.call_args.kwargs["request"]
+    assert saved_request.tool_name == "desktop_get_active_app"
