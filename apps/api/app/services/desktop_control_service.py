@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import HTTPException
@@ -245,7 +245,15 @@ def _select_connected_shell(
 
 
 def _utcnow() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _safe_metadata(raw: dict[str, Any] | None) -> dict[str, Any]:
@@ -1031,7 +1039,8 @@ def complete_desktop_command(
         raise HTTPException(status_code=409, detail="Desktop command is not claimed")
 
     now = _utcnow()
-    if command.lease_expires_at and command.lease_expires_at <= now:
+    lease_expires_at = _as_aware_utc(command.lease_expires_at)
+    if lease_expires_at and lease_expires_at <= now:
         command.status = "expired"
         command.completed_at = now
         command.updated_at = now

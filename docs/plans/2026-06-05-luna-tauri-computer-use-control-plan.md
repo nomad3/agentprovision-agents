@@ -9,13 +9,13 @@ Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
 session ownership and device-bound shell identity merged; observation-only
-command down-channel merged in PR #799; unsigned `luna-v0.1.95` installed
-locally; release, Docker mount, and chat/startup smoke passed; installed
-command-completion smoke found a claimed command expiring without client
-completion, now under follow-up branch
-`codex/luna-command-completion-smoke-fix`
+command down-channel merged in PR #799; PR #800 client completion hardening
+merged and unsigned `luna-v0.1.96` installed locally; installed smoke found
+API completion rejecting the client's `/complete` call because of mixed
+timezone lease comparison, now under follow-up branch
+`codex/luna-v0196-validation`
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-command-completion-smoke-fix`
+Current implementation branch: `codex/luna-v0196-validation`
 
 ---
 
@@ -360,6 +360,23 @@ Additional discovery inputs:
     adds client-side timeouts around safety checks, native observation invokes,
     and completion POSTs so a stalled Tauri call records `failed` instead of
     waiting for backend expiry.
+37. PR #800 merged the client-side claimed-command terminalization hardening
+    into `main` on 2026-06-06 UTC as merge commit `49726b06`. Luna lead review
+    via Alpha Chat returned merge-ready with one non-blocking caveat:
+    cancellation during an already-running safety/native invoke still resolves
+    through timeout/success/failure instead of immediate `preempted`. PR checks
+    and post-merge broad Tests, Docker Desktop Deployment, and Luna Client
+    Tauri Build passed. GitHub Actions published unsigned development
+    prerelease `luna-v0.1.96`, installed locally with checksum verification,
+    bundle version `0.1.96`, and expected ad-hoc signature.
+38. Installed command down-channel smoke for `luna-v0.1.96` proved the client
+    now attempts completion, but the API rejected `/complete` with a 500:
+    `complete_desktop_command` compared a database-loaded lease timestamp with
+    a different timezone awareness than `now`. The command therefore expired
+    after lease timeout even though raw request markers were not persisted.
+    Follow-up branch `codex/luna-v0196-validation` normalizes lease timestamps
+    before Python comparisons and adds a regression test for naive future
+    leases loaded from the database.
 
 ---
 
@@ -1420,6 +1437,15 @@ Exit criteria:
       `codex/luna-command-completion-smoke-fix` passed:
       `npm test -- --run` (`142 passed`) and `npm run build` succeeded with
       only the existing Vite dynamic/static import and chunk-size warnings.
+- [x] API timezone regression validation for `codex/luna-v0196-validation`
+      passed:
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py -q`
+      (`15 passed`);
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py -q` (`47 passed`);
+      targeted `ruff check` and `python -m py_compile` for the touched API
+      service/test modules.
 
 ### React / UX
 
@@ -1464,6 +1490,15 @@ Exit criteria:
       internal `get_active_app` command, but did not post terminal completion;
       backend expired the lease. Keep this open until the follow-up branch is
       merged, released, installed, and a claimed command completes locally.
+- [x] `luna-v0.1.96` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.96`, ad-hoc unsigned development signature confirmed,
+      chat-first expanded startup verified with Computer Use, durable
+      `Stopped` relaunch verified, and Luna lead review response visible.
+- [ ] `luna-v0.1.96` command down-channel smoke: installed app claimed
+      `get_active_app` and attempted `/complete`, but API completion raised a
+      mixed-timezone lease comparison error and the command expired. Keep this
+      open until the timezone fix is merged, released, installed, and a claimed
+      command completes before backend lease expiry.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1508,13 +1543,12 @@ Exit criteria:
 
 ## Next Actions
 
-1. Finish `codex/luna-command-completion-smoke-fix`: keep the branch scoped to
-   client-side claimed-command timeout completion plus plan updates, run focused
-   Luna tests, full Luna test/build, and any review requested by Luna/council.
-2. Create the follow-up PR, merge only after required GitHub Actions pass, then
-   install the next unsigned development release locally and rerun the command
-   down-channel smoke. Pass condition: the installed app claims the command and
-   posts terminal completion before backend lease expiry.
+1. Finish `codex/luna-v0196-validation`: keep the branch scoped to backend
+   lease timezone normalization plus plan updates, run focused API tests, and
+   submit PR/CI.
+2. After merge, install the next unsigned development release locally and rerun
+   the command down-channel smoke. Pass condition: the installed app claims the
+   command and posts terminal completion before backend lease expiry.
 3. Rerun the exact Docker `_work` mount gate after the post-merge deployment.
    The pass condition remains zero output:
    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
