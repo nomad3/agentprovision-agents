@@ -2237,12 +2237,38 @@ Exit criteria:
       CI plus first-DMG install/updater validation. Luna Supervisor Alpha Chat
       hit the known Cloudflare 524 path. Claude hosted `ultrareview` was
       unavailable because usage credits were exhausted; local Claude Code
-      Opus/max fallback was requested. Codex review found a release-workflow
+      Opus/max fallback stayed silent for over 13 minutes and was terminated
+      before it consumed more resources. Codex review found a release-workflow
       blocker for signed manual branch builds: `luna-latest` publication was
       gated only on signed mode, while release creation is skipped off `main`/
       `luna-v*` tags. The in-flight branch run `27071553333` was cancelled
       before release-publication steps, and the workflow guard was tightened so
       stable updater manifest publication only runs on `main` or `luna-v*` tags.
+- [x] Developer ID integrity check after the long signed branch build:
+      Certificate Assistant had been stuck during the macOS UI flow, but the
+      certificate material itself validated locally. The Developer ID
+      Application certificate parses cleanly as `Developer ID Application:
+      Simon Aguilera (KF9LPYY7KK)`, issued by Apple Developer ID G2, valid
+      `2026-06-06` through `2031-06-07`, with fingerprint
+      `A0:BF:89:39:3D:7C:AC:07:8B:0A:42:35:19:F2:50:2F:62:9C:88:28:04:29:6E:BC:0E:CD:DB:F9:22:1B:ED:F4`.
+      The certificate modulus matches the private key, the Apple-compatible P12
+      contains a certificate bag plus shrouded keybag, and the P12 certificate
+      matches the private key. The signed branch run was not compiling; it was
+      sleeping inside Apple's `notarytool submit --wait` for the uploaded Luna
+      ZIP. Root cause to pursue if the run times out: notarization wait
+      reliability and secret handling, not corrupted cert material.
+- [x] Signed branch run `27071762194` timed out after `30m21s`. Logs show
+      release compile finished in about one minute, Developer ID certificate
+      import succeeded, Luna binaries and app bundle were signed with
+      `Developer ID Application: Simon Aguilera`, and Tauri entered
+      notarization at `2026-06-06T19:32:18Z`. GitHub cancelled the job at
+      `2026-06-06T20:01:01Z`, after about `28m43s` inside Apple's
+      notarization wait. Tauri's own installed bundler docs note first
+      notarization can take multiple hours, so the workflow timeout was raised
+      from 30 to 120 minutes. Follow-up remains: move notarization auth to
+      App Store Connect API key or a keychain profile path so the app-specific
+      password is not visible in local process arguments on the self-hosted
+      runner.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.

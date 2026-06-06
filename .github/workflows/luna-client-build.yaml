@@ -20,7 +20,10 @@ concurrency:
 jobs:
   build-macos:
     runs-on: self-hosted
-    timeout-minutes: 30
+    # First-time Apple notarization can sit in `notarytool --wait` for well
+    # over 30 minutes. Keep the job bounded, but do not kill a valid signed
+    # release build while Apple's queue is still processing it.
+    timeout-minutes: 120
     env:
       LUNA_CHECKOUT_DIR: luna-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
