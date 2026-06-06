@@ -102,11 +102,46 @@ struct ControlSafetyState {
     last_stop_at_ms: Option<u64>,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct DesktopObservationAuditEvent {
+    event_id: String,
+    event_type: String,
+    source: String,
+    action: String,
+    capability: String,
+    outcome: String,
+    reason: Option<String>,
+    mode: String,
+    shell_id: Option<String>,
+    created_at_ms: u64,
+    screen_recording_status: String,
+    accessibility_status: String,
+    automation_system_events_status: String,
+}
+
+#[derive(Clone)]
+struct ObservationAuditContext {
+    event_id: String,
+    action: &'static str,
+    capability: computer_use::ObservationCapability,
+    mode: computer_use::DesktopControlMode,
+    permissions: computer_use::DesktopPermissionReadiness,
+    shell_id: Option<String>,
+}
+
 fn control_mode_name(mode: u8) -> &'static str {
     match mode {
         CONTROL_MODE_OBSERVE => "observe",
         CONTROL_MODE_STOPPED => "stopped",
         _ => "control_locked",
+    }
+}
+
+fn current_desktop_control_mode() -> computer_use::DesktopControlMode {
+    match CONTROL_MODE.load(Ordering::SeqCst) {
+        CONTROL_MODE_OBSERVE => computer_use::DesktopControlMode::Observe,
+        CONTROL_MODE_STOPPED => computer_use::DesktopControlMode::Stopped,
+        _ => computer_use::DesktopControlMode::ControlLocked,
     }
 }
 
@@ -153,6 +188,116 @@ fn ensure_desktop_control_allows_observation(action: &str) -> Result<(), String>
     } else {
         Err(format!("desktop observe locked; {action} denied"))
     }
+}
+
+fn existing_shell_id_for_audit(app: &tauri::AppHandle) -> Option<String> {
+    let dir = app.path().app_data_dir().ok()?;
+    let raw = std::fs::read_to_string(dir.join("desktop-shell-id")).ok()?;
+    let shell_id = raw.trim();
+    if valid_desktop_shell_id(shell_id) {
+        Some(shell_id.to_string())
+    } else {
+        None
+    }
+}
+
+fn emit_observation_audit(
+    app: &tauri::AppHandle,
+    ctx: &ObservationAuditContext,
+    event_type: &str,
+    outcome: &str,
+    reason: Option<String>,
+) {
+    let event = DesktopObservationAuditEvent {
+        event_id: ctx.event_id.clone(),
+        event_type: event_type.to_string(),
+        source: "tauri_local".to_string(),
+        action: ctx.action.to_string(),
+        capability: ctx.capability.as_str().to_string(),
+        outcome: outcome.to_string(),
+        reason,
+        mode: ctx.mode.as_str().to_string(),
+        shell_id: ctx.shell_id.clone(),
+        created_at_ms: now_unix_ms(),
+        screen_recording_status: ctx.permissions.screen_recording.status.clone(),
+        accessibility_status: ctx.permissions.accessibility.status.clone(),
+        automation_system_events_status: ctx.permissions.automation_system_events.status.clone(),
+    };
+    if let Err(e) = app.emit("desktop-control-audit", &event) {
+        log::warn!("desktop control audit emit failed for {}: {e}", ctx.action);
+    }
+    match event.outcome.as_str() {
+        "denied" | "failed" => log::warn!(
+            "desktop observation audit: action={} capability={} outcome={} reason={}",
+            event.action,
+            event.capability,
+            event.outcome,
+            event.reason.as_deref().unwrap_or("")
+        ),
+        _ => log::info!(
+            "desktop observation audit: action={} capability={} outcome={}",
+            event.action,
+            event.capability,
+            event.outcome
+        ),
+    }
+}
+
+fn begin_observation_audit(
+    app: &tauri::AppHandle,
+    action: &'static str,
+    capability: computer_use::ObservationCapability,
+) -> Result<ObservationAuditContext, String> {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    let ctx = ObservationAuditContext {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        action,
+        capability,
+        mode,
+        permissions,
+        shell_id: existing_shell_id_for_audit(app),
+    };
+
+    if let Err(denial) =
+        computer_use::evaluate_observation_policy(ctx.mode, &ctx.permissions, capability, action)
+    {
+        let reason = denial.reason;
+        emit_observation_audit(
+            app,
+            &ctx,
+            "desktop_observation_denied",
+            "denied",
+            Some(reason.clone()),
+        );
+        return Err(reason);
+    }
+
+    emit_observation_audit(app, &ctx, "desktop_observation_started", "started", None);
+    Ok(ctx)
+}
+
+fn observation_policy_currently_allows(
+    action: &str,
+    capability: computer_use::ObservationCapability,
+) -> bool {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    computer_use::evaluate_observation_policy(mode, &permissions, capability, action).is_ok()
+}
+
+fn complete_observation_audit(app: &tauri::AppHandle, ctx: &ObservationAuditContext) {
+    emit_observation_audit(app, ctx, "desktop_observation_completed", "succeeded", None);
+}
+
+fn fail_observation_audit(app: &tauri::AppHandle, ctx: &ObservationAuditContext, reason: &str) {
+    emit_observation_audit(
+        app,
+        ctx,
+        "desktop_observation_failed",
+        "failed",
+        Some(reason.to_string()),
+    );
 }
 
 pub(crate) fn desktop_control_allows_actuation() -> bool {
@@ -232,7 +377,11 @@ async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
         persist_stop_latch(&app, true, at);
     }
     gesture::set_global_mode(false);
-    gesture::stop_engine().await?;
+    // Stop is already authoritative + persisted above. A gesture-teardown error
+    // must not make the UI believe the safety latch failed.
+    if let Err(e) = gesture::stop_engine().await {
+        log::warn!("desktop control: gesture stop errored during Stop (latch already set): {e}");
+    }
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
@@ -249,11 +398,9 @@ async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
         CAPTURE_RUNNING.store(false, Ordering::SeqCst);
     }
     gesture::set_global_mode(false);
-    // A kill switch must never report failure once the latch is set: the Stop is
-    // already authoritative + persisted above. A gesture-teardown error is logged,
-    // not propagated, so the UI always sees the STOPPED state (Luna review nit).
+    // Lock should not fail just because a gesture teardown is already stopped.
     if let Err(e) = gesture::stop_engine().await {
-        log::warn!("desktop control: gesture stop errored during Stop (latch already set): {e}");
+        log::warn!("desktop control: gesture stop errored during Lock: {e}");
     }
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
@@ -322,8 +469,12 @@ fn restore_persisted_stop(app: &tauri::AppHandle) {
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
 /// On iOS returns an error; the frontend should use the native share sheet instead.
 #[tauri::command]
-async fn capture_screenshot() -> Result<String, String> {
-    ensure_desktop_control_allows_observation("capture_screenshot")?;
+async fn capture_screenshot(app: tauri::AppHandle) -> Result<String, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "capture_screenshot",
+        computer_use::ObservationCapability::Screenshot,
+    )?;
     #[cfg(desktop)]
     {
         use std::process::Command;
@@ -337,21 +488,36 @@ async fn capture_screenshot() -> Result<String, String> {
         let output = Command::new("screencapture")
             .args(["-x", "-C", &path])
             .output()
-            .map_err(|e| format!("Screenshot failed: {}", e))?;
+            .map_err(|e| {
+                let reason = format!("Screenshot failed: {}", e);
+                fail_observation_audit(&app, &audit, &reason);
+                reason
+            })?;
 
         if !output.status.success() {
-            return Err("Screenshot capture failed".to_string());
+            let reason = "Screenshot capture failed".to_string();
+            fail_observation_audit(&app, &audit, &reason);
+            return Err(reason);
         }
 
         let bytes = std::fs::read(&path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+            .map_err(|e| {
+                let reason = format!("Failed to read screenshot: {}", e);
+                fail_observation_audit(&app, &audit, &reason);
+                reason
+            })?;
         let _ = std::fs::remove_file(&path);
 
+        complete_observation_audit(&app, &audit);
         return Ok(base64_encode(&bytes));
     }
 
     #[cfg(mobile)]
-    Err("Screenshot not available on mobile — use the system share sheet".to_string())
+    {
+        let reason = "Screenshot not available on mobile — use the system share sheet".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        Err(reason)
+    }
 }
 
 /// Haptic feedback trigger — mobile only, no-op on desktop.
@@ -364,14 +530,27 @@ async fn haptic_feedback(style: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_active_app() -> Result<serde_json::Value, String> {
-    ensure_desktop_control_allows_observation("get_active_app")?;
+async fn get_active_app(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "get_active_app",
+        computer_use::ObservationCapability::ActiveApp,
+    )?;
     use std::process::Command;
 
     let app_output = Command::new("osascript")
         .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
         .output()
-        .map_err(|e| format!("Failed: {}", e))?;
+        .map_err(|e| {
+            let reason = format!("Failed: {}", e);
+            fail_observation_audit(&app, &audit, &reason);
+            reason
+        })?;
+    if !app_output.status.success() {
+        let reason = "Active app lookup failed".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        return Err(reason);
+    }
     let app_name = String::from_utf8_lossy(&app_output.stdout).trim().to_string();
 
     let safe_name = app_name.replace('\\', "\\\\").replace('"', "\\\"");
@@ -387,6 +566,7 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
         _ => String::new(),
     };
 
+    complete_observation_audit(&app, &audit);
     Ok(serde_json::json!({
         "app": app_name,
         "title": window_title,
@@ -394,12 +574,26 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn read_clipboard() -> Result<String, String> {
-    ensure_desktop_control_allows_observation("read_clipboard")?;
+async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "read_clipboard",
+        computer_use::ObservationCapability::ClipboardRead,
+    )?;
     use std::process::Command;
     let output = Command::new("pbpaste")
         .output()
-        .map_err(|e| format!("Clipboard read failed: {}", e))?;
+        .map_err(|e| {
+            let reason = format!("Clipboard read failed: {}", e);
+            fail_observation_audit(&app, &audit, &reason);
+            reason
+        })?;
+    if !output.status.success() {
+        let reason = "Clipboard read failed".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        return Err(reason);
+    }
+    complete_observation_audit(&app, &audit);
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -1017,11 +1211,26 @@ pub fn run() {
                     if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_OBSERVE {
                         continue;
                     }
+                    if !observation_policy_currently_allows(
+                        "watch_clipboard",
+                        computer_use::ObservationCapability::ClipboardRead,
+                    ) {
+                        continue;
+                    }
                     if let Ok(output) = std::process::Command::new("pbpaste").output() {
                         let current = String::from_utf8_lossy(&output.stdout).to_string();
                         if current != last_content && !current.is_empty() {
+                            let audit = match begin_observation_audit(
+                                &clip_handle,
+                                "watch_clipboard",
+                                computer_use::ObservationCapability::ClipboardRead,
+                            ) {
+                                Ok(audit) => audit,
+                                Err(_) => continue,
+                            };
                             last_content = current.clone();
                             let _ = tauri::Emitter::emit(&clip_handle, "clipboard-changed", &current);
+                            complete_observation_audit(&clip_handle, &audit);
                         }
                     }
                 }
@@ -1039,6 +1248,12 @@ pub fn run() {
                 while activity_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_OBSERVE {
+                        continue;
+                    }
+                    if !observation_policy_currently_allows(
+                        "track_active_app",
+                        computer_use::ObservationCapability::ActiveApp,
+                    ) {
                         continue;
                     }
 
@@ -1071,6 +1286,14 @@ pub fn run() {
                     // Only emit on context change (app + title)
                     let context_key = format!("{}:{}", resolved_app, window_title);
                     if context_key != last_context {
+                        let audit = match begin_observation_audit(
+                            &activity_handle,
+                            "track_active_app",
+                            computer_use::ObservationCapability::ActiveApp,
+                        ) {
+                            Ok(audit) => audit,
+                            Err(_) => continue,
+                        };
                         let duration_secs = last_switch.elapsed().as_secs();
                         let timestamp = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -1125,6 +1348,7 @@ pub fn run() {
                             }
                         }
 
+                        complete_observation_audit(&activity_handle, &audit);
                         last_context = context_key;
                         last_switch = std::time::Instant::now();
                     }
