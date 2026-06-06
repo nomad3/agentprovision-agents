@@ -1,5 +1,5 @@
 {
-  "compose_workdir": "/Users/nomade/actions-runner/_work/agentprovision-agents/agentprovision-agents",
+  "compose_workdir": "/Users/nomade/.agentprovision/deploy/agentprovision-agents",
   "api_health_path": "/openapi.json",
   "last_status": "healthy",
   "consecutive_failures_by_key": {},
