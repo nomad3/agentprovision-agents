@@ -114,17 +114,28 @@ def _presence_for_tenant(tenant_id: uuid.UUID) -> dict[str, Any]:
     return luna_presence_service.get_presence(tenant_id)
 
 
-def _ensure_shell_connected(shell_id: str, user: User) -> None:
+def _bound_device_for_shell(snapshot: dict[str, Any], shell_id: str) -> uuid.UUID:
+    raw_device_id = (snapshot.get("shell_devices") or {}).get(shell_id)
+    if not raw_device_id:
+        raise HTTPException(status_code=409, detail="Desktop shell device is not bound")
+    try:
+        return uuid.UUID(str(raw_device_id))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=409, detail="Desktop shell device binding is invalid")
+
+
+def _ensure_shell_bound(shell_id: str, user: User) -> uuid.UUID:
     snapshot = _presence_for_tenant(user.tenant_id)
     connected_shells = set(snapshot.get("connected_shells") or [])
     if shell_id not in connected_shells:
         raise HTTPException(status_code=409, detail="Desktop shell is not connected")
+    return _bound_device_for_shell(snapshot, shell_id)
 
 
 def _select_connected_shell(
     tenant_id: uuid.UUID,
     requested_shell_id: str | None,
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[str, dict[str, Any], uuid.UUID]:
     snapshot = _presence_for_tenant(tenant_id)
     connected_shells = list(snapshot.get("connected_shells") or [])
     connected = set(connected_shells)
@@ -147,7 +158,8 @@ def _select_connected_shell(
         for key, value in raw_caps.items()
         if key.startswith("can_") and isinstance(value, bool)
     }
-    return selected, capabilities
+    device_id = _bound_device_for_shell(snapshot, selected)
+    return selected, capabilities, device_id
 
 
 def _display_safe_payload(event: DesktopCommandEvent) -> dict[str, Any]:
@@ -155,6 +167,7 @@ def _display_safe_payload(event: DesktopCommandEvent) -> dict[str, Any]:
         "desktop_event_id": str(event.id),
         "local_event_id": event.event_metadata.get("local_event_id"),
         "shell_id": event.shell_id,
+        "device_id": str(event.device_id) if event.device_id else None,
         "source": event.source,
         "action": event.action,
         "capability": event.capability,
@@ -208,7 +221,7 @@ def record_local_observation_event(
     text, OCR text, and window contents have no accepted field here.
     """
     _ensure_session_owned(db, audit.session_id, user)
-    _ensure_shell_connected(audit.shell_id, user)
+    device_id = _ensure_shell_bound(audit.shell_id, user)
 
     metadata = {
         "local_event_id": str(audit.event_id),
@@ -218,6 +231,7 @@ def record_local_observation_event(
             "accessibility": audit.accessibility_status,
             "automation_system_events": audit.automation_system_events_status,
         },
+        "device_id": str(device_id),
     }
     event = DesktopCommandEvent(
         tenant_id=user.tenant_id,
@@ -231,6 +245,7 @@ def record_local_observation_event(
         reason=_safe_reason(audit),
         mode=audit.mode,
         shell_id=audit.shell_id,
+        device_id=device_id,
         event_metadata=metadata,
     )
     db.add(event)
@@ -270,7 +285,7 @@ def record_mcp_observation_request(
     """
     _ensure_user_for_tenant(db, user_id, tenant_id)
     _ensure_session_owned_by_user(db, request.session_id, tenant_id, user_id)
-    shell_id, shell_capabilities = _select_connected_shell(tenant_id, request.shell_id)
+    shell_id, shell_capabilities, device_id = _select_connected_shell(tenant_id, request.shell_id)
 
     capability = _OBSERVATION_CAPABILITIES[request.action]
     can_observe = bool(shell_capabilities.get("can_observe"))
@@ -295,9 +310,11 @@ def record_mcp_observation_request(
         reason=reason,
         mode=mode,
         shell_id=shell_id,
+        device_id=device_id,
         event_metadata={
             "request_id": str(uuid.uuid4()),
             "tool_name": request.tool_name,
+            "device_id": str(device_id),
             "down_channel": {
                 "available": False,
                 "reason": down_channel_reason,

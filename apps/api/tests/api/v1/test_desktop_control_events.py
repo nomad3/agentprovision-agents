@@ -23,6 +23,7 @@ from app.services.desktop_control_service import (
 )
 
 _DEFAULT_OWNER = object()
+_DEVICE_REGISTRY_ID = uuid.UUID("88888888-8888-8888-8888-888888888888")
 
 
 def _user():
@@ -72,7 +73,12 @@ def _db_with_session(found=True, owner_user_id=_DEFAULT_OWNER):
 def _connected_shell():
     return patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
-        return_value={"connected_shells": ["desktop-44444444-4444-4444-4444-444444444444"]},
+        return_value={
+            "connected_shells": ["desktop-44444444-4444-4444-4444-444444444444"],
+            "shell_devices": {
+                "desktop-44444444-4444-4444-4444-444444444444": str(_DEVICE_REGISTRY_ID),
+            },
+        },
     )
 
 
@@ -87,6 +93,9 @@ def _observable_shell_presence():
                 "can_control_pointer": False,
                 "can_control_keyboard": False,
             },
+        },
+        "shell_devices": {
+            "desktop-44444444-4444-4444-4444-444444444444": str(_DEVICE_REGISTRY_ID),
         },
     }
 
@@ -163,6 +172,22 @@ def test_record_local_observation_rejects_unconnected_shell():
     db.commit.assert_not_called()
 
 
+def test_record_local_observation_rejects_unbound_desktop_device():
+    db = _db_with_session(found=True)
+
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value={"connected_shells": ["desktop-44444444-4444-4444-4444-444444444444"]},
+    ):
+        with pytest.raises(HTTPException) as exc:
+            record_local_observation_event(db, _user(), _audit())
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Desktop shell device is not bound"
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
 def test_record_local_observation_persists_metadata_only_and_mirrors_session_event():
     db = _db_with_session(found=True)
 
@@ -179,6 +204,7 @@ def test_record_local_observation_persists_metadata_only_and_mirrors_session_eve
     assert persisted.user_id == _user().id
     assert persisted.session_id == _audit().session_id
     assert persisted.shell_id == "desktop-44444444-4444-4444-4444-444444444444"
+    assert persisted.device_id == _DEVICE_REGISTRY_ID
     assert persisted.event_type == "desktop_observation_denied"
     assert persisted.capability == "screenshot"
     assert persisted.outcome == "denied"
@@ -190,6 +216,7 @@ def test_record_local_observation_persists_metadata_only_and_mirrors_session_eve
             "accessibility": "denied",
             "automation_system_events": "unknown",
         },
+        "device_id": str(_DEVICE_REGISTRY_ID),
     }
     assert "screenshot" not in persisted.event_metadata
     assert "clipboard" not in persisted.event_metadata
@@ -199,6 +226,7 @@ def test_record_local_observation_persists_metadata_only_and_mirrors_session_eve
     assert event_type == "desktop_observation_denied"
     assert payload["desktop_event_id"] == "66666666-6666-6666-6666-666666666666"
     assert payload["shell_id"] == persisted.shell_id
+    assert payload["device_id"] == str(_DEVICE_REGISTRY_ID)
     assert payload["permissions"]["screen_recording"] == "denied"
     assert "raw" not in payload
     assert "clipboard_text" not in payload
@@ -276,8 +304,10 @@ def test_record_mcp_observation_request_records_down_channel_denial_with_active_
     assert persisted.outcome == "denied"
     assert persisted.mode == "observe"
     assert persisted.shell_id == "desktop-44444444-4444-4444-4444-444444444444"
+    assert persisted.device_id == _DEVICE_REGISTRY_ID
     assert persisted.reason == "desktop observation down-channel unavailable; capture_screenshot request denied"
     assert persisted.event_metadata["tool_name"] == "desktop_observe_screen"
+    assert persisted.event_metadata["device_id"] == str(_DEVICE_REGISTRY_ID)
     assert persisted.event_metadata["down_channel"] == {
         "available": False,
         "reason": "not_implemented",
@@ -290,6 +320,7 @@ def test_record_mcp_observation_request_records_down_channel_denial_with_active_
     mirrored = publish.call_args.args[2]
     assert mirrored["reason"] == persisted.reason
     assert mirrored["shell_id"] == persisted.shell_id
+    assert mirrored["device_id"] == str(_DEVICE_REGISTRY_ID)
     assert "raw" not in mirrored
     assert "clipboard_text" not in mirrored
 
@@ -336,6 +367,28 @@ def test_record_mcp_observation_request_rejects_no_connected_shell():
             )
 
     assert exc.value.status_code == 409
+    db.add.assert_not_called()
+
+
+def test_record_mcp_observation_request_rejects_unbound_desktop_device():
+    db = _db_with_session(found=True)
+
+    presence = _observable_shell_presence()
+    presence["shell_devices"] = {}
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=presence,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            record_mcp_observation_request(
+                db,
+                tenant_id=_user().tenant_id,
+                user_id=_user().id,
+                request=_mcp_request(),
+            )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Desktop shell device is not bound"
     db.add.assert_not_called()
 
 

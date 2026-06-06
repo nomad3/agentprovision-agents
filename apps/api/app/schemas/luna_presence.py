@@ -1,6 +1,5 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
-from datetime import datetime
 
 
 class LunaPresenceSnapshot(BaseModel):
@@ -9,6 +8,9 @@ class LunaPresenceSnapshot(BaseModel):
     privacy: str = "open"  # open, passive, muted, camera_off, mic_off, private
     active_shell: Optional[str] = None  # whatsapp, web, desktop, mobile, necklace, glasses, camera
     connected_shells: List[str] = []
+    shell_capabilities: Dict[str, Dict[str, bool]] = Field(default_factory=dict)
+    shell_devices: Dict[str, str] = Field(default_factory=dict)
+    shell_device_ids: Dict[str, str] = Field(default_factory=dict)
     tool_status: str = "idle"  # idle, running, waiting, error
     attention_target: Optional[str] = None
     timestamp: Optional[str] = None
@@ -28,6 +30,7 @@ class LunaPresenceUpdate(BaseModel):
 class ShellRegisterRequest(BaseModel):
     shell: str
     capabilities: Optional[Dict[str, bool]] = None
+    device_id: Optional[str] = None
 
 
 class ShellDeregisterRequest(BaseModel):
