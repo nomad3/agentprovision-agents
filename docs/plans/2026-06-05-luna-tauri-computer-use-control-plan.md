@@ -776,6 +776,11 @@ Additional discovery inputs:
     and private key using an Apple-compatible legacy PKCS#12 format, verified
     locally with a temporary keychain, and `APPLE_CERTIFICATE` plus trimmed
     `APPLE_CERTIFICATE_PASSWORD` were re-uploaded to GitHub Actions secrets.
+80. After the Apple-compatible PKCS#12 fix, CI imported the Developer ID
+    identity but codesign failed with `unable to build chain to self-signed root
+    for signer`. The Luna workflow now installs Apple's official Developer ID
+    G2 intermediate certificate into the self-hosted runner login keychain before
+    `cargo tauri build`, so the signer chain can be resolved during CI signing.
 
 ---
 
@@ -1317,6 +1322,9 @@ Current verification finding (2026-06-06):
       as Apple-compatible after `security import` rejected the OpenSSL-default
       bundle, verify import locally with a temporary keychain, and refresh
       `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` secrets.
+- [x] Add CI keychain chain-prep for signed builds: install Apple's official
+      Developer ID G2 intermediate into the self-hosted runner login keychain
+      before Tauri invokes `codesign`.
 - [x] Luna lead review for the release-signing/permission-onboarding slice:
       Alpha Chat ACKed no blocker before PR/CI signed-build gate and preserved
       the manual first-DMG install requirement after updater-key rotation.

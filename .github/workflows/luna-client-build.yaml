@@ -145,6 +145,23 @@ jobs:
             echo "::notice::Signing secrets are incomplete; building unsigned Luna development DMG."
           fi
 
+      - name: Install Apple Developer ID certificate chain
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          CHAIN_DIR="$(mktemp -d)"
+          trap 'rm -rf "$CHAIN_DIR"' EXIT
+          curl -fsSL \
+            https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+            -o "$CHAIN_DIR/DeveloperIDG2CA.cer"
+
+          LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+          security import "$CHAIN_DIR/DeveloperIDG2CA.cer" \
+            -k "$LOGIN_KEYCHAIN" >/dev/null 2>&1 || true
+
+          security find-certificate \
+            -c "Developer ID Certification Authority" \
+            "$LOGIN_KEYCHAIN" >/dev/null
+
       - name: Build Tauri (macOS ARM64)
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         env:
