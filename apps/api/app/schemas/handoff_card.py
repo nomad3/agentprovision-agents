@@ -52,15 +52,18 @@ class HandoffCard:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"{name} must be a non-empty string")
-        if self.from_agent == self.to_agent:
+        if self.from_agent.strip() == self.to_agent.strip():
             raise ValueError(
                 "a handoff must cross between two different agents "
                 f"(from_agent == to_agent == {self.from_agent!r})"
             )
         for name in ("source_docs", "constraints", "non_goals",
                      "reviewer_focus", "stop_conditions"):
-            if not isinstance(getattr(self, name), list):
+            values = getattr(self, name)
+            if not isinstance(values, list):
                 raise ValueError(f"{name} must be a list")
+            if any(not isinstance(item, str) or not item.strip() for item in values):
+                raise ValueError(f"{name} must contain non-empty strings")
         # The card is the receiver's mandate: it must say when to stop and what
         # the reviewer should scrutinise, or it is not a safe handoff contract.
         if len(self.stop_conditions) == 0:

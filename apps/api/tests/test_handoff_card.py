@@ -62,6 +62,8 @@ def test_handoff_must_cross_between_two_agents():
     # Handing a task to yourself is not a handoff.
     with pytest.raises(ValueError):
         _valid(from_agent="luna", to_agent="luna")
+    with pytest.raises(ValueError):
+        _valid(from_agent="luna", to_agent=" luna ")
 
 
 def test_tenant_id_required():
@@ -74,3 +76,12 @@ def test_list_fields_must_be_lists():
         _valid(constraints="trace-only")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         _valid(source_docs="docs/x.md")  # type: ignore[arg-type]
+
+
+def test_list_fields_must_contain_non_empty_strings():
+    with pytest.raises(ValueError):
+        _valid(stop_conditions=["   "])
+    with pytest.raises(ValueError):
+        _valid(reviewer_focus=[None])  # type: ignore[list-item]
+    with pytest.raises(ValueError):
+        _valid(source_docs=["docs/plan.md", ""])
