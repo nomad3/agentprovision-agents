@@ -8,10 +8,10 @@
 Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
-session ownership foundation ready for PR
+session ownership merged; device-bound shell identity in progress
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
 Branch: `codex/luna-phase1-control-plane`; current follow-up branch:
-`codex/luna-phase2-session-ownership`
+`codex/luna-phase2-device-binding`
 
 ---
 
@@ -241,6 +241,22 @@ Additional discovery inputs:
     down-channel exists. This intentionally returns no screenshot pixels,
     clipboard text, active-window title, OCR text, bundle id, path, or raw
     desktop content.
+25. PR #794 merged the read-only MCP observation request/audit path into
+    `main` on 2026-06-06 UTC as merge commit `84d3011b`. Post-merge Tests run
+    `27055885443` and Docker Desktop Deployment run `27055885437` passed, and
+    Luna's exact Docker mount gate returned no output.
+26. PR #795 merged the `chat_sessions.owner_user_id` ownership foundation into
+    `main` on 2026-06-06 UTC as merge commit `3065defb`. PR and post-merge CI
+    applied migration `159`, API unit/integration coverage passed, broad main
+    tests passed, Docker Desktop Deployment run `27056251358` passed, and
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`
+    returned no output. Desktop-control now rejects ownerless and same-tenant
+    cross-user sessions before selecting a desktop shell.
+27. Branch `codex/luna-phase2-device-binding` started the next Phase 2
+    prerequisite: Luna desktop enrolls as a `desktop` device through
+    `device_registry`, shell presence records an authenticated
+    `shell_id -> device_registry.id` binding, and desktop-control audit/MCP
+    observation paths fail closed when the connected shell is not device-bound.
 
 ---
 
@@ -967,11 +983,20 @@ Goal: add the missing API-to-Tauri path for action envelopes.
         envelopes.
 - [ ] Add desktop device enrollment, claim token hashing, rotation, and
       revocation through `device_registry`.
+  - [x] Add authenticated Luna desktop enrollment endpoint that creates or
+        updates a `desktop` `device_registry` row for the durable
+        `desktop-<uuid>` shell id, stores only the hashed claim token, rotates
+        the token on enrollment, and returns the raw token once to the client.
+        Operator revocation and claim-time token validation remain pending.
 - [ ] Add Ed25519 key lifecycle: key generation during enrollment, public key
       storage in `device_registry`, private key storage in Tauri secure storage,
       and rotation/revocation.
 - [ ] Bind shell presence to `device_id`, `shell_id`, app version, hostname hash,
       OS username hash, and current capability manifest.
+  - [x] Bind Luna shell presence to authenticated `device_id`, `shell_id`, and
+        current capability manifest, then persist the internal
+        `device_registry.id` in presence for desktop-control authorization.
+        App version/host hash/OS-user hash are still pending.
 - [ ] Add authenticated Tauri polling/SSE hook for claimable-command notices.
 - [ ] Require Tauri claim before execution; down-channel notices alone never
       execute commands.
@@ -996,12 +1021,16 @@ Goal: add the missing API-to-Tauri path for action envelopes.
       arguments.
   - [x] Bind desktop observation requests to an authenticated user header and
         reject sessions not owned by that user.
-  - [ ] Bind shell/device identity to authenticated enrollment before returning
-        screenshots, active-app data, clipboard text, or pointer/keyboard
-        command results.
+  - [x] Bind shell/device identity to authenticated Luna desktop enrollment
+        before even recording MCP observation requests. Screenshots,
+        active-app data, clipboard text, and pointer/keyboard command results
+        remain blocked until device-token-authenticated command claim and
+        signed action envelopes ship.
 - [ ] Add API tests for tenant isolation and command ownership.
   - [x] Add focused observation-path tests for ownerless sessions, same-tenant
         cross-user sessions, and user validation before shell selection.
+  - [x] Add focused desktop-device enrollment and shell-device binding tests,
+        including unbound shell rejection for local and MCP observation paths.
 
 Exit criteria:
 
@@ -1161,6 +1190,9 @@ Exit criteria:
 - [x] PR #793 includes migration files for `desktop_commands` and
       `desktop_command_events`; applied-migration validation remains part of
       the PostgreSQL CI/release gate.
+- [x] PR #795 migration `159_chat_sessions_owner_user_id.sql` applies in PR and
+      post-merge PostgreSQL CI, backfills single-user tenants only, and records
+      in `_migrations`.
 - [ ] Command enqueue requires authenticated user and valid session.
 - [ ] Command claim requires matching tenant and shell/device.
 - [ ] Cross-tenant command claim returns 404 or denial without leaking existence.
@@ -1179,8 +1211,10 @@ Exit criteria:
       context, not from LLM-supplied tool arguments.
   - [x] PR #794 and the Phase 2 ownership follow-up keep MCP observation tools
         denial-only and require authenticated user/session ownership.
-  - [ ] Device-bound shell identity remains the next blocking condition for
-        live content return.
+  - [x] Device-bound shell identity is now enforced before local/MCP desktop
+        observation audit rows are accepted; live content return remains
+        blocked until command claim, signatures, approvals, and Tauri execution
+        ship.
 - [ ] Rate limits are enforced per tenant/user/session/shell/capability.
 - [ ] Raw screenshot and clipboard values are not written to logs or
       `session_events`.
@@ -1206,6 +1240,16 @@ Exit criteria:
       `27055213272` passed on merge commit `8c6449cf`.
 - [x] Phase 1 MCP request/audit slice local API validation passed:
       `pytest tests/api/v1/test_desktop_control_events.py -q` (`14 passed`).
+- [x] Phase 2 session ownership local API validation passed:
+      `pytest tests/api/v1/test_desktop_control_events.py
+      tests/test_chat_session_default_agent_and_title.py
+      tests/test_api.py::test_create_user_and_tenant
+      tests/test_api.py::test_login_for_access_token -q` (`28 passed`).
+- [x] Phase 2 device-binding focused local validation passed:
+      `pytest tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py -q` (`28 passed`) and
+      `npm test -- --run src/hooks/__tests__/useShellPresence.test.jsx
+      src/utils/__tests__/desktopDeviceEnrollment.test.js` (`3 passed`).
 
 ### Tauri / Rust
 
