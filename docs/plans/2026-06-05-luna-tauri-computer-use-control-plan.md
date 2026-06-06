@@ -787,6 +787,80 @@ Additional discovery inputs:
     failed at notarization with Apple HTTP 401: Apple requires an app-specific
     password generated at `appleid.apple.com`; the normal Apple account password
     cannot be used as `APPLE_PASSWORD` for Tauri notarization.
+82. Notarization root cause + CI redesign (2026-06-06, after the app-specific
+    password was uploaded). Signed branch run `27071762194` reached Apple's
+    notary service but never returned: Tauri ran `notarytool submit --wait`
+    inside `cargo tauri build` and slept. Diagnosis via the validated local
+    keychain profile (`luna-notary-local`) showed the queue, not Luna, was the
+    problem — `xcrun notarytool history` reported BOTH Luna submissions
+    (`15e4f6e5…` 19:23Z, `c7d2cc34…` 19:32Z) AND a tiny independently-signed
+    probe app (`7a9120cc…`, `LunaNotaryProbe.zip`, 20:07Z) all stuck
+    `In Progress` 45–60+ min later (checked 20:16Z). A minimal probe stuck
+    identically to Luna proves the blocker is Apple notary-service backlog, not
+    app size or certificate corruption (the Developer ID cert/key/P12 had already
+    validated: fingerprint `A0:BF:89…ED:F4`, valid 2026-06-06→2031-06-07). No
+    code makes Apple faster, so CI was rebuilt to SURVIVE the backlog rather than
+    block on it. Key correctness fact established by reading
+    `tauri-bundler-2.9.2`/`tauri-macos-sign-2.3.4`: Tauri notarizes the app and
+    staples it BEFORE building the DMG (so the DMG normally carries a stapled
+    app), it authenticates notarytool only via Apple-ID-password (`--apple-id
+    --password --team-id`, password on the long-lived `--wait` argv) or App Store
+    Connect API key (`APPLE_API_KEY`/`APPLE_API_ISSUER`/`APPLE_API_KEY_PATH`, no
+    password) — there is NO keychain-profile support — and `--skip-stapling`
+    switches Tauri to `submit --no-wait` (returns the submission id immediately,
+    no staple). Also: notarization is keyed on the code cdhash and stored
+    server-side; stapling only caches the ticket locally, so once a submission is
+    Accepted EVERY copy of that exact app (DMG, updater tarball) passes Gatekeeper
+    online — only offline `stapler validate` needs a locally-stapled copy.
+83. Redesigned `.github/workflows/luna-client-build.yaml` to an explicit,
+    observable, queue-decoupled notarization pipeline (req-2/req-3 of the
+    operator handoff). (a) `cargo tauri build` now signs ONLY — the Apple-ID and
+    API-key env vars are withheld so tauri-bundler signs the app+dylib and skips
+    notarization. (b) A new `Notarize` step imports the Developer ID identity into
+    a disposable, run-scoped keychain (kept off the global search list; used later
+    to sign the rebuilt DMG), sets up notary auth preferring an App Store Connect
+    API key and otherwise seeding a keychain profile from the app-specific
+    password via `notarytool store-credentials` (the password reaches a process
+    argument ONLY there, for a few seconds — never during the poll, vs Tauri's
+    ~hour-long `submit --wait`), `ditto --sequesterRsrc` zips the app, `notarytool
+    submit --no-wait` captures the submission id, then a bounded poll of
+    `notarytool info` runs: `Accepted`→staple and continue; `Invalid`/`Rejected`
+    →`notarytool log` and fail; past `NOTARY_TIMEOUT_SECONDS` (default 1800,
+    overridable via `workflow_dispatch` input/`vars`, validated to a numeric
+    [60,7200])→mark `pending` and exit 0 so signed smoke artifacts still upload.
+    (c) Still on the same step (so the keychain + notary auth stay in scope), once
+    the app is Accepted+stapled the DMG is recreated from the now-stapled app via
+    `hdiutil` + `codesign` so a dragged-out `/Applications/Luna.app` carries the
+    ticket and offline `stapler validate` passes, then the DMG itself is
+    notarized+stapled through the same bounded poll so a downloaded DMG opens
+    without a Gatekeeper prompt; the updater `Luna.app.tar.gz`+`.sig` is left
+    untouched (same cdhash → notarized online once Accepted; no re-sign needed,
+    updater integrity preserved). (d) `Verify` re-checks codesign on the app and
+    asserts offline Gatekeeper (`stapler validate` + `spctl --ignore-cache -t
+    exec`) on the app inside the mounted rebuilt DMG — the copy users actually
+    receive. (e) Publication — the
+    signed GitHub Release and the stable `luna-latest` updater manifest — is now
+    gated on `notarized == 'accepted'` AND (`main` or `luna-v*`); the unsigned
+    dev-prerelease path is preserved; branch/PR/`workflow_dispatch` builds and
+    `pending` builds never publish. Decision on req-3: we go beyond Tauri
+    `--skip-stapling` — Tauri does no notarization at all and the explicit step
+    owns submit/poll/staple, which is the only way to also fix the
+    password-on-argv exposure (Tauri cannot use a keychain profile) and to fetch
+    the failure log. Validated locally: `actionlint` clean, `bash -n` on all run
+    blocks + a control-flow simulation under the runner's real bash 3.2.57,
+    `hdiutil` create/attach/detach mechanics, `base64 --decode` + `find-identity`
+    field layout; a 4-lens adversarial agent review (secrets, bash-3.2, signing
+    semantics, CI gating) with per-finding verification whose five confirmed
+    IMPORTANTs (jq-parse abort under pipefail, timeout-input validation, the
+    un-notarized DMG, mounted-copy Gatekeeper assertion, and the cert-password
+    argv threat-model note) were all fixed. Still PENDING on Apple:
+    a fully Accepted run, the rebuilt-DMG install smoke (`codesign -dv`,
+    `stapler validate`, `spctl`), and first stable-updater publication — finalize
+    once Apple's queue drains (re-run the signed build; the poll completes fast on
+    a healthy queue). Follow-up to fully retire the brief password exposure:
+    create an App Store Connect API key and add `APPLE_API_KEY` (base64 .p8),
+    `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` secrets — the workflow already prefers
+    them when present.
 
 ---
 
@@ -1331,8 +1405,25 @@ Current verification finding (2026-06-06):
 - [x] Add CI keychain chain-prep for signed builds: install Apple's official
       Developer ID G2 intermediate into the self-hosted runner login keychain
       before Tauri invokes `codesign`.
-- [ ] Replace `APPLE_PASSWORD` with an Apple app-specific password for
-      notarization, then rerun signed CI and verify notarization/stapling.
+- [x] Replace `APPLE_PASSWORD` with an Apple app-specific password for
+      notarization (secret rotated 2026-06-06).
+- [x] Diagnose the notarization stall as Apple notary-service backlog (not cert
+      or app-size) via `notarytool history` on the validated keychain profile: a
+      minimal signed probe app sat `In Progress` alongside both Luna submissions
+      for 45–60+ min (log entry 82).
+- [x] Rebuild the Luna workflow to an explicit, queue-decoupled notarization
+      pipeline: Tauri signs only; explicit `notarytool submit --no-wait` +
+      bounded poll + `notarytool log` on failure; staple on Accept; rebuild the
+      DMG from the stapled app; publication gated on `notarized == 'accepted'` and
+      `main`/`luna-v*` (log entry 83).
+- [ ] Finalize once Apple's queue drains: re-run the signed build, confirm
+      `notarized == 'accepted'`, then install the rebuilt DMG and verify
+      `codesign -dv`, `stapler validate`, `spctl`, and the Computer Use smoke;
+      confirm the first stable `luna-latest` updater manifest publishes.
+- [ ] (Optional hardening) Create an App Store Connect API key and add
+      `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` secrets to remove the
+      brief `store-credentials` password exposure entirely (the workflow already
+      prefers the API key when present).
 - [x] Luna lead review for the release-signing/permission-onboarding slice:
       Alpha Chat ACKed no blocker before PR/CI signed-build gate and preserved
       the manual first-DMG install requirement after updater-key rotation.
