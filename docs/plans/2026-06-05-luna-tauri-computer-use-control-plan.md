@@ -861,6 +861,40 @@ Additional discovery inputs:
     create an App Store Connect API key and add `APPLE_API_KEY` (base64 .p8),
     `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` secrets — the workflow already prefers
     them when present.
+84. Runner codesign regression surfaced while validating entry 83 (2026-06-06
+    ~21:15Z). Two `workflow_dispatch` validation runs on the redesigned workflow
+    (`27073858932`, `27074079154`) proved the new structure behaves correctly —
+    compile finished in ~1 min, the new Notarize/Verify/publish steps were gated
+    and skipped as designed, and the always() keychain cleanup ran — but BOTH
+    failed inside `cargo tauri build` at Tauri's OWN code-signing of
+    `libluna_hand_landmarker.dylib` with `codesign: errSecInternalComponent`
+    ("replacing existing signature" → errSec on the first dylib). This is NOT
+    caused by the notarization redesign (that change only withholds the
+    notarization credentials so Tauri signs-but-skips-notarize; signing itself is
+    unchanged and was unaffected). Diagnosis on the runner (this machine, same
+    user): `codesign --sign "Developer ID Application: Simon Aguilera
+    (KF9LPYY7KK)"` against the ESTABLISHED key (the identity lives in
+    `~/Documents/LunaSigning/luna-notary-local.keychain-db`, in the user search
+    list — the login keychain itself holds 0 codesigning identities) SUCCEEDS,
+    while Tauri's pattern of importing `APPLE_CERTIFICATE` into a FRESH per-build
+    temp keychain (create→unlock→import→`set-key-partition-list`→`codesign
+    --keychain`) FAILS. The identical Tauri flow signed fine at 19:30Z
+    (`27071762194`); the machine has since slept. `errSecInternalComponent` on a
+    previously-working self-hosted macOS runner, where established-key codesign
+    works but newly-created-keychain key access fails, is the classic signature of
+    a degraded securityd / Security session (the runner agent losing its Aqua
+    security session after sleep). Standard remediation: restart the runner agent
+    in a full GUI login session / reboot, which clears securityd state. No code
+    fix is required (and none is sufficient if the build keeps importing into a
+    fresh keychain); the alternative is to sign via an ESTABLISHED keychain
+    identity using `APPLE_SIGNING_IDENTITY` (no per-build import), which works now
+    but couples signing to the runner's persistent keychain setup. NOTE: the
+    redesign committed in 467560f3 is validated to the extent CI can reach today;
+    full notarized-release validation remains blocked on BOTH (a) restoring runner
+    codesign and (b) Apple's notary-queue backlog draining (entry 82). Runner
+    keychain hygiene performed during diagnosis: removed two orphaned 0-identity
+    Tauri temp keychains and restored the user search list to its prior state
+    (`luna-notary-local` + login).
 
 ---
 
