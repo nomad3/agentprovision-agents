@@ -340,8 +340,19 @@ fn ensure_desktop_control_allows_native_control(
 ) -> Result<(), String> {
     let mode = current_desktop_control_mode();
     let permissions = computer_use::current_permission_readiness();
-    computer_use::evaluate_native_control_policy(mode, &permissions, capability, action)
-        .map_err(|denial| denial.reason)
+    computer_use::evaluate_native_control_command_policy(
+        computer_use::NativeControlCommandPolicy {
+            mode,
+            capability,
+            has_claim_lease: false,
+            tier_enabled: false,
+            envelope: None,
+            now_ms: now_unix_ms(),
+        },
+        &permissions,
+        action,
+    )
+    .map_err(|denial| denial.reason)
 }
 
 fn ensure_desktop_control_allows_pointer_actuation(action: &str) -> Result<(), String> {

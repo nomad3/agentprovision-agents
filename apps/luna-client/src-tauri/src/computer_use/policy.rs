@@ -59,6 +59,28 @@ pub enum NativeControlCapability {
     Keyboard,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeControlCommandEnvelope {
+    /// Placeholder for the future signature-verification result. This must be
+    /// set only by a real AgentProvision signature verifier before native
+    /// actuation is enabled; screen or LLM-supplied data must never set it.
+    pub signed: bool,
+    pub policy_version: u16,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeControlCommandPolicy {
+    pub mode: DesktopControlMode,
+    pub capability: NativeControlCapability,
+    pub has_claim_lease: bool,
+    pub tier_enabled: bool,
+    pub envelope: Option<NativeControlCommandEnvelope>,
+    pub now_ms: u64,
+}
+
+pub const CURRENT_NATIVE_CONTROL_POLICY_VERSION: u16 = 1;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservationPolicyDenial {
     pub action: String,
@@ -147,6 +169,70 @@ pub fn evaluate_native_control_policy(
         capability,
         format!("desktop native control disabled; {action} denied"),
     ))
+}
+
+pub fn evaluate_native_control_command_policy(
+    policy: NativeControlCommandPolicy,
+    permissions: &DesktopPermissionReadiness,
+    action: &str,
+) -> Result<(), NativeControlPolicyDenial> {
+    if policy.mode == DesktopControlMode::Stopped {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop control stopped; {action} denied"),
+        ));
+    }
+
+    if !policy.has_claim_lease {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop command claim required; {action} denied"),
+        ));
+    }
+
+    let Some(envelope) = policy.envelope else {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop command envelope required; {action} denied"),
+        ));
+    };
+
+    if !envelope.signed {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop command envelope unsigned; {action} denied"),
+        ));
+    }
+
+    if envelope.policy_version != CURRENT_NATIVE_CONTROL_POLICY_VERSION {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop command envelope policy unsupported; {action} denied"),
+        ));
+    }
+
+    if envelope.expires_at_ms <= policy.now_ms {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop command envelope expired; {action} denied"),
+        ));
+    }
+
+    if !policy.tier_enabled {
+        return Err(native_control_denial(
+            action,
+            policy.capability,
+            format!("desktop native control tier disabled; {action} denied"),
+        ));
+    }
+
+    evaluate_native_control_policy(policy.mode, permissions, policy.capability, action)
 }
 
 fn denial(
@@ -333,5 +419,126 @@ mod tests {
         )
         .expect_err("stopped mode must preempt native control");
         assert!(stopped.reason.contains("desktop control stopped"));
+    }
+
+    fn command_policy(
+        mode: DesktopControlMode,
+        capability: NativeControlCapability,
+    ) -> NativeControlCommandPolicy {
+        NativeControlCommandPolicy {
+            mode,
+            capability,
+            has_claim_lease: true,
+            tier_enabled: false,
+            envelope: Some(NativeControlCommandEnvelope {
+                signed: true,
+                policy_version: CURRENT_NATIVE_CONTROL_POLICY_VERSION,
+                expires_at_ms: 2_000,
+            }),
+            now_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn native_command_policy_stop_preempts_claim_and_envelope_checks() {
+        let ready = readiness("granted", "granted", "granted");
+        let mut policy = command_policy(
+            DesktopControlMode::Stopped,
+            NativeControlCapability::Pointer,
+        );
+        policy.has_claim_lease = false;
+        policy.tier_enabled = true;
+        policy.envelope = None;
+
+        let err = evaluate_native_control_command_policy(policy, &ready, "control_pointer_click")
+            .expect_err("Stop must be the first native-control denial");
+
+        assert!(err.reason.contains("desktop control stopped"));
+        assert_eq!(err.capability, NativeControlCapability::Pointer);
+    }
+
+    #[test]
+    fn native_command_policy_requires_claim_lease_before_envelope() {
+        let ready = readiness("granted", "granted", "granted");
+        let mut policy = command_policy(
+            DesktopControlMode::ControlLocked,
+            NativeControlCapability::Keyboard,
+        );
+        policy.has_claim_lease = false;
+        policy.envelope = None;
+
+        let err = evaluate_native_control_command_policy(policy, &ready, "control_keyboard_type")
+            .expect_err("native control needs a claimed command lease");
+
+        assert!(err.reason.contains("desktop command claim required"));
+    }
+
+    #[test]
+    fn native_command_policy_requires_signed_current_unexpired_envelope() {
+        let ready = readiness("granted", "granted", "granted");
+
+        let mut unsigned = command_policy(
+            DesktopControlMode::ControlLocked,
+            NativeControlCapability::Pointer,
+        );
+        unsigned.envelope.as_mut().expect("envelope").signed = false;
+        let unsigned_err =
+            evaluate_native_control_command_policy(unsigned, &ready, "control_pointer_move")
+                .expect_err("unsigned envelopes must deny");
+        assert!(unsigned_err.reason.contains("envelope unsigned"));
+
+        let mut unsupported = command_policy(
+            DesktopControlMode::ControlLocked,
+            NativeControlCapability::Pointer,
+        );
+        unsupported
+            .envelope
+            .as_mut()
+            .expect("envelope")
+            .policy_version = CURRENT_NATIVE_CONTROL_POLICY_VERSION + 1;
+        let unsupported_err =
+            evaluate_native_control_command_policy(unsupported, &ready, "control_pointer_move")
+                .expect_err("unsupported policy versions must deny");
+        assert!(unsupported_err.reason.contains("policy unsupported"));
+
+        let mut expired = command_policy(
+            DesktopControlMode::ControlLocked,
+            NativeControlCapability::Pointer,
+        );
+        expired.envelope.as_mut().expect("envelope").expires_at_ms = expired.now_ms;
+        let expired_err =
+            evaluate_native_control_command_policy(expired, &ready, "control_pointer_move")
+                .expect_err("expired envelopes must deny");
+        assert!(expired_err.reason.contains("envelope expired"));
+    }
+
+    #[test]
+    fn native_command_policy_denies_when_tier_disabled() {
+        let ready = readiness("granted", "granted", "granted");
+        let policy = command_policy(
+            DesktopControlMode::ControlLocked,
+            NativeControlCapability::Keyboard,
+        );
+
+        let err =
+            evaluate_native_control_command_policy(policy, &ready, "control_keyboard_key_chord")
+                .expect_err("current native-control tier must stay off");
+
+        assert!(err.reason.contains("native control tier disabled"));
+    }
+
+    #[test]
+    fn native_command_policy_still_denies_with_all_current_preconditions_met() {
+        let ready = readiness("granted", "granted", "granted");
+        let mut policy = command_policy(
+            DesktopControlMode::Observe,
+            NativeControlCapability::Pointer,
+        );
+        policy.tier_enabled = true;
+
+        let err = evaluate_native_control_command_policy(policy, &ready, "control_pointer_click")
+            .expect_err("native actuation remains disabled until future approval path ships");
+
+        assert!(err.reason.contains("desktop native control disabled"));
     }
 }
