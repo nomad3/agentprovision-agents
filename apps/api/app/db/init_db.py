@@ -274,6 +274,7 @@ def seed_demo_data(db: Session) -> None:
         dataset_id=seeded_dataset.id,
         agent_id=agents[1].id if len(agents) > 1 else None,
         tenant_id=demo_tenant.id,
+        owner_user_id=admin_user.id,
     )
     db.add(demo_chat_session)
     db.flush()

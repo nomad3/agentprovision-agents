@@ -138,6 +138,7 @@ def create_session(
         dataset_group_id=dataset_group.id if dataset_group else None,
         agent_id=agent.id if agent else None,
         tenant_id=tenant_id,
+        owner_user_id=user_id,
         source="native",
     )
     db.add(session)

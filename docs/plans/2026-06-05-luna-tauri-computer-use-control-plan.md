@@ -7,10 +7,11 @@
 
 Date: 2026-06-05
 Operator: Simon Aguilera
-Status: Phase 1 audit spine merged; read-only MCP observation tools pending
+Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
+session ownership foundation ready for PR
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
 Branch: `codex/luna-phase1-control-plane`; current follow-up branch:
-`codex/luna-release-validation-phase2`
+`codex/luna-phase2-session-ownership`
 
 ---
 
@@ -956,9 +957,10 @@ Exit criteria:
 
 Goal: add the missing API-to-Tauri path for action envelopes.
 
-- [ ] Add `desktop_commands` table with tenant/user/session/shell scoping.
 - [x] Add `desktop_commands` table with tenant/user/session/shell scoping.
 - [x] Add append-only `desktop_command_events` table for authoritative audit.
+- [x] Add `chat_sessions.owner_user_id` so desktop-control can reject ownerless
+      and cross-user session requests before live content is enabled.
 - [ ] Add API service for enqueue, claim, complete, deny, expire.
   - [x] Add API service for local metadata-only observation-event ingestion.
         Enqueue/claim/complete/deny/expire remains pending for signed command
@@ -992,7 +994,14 @@ Goal: add the missing API-to-Tauri path for action envelopes.
 - [ ] Enforce MCP `desktop_control` tools through scoped agent-token auth; derive
       tenant/user/session/device from auth-bound context, not LLM-supplied
       arguments.
+  - [x] Bind desktop observation requests to an authenticated user header and
+        reject sessions not owned by that user.
+  - [ ] Bind shell/device identity to authenticated enrollment before returning
+        screenshots, active-app data, clipboard text, or pointer/keyboard
+        command results.
 - [ ] Add API tests for tenant isolation and command ownership.
+  - [x] Add focused observation-path tests for ownerless sessions, same-tenant
+        cross-user sessions, and user validation before shell selection.
 
 Exit criteria:
 
@@ -1147,6 +1156,8 @@ Exit criteria:
 
 - [ ] `desktop_commands` migration applies and records in `_migrations`.
 - [ ] `desktop_command_events` migration applies and records in `_migrations`.
+- [ ] `chat_sessions.owner_user_id` migration applies, backfills single-user
+      tenants only, and records in `_migrations`.
 - [x] PR #793 includes migration files for `desktop_commands` and
       `desktop_command_events`; applied-migration validation remains part of
       the PostgreSQL CI/release gate.
@@ -1166,6 +1177,10 @@ Exit criteria:
       `desktop_control` tool group.
 - [ ] MCP desktop tools derive tenant/user/session/device from auth-bound
       context, not from LLM-supplied tool arguments.
+  - [x] PR #794 and the Phase 2 ownership follow-up keep MCP observation tools
+        denial-only and require authenticated user/session ownership.
+  - [ ] Device-bound shell identity remains the next blocking condition for
+        live content return.
 - [ ] Rate limits are enforced per tenant/user/session/shell/capability.
 - [ ] Raw screenshot and clipboard values are not written to logs or
       `session_events`.

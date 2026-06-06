@@ -831,6 +831,7 @@ class TeamsService:
                         tenant_id=tenant_id,
                         agent_id=agent.id,
                         title=session_title,
+                        owner_user_id=user.id,
                     )
                     db.add(session)
                     db.commit()

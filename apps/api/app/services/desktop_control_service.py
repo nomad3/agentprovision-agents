@@ -67,17 +67,38 @@ class McpObservationRequest:
     tool_name: str
 
 
-def _ensure_session_for_tenant(db: Session, session_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
-    exists = db.query(ChatSession.id).filter(
+def _get_session_for_tenant(db: Session, session_id: uuid.UUID, tenant_id: uuid.UUID) -> ChatSession:
+    session = db.query(ChatSession).filter(
         ChatSession.id == session_id,
         ChatSession.tenant_id == tenant_id,
     ).first()
-    if not exists:
+    if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+
+def _ensure_session_owned_by_user(
+    db: Session,
+    session_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    session = _get_session_for_tenant(db, session_id, tenant_id)
+    owner_user_id = getattr(session, "owner_user_id", None)
+    if owner_user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Desktop session owner is not established",
+        )
+    if str(owner_user_id) != str(user_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Desktop session is not owned by user",
+        )
 
 
 def _ensure_session_owned(db: Session, session_id: uuid.UUID, user: User) -> None:
-    _ensure_session_for_tenant(db, session_id, user.tenant_id)
+    _ensure_session_owned_by_user(db, session_id, user.tenant_id, user.id)
 
 
 def _ensure_user_for_tenant(db: Session, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
@@ -247,8 +268,8 @@ def record_mcp_observation_request(
     denied event keeps the MCP tool honest while preserving tenant/session/shell
     auditability and display-safe session replay.
     """
-    _ensure_session_for_tenant(db, request.session_id, tenant_id)
     _ensure_user_for_tenant(db, user_id, tenant_id)
+    _ensure_session_owned_by_user(db, request.session_id, tenant_id, user_id)
     shell_id, shell_capabilities = _select_connected_shell(tenant_id, request.shell_id)
 
     capability = _OBSERVATION_CAPABILITIES[request.action]
