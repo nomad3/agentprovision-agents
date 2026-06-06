@@ -64,6 +64,7 @@ function permissionEntries(permissions) {
     label: permissionLabel(key),
     status: value?.status || 'unknown',
     reason: value?.reason || '',
+    requiredFor: value?.required_for || [],
   }));
 }
 
@@ -79,9 +80,23 @@ export function summarizePermissions(permissions) {
   return { label: `TCC ${ready}/${activeEntries.length}`, title };
 }
 
+export function labelForPermissionStatus(status) {
+  switch (status) {
+    case 'granted':
+      return 'Granted';
+    case 'denied':
+      return 'Denied';
+    case 'not_required':
+      return 'Not Required';
+    default:
+      return 'Unknown';
+  }
+}
+
 export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
 
   const publishState = useCallback((next) => {
     const merged = { ...FALLBACK_STATE, ...next };
@@ -132,6 +147,10 @@ export default function ControlSafetyStrip() {
     () => summarizePermissions(state.permissions),
     [state.permissions],
   );
+  const permissionDetails = useMemo(
+    () => permissionEntries(state.permissions),
+    [state.permissions],
+  );
   const title = useMemo(() => {
     const gesture = state.gesture_state || 'unknown';
     const cursor = state.cursor_global ? 'global cursor on' : 'global cursor off';
@@ -139,63 +158,96 @@ export default function ControlSafetyStrip() {
   }, [label, permissionSummary.title, state.gesture_state, state.cursor_global]);
 
   return (
-    <div className={`control-safety control-safety-${state.mode}`} title={title} aria-label="Desktop control safety">
-      <span className="control-safety-label">{label}</span>
-      <button
-        className="control-safety-action"
-        onClick={() => run('control_observe_status')}
-        disabled={busy || state.mode === 'observe' || !state.can_observe}
-        title="Enable observe-only mode"
-      >
-        Observe
-      </button>
-      <button
-        className="control-safety-action"
-        disabled={busy || !state.can_assist}
-        title="Assist mode requires API governance and approval grants"
-      >
-        Assist
-      </button>
-      <button
-        className="control-safety-action"
-        disabled={busy || !state.can_control}
-        title="Control mode is locked until command governance ships"
-      >
-        Control
-      </button>
-      <button
-        className="control-safety-action"
-        onClick={() => run('control_lock_all')}
-        disabled={busy || state.mode === 'control_locked' || state.mode === 'stopped'}
-        title="Lock observation without latching Stop"
-      >
-        Lock
-      </button>
-      <button
-        className="control-safety-action control-safety-stop"
-        onClick={() => run('control_stop_all')}
-        disabled={busy || state.mode === 'stopped'}
-        title="Stop all local desktop control and capture loops"
-      >
-        Stop
-      </button>
-      {state.mode === 'stopped' && (
+    <div className="control-safety-wrap">
+      <div className={`control-safety control-safety-${state.mode}`} title={title} aria-label="Desktop control safety">
+        <span className="control-safety-label">{label}</span>
         <button
-          className="control-safety-action control-safety-resume"
-          onClick={() => run('control_clear_stop')}
-          disabled={busy}
-          title="Clear the latched Stop and return to the locked (safe) state. Stop now persists across app relaunch, so this is the only way to resume."
+          className="control-safety-action"
+          onClick={() => run('control_observe_status')}
+          disabled={busy || state.mode === 'observe' || !state.can_observe}
+          title="Enable observe-only mode"
         >
-          Resume
+          Observe
         </button>
+        <button
+          className="control-safety-action"
+          disabled={busy || !state.can_assist}
+          title="Assist mode requires API governance and approval grants"
+        >
+          Assist
+        </button>
+        <button
+          className="control-safety-action"
+          disabled={busy || !state.can_control}
+          title="Control mode is locked until command governance ships"
+        >
+          Control
+        </button>
+        <button
+          className="control-safety-action"
+          onClick={() => run('control_lock_all')}
+          disabled={busy || state.mode === 'control_locked' || state.mode === 'stopped'}
+          title="Lock observation without latching Stop"
+        >
+          Lock
+        </button>
+        <button
+          className="control-safety-action control-safety-stop"
+          onClick={() => run('control_stop_all')}
+          disabled={busy || state.mode === 'stopped'}
+          title="Stop all local desktop control and capture loops"
+        >
+          Stop
+        </button>
+        {state.mode === 'stopped' && (
+          <button
+            className="control-safety-action control-safety-resume"
+            onClick={() => run('control_clear_stop')}
+            disabled={busy}
+            title="Clear the latched Stop and return to the locked (safe) state. Stop now persists across app relaunch, so this is the only way to resume."
+          >
+            Resume
+          </button>
+        )}
+        <button
+          className="control-safety-permissions"
+          type="button"
+          title={permissionSummary.title}
+          aria-label={`Permission readiness ${permissionSummary.label}`}
+          aria-expanded={permissionsOpen}
+          onClick={() => setPermissionsOpen((open) => !open)}
+        >
+          {permissionSummary.label}
+        </button>
+      </div>
+      {permissionsOpen && (
+        <div className="control-permissions" aria-label="Permission readiness details">
+          {permissionDetails.length === 0 ? (
+            <div className="control-permission control-permission-unknown">
+              <span className="control-permission-main">
+                <span className="control-permission-name">TCC</span>
+                <span className="control-permission-detail">Permission readiness is unavailable.</span>
+              </span>
+              <span className="control-permission-status">Unknown</span>
+            </div>
+          ) : permissionDetails.map((permission) => (
+            <div className={`control-permission control-permission-${permission.status}`} key={permission.key}>
+              <span className="control-permission-main">
+                <span className="control-permission-name">{permission.label}</span>
+                {permission.reason && (
+                  <span className="control-permission-detail">{permission.reason}</span>
+                )}
+                {permission.requiredFor.length > 0 && (
+                  <span className="control-permission-detail">
+                    Required for: {permission.requiredFor.join(', ')}
+                  </span>
+                )}
+              </span>
+              <span className="control-permission-status">{labelForPermissionStatus(permission.status)}</span>
+            </div>
+          ))}
+        </div>
       )}
-      <span
-        className="control-safety-permissions"
-        title={permissionSummary.title}
-        aria-label={`Permission readiness ${permissionSummary.label}`}
-      >
-        {permissionSummary.label}
-      </span>
     </div>
   );
 }

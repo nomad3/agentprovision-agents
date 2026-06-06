@@ -7,7 +7,11 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args) => invokeMock(...args),
 }));
 
-import ControlSafetyStrip, { labelForControlMode, summarizePermissions } from '../ControlSafetyStrip';
+import ControlSafetyStrip, {
+  labelForControlMode,
+  labelForPermissionStatus,
+  summarizePermissions,
+} from '../ControlSafetyStrip';
 
 beforeEach(() => {
   invokeMock.mockReset();
@@ -35,6 +39,13 @@ describe('ControlSafetyStrip', () => {
     expect(summary.title).toContain('Screen: granted');
     expect(summary.title).toContain('AX: denied');
     expect(summary.title).toContain('Camera: unknown');
+  });
+
+  it('maps permission readiness states to operator labels', () => {
+    expect(labelForPermissionStatus('granted')).toBe('Granted');
+    expect(labelForPermissionStatus('denied')).toBe('Denied');
+    expect(labelForPermissionStatus('not_required')).toBe('Not Required');
+    expect(labelForPermissionStatus('unknown')).toBe('Unknown');
   });
 
   it('loads the safety state on mount', async () => {
@@ -70,6 +81,36 @@ describe('ControlSafetyStrip', () => {
     expect(screen.getByRole('button', { name: /^control$/i })).toBeDisabled();
     expect(screen.getByText('TCC 1/2')).toBeInTheDocument();
     expect(screen.getByLabelText('Permission readiness TCC 1/2')).toBeInTheDocument();
+  });
+
+  it('expands permission readiness details from the safety strip', async () => {
+    invokeMock.mockResolvedValueOnce({
+      mode: 'control_locked',
+      can_observe: true,
+      permissions: {
+        screen_recording: {
+          status: 'granted',
+          reason: 'macOS Screen Recording preflight is granted.',
+          required_for: ['screenshot', 'screen observation'],
+        },
+        accessibility: {
+          status: 'denied',
+          reason: 'macOS Accessibility trust preflight is denied or not yet granted.',
+          required_for: ['active app', 'pointer control'],
+        },
+      },
+    });
+
+    render(<ControlSafetyStrip />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Permission readiness TCC 1/2' }));
+
+    expect(screen.getByLabelText('Permission readiness details')).toBeInTheDocument();
+    expect(screen.getByText('Screen')).toBeInTheDocument();
+    expect(screen.getByText('Granted')).toBeInTheDocument();
+    expect(screen.getByText('AX')).toBeInTheDocument();
+    expect(screen.getByText('Denied')).toBeInTheDocument();
+    expect(screen.getByText('Required for: active app, pointer control')).toBeInTheDocument();
   });
 
   it('arms observe-only mode from the local UI', async () => {
