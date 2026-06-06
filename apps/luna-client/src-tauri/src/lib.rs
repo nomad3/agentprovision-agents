@@ -249,7 +249,12 @@ async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
         CAPTURE_RUNNING.store(false, Ordering::SeqCst);
     }
     gesture::set_global_mode(false);
-    gesture::stop_engine().await?;
+    // A kill switch must never report failure once the latch is set: the Stop is
+    // already authoritative + persisted above. A gesture-teardown error is logged,
+    // not propagated, so the UI always sees the STOPPED state (Luna review nit).
+    if let Err(e) = gesture::stop_engine().await {
+        log::warn!("desktop control: gesture stop errored during Stop (latch already set): {e}");
+    }
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
