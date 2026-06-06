@@ -88,12 +88,10 @@ jobs:
             if [ -n "$EXISTING_FOR_SHA" ]; then
               VERSION="$EXISTING_FOR_SHA"
             else
-              LATEST_TAGS=$(gh release list --limit 200 --json tagName,publishedAt \
-                --jq ".[] | select(.tagName | test(\"^luna-v${MAJOR}\\\\.${MINOR}\\\\.[0-9]+$\")) | .tagName" \
-              )
-              LATEST_TAG=$(printf '%s\n' "$LATEST_TAGS" | head -1)
-              LATEST_PATCH=$(printf '%s\n' "$LATEST_TAG" \
-                | sed -E "s/^luna-v${MAJOR}\\.${MINOR}\\.([0-9]+)$/\\1/")
+              LATEST_PATCH=$(printf '%s\n' "$REMOTE_TAGS" \
+                | awk -v prefix="refs/tags/luna-v${MAJOR}.${MINOR}." '$2 ~ "^" prefix "[0-9]+$" { sub(prefix, "", $2); print $2 }' \
+                | sort -n \
+                | tail -1)
               PATCH=$(( ${LATEST_PATCH:-0} + 1 ))
               VERSION="${MAJOR}.${MINOR}.${PATCH}"
               while true; do
@@ -294,6 +292,33 @@ jobs:
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: |
           STABLE_TAG="luna-latest"
+          VERSION="${{ steps.version.outputs.version }}"
+          TMPDIR=$(mktemp -d)
+          trap 'rm -rf "$TMPDIR"' EXIT
+
+          if gh release view "$STABLE_TAG" >/dev/null 2>&1; then
+            if gh release download "$STABLE_TAG" --pattern latest.json --dir "$TMPDIR" --clobber; then
+              EXISTING_VERSION=$(python3 -c "import json, sys; print(json.load(open(sys.argv[1])).get('version', ''))" "$TMPDIR/latest.json")
+              python3 - "$VERSION" "$EXISTING_VERSION" <<'PY'
+          import sys
+
+          new_version, existing_version = sys.argv[1], sys.argv[2]
+
+          def parse(version):
+              parts = version.split(".")
+              if len(parts) != 3 or any(not part.isdigit() for part in parts):
+                  raise SystemExit(f"Invalid Luna updater manifest version: {version!r}")
+              return tuple(int(part) for part in parts)
+
+          if existing_version and parse(new_version) <= parse(existing_version):
+              raise SystemExit(
+                  f"Refusing to publish non-monotonic Luna updater manifest: "
+                  f"{new_version} <= {existing_version}"
+              )
+          PY
+            fi
+          fi
+
           git tag -f "$STABLE_TAG"
           git push origin "refs/tags/$STABLE_TAG" --force
 
