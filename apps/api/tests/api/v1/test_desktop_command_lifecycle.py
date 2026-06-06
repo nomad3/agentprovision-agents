@@ -806,7 +806,7 @@ def test_completion_sanitizes_reason_and_metadata_values(db_session, seeded):
                     summary="OCR token must not persist",
                     result_kind="string",
                     result_size_chars=41,
-                    result_fields=["app", "raw_text"],
+                    result_fields=["app", "title", "title_present", "raw_text"],
                 ),
             ),
         )
@@ -814,7 +814,7 @@ def test_completion_sanitizes_reason_and_metadata_values(db_session, seeded):
     assert event.reason == "desktop command failed"
     assert event.event_metadata["result_kind"] == "string"
     assert event.event_metadata["result_size_chars"] == 41
-    assert event.event_metadata["result_fields"] == ["app"]
+    assert event.event_metadata["result_fields"] == ["app", "title_present"]
     assert "must not persist" not in str(event.event_metadata)
     assert "lease_expires_at" not in event.event_metadata
     assert "raw clipboard" not in str(event.reason)

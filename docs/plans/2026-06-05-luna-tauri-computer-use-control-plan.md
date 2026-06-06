@@ -15,9 +15,11 @@ timezone fix merged and deployed; PR #803 native pointer/keyboard scaffold
 merged and unsigned `luna-v0.1.97` installed locally; PR #806 native-control
 policy hardening merged and unsigned `luna-v0.1.98` installed locally; PR #807
 signed desktop command envelope gate merged and unsigned `luna-v0.1.99`
-installed locally; PR #808 Alpha CLI async chat-kernel transport merged. Native
-actuation remains disabled; next phase is macOS-only Alpha-kernel adapter design
-plus Tauri-side public-key/Ed25519 command-envelope verification.
+installed locally; PR #808 Alpha CLI async chat-kernel transport merged and
+unsigned `luna-v0.1.100` installed locally. Native actuation remains disabled;
+current branch adds macOS-only Alpha-kernel readiness and metadata-only native
+app-monitor status before Tauri-side public-key/Ed25519 command-envelope
+verification.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
 Current implementation branch: `codex/luna-macos-alpha-kernel`
 
@@ -566,6 +568,45 @@ Additional discovery inputs:
     advertising conservative until Alpha CLI/core, Tauri, audit, and approval
     behavior are present together. Do not make API-only promises ahead of local
     kernel support.
+59. Post-merge validation for PR #808 passed on merge commit `92f056bc`: broad
+    Tests, CLI Build Matrix, Docker Desktop Deployment, and Luna Client Tauri
+    Build all completed successfully. GitHub Actions published unsigned
+    development prerelease `luna-v0.1.100`; the DMG and `.sha256` were
+    downloaded, `shasum -c` verified the checksum, `/Applications/Luna.app`
+    reported bundle version `0.1.100`, and codesign reported the expected
+    ad-hoc signature with no `TeamIdentifier`.
+60. Computer Use smoke on installed `luna-v0.1.100` verified the expanded
+    chat/session surface, visible Luna Alpha Chat handoff, durable `Stopped`
+    safety strip, disabled Observe/Assist/Control/Lock/Stop while stopped,
+    visible `Resume`, and passive TCC readiness with Screen Recording and
+    Accessibility denied/not-yet-granted. Luna's exact Docker `_work` mount
+    gate returned no output.
+61. Branch `codex/luna-macos-alpha-kernel` implements the first macOS-only
+    local-kernel/readiness slice without API expansion or native actuation:
+    Luna Tauri now reports Alpha CLI discovery status in the control safety
+    state, exposes a local `alpha_kernel_status` command, reports macOS
+    app-monitor readiness from mode plus Accessibility status, and keeps
+    capability advertising conservative. Active-app policy now gates on
+    Accessibility only; passive System Events automation remains visible in TCC
+    readiness and runtime failures still audit/deny. The ambient activity
+    tracker now emits metadata-only app-switch events and no longer forwards
+    raw window titles, subprocess args, terminal cwd, or project labels.
+62. Local branch debug-app smoke built an unsigned `Luna.app` from
+    `codex/luna-macos-alpha-kernel`, temporarily installed it into
+    `/Applications`, and verified with Computer Use that the safety strip showed
+    `Stopped Alpha OK Mac Stopped` while Assist/Control and pointer/keyboard
+    actuation remained disabled. After the branch smoke, `/Applications/Luna.app`
+    was restored to verified release `luna-v0.1.100` with checksum validation.
+63. Council review found one privacy blocker before PR: after ActiveApp moved to
+    Accessibility-only gating, direct Tauri `get_active_app` still returned raw
+    `title`. The branch now fixes that path too: direct active-app results are
+    metadata-only (`app`, `title_present`, `title_chars`), Command Palette
+    includes only app name in prompt context, and the API safe `result_fields`
+    allowlist no longer accepts raw `title`.
+64. Council re-review after the fix found no remaining blockers. Luna final
+    Alpha Chat review was requested with the post-fix validation summary, but
+    the durable Alpha Chat job did not return an ACK during this turn; no
+    hanging local Alpha CLI process remained after cleanup.
 
 ---
 
@@ -1133,6 +1174,12 @@ Current verification finding (2026-06-06):
       assets but marked the run failed because GitHub release creation timed out
       before the delayed server-side release became visible; the workflow now
       retries create/upload idempotently.
+- [x] Verify `luna-v0.1.100` unsigned development release locally after PR
+      #808: DMG checksum, `/Applications/Luna.app` version `0.1.100`, installed
+      app launched from `/Applications`, expanded chat/session UI, durable
+      `Stopped` posture, disabled native-control affordances, visible Luna
+      Alpha Chat handoff, expected ad-hoc unsigned development signature, and
+      an empty exact Docker `_work` mount gate.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -1178,6 +1225,11 @@ Exit criteria:
       checksum, installed `/Applications/Luna.app` launch, expanded chat/session
       window, durable stopped posture, disabled native-control controls, Luna
       Alpha Chat lead response, and an empty exact Docker `_work` mount gate.
+- [x] Local install smoke from GitHub Release `luna-v0.1.100` confirms version,
+      checksum, installed `/Applications/Luna.app` launch, expanded chat/session
+      window, durable stopped posture, disabled native-control controls, Luna
+      Alpha Chat handoff visibility, expected ad-hoc signature, and an empty
+      exact Docker `_work` mount gate.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -1194,16 +1246,26 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
         app/window, and clipboard read.
   - [x] Enforce `Stopped` and non-Observe denial before native observation work
         begins.
-  - [x] Enforce passive local permission readiness before Screen Recording,
-        Accessibility, and System Events-backed observations.
+  - [x] Enforce passive local permission readiness before Screen Recording and
+        Accessibility-backed observations. System Events automation remains a
+        visible readiness signal, but the passive `unknown` probe no longer
+        blocks Accessibility-gated active-app metadata; runtime lookup failures
+        still audit and deny.
   - [x] Emit local metadata-only `desktop-control-audit` events for observation
         start, success, failure, and denial.
   - [x] Gate background clipboard/activity emitters with the same local
         observation policy before emitting frontend events, and emit matching
         local audit events for emitted observations.
-  - [x] Keep active app/window observation fail-closed on macOS until an
-        explicit System Events setup/probe flow can mark Automation readiness as
-        granted.
+  - [x] Re-scope macOS active-app observation to Accessibility readiness so
+        passive System Events `unknown` does not permanently block monitoring.
+        Keep runtime System Events failures fail-closed with audit.
+  - [x] Route ambient macOS activity events through metadata-only app-switch
+        payloads: app names, duration, timestamp, source, and title presence/
+        character count only; no raw window titles, subprocess args, terminal
+        cwd, or project labels are emitted.
+  - [x] Make direct `get_active_app` command results metadata-only as well:
+        app name, title presence, and title character count; no raw window title
+        is returned to the WebView or command-completion metadata.
   - [ ] Bind local observation requests to the active chat session before
         MCP/API-governed observations ship.
     - [x] Add branch `codex/luna-desktop-command-events` bridge that forwards
@@ -1249,6 +1311,9 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       (`observe`, `stop`, `notify`; no pointer/keyboard/local-action claim).
 - [x] Sync shell presence capabilities from native control safety state so
       stopped shells do not advertise observation readiness.
+- [x] Surface Alpha CLI local-kernel discovery and macOS app-monitor readiness
+      in the Luna Tauri safety state/UI without advertising new API
+      capabilities.
 - [x] Ensure the local audit bridge uses the active app shell id instead of
       trusting a native event payload shell override.
 - [x] Add explicit gesture engine start paths in calibration and gesture
@@ -1733,6 +1798,16 @@ Exit criteria:
       `cargo test` in `apps/luna-client/src-tauri` (`69 passed`). Existing
       Cargo cache cleanup permission warning and pre-existing Rust warnings
       were observed.
+- [x] macOS Alpha-kernel/readiness slice focused validation passed on branch
+      `codex/luna-macos-alpha-kernel`: `cargo test
+      computer_use::policy::tests --quiet` (`12 passed`), targeted Rust privacy
+      helper tests for active-app metadata and activity-event metadata, `cargo
+      check`, `npm test -- --run ControlSafetyStrip.test.jsx
+      CommandPalette.test.jsx useDesktopCommandClaims.test.jsx` (`36 passed`),
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py::test_completion_sanitizes_reason_and_metadata_values
+      -q` (`1 passed`), and `git diff --check`. The local Cargo cache cleanup
+      permission warning and existing gesture/spatial warnings remain
+      non-blocking.
 
 ### React / UX
 
@@ -1815,6 +1890,12 @@ Exit criteria:
       visible, durable `Stopped` posture verified, Observe/Assist/Control/Lock/
       Stop disabled, `Resume` visible, Luna's Alpha Chat lead response visible,
       and Luna's exact Docker `_work` mount gate returned no output.
+- [x] `luna-v0.1.100` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.100`, ad-hoc unsigned development signature confirmed,
+      installed Tauri app verified with Computer Use, expanded chat/session UI
+      visible, durable `Stopped` posture verified, Observe/Assist/Control/Lock/
+      Stop disabled, `Resume` visible, Luna's Alpha Chat handoff visible, and
+      Luna's exact Docker `_work` mount gate returned no output.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1859,15 +1940,14 @@ Exit criteria:
 
 ## Next Actions
 
-1. Validate post-merge `92f056bc`: GitHub Actions Tests, CLI Build Matrix,
-   Docker Desktop Deployment, and Luna Client Tauri Build. If a new Luna
-   prerelease is published, install it locally, verify checksum, launch
-   `/Applications/Luna.app`, and keep the exact Docker `_work` mount gate empty.
-2. Add the Luna Tauri Alpha-kernel adapter design before expanding actuation,
-   scoped to macOS native app/window monitoring:
-   `alpha` binary discovery/pinning, auth/session handoff, chat/job streaming,
-   cancellation, error display, offline behavior, release packaging, and
-   app-monitor event mapping into Luna UI.
+1. Review and merge the macOS Alpha-kernel/readiness slice after Luna/council
+   review: Alpha CLI discovery status, macOS app-monitor readiness,
+   Accessibility-only active-app policy, and metadata-only ambient activity
+   events. Keep native pointer/keyboard actuation disabled.
+2. Extend the Alpha-kernel adapter beyond readiness in the next slice:
+   auth/session handoff, chat-job streaming from `alpha`, cancellation, error
+   display, offline behavior, release packaging, and app-monitor event mapping
+   into Luna UI.
 3. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.

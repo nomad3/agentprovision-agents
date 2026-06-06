@@ -106,7 +106,7 @@ _SAFE_METADATA_KEYS = {
 }
 
 _SAFE_RESULT_KINDS = {"binary", "string", "json", "error", "unsupported", "unknown"}
-_SAFE_RESULT_FIELDS = {"app", "title"}
+_SAFE_RESULT_FIELDS = {"app", "title_chars", "title_present"}
 _SAFE_CONTROL_MODES = {"control_locked", "observe", "stopped"}
 
 DEFAULT_COMMAND_LEASE_SECONDS = 30

@@ -8,7 +8,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import ControlSafetyStrip, {
+  labelForAlphaKernelStatus,
   labelForControlMode,
+  labelForMacosMonitorStatus,
   labelForPermissionStatus,
   summarizePermissions,
 } from '../ControlSafetyStrip';
@@ -48,6 +50,15 @@ describe('ControlSafetyStrip', () => {
     expect(labelForPermissionStatus('unknown')).toBe('Unknown');
   });
 
+  it('maps local kernel and macOS monitor states to compact labels', () => {
+    expect(labelForAlphaKernelStatus('available', true)).toBe('Alpha OK');
+    expect(labelForAlphaKernelStatus('missing', false)).toBe('Alpha --');
+    expect(labelForMacosMonitorStatus('ready')).toBe('Mac Ready');
+    expect(labelForMacosMonitorStatus('denied')).toBe('Mac Denied');
+    expect(labelForMacosMonitorStatus('stopped')).toBe('Mac Stopped');
+    expect(labelForMacosMonitorStatus('unsupported')).toBe('Mac --');
+  });
+
   it('loads the safety state on mount', async () => {
     invokeMock.mockResolvedValueOnce({
       mode: 'control_locked',
@@ -81,6 +92,41 @@ describe('ControlSafetyStrip', () => {
     expect(screen.getByRole('button', { name: /^control$/i })).toBeDisabled();
     expect(screen.getByText('TCC 1/2')).toBeInTheDocument();
     expect(screen.getByLabelText('Permission readiness TCC 1/2')).toBeInTheDocument();
+  });
+
+  it('shows Alpha kernel and macOS monitor readiness without exposing raw window titles', async () => {
+    invokeMock.mockResolvedValueOnce({
+      mode: 'observe',
+      can_observe: true,
+      alpha_kernel: {
+        status: 'available',
+        available: true,
+        binary_path: '/opt/homebrew/bin/alpha',
+      },
+      macos_app_monitor: {
+        status: 'ready',
+        reason: 'macOS active-app monitoring is ready in metadata-only mode.',
+        accessibility_status: 'granted',
+        automation_system_events_status: 'unknown',
+      },
+    });
+
+    render(<ControlSafetyStrip />);
+
+    expect(await screen.findByText('Alpha OK')).toBeInTheDocument();
+    expect(screen.getByText('Mac Ready')).toBeInTheDocument();
+
+    fireEvent(window, new CustomEvent('luna:activity-event', {
+      detail: {
+        to_app: 'Terminal',
+        window_title: 'secret repo window title',
+        subprocess: { active_processes: [{ args: 'secret args' }] },
+      },
+    }));
+
+    expect(screen.getByText('Terminal')).toBeInTheDocument();
+    expect(screen.queryByText('secret repo window title')).toBeNull();
+    expect(screen.queryByText('secret args')).toBeNull();
   });
 
   it('expands permission readiness details from the safety strip', async () => {

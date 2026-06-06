@@ -11,7 +11,7 @@ import CommandPalette from '../CommandPalette';
 
 beforeEach(() => {
   invokeMock.mockReset();
-  invokeMock.mockResolvedValue({ app: '', title: '' });
+  invokeMock.mockResolvedValue({ app: '', title_present: false, title_chars: 0 });
 });
 
 describe('CommandPalette', () => {
@@ -51,7 +51,7 @@ describe('CommandPalette', () => {
   });
 
   it('sends the query prefixed with active app context and closes', async () => {
-    invokeMock.mockResolvedValue({ app: 'Code', title: 'project — file.js' });
+    invokeMock.mockResolvedValue({ app: 'Code', title_present: true, title_chars: 17 });
     const onSend = vi.fn();
     const onClose = vi.fn();
 
@@ -68,6 +68,7 @@ describe('CommandPalette', () => {
     });
     expect(onSend.mock.calls[0][0]).toContain('summarise this file');
     expect(onSend.mock.calls[0][0]).toContain('Code');
+    expect(onSend.mock.calls[0][0]).not.toContain('project');
     expect(onClose).toHaveBeenCalled();
   });
 

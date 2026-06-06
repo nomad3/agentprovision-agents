@@ -421,6 +421,35 @@
 .control-safety-observe .control-safety-label { color: #63d297; }
 .control-safety-stopped .control-safety-label { color: #ff8f8f; }
 
+.control-safety-chip {
+  max-width: 112px;
+  height: 22px;
+  padding: 0 6px;
+  border-left: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-safety-chip-available,
+.control-safety-chip-ready {
+  color: #63d297;
+}
+
+.control-safety-chip-denied,
+.control-safety-chip-stopped {
+  color: #ffb0b0;
+}
+
+.control-safety-chip-active {
+  max-width: 132px;
+  color: var(--color-text);
+}
+
 .control-safety-action {
   min-width: 34px;
   height: 24px;

@@ -36,7 +36,7 @@ export default function CommandPalette({ visible, onClose, onSend }) {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const app = await invoke('get_active_app');
-      if (app.app) appContext = `[User is in ${app.app}${app.title ? ': ' + app.title : ''}] `;
+      if (app.app) appContext = `[User is in ${app.app}] `;
     } catch {}
 
     // Quick command — send to Luna via active session and show result inline

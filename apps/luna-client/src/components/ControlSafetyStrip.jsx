@@ -15,6 +15,22 @@ const FALLBACK_STATE = {
   can_control: false,
   can_control_pointer: false,
   can_control_keyboard: false,
+  alpha_kernel: {
+    status: 'missing',
+    available: false,
+    binary_path: null,
+    source: null,
+    platform_scope: 'macos',
+    reason: 'Alpha CLI readiness is unavailable.',
+  },
+  macos_app_monitor: {
+    platform: 'macos',
+    status: 'locked',
+    reason: 'macOS app monitoring is locked.',
+    accessibility_status: 'unknown',
+    automation_system_events_status: 'unknown',
+    observed_at_ms: null,
+  },
   permissions: null,
   last_stop_at_ms: null,
 };
@@ -93,10 +109,39 @@ export function labelForPermissionStatus(status) {
   }
 }
 
+export function labelForAlphaKernelStatus(status, available) {
+  if (available || status === 'available') return 'Alpha OK';
+  return 'Alpha --';
+}
+
+export function labelForMacosMonitorStatus(status) {
+  switch (status) {
+    case 'ready':
+      return 'Mac Ready';
+    case 'denied':
+      return 'Mac Denied';
+    case 'stopped':
+      return 'Mac Stopped';
+    case 'unsupported':
+      return 'Mac --';
+    default:
+      return 'Mac Locked';
+  }
+}
+
+function safeActiveAppLabel(payload) {
+  const value = payload?.to_app || payload?.app_name || '';
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length > 28 ? `${trimmed.slice(0, 27)}...` : trimmed;
+}
+
 export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [activeApp, setActiveApp] = useState(null);
 
   const publishState = useCallback((next) => {
     const merged = { ...FALLBACK_STATE, ...next };
@@ -117,6 +162,11 @@ export default function ControlSafetyStrip() {
     refresh();
   }, [refresh]);
 
+  const handleActivityPayload = useCallback((payload) => {
+    const label = safeActiveAppLabel(payload);
+    if (label) setActiveApp(label);
+  }, []);
+
   useEffect(() => {
     let unlisten;
     (async () => {
@@ -129,6 +179,24 @@ export default function ControlSafetyStrip() {
     })();
     return () => { unlisten?.(); };
   }, [publishState]);
+
+  useEffect(() => {
+    let unlisten;
+    const handleDomActivity = (event) => handleActivityPayload(event.detail);
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen('activity-event', (event) => {
+          handleActivityPayload(event.payload);
+        });
+      } catch {}
+    })();
+    window.addEventListener('luna:activity-event', handleDomActivity);
+    return () => {
+      window.removeEventListener('luna:activity-event', handleDomActivity);
+      unlisten?.();
+    };
+  }, [handleActivityPayload]);
 
   const run = useCallback(async (command) => {
     setBusy(true);
@@ -156,11 +224,38 @@ export default function ControlSafetyStrip() {
     const cursor = state.cursor_global ? 'global cursor on' : 'global cursor off';
     return `Desktop safety: ${label}; gestures ${gesture}; ${cursor}\n${permissionSummary.title}`;
   }, [label, permissionSummary.title, state.gesture_state, state.cursor_global]);
+  const alphaKernel = state.alpha_kernel || FALLBACK_STATE.alpha_kernel;
+  const macosMonitor = state.macos_app_monitor || FALLBACK_STATE.macos_app_monitor;
+  const alphaTitle = alphaKernel.available
+    ? `Alpha CLI kernel: ${alphaKernel.binary_path || 'available'}`
+    : `Alpha CLI kernel: ${alphaKernel.reason || 'missing'}`;
+  const monitorTitle = [
+    macosMonitor.reason || 'macOS app monitor status unavailable.',
+    `AX: ${macosMonitor.accessibility_status || 'unknown'}`,
+    `Events: ${macosMonitor.automation_system_events_status || 'unknown'}`,
+  ].join('\n');
 
   return (
     <div className="control-safety-wrap">
       <div className={`control-safety control-safety-${state.mode}`} title={title} aria-label="Desktop control safety">
         <span className="control-safety-label">{label}</span>
+        <span
+          className={`control-safety-chip control-safety-chip-${alphaKernel.status || 'missing'}`}
+          title={alphaTitle}
+        >
+          {labelForAlphaKernelStatus(alphaKernel.status, alphaKernel.available)}
+        </span>
+        <span
+          className={`control-safety-chip control-safety-chip-${macosMonitor.status || 'locked'}`}
+          title={monitorTitle}
+        >
+          {labelForMacosMonitorStatus(macosMonitor.status)}
+        </span>
+        {activeApp && (
+          <span className="control-safety-chip control-safety-chip-active" title={activeApp}>
+            {activeApp}
+          </span>
+        )}
         <button
           className="control-safety-action"
           onClick={() => run('control_observe_status')}
