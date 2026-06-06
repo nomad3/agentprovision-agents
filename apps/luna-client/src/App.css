@@ -394,12 +394,20 @@
 .control-safety {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 4px;
   min-height: 30px;
   padding: 3px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: rgba(255,255,255,0.04);
+}
+
+.control-safety-wrap {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
 .control-safety-label {
@@ -456,12 +464,83 @@
   height: 22px;
   padding: 0 6px;
   border-left: 1px solid var(--color-border);
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: transparent;
   color: var(--color-text-muted);
   font-size: 10px;
   font-weight: 700;
   line-height: 22px;
   white-space: nowrap;
+  cursor: pointer;
 }
+
+.control-safety-permissions:hover {
+  color: var(--color-text);
+}
+
+.control-permissions {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  gap: 4px;
+  width: min(340px, calc(100vw - 24px));
+  padding: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.32);
+  z-index: 2300;
+}
+
+.control-permission {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  font-size: 12px;
+}
+
+.control-permission-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.control-permission-name,
+.control-permission-status,
+.control-permission-detail {
+  overflow-wrap: anywhere;
+}
+
+.control-permission-name {
+  color: var(--color-text);
+  font-weight: 700;
+}
+
+.control-permission-status {
+  color: var(--color-text-muted);
+  font-weight: 700;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.control-permission-detail {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.control-permission-granted .control-permission-status,
+.control-permission-not_required .control-permission-status { color: #63d297; }
+.control-permission-denied .control-permission-status { color: #ffb0b0; }
+.control-permission-unknown .control-permission-status { color: #a7b4d4; }
 
 .luna-floating-safety {
   position: fixed;
