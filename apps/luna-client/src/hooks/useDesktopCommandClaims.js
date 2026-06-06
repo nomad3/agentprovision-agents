@@ -24,6 +24,20 @@ const NATIVE_CONTROL_COMMANDS = new Set([
   'keyboard_key_chord',
 ]);
 
+const DESKTOP_COMMAND_ENVELOPE_SCHEMA = 'agentprovision.desktop_command_envelope.v1';
+const DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1;
+const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG = 'HMAC-SHA256';
+
+const ACTION_CAPABILITIES = {
+  capture_screenshot: 'screenshot',
+  get_active_app: 'active_app',
+  read_clipboard: 'clipboard_read',
+  pointer_move: 'pointer_control',
+  pointer_click: 'pointer_control',
+  keyboard_type: 'keyboard_control',
+  keyboard_key_chord: 'keyboard_control',
+};
+
 function commandId(command) {
   return command?.desktop_command_id || command?.id;
 }
@@ -135,6 +149,90 @@ function commandEnvelopeNonce(command) {
   return typeof nonce === 'string' && nonce.length > 0 ? nonce : null;
 }
 
+function parseEnvelopeExpiryMs(envelope) {
+  if (Number.isFinite(envelope?.expires_at_ms)) return Number(envelope.expires_at_ms);
+  if (typeof envelope?.expires_at === 'string' && envelope.expires_at) {
+    const parsed = Date.parse(envelope.expires_at);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function envelopeBindingFields(command, action, shellId, expectedContext = {}) {
+  return {
+    desktop_command_id: commandId(command),
+    shell_id: shellId,
+    session_id: expectedContext.sessionId || command?.session_id || null,
+    device_id: command?.device_id || null,
+    action,
+    capability: command?.capability || ACTION_CAPABILITIES[action] || null,
+  };
+}
+
+function validateClaimedCommandEnvelope(command, action, shellId, expectedContext = {}) {
+  const envelope = command?.payload?.command_envelope;
+  if (!envelope || typeof envelope !== 'object') {
+    return {
+      ok: false,
+      reason: 'desktop command envelope missing',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  if (typeof envelope.nonce !== 'string' || envelope.nonce.length === 0) {
+    return {
+      ok: false,
+      reason: 'desktop command envelope nonce missing',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  if (
+    envelope.schema !== DESKTOP_COMMAND_ENVELOPE_SCHEMA
+    || envelope.signed !== true
+    || envelope.signature_alg !== DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG
+    || envelope.policy_version !== DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION
+    || envelope.issuer !== 'agentprovision-api'
+  ) {
+    return {
+      ok: false,
+      reason: 'desktop command envelope binding mismatch',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  if (typeof envelope.signature !== 'string' || envelope.signature.length === 0) {
+    return {
+      ok: false,
+      reason: 'desktop command envelope signature invalid',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  const expiresAtMs = parseEnvelopeExpiryMs(envelope);
+  if (!expiresAtMs || expiresAtMs <= Date.now()) {
+    return {
+      ok: false,
+      reason: 'desktop command envelope expired',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  const expected = envelopeBindingFields(command, action, shellId, expectedContext);
+  const mismatched = Object.entries(expected).some(([key, value]) => (
+    value !== null && value !== undefined && envelope[key] !== value
+  ));
+  if (mismatched) {
+    return {
+      ok: false,
+      reason: 'desktop command envelope binding mismatch',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  return { ok: true };
+}
+
 function commandCompletionMetadata(command, metadata = {}) {
   const nonce = commandEnvelopeNonce(command);
   if (!nonce) return metadata;
@@ -207,9 +305,26 @@ export async function executeClaimedDesktopCommand(
   deviceToken,
   invoke,
   timeoutOverrides = {},
+  expectedContext = {},
 ) {
   const timeouts = resolveTimeouts(timeoutOverrides);
   const action = commandAction(command);
+  if (OBSERVATION_COMMANDS[action] || NATIVE_CONTROL_COMMANDS.has(action)) {
+    const envelopeCheck = validateClaimedCommandEnvelope(command, action, shellId, expectedContext);
+    if (!envelopeCheck.ok) {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'denied',
+        envelopeCheck.reason,
+        envelopeCheck.metadata,
+        timeouts,
+      );
+      return;
+    }
+  }
+
   const nativeCommand = OBSERVATION_COMMANDS[action];
   if (NATIVE_CONTROL_COMMANDS.has(action)) {
     let safety;
@@ -418,6 +533,7 @@ export function useDesktopCommandClaims(sessionId, shellId, options = {}) {
             deviceToken,
             invoke,
             timeoutsRef.current,
+            { sessionId },
           );
         } catch (error) {
           await completeCommand(
