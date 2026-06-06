@@ -158,17 +158,18 @@ Type your message, press Enter; the assistant streams its reply. `Ctrl-D` or
 `Ctrl-C` exits. History persists across REPL exits — use `alpha session ls` to
 find the session id and `alpha chat repl --session …` to come back.
 
-> **Long prompts:** `alpha chat send` streams over SSE through Cloudflare,
-> which cuts idle streams around the 524 deadline. For multi-minute turns
-> use `alpha run --fanout <cli> --background` instead — durable Temporal,
-> resumable from any host. See [troubleshooting.md](troubleshooting.md#cloudflare-524-on-alpha-chat-send).
+> **Long prompts:** current `alpha chat send` uses the async chat-job path
+> (`/messages/start` + `/chat/jobs/{id}/events`) so the initial request returns
+> quickly and event tails are heartbeat-backed/reconnectable. Use
+> `alpha run --fanout <cli> --background` for true long-running autonomous tasks
+> that should survive terminal close or laptop reboot.
 
 ### `alpha run` — durable Temporal-backed tasks
 
 Dispatches a long-running task into Temporal's `agentprovision-code` queue.
-Unlike `alpha chat send` (synchronous, SSE), `alpha run` survives terminal
-close, network drop, and laptop reboot — resume from any other host with
-`alpha watch <task_id>`.
+Use this when the work is a durable autonomous task rather than a chat turn:
+it survives terminal close, network drop, and laptop reboot — resume from any
+other host with `alpha watch <task_id>`.
 
 ```bash
 # Single-provider fanout (one CLI, durable Temporal child workflow). SHIPPED today.

@@ -192,10 +192,7 @@ pub async fn run(args: LearnArgs, ctx: Context) -> anyhow::Result<()> {
     render(&args, &resp, ctx.json)
 }
 
-async fn upload_attachment(
-    ctx: &Context,
-    path: &std::path::Path,
-) -> anyhow::Result<String> {
+async fn upload_attachment(ctx: &Context, path: &std::path::Path) -> anyhow::Result<String> {
     use agentprovision_core::error::Error;
     use reqwest::multipart;
 
@@ -212,9 +209,9 @@ async fn upload_attachment(
     // `try_clone()`-based auto-refresh fail (multipart streams are
     // not cloneable), which would break the 401 retry path users
     // expect from every other CLI verb.
-    let bytes = tokio::fs::read(path).await.map_err(|e| {
-        anyhow::anyhow!("could not read attachment {}: {e}", path.display())
-    })?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| anyhow::anyhow!("could not read attachment {}: {e}", path.display()))?;
 
     let part = multipart::Part::bytes(bytes)
         .file_name(filename)
@@ -318,8 +315,7 @@ mod tests {
 
     #[test]
     fn parses_bare_url() {
-        let a =
-            parse(&["t", "learn", "https://youtu.be/dQw4w9WgXcQ"]).expect("parse ok");
+        let a = parse(&["t", "learn", "https://youtu.be/dQw4w9WgXcQ"]).expect("parse ok");
         assert_eq!(a.url.as_deref(), Some("https://youtu.be/dQw4w9WgXcQ"));
         assert!(!a.dry_run);
         assert!(a.from_attachment.is_none());
@@ -342,8 +338,7 @@ mod tests {
 
     #[test]
     fn parses_from_attachment() {
-        let a = parse(&["t", "learn", "--from-attachment", "/tmp/voice.ogg"])
-            .expect("parse ok");
+        let a = parse(&["t", "learn", "--from-attachment", "/tmp/voice.ogg"]).expect("parse ok");
         assert!(a.url.is_none());
         assert_eq!(a.from_attachment, Some(PathBuf::from("/tmp/voice.ogg")));
     }
@@ -367,14 +362,8 @@ mod tests {
     fn dry_run_combines_with_from_attachment() {
         // `--dry-run` is orthogonal to the source group — should be
         // accepted with any single source flag.
-        let a = parse(&[
-            "t",
-            "learn",
-            "--from-attachment",
-            "/tmp/v.mp4",
-            "--dry-run",
-        ])
-        .expect("parse ok");
+        let a = parse(&["t", "learn", "--from-attachment", "/tmp/v.mp4", "--dry-run"])
+            .expect("parse ok");
         assert!(a.dry_run);
         assert_eq!(a.from_attachment, Some(PathBuf::from("/tmp/v.mp4")));
     }
@@ -403,9 +392,8 @@ mod tests {
 
     #[test]
     fn rejects_url_plus_resume() {
-        let err =
-            parse(&["t", "learn", "https://youtu.be/x", "--resume", "job-1"])
-                .expect_err("url + resume must conflict");
+        let err = parse(&["t", "learn", "https://youtu.be/x", "--resume", "job-1"])
+            .expect_err("url + resume must conflict");
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
     }
 
@@ -584,8 +572,7 @@ mod tests {
             source_url: None,
         };
         let mut buf: Vec<u8> = Vec::new();
-        render_to_writer(&mut buf, &_golden_args(), &resp, false)
-            .expect("render must succeed");
+        render_to_writer(&mut buf, &_golden_args(), &resp, false).expect("render must succeed");
         let actual = String::from_utf8(buf).expect("utf8");
         assert!(actual.contains("workflow_id=luna-learn-t1-pollme"));
         assert!(actual.contains("`alpha workflow get luna-learn-t1-pollme`"));
@@ -598,13 +585,15 @@ mod tests {
         // must be '{' (no `[alpha] ...` preamble leaks through).
         let resp = _golden_response();
         let mut buf: Vec<u8> = Vec::new();
-        render_to_writer(&mut buf, &_golden_args(), &resp, true)
-            .expect("render must succeed");
+        render_to_writer(&mut buf, &_golden_args(), &resp, true).expect("render must succeed");
         let actual = String::from_utf8(buf).expect("utf8");
         assert!(
             actual.trim_start().starts_with('{'),
             "json mode must emit a bare JSON object, got: {actual:?}"
         );
-        assert!(!actual.contains("[alpha]"), "json mode must not include the human ack");
+        assert!(
+            !actual.contains("[alpha]"),
+            "json mode must not include the human ack"
+        );
     }
 }

@@ -1,7 +1,12 @@
-//! Streaming chat helper.
+//! Streaming chat helpers.
 //!
 //! Hits `POST /api/v1/chat/sessions/{id}/messages/stream` and yields incremental
 //! text deltas as they arrive.
+//!
+//! Newer CLI surfaces should prefer the durable async-job flow:
+//! `POST /messages/start` then `GET /chat/jobs/{id}/events?from_seq=N`.
+//! That keeps each request short or heartbeat-backed, which avoids
+//! Cloudflare 524s for long agent turns while preserving resumability.
 //!
 //! Wire format (current backend in `apps/api/app/api/v1/chat.py`):
 //!   data: {"type":"user_saved","message":...}
@@ -21,7 +26,7 @@ use serde::Deserialize;
 
 use crate::client::ApiClient;
 use crate::error::{Error, Result};
-use crate::models::ChatMessageRequest;
+use crate::models::{ChatJobEventPayload, ChatMessageRequest};
 
 #[derive(Debug, Clone)]
 pub enum ChatStreamEvent {
@@ -30,6 +35,27 @@ pub enum ChatStreamEvent {
     /// Stream finished (final event).
     Done,
     /// An informational event we didn't recognise; surfaced raw for debug.
+    Other(String),
+}
+
+#[derive(Debug, Clone)]
+pub enum ChatJobStreamEvent {
+    /// A reply text chunk from a `chat_job_events.kind == "chunk"` row.
+    Chunk { seq: u64, text: String },
+    /// A non-chunk event such as lifecycle/tool metadata.
+    Event(ChatJobEventPayload),
+    /// The job reached a terminal state.
+    Terminal {
+        status: String,
+        result_message_id: Option<String>,
+        error: Option<String>,
+        last_seq: u64,
+    },
+    /// The server's SSE tail hit its reconnect ceiling; caller should reconnect.
+    Timeout { last_seq: u64 },
+    /// The server indicates the first replay batch was truncated.
+    Truncated { from_seq: u64 },
+    /// An informational frame we do not recognise.
     Other(String),
 }
 
@@ -50,6 +76,28 @@ struct WireEvent {
     /// Backend error detail when `type == "error"`.
     #[serde(default)]
     detail: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JobWireEvent {
+    #[serde(default, rename = "type")]
+    event_type: Option<String>,
+    #[serde(default)]
+    seq: Option<u64>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    payload: serde_json::Value,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    result_message_id: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    last_seq: Option<u64>,
+    #[serde(default)]
+    from_seq: Option<u64>,
 }
 
 /// Open a streaming chat connection. Caller awaits the returned future to get
@@ -128,6 +176,84 @@ pub async fn stream_chat(
     Ok(stream)
 }
 
+/// Open the reconnect-safe async chat-job SSE stream.
+///
+/// The server replays events with `seq > from_seq`, heartbeats while idle,
+/// and emits a terminal frame before closing. If it emits a timeout frame,
+/// callers should reconnect with the last sequence they rendered.
+pub async fn stream_chat_job_events(
+    client: &ApiClient,
+    job_id: &str,
+    from_seq: u64,
+) -> Result<impl Stream<Item = Result<ChatJobStreamEvent>>> {
+    let path = format!("/api/v1/chat/jobs/{job_id}/events");
+    let req = client
+        .request(reqwest::Method::GET, &path)?
+        .header("Accept", "text/event-stream")
+        .query(&[("from_seq", from_seq.to_string())]);
+    let resp = req.send().await?;
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(Error::Api { status, body });
+    }
+    let stream = resp.bytes_stream().eventsource().map(|res| {
+        let ev = res.map_err(|e| Error::other(format!("sse error: {e}")))?;
+        parse_chat_job_event(&ev.data)
+    });
+    Ok(stream)
+}
+
+fn parse_chat_job_event(data: &str) -> Result<ChatJobStreamEvent> {
+    if data.is_empty() {
+        return Ok(ChatJobStreamEvent::Other(String::new()));
+    }
+    let parsed: serde_json::Result<JobWireEvent> = serde_json::from_str(data);
+    let w = match parsed {
+        Ok(w) => w,
+        Err(_) => return Ok(ChatJobStreamEvent::Other(data.to_string())),
+    };
+
+    match w.event_type.as_deref() {
+        Some("event") => {
+            let seq = w.seq.unwrap_or(0);
+            let kind = w.kind.unwrap_or_else(|| "unknown".to_string());
+            if kind == "chunk" {
+                let text = w
+                    .payload
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                return Ok(ChatJobStreamEvent::Chunk { seq, text });
+            }
+            Ok(ChatJobStreamEvent::Event(ChatJobEventPayload {
+                seq,
+                kind,
+                payload: w.payload,
+            }))
+        }
+        Some("terminal") => Ok(ChatJobStreamEvent::Terminal {
+            status: w.status.unwrap_or_else(|| "unknown".to_string()),
+            result_message_id: w.result_message_id,
+            error: w.error,
+            last_seq: w.last_seq.unwrap_or(0),
+        }),
+        Some("timeout") => Ok(ChatJobStreamEvent::Timeout {
+            last_seq: w.last_seq.unwrap_or(0),
+        }),
+        Some("truncated") => Ok(ChatJobStreamEvent::Truncated {
+            from_seq: w.from_seq.unwrap_or(0),
+        }),
+        Some("error") => {
+            Err(Error::other(w.error.unwrap_or_else(|| {
+                "chat job event stream reported an error".to_string()
+            })))
+        }
+        _ => Ok(ChatJobStreamEvent::Other(data.to_string())),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Wire-format parser tests
 // ──────────────────────────────────────────────────────────────────────
@@ -178,6 +304,10 @@ mod tests {
             }
             Err(_) => Ok(ChatStreamEvent::Other(frame.to_string())),
         }
+    }
+
+    fn classify_job(frame: &str) -> Result<ChatJobStreamEvent> {
+        parse_chat_job_event(frame)
     }
 
     fn unwrap_delta(ev: ChatStreamEvent) -> String {
@@ -240,5 +370,62 @@ mod tests {
     fn token_frame_without_text_is_other_not_panic() {
         let ev = classify(r#"{"type":"token"}"#).unwrap();
         assert!(matches!(ev, ChatStreamEvent::Other(_)));
+    }
+
+    #[test]
+    fn parses_chat_job_chunk_event() {
+        let ev =
+            classify_job(r#"{"type":"event","seq":7,"kind":"chunk","payload":{"text":"hello"}}"#)
+                .unwrap();
+        match ev {
+            ChatJobStreamEvent::Chunk { seq, text } => {
+                assert_eq!(seq, 7);
+                assert_eq!(text, "hello");
+            }
+            other => panic!("expected chunk, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_chat_job_lifecycle_event() {
+        let ev = classify_job(
+            r#"{"type":"event","seq":2,"kind":"lifecycle","payload":{"event":"started"}}"#,
+        )
+        .unwrap();
+        match ev {
+            ChatJobStreamEvent::Event(e) => {
+                assert_eq!(e.seq, 2);
+                assert_eq!(e.kind, "lifecycle");
+                assert_eq!(e.payload["event"], "started");
+            }
+            other => panic!("expected lifecycle event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_chat_job_terminal_event() {
+        let ev = classify_job(
+            r#"{"type":"terminal","status":"done","result_message_id":"abc","last_seq":9}"#,
+        )
+        .unwrap();
+        match ev {
+            ChatJobStreamEvent::Terminal {
+                status,
+                result_message_id,
+                last_seq,
+                ..
+            } => {
+                assert_eq!(status, "done");
+                assert_eq!(result_message_id.as_deref(), Some("abc"));
+                assert_eq!(last_seq, 9);
+            }
+            other => panic!("expected terminal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_chat_job_timeout_event() {
+        let ev = classify_job(r#"{"type":"timeout","last_seq":12}"#).unwrap();
+        assert!(matches!(ev, ChatJobStreamEvent::Timeout { last_seq: 12 }));
     }
 }

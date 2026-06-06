@@ -17,10 +17,10 @@ use url::Url;
 
 use crate::error::{Error, Result};
 use crate::models::{
-    Agent, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn, CreateEntityRequest,
-    DynamicWorkflow, DynamicWorkflowRun, FileSkill, IntegrationStatus, KnowledgeEntity, Tenant,
-    Token, User, Workflow, WorkflowRun, WorkflowRunRequest, WorkspaceCloneRequest,
-    WorkspaceCloneResponse,
+    Agent, ChatJobSnapshot, ChatJobStart, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn,
+    CreateEntityRequest, DynamicWorkflow, DynamicWorkflowRun, FileSkill, IntegrationStatus,
+    KnowledgeEntity, Tenant, Token, User, Workflow, WorkflowRun, WorkflowRunRequest,
+    WorkspaceCloneRequest, WorkspaceCloneResponse,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://agentprovision.com";
@@ -534,6 +534,27 @@ impl ApiClient {
                 &format!("/api/v1/chat/sessions/{session_id}/messages"),
             )?
             .json(&ChatMessageRequest { content });
+        self.send_json(req).await
+    }
+
+    /// `POST /api/v1/chat/sessions/{id}/messages/start` — durable async send.
+    pub async fn start_chat_message_job(
+        &self,
+        session_id: &str,
+        content: &str,
+    ) -> Result<ChatJobStart> {
+        let req = self
+            .request(
+                Method::POST,
+                &format!("/api/v1/chat/sessions/{session_id}/messages/start"),
+            )?
+            .json(&ChatMessageRequest { content });
+        self.send_json(req).await
+    }
+
+    /// `GET /api/v1/chat/jobs/{id}` — async chat job snapshot.
+    pub async fn get_chat_job(&self, job_id: &str) -> Result<ChatJobSnapshot> {
+        let req = self.request(Method::GET, &format!("/api/v1/chat/jobs/{job_id}"))?;
         self.send_json(req).await
     }
 
