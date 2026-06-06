@@ -93,11 +93,26 @@ fn desktop_control_stopped() -> bool {
     CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED
 }
 
+fn desktop_control_observe_enabled() -> bool {
+    CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_OBSERVE
+}
+
 fn ensure_desktop_control_not_stopped(action: &str) -> Result<(), String> {
     if desktop_control_stopped() {
         Err(format!("desktop control stopped; {action} denied"))
     } else {
         Ok(())
+    }
+}
+
+fn ensure_desktop_control_allows_observation(action: &str) -> Result<(), String> {
+    let mode = CONTROL_MODE.load(Ordering::SeqCst);
+    if mode == CONTROL_MODE_STOPPED {
+        Err(format!("desktop control stopped; {action} denied"))
+    } else if mode == CONTROL_MODE_OBSERVE {
+        Ok(())
+    } else {
+        Err(format!("desktop observe locked; {action} denied"))
     }
 }
 
@@ -160,11 +175,24 @@ async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
     Ok(state)
 }
 
+#[tauri::command]
+async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_STOPPED {
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
+    CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    gesture::set_global_mode(false);
+    gesture::stop_engine().await?;
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
 /// On iOS returns an error; the frontend should use the native share sheet instead.
 #[tauri::command]
 async fn capture_screenshot() -> Result<String, String> {
-    ensure_desktop_control_not_stopped("capture_screenshot")?;
+    ensure_desktop_control_allows_observation("capture_screenshot")?;
     #[cfg(desktop)]
     {
         use std::process::Command;
@@ -206,7 +234,7 @@ async fn haptic_feedback(style: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_active_app() -> Result<serde_json::Value, String> {
-    ensure_desktop_control_not_stopped("get_active_app")?;
+    ensure_desktop_control_allows_observation("get_active_app")?;
     use std::process::Command;
 
     let app_output = Command::new("osascript")
@@ -236,7 +264,7 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn read_clipboard() -> Result<String, String> {
-    ensure_desktop_control_not_stopped("read_clipboard")?;
+    ensure_desktop_control_allows_observation("read_clipboard")?;
     use std::process::Command;
     let output = Command::new("pbpaste")
         .output()
@@ -251,7 +279,7 @@ async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
             let _ = window.hide();
             CAPTURE_RUNNING.store(false, Ordering::Relaxed);
         } else {
-            ensure_desktop_control_not_stopped("toggle_spatial_hud")?;
+            ensure_desktop_control_allows_observation("toggle_spatial_hud")?;
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -268,7 +296,7 @@ struct SpatialFrame {
 
 #[tauri::command]
 async fn start_spatial_capture(_app: tauri::AppHandle) -> Result<(), String> {
-    ensure_desktop_control_not_stopped("start_spatial_capture")?;
+    ensure_desktop_control_allows_observation("start_spatial_capture")?;
     // Real `spatial-frame` events are now emitted by the gesture engine
     // (`gesture::supervisor::run_engine_loop`). This command is kept as a
     // no-op for FFI compatibility with the existing frontend HUD bootstrap.
@@ -286,7 +314,7 @@ async fn stop_spatial_capture() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_start() -> Result<(), String> {
-    ensure_desktop_control_not_stopped("gesture_start")?;
+    ensure_desktop_control_allows_observation("gesture_start")?;
     gesture::start_engine().await
 }
 
@@ -302,7 +330,7 @@ async fn gesture_pause() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_resume() -> Result<(), String> {
-    ensure_desktop_control_not_stopped("gesture_resume")?;
+    ensure_desktop_control_allows_observation("gesture_resume")?;
     gesture::resume_engine().await
 }
 
@@ -731,6 +759,10 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     app.global_shortcut().on_shortcut(gesture_killswitch, move |_app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             tauri::async_runtime::spawn(async move {
+                if !crate::desktop_control_observe_enabled() {
+                    let _ = crate::gesture::stop_engine().await;
+                    return;
+                }
                 let status = crate::gesture::engine_status().await;
                 if status.state == "paused" {
                     let _ = crate::gesture::resume_engine().await;
@@ -847,6 +879,9 @@ pub fn run() {
                 let mut last_content = String::new();
                 while clip_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(2));
+                    if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_OBSERVE {
+                        continue;
+                    }
                     if let Ok(output) = std::process::Command::new("pbpaste").output() {
                         let current = String::from_utf8_lossy(&output.stdout).to_string();
                         if current != last_content && !current.is_empty() {
@@ -868,6 +903,9 @@ pub fn run() {
                 let mut last_switch = std::time::Instant::now();
                 while activity_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(5));
+                    if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_OBSERVE {
+                        continue;
+                    }
 
                     // Get frontmost app
                     let app_name = match std::process::Command::new("osascript")
@@ -977,6 +1015,7 @@ pub fn run() {
             control_get_safety_state,
             control_observe_status,
             control_stop_all,
+            control_lock_all,
             capture_screenshot,
             get_active_app,
             read_clipboard,
@@ -1030,6 +1069,25 @@ mod tests {
         assert!(err.contains("desktop control stopped"), "got: {err}");
         assert!(err.contains("gesture_start"), "got: {err}");
         assert!(!desktop_control_allows_actuation());
+
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn locked_control_mode_blocks_observation_entrypoints() {
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        let locked = ensure_desktop_control_allows_observation("capture_screenshot")
+            .expect_err("locked mode should reject observation");
+        assert!(locked.contains("desktop observe locked"), "got: {locked}");
+        assert!(locked.contains("capture_screenshot"), "got: {locked}");
+
+        CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+        assert!(ensure_desktop_control_allows_observation("capture_screenshot").is_ok());
+
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        let stopped = ensure_desktop_control_allows_observation("capture_screenshot")
+            .expect_err("stopped mode should reject observation");
+        assert!(stopped.contains("desktop control stopped"), "got: {stopped}");
 
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
     }

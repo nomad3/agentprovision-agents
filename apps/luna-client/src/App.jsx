@@ -255,6 +255,14 @@ function AuthenticatedApp() {
   );
 }
 
+function FloatingSafetyStrip() {
+  return (
+    <div className="luna-floating-safety">
+      <ControlSafetyStrip />
+    </div>
+  );
+}
+
 // Children of GestureProvider so the SpatialHUD webview never registers
 // onAction (preventing double-fire of every binding).
 function GestureScope({ children, windowLabel }) {
@@ -303,13 +311,24 @@ function AppContent({ windowLabel }) {
       );
     }
     if (hash.startsWith('#/settings/gestures')) {
-      return <GestureBindingsPage />;
+      return (
+        <>
+          <FloatingSafetyStrip />
+          <GestureBindingsPage />
+        </>
+      );
     }
     if (hash.startsWith('#/legacy-hud')) {
-      return <SpatialHUD />;
+      return (
+        <>
+          <FloatingSafetyStrip />
+          <SpatialHUD />
+        </>
+      );
     }
     return (
       <>
+        <FloatingSafetyStrip />
         <PodiumScene />
         {showCalibration && (
           <GestureCalibration onDone={() => setShowCalibration(false)} />
@@ -322,7 +341,12 @@ function AppContent({ windowLabel }) {
   if (loading) return <div className="luna-loading">Loading...</div>;
   if (!user) return <LoginForm />;
   if (hash.startsWith('#/settings/gestures')) {
-    return <GestureBindingsPage />;
+    return (
+      <>
+        <FloatingSafetyStrip />
+        <GestureBindingsPage />
+      </>
+    );
   }
   return <AuthenticatedApp />;
 }

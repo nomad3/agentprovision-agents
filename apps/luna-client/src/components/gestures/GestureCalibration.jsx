@@ -13,7 +13,7 @@
  *
  * Persists `gesture_calibrated=1` in localStorage when complete.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useGesture } from '../../hooks/useGesture';
 
 const STEPS = [
@@ -57,22 +57,46 @@ export default function GestureCalibration({ onDone }) {
   const [engineStartError, setEngineStartError] = useState(null);
   const { wakeState, status } = useGesture();
 
+  const startGestureEngine = useCallback(async () => {
+    try {
+      const tauri = await import('@tauri-apps/api/core').catch(() => null);
+      if (!tauri) return;
+      await tauri.invoke('gesture_start');
+      setEngineStartError(null);
+    } catch (e) {
+      setEngineStartError(String(e?.message || e));
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const tauri = await import('@tauri-apps/api/core').catch(() => null);
         if (!tauri || cancelled) return;
-        await tauri.invoke('gesture_start').catch((e) => {
-          if (!cancelled) setEngineStartError(String(e?.message || e));
-        });
+        await startGestureEngine();
         const cams = await tauri.invoke('gesture_list_cameras');
         if (cancelled) return;
         if (Array.isArray(cams)) setCameras(cams);
       } catch {}
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+      import('@tauri-apps/api/core')
+        .then((tauri) => tauri.invoke('gesture_stop').catch(() => {}))
+        .catch(() => {});
+    };
+  }, [startGestureEngine]);
+
+  useEffect(() => {
+    const handleSafetyChanged = (event) => {
+      if (event.detail?.mode === 'observe') {
+        startGestureEngine();
+      }
+    };
+    window.addEventListener('luna:control-safety-changed', handleSafetyChanged);
+    return () => window.removeEventListener('luna:control-safety-changed', handleSafetyChanged);
+  }, [startGestureEngine]);
 
   const cur = STEPS[step];
 

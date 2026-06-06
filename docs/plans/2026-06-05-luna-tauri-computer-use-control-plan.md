@@ -555,15 +555,21 @@ Current verification finding (2026-06-06):
       Luna release checkout into a per-run isolated path. Main run
       `27047038881` completed checkout, dependency install, and version
       calculation.
-- [ ] Signed release publication is currently blocked by missing GitHub release
-      secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
-      `APPLE_PASSWORD`, `APPLE_TEAM_ID`, and `TAURI_SIGNING_PRIVATE_KEY`.
-      `KEYCHAIN_PASSWORD` exists, but the repo does not currently have the
-      Apple notarization/certificate or Tauri updater signing secrets required
-      by the hardened release workflow.
-- [ ] Local released-DMG verification is blocked until those secrets are
-      configured and the `Luna Client -- Tauri Build` workflow successfully
-      publishes a new `luna-v*` release plus `luna-latest` manifest.
+- [x] Development builds are intentionally unsigned for now. The Luna release
+      workflow now falls back to `cargo tauri build --no-sign` when Apple/Tauri
+      signing secrets are absent, uploads the DMG plus SHA256, and labels the
+      GitHub Release as an unsigned development build.
+- [x] Signed updater publication remains signed-only. The workflow generates
+      `latest.json`, uploads `Luna.app.tar.gz` plus `.sig`, and updates
+      `luna-latest` only when signing secrets are complete.
+- [ ] Local unsigned-DMG verification is required for this development phase.
+      Signed released-DMG/updater verification is deferred until Apple
+      notarization and Tauri updater signing are re-enabled.
+- [x] Local unsigned app-bundle smoke completed from branch
+      `codex/luna-dev-unsigned-safety`: built with
+      `cargo tauri build --debug --bundles app --no-sign`, installed into
+      `/Applications/Luna.app`, launched with Computer Use, and verified
+      `Control Locked -> Observe -> Lock -> Control Locked` plus Stop latch.
 
 - [x] Change Luna updater endpoint to a Luna-specific manifest URL, for example
       a stable `luna-latest` release asset.
@@ -579,15 +585,19 @@ Current verification finding (2026-06-06):
       repo URL, downloadable DMG, and DMG SHA256.
 - [x] Add Developer ID signing/notarization to the Luna workflow with CI
       verification via `codesign`, `stapler`, and `spctl`.
+- [x] Allow unsigned development releases without producing an unsigned updater
+      manifest.
 
 Exit criteria:
 
-- [ ] Installed Luna can fetch a valid updater manifest.
-- [ ] `latest.json` points at `nomad3/agentprovision-agents` and includes a
-      non-empty signature.
-- [ ] The release path is documented as GitHub Actions/GitHub Releases only.
-- [ ] Local install smoke from the released DMG confirms version, launch, and
-      updater check behavior.
+- [ ] Installed signed Luna can fetch a valid updater manifest once signing is
+      re-enabled.
+- [ ] Signed `latest.json` points at `nomad3/agentprovision-agents` and
+      includes a non-empty signature.
+- [ ] The release path documents GitHub Actions/GitHub Releases for release
+      artifacts and local unsigned builds for development smoke only.
+- [x] Local install smoke from the unsigned development app bundle confirms
+      version, launch, Observe/Lock, and Stop behavior.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -623,6 +633,16 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       stopped shells do not advertise observation readiness.
 - [x] Add explicit gesture engine start paths in calibration and gesture
       settings after removing login-time camera auto-start.
+- [x] Require Observe, not merely non-Stopped, for screenshot, active-app,
+      clipboard, spatial capture, and gesture engine start/resume commands.
+- [x] Gate background clipboard and activity polling behind Observe mode.
+- [x] Ensure logout/unmount locks local observation and releases the gesture
+      engine without unlatching Stop.
+- [x] Keep the Observe/Stop strip visible in gesture settings and Luna OS/Labs.
+- [x] Add a visible Lock action so Observe can be turned off without latching
+      emergency Stop.
+- [x] Retry gesture engine start when Observe is enabled after an initial
+      locked-mode denial in gesture settings or calibration.
 - [ ] Register macOS permission readiness for Screen Recording, Accessibility,
       Automation/System Events, Input Monitoring, camera, and microphone.
 - [ ] Add `desktop_control` tool group in `tool_groups.py`.

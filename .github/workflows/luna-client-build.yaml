@@ -78,7 +78,7 @@ jobs:
             BASE=$(python3 -c "import json; print(json.load(open('apps/luna-client/src-tauri/tauri.conf.json'))['version'])")
             MAJOR=$(echo "$BASE" | cut -d. -f1)
             MINOR=$(echo "$BASE" | cut -d. -f2)
-            PATCH=$(git rev-list HEAD --count -- apps/luna-client/)
+            PATCH=$(git rev-list HEAD --count -- apps/luna-client/ .github/workflows/luna-client-build.yaml)
             VERSION="${MAJOR}.${MINOR}.${PATCH}"
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -87,8 +87,8 @@ jobs:
           # Patch tauri.conf.json so the built DMG has the correct version name
           python3 -c "import json; d=json.load(open('apps/luna-client/src-tauri/tauri.conf.json')); d['version']='$VERSION'; json.dump(d, open('apps/luna-client/src-tauri/tauri.conf.json', 'w'), indent=2)"
 
-      - name: Verify release signing secrets
-        if: startsWith(github.ref, 'refs/tags/luna-v') || github.ref == 'refs/heads/main'
+      - name: Determine signing mode
+        id: signing
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -111,7 +111,14 @@ jobs:
               missing=1
             fi
           done
-          exit "$missing"
+
+          if [ "$missing" -eq 0 ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Building signed/notarized Luna release."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets are incomplete; building unsigned Luna development DMG."
+          fi
 
       - name: Build Tauri (macOS ARM64)
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
@@ -126,10 +133,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           source "$HOME/.cargo/env" 2>/dev/null || true
-          cargo tauri build --target aarch64-apple-darwin
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            cargo tauri build --target aarch64-apple-darwin
+          else
+            cargo tauri build --target aarch64-apple-darwin --no-sign
+          fi
 
       - name: Verify macOS signing and notarization
-        if: startsWith(github.ref, 'refs/tags/luna-v') || github.ref == 'refs/heads/main'
+        if: steps.signing.outputs.signed == 'true'
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: |
           APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app"
@@ -141,6 +152,12 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl -a -vv -t exec "$APP_PATH"
 
+      - name: Generate DMG checksum
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
+        run: |
+          DMG_PATH=$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg)
+          shasum -a 256 "$DMG_PATH" > "${DMG_PATH}.sha256"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -148,12 +165,13 @@ jobs:
           path: |
             ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app
             ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg
+            ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg.sha256
             ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz
             ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz.sig
           retention-days: 30
 
       - name: Generate updater manifest
-        if: startsWith(github.ref, 'refs/tags/luna-v') || github.ref == 'refs/heads/main'
+        if: steps.signing.outputs.signed == 'true'
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -172,7 +190,7 @@ jobs:
             echo "::error::Tauri updater signature artifact is empty"
             exit 1
           fi
-          shasum -a 256 "$DMG_PATH" > "$DMG_SHA_PATH"
+          test -f "$DMG_SHA_PATH"
 
           cat > latest.json <<EOF
           {
@@ -210,6 +228,17 @@ jobs:
           DMG_SHA_PATH="${DMG_PATH}.sha256"
           UPDATER_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz"
           UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
+          ASSETS=("$DMG_PATH" "$DMG_SHA_PATH")
+          RELEASE_NOTES="Luna $VERSION unsigned development build."
+          RELEASE_FLAGS=(--prerelease --latest=false)
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            test -f "$UPDATER_PATH"
+            test -f "$UPDATER_SIG_PATH"
+            test -f latest.json
+            ASSETS+=("$UPDATER_PATH" "$UPDATER_SIG_PATH" latest.json)
+            RELEASE_NOTES="Luna $VERSION signed and notarized release."
+            RELEASE_FLAGS=(--latest)
+          fi
 
           # Create tag if it doesn't exist
           git tag "$TAG" 2>/dev/null || true
@@ -218,19 +247,15 @@ jobs:
           # Create or Update release with ALL assets in one shot
           # This is more reliable than separate create and upload calls
           gh release create "$TAG" \
-            "$DMG_PATH" \
-            "$DMG_SHA_PATH" \
-            "$UPDATER_PATH" \
-            "$UPDATER_SIG_PATH" \
-            latest.json \
+            "${ASSETS[@]}" \
             --title "Luna $VERSION" \
-            --generate-notes \
-            --latest \
+            --notes "$RELEASE_NOTES" \
             --verify-tag \
-            || gh release upload "$TAG" "$DMG_PATH" "$DMG_SHA_PATH" "$UPDATER_PATH" "$UPDATER_SIG_PATH" latest.json --clobber
+            "${RELEASE_FLAGS[@]}" \
+            || gh release upload "$TAG" "${ASSETS[@]}" --clobber
 
       - name: Publish stable Luna updater manifest
-        if: startsWith(github.ref, 'refs/tags/luna-v') || github.ref == 'refs/heads/main'
+        if: steps.signing.outputs.signed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
