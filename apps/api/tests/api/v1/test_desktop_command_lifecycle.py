@@ -1,0 +1,596 @@
+from __future__ import annotations
+
+import hashlib
+import uuid
+from datetime import timedelta
+from unittest.mock import patch
+
+import pytest
+from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.db.base import Base
+from app.db.session import SessionLocal, engine
+from app.models.chat import ChatSession
+from app.models.desktop_command import DesktopCommand
+from app.models.desktop_command_event import DesktopCommandEvent
+from app.models.device_registry import DeviceRegistry
+from app.models.tenant import Tenant
+from app.models.user import User
+from app.services.desktop_control_service import (
+    DEFAULT_COMMAND_PENDING_TTL_SECONDS,
+    DesktopCommandClaim,
+    DesktopCommandCompletion,
+    DesktopCommandEnqueue,
+    DesktopCommandStop,
+    _utcnow,
+    claim_next_desktop_command,
+    complete_desktop_command,
+    enqueue_desktop_command,
+    preempt_desktop_commands_for_stop,
+)
+
+TENANT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+TENANT_ID_2 = uuid.UUID("11111111-1111-1111-1111-111111111112")
+USER_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
+USER_ID_2 = uuid.UUID("22222222-2222-2222-2222-222222222223")
+SESSION_ID = uuid.UUID("33333333-3333-3333-3333-333333333333")
+SESSION_ID_2 = uuid.UUID("33333333-3333-3333-3333-333333333334")
+SHELL_ID = "desktop-44444444-4444-4444-4444-444444444444"
+OTHER_SHELL_ID = "desktop-55555555-5555-5555-5555-555555555555"
+DEVICE_ID = uuid.UUID("88888888-8888-8888-8888-888888888888")
+DEVICE_ID_2 = uuid.UUID("88888888-8888-8888-8888-888888888889")
+DEVICE_TOKEN = "device-token-test"
+
+
+@pytest.fixture(name="db_session")
+def db_session_fixture():
+    Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    yield db
+    db.close()
+    Base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture(name="seeded")
+def seeded_fixture(db_session: Session):
+    tenant = Tenant(id=TENANT_ID, name="Desktop Command Tenant")
+    user = User(
+        id=USER_ID,
+        tenant_id=TENANT_ID,
+        email="desktop-command@example.test",
+        hashed_password="x",
+    )
+    session = ChatSession(
+        id=SESSION_ID,
+        tenant_id=TENANT_ID,
+        owner_user_id=USER_ID,
+        title="Desktop command session",
+    )
+    device = DeviceRegistry(
+        id=DEVICE_ID,
+        tenant_id=TENANT_ID,
+        device_id=f"{TENANT_ID}-desktop-{SHELL_ID.removeprefix('desktop-')}",
+        device_name="Luna Desktop",
+        device_type="desktop",
+        status="online",
+        device_token_hash=hashlib.sha256(DEVICE_TOKEN.encode()).hexdigest(),
+        capabilities=["can_observe"],
+        config={"shell_id": SHELL_ID},
+    )
+    db_session.add_all([tenant, user, session, device])
+    db_session.commit()
+    return user
+
+
+def _presence(can_observe: bool = True, *, device_id: uuid.UUID = DEVICE_ID):
+    return {
+        "active_shell": SHELL_ID,
+        "connected_shells": [SHELL_ID],
+        "shell_capabilities": {
+            SHELL_ID: {
+                "can_observe": can_observe,
+                "can_stop": True,
+                "can_control_pointer": False,
+                "can_control_keyboard": False,
+            },
+        },
+        "shell_devices": {SHELL_ID: str(device_id)},
+    }
+
+
+def _enqueue(db: Session, *, nonce: str | None = None):
+    return enqueue_desktop_command(
+        db,
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        request=DesktopCommandEnqueue(
+            session_id=SESSION_ID,
+            action="capture_screenshot",
+            tool_name="desktop_observe_screen",
+            shell_id=None,
+            nonce=nonce,
+            payload={
+                "reason": "smoke",
+                "raw_clipboard_text": "must not persist",
+                "screenshot_base64": "must not persist",
+            },
+        ),
+    )[0]
+
+
+def _seed_second_tenant(db_session: Session):
+    tenant = Tenant(id=TENANT_ID_2, name="Second Desktop Command Tenant")
+    user = User(
+        id=USER_ID_2,
+        tenant_id=TENANT_ID_2,
+        email="desktop-command-2@example.test",
+        hashed_password="x",
+    )
+    session = ChatSession(
+        id=SESSION_ID_2,
+        tenant_id=TENANT_ID_2,
+        owner_user_id=USER_ID_2,
+        title="Second desktop command session",
+    )
+    device = DeviceRegistry(
+        id=DEVICE_ID_2,
+        tenant_id=TENANT_ID_2,
+        device_id=f"{TENANT_ID_2}-desktop-{SHELL_ID.removeprefix('desktop-')}",
+        device_name="Luna Desktop 2",
+        device_type="desktop",
+        status="online",
+        device_token_hash=hashlib.sha256("second-token".encode()).hexdigest(),
+        capabilities=["can_observe"],
+        config={"shell_id": SHELL_ID},
+    )
+    db_session.add_all([tenant, user, session, device])
+    db_session.commit()
+    return user
+
+
+def test_enqueue_and_claim_command_sets_device_bound_lease(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-1")
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is not None
+    assert claimed.id == command.id
+    assert claimed.status == "claimed"
+    assert claimed.lease_owner_shell_id == SHELL_ID
+    assert claimed.lease_expires_at is not None
+    assert claimed.device_id == DEVICE_ID
+    assert event.event_type == "desktop_command_claimed"
+    assert event.outcome == "started"
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "claimed"
+    assert "must not persist" not in str(reloaded.payload)
+
+
+def test_duplicate_completion_is_idempotent_and_writes_one_completion_event(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-2")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+                reason="done",
+                metadata={"summary": "ok"},
+            ),
+        )
+        again, again_event, _again_session_event, again_idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="failed",
+                reason="late duplicate",
+                metadata={"raw_clipboard_text": "must not persist"},
+            ),
+        )
+
+    assert completed.status == "succeeded"
+    assert event.event_type == "desktop_command_completed"
+    assert idempotent is False
+    assert again.status == "succeeded"
+    assert again_event is None
+    assert again_idempotent is True
+    completion_events = db_session.query(DesktopCommandEvent).filter(
+        DesktopCommandEvent.desktop_command_id == command.id,
+        DesktopCommandEvent.event_type == "desktop_command_completed",
+    ).all()
+    assert len(completion_events) == 1
+    assert "must not persist" not in str(completion_events[0].event_metadata)
+
+
+def test_completion_after_stop_returns_preempted_not_success(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-3")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        count, events, _session_events = preempt_desktop_commands_for_stop(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            stop=DesktopCommandStop(session_id=SESSION_ID, shell_id=SHELL_ID, reason="operator Stop"),
+        )
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+            ),
+        )
+
+    assert count == 1
+    assert events[0].event_type == "desktop_command_preempted"
+    assert completed.status == "preempted"
+    assert event is None
+    assert idempotent is True
+
+
+def test_expired_lease_rejects_success_completion(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-4")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=5),
+        )
+        command.lease_expires_at = _utcnow() - timedelta(seconds=1)
+        db_session.commit()
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+            ),
+        )
+
+    assert completed.status == "expired"
+    assert event.event_type == "desktop_command_expired"
+    assert event.outcome == "expired"
+    assert idempotent is False
+
+
+def test_stale_pending_command_expires_before_claim(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-pending-ttl")
+        old = _utcnow() - timedelta(seconds=DEFAULT_COMMAND_PENDING_TTL_SECONDS + 1)
+        command.created_at = old
+        command.updated_at = old
+        db_session.commit()
+
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None
+    assert event is None
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "expired"
+    expired_event = db_session.query(DesktopCommandEvent).filter(
+        DesktopCommandEvent.desktop_command_id == command.id,
+        DesktopCommandEvent.event_type == "desktop_command_expired",
+    ).one()
+    assert expired_event.reason == "desktop command pending ttl expired"
+
+
+def test_stop_preempts_pending_claimed_and_running_commands(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        pending = _enqueue(db_session, nonce="nonce-5a")
+        claimed = _enqueue(db_session, nonce="nonce-5b")
+        running = _enqueue(db_session, nonce="nonce-5c")
+        claimed.status = "claimed"
+        claimed.lease_owner_shell_id = SHELL_ID
+        claimed.lease_expires_at = _utcnow() + timedelta(seconds=30)
+        running.status = "running"
+        running.lease_owner_shell_id = SHELL_ID
+        running.lease_expires_at = _utcnow() + timedelta(seconds=30)
+        db_session.commit()
+
+        count, events, _session_events = preempt_desktop_commands_for_stop(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            stop=DesktopCommandStop(session_id=SESSION_ID, shell_id=SHELL_ID),
+        )
+
+    assert count == 3
+    assert {event.desktop_command_id for event in events} == {pending.id, claimed.id, running.id}
+    statuses = {
+        row.id: row.status
+        for row in db_session.query(DesktopCommand).filter(
+            DesktopCommand.id.in_([pending.id, claimed.id, running.id]),
+        )
+    }
+    assert statuses == {
+        pending.id: "preempted",
+        claimed.id: "preempted",
+        running.id: "preempted",
+    }
+
+
+def test_claim_requires_matching_device_token(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        _enqueue(db_session, nonce="nonce-6")
+        with pytest.raises(HTTPException) as exc:
+            claim_next_desktop_command(
+                db_session,
+                user=seeded,
+                device_token="wrong-token",
+                claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+            )
+
+    assert exc.value.status_code == 401
+
+
+def test_completion_sanitizes_reason_and_metadata_values(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-7")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        _completed, event, _session_event, _idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="failed",
+                reason="raw clipboard text: password token must not persist",
+                metadata={
+                    "lease_expires_at": "sk-raw-token-must-not-persist",
+                    "summary": "OCR token must not persist",
+                    "result_kind": "string",
+                    "result_size_chars": 41,
+                    "result_fields": ["app", "raw_text"],
+                },
+            ),
+        )
+
+    assert event.reason == "desktop command failed"
+    assert event.event_metadata["result_kind"] == "string"
+    assert event.event_metadata["result_size_chars"] == 41
+    assert event.event_metadata["result_fields"] == ["app"]
+    assert "must not persist" not in str(event.event_metadata)
+    assert "lease_expires_at" not in event.event_metadata
+    assert "raw clipboard" not in str(event.reason)
+
+
+def test_stop_sanitizes_operator_reason(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        _enqueue(db_session, nonce="nonce-8")
+        count, events, _session_events = preempt_desktop_commands_for_stop(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            stop=DesktopCommandStop(
+                session_id=SESSION_ID,
+                shell_id=SHELL_ID,
+                reason="raw clipboard text: password token must not persist",
+            ),
+        )
+
+    assert count == 1
+    assert events[0].reason == "desktop command preempted"
+    assert "must not persist" not in str(events[0].event_metadata)
+
+
+def test_duplicate_terminal_completion_is_idempotent_after_shell_disconnect(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-9")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+            ),
+        )
+
+    disconnected = {
+        "active_shell": None,
+        "connected_shells": [],
+        "shell_capabilities": {},
+        "shell_devices": {},
+    }
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=disconnected,
+    ):
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="failed",
+            ),
+        )
+
+    assert completed.status == "succeeded"
+    assert event is None
+    assert idempotent is True
+
+
+def test_later_claim_expires_stale_lease_with_audit_event(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        stale = _enqueue(db_session, nonce="nonce-10a")
+        pending = _enqueue(db_session, nonce="nonce-10b")
+        stale.status = "claimed"
+        stale.lease_owner_shell_id = SHELL_ID
+        stale.lease_expires_at = _utcnow() - timedelta(seconds=1)
+        db_session.commit()
+
+        claimed, _event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed.id == pending.id
+    expired = db_session.query(DesktopCommand).filter(DesktopCommand.id == stale.id).one()
+    assert expired.status == "expired"
+    expired_events = db_session.query(DesktopCommandEvent).filter(
+        DesktopCommandEvent.desktop_command_id == stale.id,
+        DesktopCommandEvent.event_type == "desktop_command_expired",
+    ).all()
+    assert len(expired_events) == 1
+    assert expired_events[0].reason == "desktop command lease expired"
+
+
+def test_enqueue_nonce_retry_is_idempotent_for_same_tenant_request(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        first = _enqueue(db_session, nonce="shared-same-tenant")
+        second = _enqueue(db_session, nonce="shared-same-tenant")
+
+    assert second.id == first.id
+    commands = db_session.query(DesktopCommand).filter(
+        DesktopCommand.nonce == "shared-same-tenant",
+    ).all()
+    queued_events = db_session.query(DesktopCommandEvent).filter(
+        DesktopCommandEvent.desktop_command_id == first.id,
+        DesktopCommandEvent.event_type == "desktop_command_queued",
+    ).all()
+    assert len(commands) == 1
+    assert len(queued_events) == 1
+
+
+def test_enqueue_nonce_retry_rejects_explicit_shell_mismatch(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        _enqueue(db_session, nonce="shared-shell-mismatch")
+        with pytest.raises(HTTPException) as exc:
+            enqueue_desktop_command(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandEnqueue(
+                    session_id=SESSION_ID,
+                    action="capture_screenshot",
+                    tool_name="desktop_observe_screen",
+                    shell_id=OTHER_SHELL_ID,
+                    nonce="shared-shell-mismatch",
+                    payload={},
+                ),
+            )
+
+    assert exc.value.status_code == 409
+
+
+def test_enqueue_nonce_is_tenant_scoped(db_session, seeded):
+    _seed_second_tenant(db_session)
+
+    def presence_for_tenant(tenant_id):
+        if tenant_id == TENANT_ID_2:
+            return _presence(device_id=DEVICE_ID_2)
+        return _presence()
+
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        side_effect=presence_for_tenant,
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        first = _enqueue(db_session, nonce="shared-cross-tenant")
+        second = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID_2,
+            user_id=USER_ID_2,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID_2,
+                action="capture_screenshot",
+                tool_name="desktop_observe_screen",
+                shell_id=None,
+                nonce="shared-cross-tenant",
+                payload={"reason": "same nonce, different tenant"},
+            ),
+        )[0]
+
+    assert first.id != second.id
+    commands = db_session.query(DesktopCommand).filter(
+        DesktopCommand.nonce == "shared-cross-tenant",
+    ).all()
+    assert {command.tenant_id for command in commands} == {TENANT_ID, TENANT_ID_2}

@@ -1,13 +1,14 @@
 """Luna desktop-control API.
 
-This phase only ingests metadata-only local observation audit events. Command
-claiming/execution remains intentionally unimplemented until signed envelopes
-and approval consumption ship.
+This phase ingests metadata-only local observation audit events and exposes the
+first API-to-Tauri command queue contract: enqueue, claim lease, complete, and
+Stop preemption. Native pointer/keyboard actuation remains disabled until
+signed envelopes and approval consumption ship.
 """
 from __future__ import annotations
 
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -17,17 +18,19 @@ from app.api import deps
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.models.user import User as UserModel
-from app.api.v1.devices import get_device_by_token
-from app.models.device_registry import DeviceRegistry
 from app.services.desktop_control_service import (
-    CommandAck,
+    DesktopCommandClaim,
+    DesktopCommandCompletion,
+    DesktopCommandEnqueue,
+    DesktopCommandStop,
     LocalObservationAudit,
     McpObservationRequest,
-    ack_desktop_command,
     claim_next_desktop_command,
+    complete_desktop_command,
+    enqueue_desktop_command,
+    preempt_desktop_commands_for_stop,
     record_local_observation_event,
     record_mcp_observation_request,
-    stop_desktop_commands,
 )
 
 router = APIRouter(prefix="/desktop-control", tags=["desktop-control"])
@@ -110,11 +113,10 @@ class DesktopObservationRequestIn(BaseModel):
 
 
 class DesktopObservationRequestOut(BaseModel):
-    status: Literal["pending", "denied"]
+    status: Literal["denied"] = "denied"
     desktop_event_id: uuid.UUID
     session_event_id: str | None = None
     session_seq_no: int | None = None
-    desktop_command_id: uuid.UUID | None = None
     shell_id: str
     action: str
     capability: str
@@ -122,9 +124,53 @@ class DesktopObservationRequestOut(BaseModel):
     down_channel_available: bool = False
 
 
+class DesktopCommandEnqueueIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    shell_id: str | None = Field(
+        default=None,
+        pattern=(
+            r"^desktop-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        ),
+        max_length=96,
+    )
+    action: Literal["capture_screenshot", "get_active_app", "read_clipboard"]
+    tool_name: Literal[
+        "desktop_observe_screen",
+        "desktop_get_active_app",
+        "desktop_read_clipboard",
+    ]
+    nonce: str | None = Field(default=None, max_length=96)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def tool_matches_action(self):
+        expected = _TOOL_ACTIONS[self.tool_name]
+        if self.action != expected:
+            raise ValueError("tool_name does not match action")
+        return self
+
+
+class DesktopCommandOut(BaseModel):
+    desktop_command_id: uuid.UUID
+    desktop_event_id: uuid.UUID | None = None
+    session_event_id: str | None = None
+    session_seq_no: int | None = None
+    status: str
+    shell_id: str
+    device_id: uuid.UUID | None = None
+    capability: str
+    lease_expires_at: str | None = None
+    payload: dict[str, Any] | None = None
+    idempotent: bool = False
+
+
 class DesktopCommandClaimIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    session_id: uuid.UUID
     shell_id: str = Field(
         ...,
         pattern=(
@@ -133,20 +179,15 @@ class DesktopCommandClaimIn(BaseModel):
         ),
         max_length=96,
     )
-    lease_ms: int = Field(default=10_000, ge=1_000, le=30_000)
+    lease_seconds: int = Field(default=30, ge=5, le=120)
 
 
 class DesktopCommandClaimOut(BaseModel):
-    status: Literal["none", "claimed"]
-    command_id: uuid.UUID | None = None
-    lease_id: str | None = None
-    lease_expires_at: str | None = None
-    action: str | None = None
-    capability: str | None = None
-    payload: dict = Field(default_factory=dict)
+    status: Literal["claimed", "empty"]
+    command: DesktopCommandOut | None = None
 
 
-class DesktopCommandAckIn(BaseModel):
+class DesktopCommandCompleteIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shell_id: str = Field(
@@ -157,19 +198,15 @@ class DesktopCommandAckIn(BaseModel):
         ),
         max_length=96,
     )
-    lease_id: str = Field(..., min_length=16, max_length=128)
-    outcome: Literal["running", "succeeded", "failed", "denied"]
+    status: Literal["succeeded", "failed", "denied", "preempted"]
     reason: str | None = Field(default=None, max_length=512)
-
-
-class DesktopCommandAckOut(BaseModel):
-    command_id: uuid.UUID
-    status: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DesktopCommandStopIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    session_id: uuid.UUID
     shell_id: str = Field(
         ...,
         pattern=(
@@ -178,11 +215,29 @@ class DesktopCommandStopIn(BaseModel):
         ),
         max_length=96,
     )
-    reason: str | None = Field(default=None, max_length=512)
+    reason: str = Field(default="desktop control stopped", max_length=512)
 
 
 class DesktopCommandStopOut(BaseModel):
-    preempted: int
+    status: Literal["preempted"] = "preempted"
+    preempted_count: int
+    desktop_event_ids: list[uuid.UUID]
+
+
+def _command_out(command, event=None, session_event=None, *, idempotent: bool = False) -> DesktopCommandOut:
+    return DesktopCommandOut(
+        desktop_command_id=command.id,
+        desktop_event_id=event.id if event else None,
+        session_event_id=session_event.get("event_id") if session_event else None,
+        session_seq_no=session_event.get("seq_no") if session_event else None,
+        status=command.status,
+        shell_id=command.shell_id,
+        device_id=command.device_id,
+        capability=command.capability,
+        lease_expires_at=command.lease_expires_at.isoformat() if command.lease_expires_at else None,
+        payload=command.payload or None,
+        idempotent=idempotent,
+    )
 
 
 def _verify_internal_key(
@@ -259,15 +314,10 @@ def request_desktop_observation(
         request=McpObservationRequest(**payload.model_dump()),
     )
     down_channel = event.event_metadata.get("down_channel", {})
-    command_status = "pending" if event.outcome == "requested" else "denied"
-    raw_command_id = getattr(event, "desktop_command_id", None)
-    desktop_command_id = raw_command_id if isinstance(raw_command_id, uuid.UUID) else None
     return DesktopObservationRequestOut(
-        status=command_status,
         desktop_event_id=event.id,
         session_event_id=session_event.get("event_id") if session_event else None,
         session_seq_no=session_event.get("seq_no") if session_event else None,
-        desktop_command_id=desktop_command_id,
         shell_id=event.shell_id,
         action=event.action,
         capability=event.capability,
@@ -277,59 +327,77 @@ def request_desktop_observation(
 
 
 @router.post(
+    "/internal/commands",
+    response_model=DesktopCommandOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("120/minute")
+def enqueue_command(
+    request: Request,
+    payload: DesktopCommandEnqueueIn,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    command, event, session_event = enqueue_desktop_command(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        request=DesktopCommandEnqueue(**payload.model_dump()),
+    )
+    return _command_out(command, event, session_event)
+
+
+@router.post(
     "/commands/claim",
     response_model=DesktopCommandClaimOut,
 )
 @limiter.limit("240/minute")
-def claim_desktop_command(
+def claim_command(
     request: Request,
     payload: DesktopCommandClaimIn,
     db: Session = Depends(deps.get_db),
-    device: DeviceRegistry = Depends(get_device_by_token),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+    x_device_token: str | None = Header(None, alias="X-Device-Token"),
 ):
-    claim = claim_next_desktop_command(
+    command, event, session_event = claim_next_desktop_command(
         db,
-        device=device,
-        shell_id=payload.shell_id,
-        lease_ms=payload.lease_ms,
+        user=current_user,
+        device_token=x_device_token,
+        claim=DesktopCommandClaim(**payload.model_dump()),
     )
-    if claim is None:
-        return DesktopCommandClaimOut(status="none")
+    if command is None:
+        return DesktopCommandClaimOut(status="empty", command=None)
     return DesktopCommandClaimOut(
         status="claimed",
-        command_id=claim.command_id,
-        lease_id=claim.lease_id,
-        lease_expires_at=claim.lease_expires_at.isoformat(),
-        action=claim.action,
-        capability=claim.capability,
-        payload=claim.payload,
+        command=_command_out(command, event, session_event),
     )
 
 
 @router.post(
-    "/commands/{command_id}/ack",
-    response_model=DesktopCommandAckOut,
+    "/commands/{command_id}/complete",
+    response_model=DesktopCommandOut,
 )
 @limiter.limit("240/minute")
-def ack_desktop_command_endpoint(
+def complete_command(
     request: Request,
     command_id: uuid.UUID,
-    payload: DesktopCommandAckIn,
+    payload: DesktopCommandCompleteIn,
     db: Session = Depends(deps.get_db),
-    device: DeviceRegistry = Depends(get_device_by_token),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+    x_device_token: str | None = Header(None, alias="X-Device-Token"),
 ):
-    command = ack_desktop_command(
+    command, event, session_event, idempotent = complete_desktop_command(
         db,
-        device=device,
-        shell_id=payload.shell_id,
-        ack=CommandAck(
+        user=current_user,
+        device_token=x_device_token,
+        completion=DesktopCommandCompletion(
             command_id=command_id,
-            lease_id=payload.lease_id,
-            outcome=payload.outcome,
-            reason=payload.reason,
+            **payload.model_dump(),
         ),
     )
-    return DesktopCommandAckOut(command_id=command.id, status=command.status)
+    return _command_out(command, event, session_event, idempotent=idempotent)
 
 
 @router.post(
@@ -337,16 +405,20 @@ def ack_desktop_command_endpoint(
     response_model=DesktopCommandStopOut,
 )
 @limiter.limit("120/minute")
-def stop_desktop_command_queue(
+def stop_commands(
     request: Request,
     payload: DesktopCommandStopIn,
     db: Session = Depends(deps.get_db),
-    device: DeviceRegistry = Depends(get_device_by_token),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+    x_device_token: str | None = Header(None, alias="X-Device-Token"),
 ):
-    count = stop_desktop_commands(
+    count, events, _session_events = preempt_desktop_commands_for_stop(
         db,
-        device=device,
-        shell_id=payload.shell_id,
-        reason=payload.reason or "desktop stop preempted command queue",
+        user=current_user,
+        device_token=x_device_token,
+        stop=DesktopCommandStop(**payload.model_dump()),
     )
-    return DesktopCommandStopOut(preempted=count)
+    return DesktopCommandStopOut(
+        preempted_count=count,
+        desktop_event_ids=[event.id for event in events],
+    )

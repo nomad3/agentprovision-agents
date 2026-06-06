@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -15,22 +14,16 @@ from fastapi.testclient import TestClient
 from app.api import deps
 from app.api.v1.desktop_control import router as desktop_control_router
 from app.core.config import settings
-from app.models.desktop_command import DesktopCommand
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.services.desktop_control_service import (
-    CommandAck,
     LocalObservationAudit,
     McpObservationRequest,
-    ack_desktop_command,
-    claim_next_desktop_command,
     record_local_observation_event,
     record_mcp_observation_request,
-    stop_desktop_commands,
 )
 
 _DEFAULT_OWNER = object()
 _DEVICE_REGISTRY_ID = uuid.UUID("88888888-8888-8888-8888-888888888888")
-_COMMAND_ID = uuid.UUID("99999999-9999-9999-9999-999999999999")
 
 
 def _user():
@@ -126,90 +119,18 @@ def _mcp_request(**overrides):
     return McpObservationRequest(**values)
 
 
-def _desktop_device():
-    return SimpleNamespace(
-        id=_DEVICE_REGISTRY_ID,
-        tenant_id=_user().tenant_id,
-        device_type="desktop",
-        config={"shell_id": "desktop-44444444-4444-4444-4444-444444444444"},
-    )
-
-
-def _desktop_command(**overrides):
+def _command(**overrides):
     values = {
-        "id": _COMMAND_ID,
-        "tenant_id": _user().tenant_id,
-        "user_id": _user().id,
-        "session_id": uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        "id": uuid.UUID("99999999-9999-9999-9999-999999999999"),
+        "status": "claimed",
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
         "device_id": _DEVICE_REGISTRY_ID,
-        "correlation_id": uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
         "capability": "screenshot",
-        "status": "pending",
-        "source": "mcp",
-        "nonce": None,
-        "lease_owner_shell_id": None,
         "lease_expires_at": None,
-        "claimed_at": None,
-        "completed_at": None,
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-        "payload": {"action": "capture_screenshot", "tool_name": "desktop_observe_screen"},
+        "payload": {"action": "capture_screenshot", "mode": "observe"},
     }
     values.update(overrides)
     return SimpleNamespace(**values)
-
-
-class _Query:
-    def __init__(self, *, first=None, all_items=None, update_count=0, update_target=None):
-        self._first = first
-        self._all = all_items
-        self._update_count = update_count
-        self._update_target = update_target
-
-    def filter(self, *args, **kwargs):
-        return self
-
-    def order_by(self, *args, **kwargs):
-        return self
-
-    def first(self):
-        return self._first
-
-    def all(self):
-        return self._all or []
-
-    def update(self, values, synchronize_session=False):
-        if self._update_target is not None and self._update_count:
-            for key, value in values.items():
-                setattr(self._update_target, getattr(key, "key", str(key)), value)
-        return self._update_count
-
-
-class _ScriptedDb:
-    def __init__(self, queries):
-        self.queries = list(queries)
-        self.added = []
-        self.commits = 0
-        self.rollbacks = 0
-
-    def query(self, *_args):
-        if not self.queries:
-            raise AssertionError("unexpected query")
-        return self.queries.pop(0)
-
-    def add(self, item):
-        self.added.append(item)
-
-    def commit(self):
-        self.commits += 1
-
-    def rollback(self):
-        self.rollbacks += 1
-
-    def refresh(self, item):
-        if getattr(item, "id", None) is None:
-            item.id = uuid.uuid4()
 
 
 def test_record_local_observation_rejects_cross_tenant_session():
@@ -371,7 +292,7 @@ def test_record_local_observation_reconstructs_permission_reason_without_client_
     assert "customer secret" not in str(publish.call_args.args[2])
 
 
-def test_record_mcp_observation_request_enqueues_command_with_active_shell():
+def test_record_mcp_observation_request_records_down_channel_denial_with_active_shell():
     db = _db_with_session(found=True)
 
     with patch(
@@ -388,38 +309,30 @@ def test_record_mcp_observation_request_enqueues_command_with_active_shell():
             request=_mcp_request(),
         )
 
-    command = db.add.call_args_list[0].args[0]
-    assert isinstance(command, DesktopCommand)
-    assert command.status == "pending"
-    assert command.source == "mcp"
-    assert command.payload["action"] == "capture_screenshot"
-    assert command.payload["down_channel"] == {
-        "available": True,
-        "claim_required": True,
-    }
-
     persisted = db.add.call_args.args[0]
     assert isinstance(persisted, DesktopCommandEvent)
     assert persisted.source == "mcp"
-    assert persisted.event_type == "desktop_command_requested"
+    assert persisted.event_type == "desktop_observation_denied"
     assert persisted.action == "capture_screenshot"
     assert persisted.capability == "screenshot"
-    assert persisted.outcome == "requested"
+    assert persisted.outcome == "denied"
     assert persisted.mode == "observe"
     assert persisted.shell_id == "desktop-44444444-4444-4444-4444-444444444444"
     assert persisted.device_id == _DEVICE_REGISTRY_ID
-    assert persisted.reason is None
+    assert persisted.reason == "desktop observation down-channel unavailable; capture_screenshot request denied"
+    assert persisted.event_metadata["tool_name"] == "desktop_observe_screen"
     assert persisted.event_metadata["device_id"] == str(_DEVICE_REGISTRY_ID)
     assert persisted.event_metadata["down_channel"] == {
-        "available": True,
+        "available": False,
+        "reason": "not_implemented",
     }
     assert "screenshot" not in persisted.event_metadata
     assert "clipboard" not in persisted.event_metadata
     assert event is persisted
     assert session_event == {"event_id": "session-event-2", "seq_no": 8}
-    assert publish.call_args.args[1] == "desktop_command_requested"
+    assert publish.call_args.args[1] == "desktop_observation_denied"
     mirrored = publish.call_args.args[2]
-    assert mirrored["status"] == "pending"
+    assert mirrored["reason"] == persisted.reason
     assert mirrored["shell_id"] == persisted.shell_id
     assert mirrored["device_id"] == str(_DEVICE_REGISTRY_ID)
     assert "raw" not in mirrored
@@ -551,126 +464,6 @@ def test_record_mcp_observation_request_rejects_cross_user_session_before_shell_
     assert exc.value.status_code == 403
     assert exc.value.detail == "Desktop session is not owned by user"
     db.add.assert_not_called()
-
-
-def test_claim_next_desktop_command_returns_none_when_cas_loses_race():
-    command = _desktop_command()
-    db = _ScriptedDb([
-        _Query(update_count=0),  # stale lease expiry sweep
-        _Query(first=command),
-        _Query(update_count=0, update_target=command),  # racing claimant won
-    ])
-
-    claim = claim_next_desktop_command(
-        db,
-        device=_desktop_device(),
-        shell_id="desktop-44444444-4444-4444-4444-444444444444",
-        lease_ms=10_000,
-    )
-
-    assert claim is None
-    assert command.status == "pending"
-    assert db.rollbacks == 1
-
-
-def test_claim_next_desktop_command_sets_short_lease_after_cas():
-    command = _desktop_command()
-    db = _ScriptedDb([
-        _Query(update_count=0),  # stale lease expiry sweep
-        _Query(first=command),
-        _Query(update_count=1, update_target=command),
-    ])
-
-    with patch("app.services.desktop_control_service.publish_session_event", return_value=None):
-        claim = claim_next_desktop_command(
-            db,
-            device=_desktop_device(),
-            shell_id="desktop-44444444-4444-4444-4444-444444444444",
-            lease_ms=10_000,
-        )
-
-    assert claim is not None
-    assert claim.command_id == _COMMAND_ID
-    assert command.status == "claimed"
-    assert command.lease_owner_shell_id == "desktop-44444444-4444-4444-4444-444444444444"
-    assert command.nonce == claim.lease_id
-    assert claim.lease_expires_at > datetime.now(timezone.utc)
-
-
-def test_ack_desktop_command_rejects_duplicate_terminal_ack():
-    command = _desktop_command(status="succeeded", nonce="lease-1")
-    db = _ScriptedDb([_Query(first=command)])
-
-    with pytest.raises(HTTPException) as exc:
-        ack_desktop_command(
-            db,
-            device=_desktop_device(),
-            shell_id="desktop-44444444-4444-4444-4444-444444444444",
-            ack=CommandAck(command_id=_COMMAND_ID, lease_id="lease-1", outcome="succeeded"),
-        )
-
-    assert exc.value.status_code == 409
-    assert "succeeded" in exc.value.detail
-
-
-def test_ack_desktop_command_expires_stale_lease_before_execution():
-    command = _desktop_command(
-        status="claimed",
-        nonce="lease-1",
-        lease_owner_shell_id="desktop-44444444-4444-4444-4444-444444444444",
-        lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
-    )
-    db = _ScriptedDb([_Query(first=command)])
-
-    with pytest.raises(HTTPException) as exc:
-        ack_desktop_command(
-            db,
-            device=_desktop_device(),
-            shell_id="desktop-44444444-4444-4444-4444-444444444444",
-            ack=CommandAck(command_id=_COMMAND_ID, lease_id="lease-1", outcome="running"),
-        )
-
-    assert exc.value.status_code == 409
-    assert command.status == "expired"
-
-
-def test_stop_preempts_pending_and_claimed_commands_before_ack():
-    pending = _desktop_command(id=uuid.UUID("99999999-9999-9999-9999-999999999991"))
-    claimed = _desktop_command(
-        id=uuid.UUID("99999999-9999-9999-9999-999999999992"),
-        status="claimed",
-        nonce="lease-2",
-        lease_owner_shell_id="desktop-44444444-4444-4444-4444-444444444444",
-        lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=10),
-    )
-    db = _ScriptedDb([
-        _Query(all_items=[pending, claimed]),
-        _Query(update_count=1, update_target=pending),
-        _Query(update_count=1, update_target=claimed),
-    ])
-
-    with patch("app.services.desktop_control_service.publish_session_event", return_value=None):
-        count = stop_desktop_commands(
-            db,
-            device=_desktop_device(),
-            shell_id="desktop-44444444-4444-4444-4444-444444444444",
-        )
-
-    assert count == 2
-    assert pending.status == "preempted"
-    assert claimed.status == "preempted"
-
-    ack_db = _ScriptedDb([_Query(first=claimed)])
-    with pytest.raises(HTTPException) as exc:
-        ack_desktop_command(
-            ack_db,
-            device=_desktop_device(),
-            shell_id="desktop-44444444-4444-4444-4444-444444444444",
-            ack=CommandAck(command_id=claimed.id, lease_id="lease-2", outcome="succeeded"),
-        )
-
-    assert exc.value.status_code == 409
-    assert "preempted" in exc.value.detail
 
 
 def _client_for_endpoint(user):
@@ -844,7 +637,6 @@ def test_mcp_observation_endpoint_returns_display_safe_denial():
         "desktop_event_id": "66666666-6666-6666-6666-666666666666",
         "session_event_id": "session-event-2",
         "session_seq_no": 8,
-        "desktop_command_id": None,
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
         "action": "get_active_app",
         "capability": "active_app",
@@ -853,3 +645,135 @@ def test_mcp_observation_endpoint_returns_display_safe_denial():
     }
     saved_request = record.call_args.kwargs["request"]
     assert saved_request.tool_name == "desktop_get_active_app"
+
+
+def test_command_enqueue_endpoint_returns_claimable_command():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.enqueue_desktop_command",
+        return_value=(
+            _command(status="pending"),
+            event,
+            {"event_id": "session-event-3", "seq_no": 9},
+        ),
+    ) as enqueue:
+        response = client.post(
+            "/api/v1/desktop-control/internal/commands",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "action": "capture_screenshot",
+                "tool_name": "desktop_observe_screen",
+                "payload": {"reason": "smoke"},
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {
+        "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+        "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+        "session_event_id": "session-event-3",
+        "session_seq_no": 9,
+        "status": "pending",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "device_id": "88888888-8888-8888-8888-888888888888",
+        "capability": "screenshot",
+        "lease_expires_at": None,
+        "payload": {"action": "capture_screenshot", "mode": "observe"},
+        "idempotent": False,
+    }
+    saved_request = enqueue.call_args.kwargs["request"]
+    assert saved_request.tool_name == "desktop_observe_screen"
+
+
+def test_command_claim_endpoint_passes_device_token():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.claim_next_desktop_command",
+        return_value=(
+            _command(),
+            event,
+            {"event_id": "session-event-4", "seq_no": 10},
+        ),
+    ) as claim:
+        response = client.post(
+            "/api/v1/desktop-control/commands/claim",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "lease_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "claimed"
+    assert response.json()["command"]["desktop_command_id"] == "99999999-9999-9999-9999-999999999999"
+    assert claim.call_args.kwargs["device_token"] == "secret-device-token"
+
+
+def test_command_complete_endpoint_returns_idempotent_terminal_status():
+    client, _db = _client_for_endpoint(_user())
+
+    with patch(
+        "app.api.v1.desktop_control.complete_desktop_command",
+        return_value=(
+            _command(status="succeeded"),
+            None,
+            None,
+            True,
+        ),
+    ) as complete:
+        response = client.post(
+            "/api/v1/desktop-control/commands/99999999-9999-9999-9999-999999999999/complete",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "status": "failed",
+                "reason": "late duplicate",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["idempotent"] is True
+    assert complete.call_args.kwargs["device_token"] == "secret-device-token"
+
+
+def test_command_stop_endpoint_returns_preempted_event_ids():
+    client, _db = _client_for_endpoint(_user())
+    first_event = SimpleNamespace(id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+    second_event = SimpleNamespace(id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+
+    with patch(
+        "app.api.v1.desktop_control.preempt_desktop_commands_for_stop",
+        return_value=(2, [first_event, second_event], []),
+    ) as stop:
+        response = client.post(
+            "/api/v1/desktop-control/commands/stop",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "reason": "operator Stop",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "status": "preempted",
+        "preempted_count": 2,
+        "desktop_event_ids": [
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ],
+    }
+    assert stop.call_args.kwargs["device_token"] == "secret-device-token"

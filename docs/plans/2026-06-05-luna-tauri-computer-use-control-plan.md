@@ -9,10 +9,11 @@ Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
 session ownership and device-bound shell identity merged; `luna-v0.1.94`
-installed-release validation complete; command down-channel planning active
+installed-release validation complete; command down-channel implementation
+locally validated on branch `codex/luna-command-downchannel-gate`; PR #799
+update and CI validation pending
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-phase1-control-plane`; current validation-doc branch:
-`codex/luna-v0194-validation-doc`
+Current implementation branch: `codex/luna-command-downchannel-gate`
 
 ---
 
@@ -307,6 +308,28 @@ Additional discovery inputs:
     Phase 0 command-palette verification item open until that path either
     restores/maximizes/focuses consistently or is explicitly scoped out of the
     next command down-channel branch.
+33. Branch `codex/luna-command-downchannel-gate` implements the first
+    API-to-Tauri command down-channel gate without pointer/keyboard actuation:
+    internal command enqueue, device-token-authenticated claim leases,
+    completion, Stop preemption, stale-lease expiry, duplicate-completion
+    idempotency, and a Luna client polling hook mounted only on the
+    authenticated chat/session surface. The hook claims observation commands,
+    re-checks local `control_get_safety_state`, executes only existing
+    read-only native observation commands in Observe mode, and completes with
+    metadata-only result summaries. It never forwards screenshot pixels,
+    clipboard text, OCR text, active-window text, tokens, or raw desktop
+    content through completion metadata. Sidecar review found four safety gaps
+    in the initial implementation; the branch now sanitizes completion and Stop
+    reasons, allow-lists completion metadata keys, returns terminal duplicate
+    completions idempotently even after shell presence drift, emits
+    `desktop_command_expired` audit/session events during stale lease sweeps,
+    and migrates command nonces from a global unique index to tenant-scoped
+    idempotency. Luna lead review in the installed app cleared the branch for
+    PR update while keeping real actuation locked. Claude Opus code review
+    found no high/medium issues; the two low items were closed by aligning the
+    SQLAlchemy nonce index with migration `160` and adding a pending-command
+    TTL so stale queued observe commands expire before a later reconnect can
+    claim them.
 
 ---
 
@@ -1030,10 +1053,11 @@ Goal: add the missing API-to-Tauri path for action envelopes.
 - [x] Add append-only `desktop_command_events` table for authoritative audit.
 - [x] Add `chat_sessions.owner_user_id` so desktop-control can reject ownerless
       and cross-user session requests before live content is enabled.
-- [ ] Add API service for enqueue, claim, complete, deny, expire.
+- [x] Add API service for enqueue, claim, complete, deny, expire.
   - [x] Add API service for local metadata-only observation-event ingestion.
-        Enqueue/claim/complete/deny/expire remains pending for signed command
-        envelopes.
+  - [x] Add first command queue service for observation-only commands:
+        enqueue, device-bound claim lease, complete, deny, stale expiry,
+        duplicate terminal idempotency, and Stop preemption.
 - [ ] Add desktop device enrollment, claim token hashing, rotation, and
       revocation through `device_registry`.
   - [x] Add authenticated Luna desktop enrollment endpoint that creates or
@@ -1050,14 +1074,21 @@ Goal: add the missing API-to-Tauri path for action envelopes.
         current capability manifest, then persist the internal
         `device_registry.id` in presence for desktop-control authorization.
         App version/host hash/OS-user hash are still pending.
-- [ ] Add authenticated Tauri polling/SSE hook for claimable-command notices.
-- [ ] Require Tauri claim before execution; down-channel notices alone never
+- [x] Add authenticated Tauri polling/SSE hook for claimable-command notices.
+  - [x] Add Luna client polling hook that claims commands with the enrolled
+        desktop device token and active chat session id.
+- [x] Require Tauri claim before execution; down-channel notices alone never
       execute commands.
 - [ ] Add signed action envelope validation in Tauri.
 - [ ] Add server-time TTL, nonce storage, monotonic per-device sequence numbers,
       and replay-window cleanup.
-- [ ] Add one active claim lease per command, compare-and-swap status
+  - [x] Add server-time lease expiry and pending-command TTL for the
+        observation-only queue. Signed envelope expiry, per-device sequence
+        numbers, replay cleanup, and grant-bound TTL remain pending.
+- [x] Add one active claim lease per command, compare-and-swap status
       transitions, retry limits, and duplicate completion handling.
+  - [x] Implement one active claim lease with CAS status transitions and
+        duplicate terminal completion idempotency. Retry limits remain pending.
 - [ ] Add atomic approval consumption/decrement during command claim or
       execution.
 - [ ] Implement approval consumption as a database compare-and-swap update inside
@@ -1068,6 +1099,9 @@ Goal: add the missing API-to-Tauri path for action envelopes.
       device-token secret.
 - [ ] Emit `desktop_action_requested`, `started`, `completed`, `denied`, and
       `stopped`.
+  - [x] Emit command queued, claimed, completed, preempted, and expired events
+        for the observation-only down-channel. Final event names for full
+        action envelopes remain pending.
 - [ ] Add stale-shell rejection.
 - [ ] Enforce MCP `desktop_control` tools through scoped agent-token auth; derive
       tenant/user/session/device from auth-bound context, not LLM-supplied
@@ -1084,16 +1118,20 @@ Goal: add the missing API-to-Tauri path for action envelopes.
         cross-user sessions, and user validation before shell selection.
   - [x] Add focused desktop-device enrollment and shell-device binding tests,
         including unbound shell rejection for local and MCP observation paths.
+  - [x] Add command lifecycle tests for device-bound claim, completion
+        idempotency, Stop preemption, stale lease expiry, metadata sanitization,
+        stale pending-command expiry, tenant-scoped nonce idempotency, and route
+        header plumbing.
 
 Exit criteria:
 
-- [ ] A no-op test action can be queued by API, claimed by Tauri, and completed
+- [x] A no-op test action can be queued by API, claimed by Tauri, and completed
       into `desktop_command_events` and mirrored into `session_events`.
-- [ ] Commands for another tenant/user/session/shell are rejected.
-- [ ] Expired commands are not executed.
+- [x] Commands for another tenant/user/session/shell are rejected.
+- [x] Expired commands are not executed.
 - [ ] Revoked desktop devices cannot claim commands even if shell presence is
       fresh.
-- [ ] Stop rejects queued and claimed no-op commands before pointer control
+- [x] Stop rejects queued and claimed no-op commands before pointer control
       begins.
 
 ### Phase 3 -- Local pointer control
@@ -1246,17 +1284,17 @@ Exit criteria:
 - [x] PR #795 migration `159_chat_sessions_owner_user_id.sql` applies in PR and
       post-merge PostgreSQL CI, backfills single-user tenants only, and records
       in `_migrations`.
-- [ ] Command enqueue requires authenticated user and valid session.
-- [ ] Command claim requires matching tenant and shell/device.
-- [ ] Cross-tenant command claim returns 404 or denial without leaking existence.
-- [ ] Expired commands cannot be claimed.
+- [x] Command enqueue requires authenticated user and valid session.
+- [x] Command claim requires matching tenant and shell/device.
+- [x] Cross-tenant command claim returns 404 or denial without leaking existence.
+- [x] Expired commands cannot be claimed.
 - [ ] Revoked desktop device cannot claim commands.
-- [ ] Duplicate command completion is idempotent and does not create multiple
+- [x] Duplicate command completion is idempotent and does not create multiple
       success events.
-- [ ] Command state machine rejects invalid transitions and cannot double-actuate
+- [x] Command state machine rejects invalid transitions and cannot double-actuate
       one command.
-- [ ] Stop changes queued or claimed commands to `preempted`, not `succeeded`.
-- [ ] Completion writes `desktop_command_events` and a display-safe
+- [x] Stop changes queued or claimed commands to `preempted`, not `succeeded`.
+- [x] Completion writes `desktop_command_events` and a display-safe
       `session_events` row.
 - [ ] MCP tools require `tenant_id`, scoped agent-token auth, and declared
       `desktop_control` tool group.
@@ -1269,7 +1307,7 @@ Exit criteria:
         blocked until command claim, signatures, approvals, and Tauri execution
         ship.
 - [ ] Rate limits are enforced per tenant/user/session/shell/capability.
-- [ ] Raw screenshot and clipboard values are not written to logs or
+- [x] Raw screenshot and clipboard values are not written to logs or
       `session_events`.
 - [x] Focused API validation for PR #793 passed locally:
       `tests/api/v1/test_desktop_control_events.py`,
@@ -1303,10 +1341,23 @@ Exit criteria:
       tests/api/v1/test_desktop_device_binding.py -q` (`28 passed`) and
       `npm test -- --run src/hooks/__tests__/useShellPresence.test.jsx
       src/utils/__tests__/desktopDeviceEnrollment.test.js` (`3 passed`).
+- [x] Phase 2 command down-channel focused local validation passed on branch
+      `codex/luna-command-downchannel-gate`:
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py -q` (`46 passed`);
+      `ruff check app/api/v1/desktop_control.py
+      app/services/desktop_control_service.py app/models/desktop_command.py
+      tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py`; `python -m py_compile`
+      for touched API/router/model modules.
 
 ### Tauri / Rust
 
-- [ ] `cargo check` in `apps/luna-client/src-tauri`.
+- [x] `cargo check` in `apps/luna-client/src-tauri` passed for
+      `codex/luna-command-downchannel-gate`; only existing Rust warnings and
+      the local Cargo cache cleanup permission warning were observed.
 - [ ] Unit tests for local permission decisions.
 - [ ] Actuator denies when Observe/Assist/Control tier is disabled.
 - [ ] Actuator denies expired and replayed envelopes.
@@ -1324,6 +1375,11 @@ Exit criteria:
 - [x] Phase 1 MCP tool validation passed:
       `pytest tests/test_desktop_control_tool.py -q` in `apps/mcp-server`
       (`6 passed`), plus targeted `ruff` for touched API and MCP files.
+- [x] Phase 2 Luna client command-claim validation passed:
+      `npm test -- --run` in `apps/luna-client` (`136 passed`) and
+      `npm run build` succeeded. The new tests cover device-token claim
+      polling, local Stop preemption, Observe-mode gating, and metadata-only
+      completion summaries.
 
 ### React / UX
 
@@ -1404,18 +1460,17 @@ Exit criteria:
 
 ## Next Actions
 
-1. Open the next implementation branch for the Phase 2 API-to-Tauri command
-   down-channel. First gate: lease/CAS command claim, stale lease expiry,
-   duplicate-completion idempotency, and Stop preemption for queued, claimed,
-   and in-flight commands.
-2. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+1. Council review for `codex/luna-command-downchannel-gate` is complete:
+   Luna cleared the branch for PR update but not real actuation; Claude Opus
+   found no high/medium issues; Codex/Gauss findings were fixed in the local
+   branch before push.
+2. Push the updated branch to PR #799 and let GitHub Actions validate API unit,
+   API integration, Luna client, Docker deployment, and Luna Tauri build.
+3. After merge, install the unsigned development release DMG locally, verify
+   the `.sha256`, smoke Luna with Computer Use, and rerun the exact Docker
+   `_work` mount gate. The pass condition is zero output.
+4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-3. Include the PR #797 command-palette maximize follow-up in the next branch or
+5. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.
-4. Ask Luna, Claude Code, and Codex council to review the next pushed diff for
-   privacy, tenant/session/shell binding, command-state correctness, and
-   release-readiness before merge.
-5. Keep validating every merged Luna release by installing the GitHub Actions
-   DMG locally, smoking it with Computer Use, and rerunning the exact Docker
-   `_work` mount gate. The pass condition is zero output.
