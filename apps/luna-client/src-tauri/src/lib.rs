@@ -1,12 +1,19 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 mod gesture;
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 }
+
+const CONTROL_MODE_LOCKED: u8 = 0;
+const CONTROL_MODE_OBSERVE: u8 = 1;
+const CONTROL_MODE_STOPPED: u8 = 2;
+
+static CONTROL_MODE: AtomicU8 = AtomicU8::new(CONTROL_MODE_LOCKED);
+static LAST_STOP_AT_MS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(desktop)]
 use tauri::{
@@ -24,10 +31,140 @@ fn get_arch() -> String {
     std::env::consts::ARCH.to_string()
 }
 
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn valid_desktop_shell_id(id: &str) -> bool {
+    id.strip_prefix("desktop-")
+        .is_some_and(|rest| uuid::Uuid::parse_str(rest).is_ok())
+}
+
+#[tauri::command]
+fn get_or_create_shell_id(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve Luna app data dir: {}", e))?;
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create Luna app data dir: {}", e))?;
+
+    let path = app_data_dir.join("desktop-shell-id");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let shell_id = raw.trim();
+        if valid_desktop_shell_id(shell_id) {
+            return Ok(shell_id.to_string());
+        }
+    }
+
+    let shell_id = format!("desktop-{}", uuid::Uuid::new_v4());
+    std::fs::write(&path, format!("{}\n", shell_id))
+        .map_err(|e| format!("Failed to persist Luna desktop shell id: {}", e))?;
+    Ok(shell_id)
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ControlSafetyState {
+    mode: String,
+    observe_enabled: bool,
+    stopped: bool,
+    control_locked: bool,
+    capture_running: bool,
+    gesture_state: String,
+    cursor_global: bool,
+    can_observe: bool,
+    can_control_pointer: bool,
+    can_control_keyboard: bool,
+    last_stop_at_ms: Option<u64>,
+}
+
+fn control_mode_name(mode: u8) -> &'static str {
+    match mode {
+        CONTROL_MODE_OBSERVE => "observe",
+        CONTROL_MODE_STOPPED => "stopped",
+        _ => "control_locked",
+    }
+}
+
+fn desktop_control_stopped() -> bool {
+    CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED
+}
+
+fn ensure_desktop_control_not_stopped(action: &str) -> Result<(), String> {
+    if desktop_control_stopped() {
+        Err(format!("desktop control stopped; {action} denied"))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn desktop_control_allows_actuation() -> bool {
+    false
+}
+
+fn ensure_desktop_control_allows_actuation(action: &str) -> Result<(), String> {
+    if desktop_control_allows_actuation() {
+        Ok(())
+    } else {
+        Err(format!("desktop pointer control locked; {action} denied"))
+    }
+}
+
+async fn current_control_safety_state() -> ControlSafetyState {
+    let mode = CONTROL_MODE.load(Ordering::SeqCst);
+    let last_stop = LAST_STOP_AT_MS.load(Ordering::SeqCst);
+    let gesture = gesture::engine_status().await;
+    ControlSafetyState {
+        mode: control_mode_name(mode).to_string(),
+        observe_enabled: mode == CONTROL_MODE_OBSERVE,
+        stopped: mode == CONTROL_MODE_STOPPED,
+        control_locked: mode != CONTROL_MODE_OBSERVE,
+        capture_running: CAPTURE_RUNNING.load(Ordering::SeqCst),
+        gesture_state: gesture.state,
+        cursor_global: gesture::global_mode(),
+        can_observe: mode != CONTROL_MODE_STOPPED,
+        can_control_pointer: false,
+        can_control_keyboard: false,
+        last_stop_at_ms: if last_stop == 0 { None } else { Some(last_stop) },
+    }
+}
+
+#[tauri::command]
+async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
+    Ok(current_control_safety_state().await)
+}
+
+#[tauri::command]
+async fn control_observe_status(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    if CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED {
+        return Ok(current_control_safety_state().await);
+    }
+    CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+#[tauri::command]
+async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+    LAST_STOP_AT_MS.store(now_unix_ms(), Ordering::SeqCst);
+    CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    gesture::set_global_mode(false);
+    gesture::stop_engine().await?;
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
 /// On iOS returns an error; the frontend should use the native share sheet instead.
 #[tauri::command]
 async fn capture_screenshot() -> Result<String, String> {
+    ensure_desktop_control_not_stopped("capture_screenshot")?;
     #[cfg(desktop)]
     {
         use std::process::Command;
@@ -69,6 +206,7 @@ async fn haptic_feedback(style: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_active_app() -> Result<serde_json::Value, String> {
+    ensure_desktop_control_not_stopped("get_active_app")?;
     use std::process::Command;
 
     let app_output = Command::new("osascript")
@@ -98,6 +236,7 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn read_clipboard() -> Result<String, String> {
+    ensure_desktop_control_not_stopped("read_clipboard")?;
     use std::process::Command;
     let output = Command::new("pbpaste")
         .output()
@@ -112,6 +251,7 @@ async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
             let _ = window.hide();
             CAPTURE_RUNNING.store(false, Ordering::Relaxed);
         } else {
+            ensure_desktop_control_not_stopped("toggle_spatial_hud")?;
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -128,6 +268,7 @@ struct SpatialFrame {
 
 #[tauri::command]
 async fn start_spatial_capture(_app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_control_not_stopped("start_spatial_capture")?;
     // Real `spatial-frame` events are now emitted by the gesture engine
     // (`gesture::supervisor::run_engine_loop`). This command is kept as a
     // no-op for FFI compatibility with the existing frontend HUD bootstrap.
@@ -145,6 +286,7 @@ async fn stop_spatial_capture() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_start() -> Result<(), String> {
+    ensure_desktop_control_not_stopped("gesture_start")?;
     gesture::start_engine().await
 }
 
@@ -160,6 +302,7 @@ async fn gesture_pause() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_resume() -> Result<(), String> {
+    ensure_desktop_control_not_stopped("gesture_resume")?;
     gesture::resume_engine().await
 }
 
@@ -185,6 +328,10 @@ async fn gesture_check_accessibility() -> Result<bool, String> {
 
 #[tauri::command]
 async fn gesture_set_cursor_global(enabled: bool) -> Result<(), String> {
+    if enabled {
+        ensure_desktop_control_not_stopped("gesture_set_cursor_global")?;
+        ensure_desktop_control_allows_actuation("gesture_set_cursor_global")?;
+    }
     gesture::set_global_mode(enabled);
     Ok(())
 }
@@ -220,6 +367,7 @@ async fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 /// `nav_hud` gesture binding from any window.
 #[tauri::command]
 async fn focus_podium(app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_control_not_stopped("focus_podium")?;
     if let Some(window) = app.get_webview_window("spatial_hud") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -498,27 +646,27 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // The tray "Open" verbs target the spatial_hud (Luna OS primary
-    // surface). The chat panel (`main`) is summonable separately so users
-    // who closed it can get it back without losing the podium.
-    let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS", true, None::<&str>)?;
-    let open_chat = MenuItem::with_id(app, "open_chat", "Open Chat Panel", true, None::<&str>)?;
+    // Chat/sessions are the primary product surface. The spatial HUD remains
+    // available as an explicit Labs surface, but it should not open from the
+    // default tray click.
+    let open_chat = MenuItem::with_id(app, "open_chat", "Open Luna", true, None::<&str>)?;
+    let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS / Labs", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Luna", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_os, &open_chat, &quit_item])?;
+    let menu = Menu::with_items(app, &[&open_chat, &open_os, &quit_item])?;
 
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("Luna OS — Conductor's Podium")
+        .tooltip("Luna")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "open_os" => {
-                if let Some(window) = app.get_webview_window("spatial_hud") {
+            "open_chat" => {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
             }
-            "open_chat" => {
-                if let Some(window) = app.get_webview_window("main") {
+            "open_os" => {
+                if let Some(window) = app.get_webview_window("spatial_hud") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -531,9 +679,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_tray_icon_event(|tray, event| {
             if let tauri::tray::TrayIconEvent::Click { .. } = event {
                 let app = tray.app_handle();
-                // Tray icon click goes to the OS surface; right-click
-                // opens the menu so users can pick the chat panel instead.
-                if let Some(window) = app.get_webview_window("spatial_hud") {
+                if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
@@ -566,10 +712,8 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
         }
     })?;
 
-    // Cmd+Shift+L now toggles the secondary `main` chat window (the comms
-    // panel of Luna OS). The spatial_hud is the primary surface and stays
-    // visible; pre-Luna-OS this shortcut toggled the HUD which no longer
-    // makes sense as a "show / hide" verb when the HUD IS the OS.
+    // Cmd+Shift+L toggles the primary `main` chat/session window.
+    // Spatial HUD is an explicit Labs surface opened from the tray/menu.
     app.global_shortcut().on_shortcut(hud_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             if let Some(window) = app.get_webview_window("main") {
@@ -829,6 +973,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_platform,
             get_arch,
+            get_or_create_shell_id,
+            control_get_safety_state,
+            control_observe_status,
+            control_stop_all,
             capture_screenshot,
             get_active_app,
             read_clipboard,
@@ -867,6 +1015,24 @@ mod tests {
     //! for default `cargo test` runs.
     use super::*;
     use pretty_assertions::assert_eq;
+
+    // ── desktop control safety ─────────────────────────────────────────────
+    #[test]
+    fn stopped_control_mode_blocks_control_entrypoints() {
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        assert!(ensure_desktop_control_not_stopped("gesture_start").is_ok());
+        assert!(!desktop_control_allows_actuation());
+        assert!(ensure_desktop_control_allows_actuation("gesture_set_cursor_global").is_err());
+
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        let err = ensure_desktop_control_not_stopped("gesture_start")
+            .expect_err("stopped mode should reject control entrypoints");
+        assert!(err.contains("desktop control stopped"), "got: {err}");
+        assert!(err.contains("gesture_start"), "got: {err}");
+        assert!(!desktop_control_allows_actuation());
+
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
 
     // ── platform / arch ─────────────────────────────────────────────────
     #[test]

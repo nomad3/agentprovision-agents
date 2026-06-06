@@ -34,11 +34,11 @@ npm run build
 
 ```bash
 cd apps/luna-client && npm install
-npm run tauri dev               # desktop hot reload
+npm run tauri:dev               # desktop hot reload
 cd src-tauri && cargo check
 ```
 
-> Don't build Tauri locally for releases — push to `main`, the GitHub Actions pipeline (`.github/workflows/luna-client-build.yaml`) produces signed macOS ARM64 DMGs.
+> Don't build Tauri locally for releases — push to `main`, the GitHub Actions pipeline (`.github/workflows/luna-client-build.yaml`) produces macOS ARM64 DMGs and the Luna updater manifest.
 
 ### MCP server
 

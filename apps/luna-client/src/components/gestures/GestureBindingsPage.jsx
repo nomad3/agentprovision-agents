@@ -31,6 +31,7 @@ export default function GestureBindingsPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      await tauriInvoke('gesture_start');
       const ok = await tauriInvoke('gesture_check_accessibility');
       if (!cancelled) setAccessibilityOk(!!ok);
       const cur = await tauriInvoke('gesture_get_cursor_global');

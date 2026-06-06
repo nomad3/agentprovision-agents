@@ -6,6 +6,7 @@ import LoginForm from './components/LoginForm';
 import NotificationBell from './components/NotificationBell';
 import TrustBadge from './components/TrustBadge';
 import ActionApproval from './components/ActionApproval';
+import ControlSafetyStrip from './components/ControlSafetyStrip';
 import CommandPalette from './components/CommandPalette';
 import ClipboardToast from './components/ClipboardToast';
 import WorkflowSuggestions from './components/WorkflowSuggestions';
@@ -126,7 +127,7 @@ function useUpdateBanner() {
     }
     // Fallback: signing not configured, or install_update threw.
     window.open(
-      'https://github.com/nomad3/servicetsunami-agents/releases/latest',
+      'https://github.com/nomad3/agentprovision-agents/releases?q=luna-v&expanded=true',
       '_blank',
     );
   }, []);
@@ -218,6 +219,7 @@ function AuthenticatedApp() {
           <button className="theme-toggle" onClick={toggleTheme} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
             {theme === 'dark' ? '\u2600' : '\u263E'}
           </button>
+          <ControlSafetyStrip />
           <TrustBadge trust={trust} />
           <button className="theme-toggle" onClick={() => setSuggestionsOpen(!suggestionsOpen)} title="Workflow suggestions">
             {'\u26A1'}
@@ -280,27 +282,11 @@ function AppContent({ windowLabel }) {
     try { return !localStorage.getItem('gesture_calibrated'); } catch { return false; }
   });
 
-  // Gate engine boot on login so we don't burn camera + Apple Vision cycles
-  // on the login screen. Stops on logout. Engine is global to the app, but
-  // we only kick the lifecycle from the spatial_hud window (the primary
-  // Luna OS surface) so the secondary main window doesn't toggle it.
-  useEffect(() => {
-    if (windowLabel !== 'spatial_hud') return;
-    let cancelled = false;
-    (async () => {
-      const tauri = await import('@tauri-apps/api/core').catch(() => null);
-      if (!tauri || cancelled) return;
-      if (user) {
-        try { await tauri.invoke('gesture_start'); } catch {}
-      } else {
-        try { await tauri.invoke('gesture_stop'); } catch {}
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user, windowLabel]);
+  // Gestures/camera are opt-in. Do not start the native engine on generic
+  // login; gesture settings or calibration screens own that lifecycle.
 
-  // Luna OS: spatial_hud is the conductor's podium. Login form renders
-  // here when not authenticated so first-launch isn't a blank starfield.
+  // Luna OS / Labs: spatial_hud is optional and never the default startup
+  // surface. Login form still renders here if the user opens Labs logged out.
   if (windowLabel === 'spatial_hud') {
     if (loading) {
       return (
