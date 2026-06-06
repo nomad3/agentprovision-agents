@@ -353,7 +353,9 @@ def execute_aider_chat(task_input, session_dir: str):
             metadata={"platform": "aider", "model": model},
         )
 
-    env = os.environ.copy()
+    # Per-turn env with THIS tenant's GitHub token (set-or-strip) — never the
+    # process-global the old dispatcher wrote (F01 cross-tenant bleed).
+    env = cli_runtime.build_base_env(task_input)
     env["HOME"] = tenant_home
     env["WORKSPACE"] = cli_cwd
     # Inject the provider key under the right env var. We set BOTH the

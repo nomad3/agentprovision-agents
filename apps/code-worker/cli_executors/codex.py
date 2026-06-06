@@ -91,7 +91,9 @@ def execute_codex_chat(task_input, session_dir: str, image_path: str):
     if image_path:
         cmd.extend(["--image", image_path])
 
-    env = os.environ.copy()
+    # Per-turn env with THIS tenant's GitHub token (set-or-strip) — never the
+    # process-global the old dispatcher wrote (F01 cross-tenant bleed).
+    env = cli_runtime.build_base_env(task_input)
     env["CODEX_HOME"] = codex_home
     env["WORKSPACE"] = cli_cwd
     # ── tenant HOME on workspaces volume (task #267 Phase 1) ────────────

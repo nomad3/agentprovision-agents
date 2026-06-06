@@ -309,32 +309,40 @@ class TestExecuteCopilotChat:
         assert out.success is False
         assert "not connected" in out.error.lower()
 
-    def test_token_from_env_skips_fetch(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp_envvar")
+    def test_uses_per_tenant_token_not_stale_env(self, monkeypatch, tmp_path):
+        # F01: copilot must use THIS tenant's fetched token, NOT a stale
+        # process-global GITHUB_TOKEN a prior tenant's turn left in os.environ.
+        monkeypatch.setenv("GITHUB_TOKEN", "ghp_STALE_other_tenant")
 
         called = {"n": 0}
 
         def fake_fetch(tid):
             called["n"] += 1
-            return None
+            return "ghp_this_tenant"
 
         monkeypatch.setattr(wf, "_fetch_github_token", fake_fetch)
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
-        monkeypatch.setattr(
-            cli_runtime, "run_cli_with_heartbeat",
-            lambda cmd, **kw: _completed(
+        captured: dict = {}
+
+        def fake_run(cmd, **kw):
+            captured["env"] = kw["env"]
+            return _completed(
                 returncode=0,
                 stdout=json.dumps({
                     "type": "assistant.message",
                     "data": {"content": "Hi from Copilot", "outputTokens": 10},
                 }),
-            ),
-        )
+            )
+
+        monkeypatch.setattr(cli_runtime, "run_cli_with_heartbeat", fake_run)
 
         out = wf._execute_copilot_chat(
             _make_input(platform="copilot_cli"), str(tmp_path),
         )
-        assert called["n"] == 0  # env value was used, no fetch
+        assert called["n"] == 1  # per-tenant fetch always runs (no env shortcut)
+        # The highest-precedence Copilot auth var carries THIS tenant's token,
+        # never the stale process-global.
+        assert captured["env"]["COPILOT_GITHUB_TOKEN"] == "ghp_this_tenant"
         assert out.success is True
         assert out.response_text == "Hi from Copilot"
         assert out.metadata["output_tokens"] == 10
@@ -342,7 +350,7 @@ class TestExecuteCopilotChat:
     def test_jsonl_with_no_assistant_message_returns_failure(
         self, monkeypatch, tmp_path,
     ):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
             cli_runtime, "run_cli_with_heartbeat",
@@ -359,7 +367,7 @@ class TestExecuteCopilotChat:
         assert "no parseable assistant message" in out.error
 
     def test_non_zero_exit_returns_error(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
             cli_runtime, "run_cli_with_heartbeat",
@@ -374,7 +382,7 @@ class TestExecuteCopilotChat:
         assert "quota exceeded" in out.error
 
     def test_empty_stdout_returns_no_output(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
         monkeypatch.setattr(
             cli_runtime, "run_cli_with_heartbeat",
@@ -388,7 +396,7 @@ class TestExecuteCopilotChat:
         assert "no output" in out.error.lower()
 
     def test_result_event_yields_premium_request_metadata(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
 
         stream = "\n".join([
@@ -428,7 +436,7 @@ class TestExecuteCopilotChat:
     ):
         """The helper prefers an assistant.message with NO toolRequests
         as the final answer — line 1948-1952."""
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp")
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: sd)
 
         stream = "\n".join([

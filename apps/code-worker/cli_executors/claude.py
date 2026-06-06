@@ -42,34 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 def _apply_git_credential_env(env: dict, github_token: str | None) -> None:
-    """Set this turn's GitHub token in ``env`` (mutating it in place), or STRIP
-    any inherited token when there is none (2026-05-31).
-
-    Unified gh-based auth (Simon's steer — every CLI on the code-worker shares the
-    same ``gh``): the image wires a SYSTEM credential helper
-    ``credential.https://github.com.helper = !gh auth git-credential`` (Dockerfile),
-    so git delegates github.com auth to ``gh``, and ``gh`` resolves its token from
-    ``GH_TOKEN``/``GITHUB_TOKEN`` in the env. We therefore only need to put the
-    tenant's token in the turn env — HOME-independent, and the SAME mechanism
-    every other CLI gets, instead of a claude-only bespoke helper.
-
-    CROSS-TENANT BLEED GUARD (Codex BLOCKER): ``execute_claude_chat`` starts from
-    ``os.environ.copy()``, and the chat dispatcher writes a process-global
-    ``os.environ["GITHUB_TOKEN"]`` (workflows.py:1188). If THIS tenant has no
-    token we must POP both names from the turn env — otherwise a stale token from
-    a PRIOR tenant's turn would let the system gh helper authenticate the wrong
-    tenant's clone. With a fresh token we overwrite both. Either way the turn env
-    carries ONLY this tenant's credential (or none → an unauthenticated clone
-    fails fast via ``GIT_TERMINAL_PROMPT=0``).
-    """
-    if github_token:
-        # gh prefers GH_TOKEN; GITHUB_TOKEN is the broad fallback. Both = this
-        # tenant's token; the system `!gh auth git-credential` helper reads either.
-        env["GH_TOKEN"] = github_token
-        env["GITHUB_TOKEN"] = github_token
-    else:
-        env.pop("GH_TOKEN", None)
-        env.pop("GITHUB_TOKEN", None)
+    """Thin wrapper around :func:`cli_runtime.apply_git_credential_env` — kept for
+    backward-compatible callers/tests that reference the claude-local name. The
+    canonical set-or-strip helper now lives in ``cli_runtime`` so EVERY executor
+    shares one implementation (the cross-tenant-bleed guard, F01)."""
+    cli_runtime.apply_git_credential_env(env, github_token)
 
 
 def _write_secret_file(path: str, content: str) -> None:
@@ -398,8 +375,6 @@ def execute_claude_chat(task_input, session_dir: str):
     # only; --add-dir grants access, not memory loading) and the multi-line
     # bracketed-paste ``[Pasted text +N lines]`` placeholder that needs a
     # second Enter. The runner types the trigger and strips its echo.
-    interactive_submit = None
-    interactive_answer_dir = None
 
     def _build_interactive_turn() -> tuple[str, str]:
         """Create a FRESH per-turn scratch dir + single-line trigger and return

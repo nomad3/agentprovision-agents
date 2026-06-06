@@ -85,6 +85,64 @@ def apply_git_ssh(env: dict, ssh_key: str | None) -> Callable[[], None]:
     return _cleanup
 
 
+def apply_git_credential_env(env: dict, github_token: str | None) -> None:
+    """Set this turn's GitHub token in ``env`` (GH_TOKEN + GITHUB_TOKEN), or STRIP
+    both when there is none — mutating ``env`` in place (2026-06-06).
+
+    Hoisted out of ``cli_executors.claude`` so EVERY subprocess executor shares
+    one set-or-strip helper. The code-worker image wires a SYSTEM credential
+    helper (``credential.https://github.com.helper = !gh auth git-credential``),
+    so git delegates github.com auth to ``gh``, which resolves its token from
+    ``GH_TOKEN``/``GITHUB_TOKEN`` in the env. Putting the tenant's token in the
+    per-turn env is therefore all that's needed — HOME-independent, identical
+    across every CLI.
+
+    CROSS-TENANT BLEED GUARD (F01 BLOCKER): executors start from
+    ``os.environ.copy()``. If a PRIOR tenant's turn left a process-global token
+    behind (the old ``workflows.py`` dispatcher wrote one), a tenant with NO
+    token must have it POPPED from the turn env — otherwise the system gh helper
+    would authenticate the wrong tenant's clone. With a fresh token we overwrite
+    both names. Either way the turn env carries ONLY this tenant's credential (or
+    none → an unauthenticated clone fails fast via ``GIT_TERMINAL_PROMPT=0``).
+    """
+    if github_token:
+        env["GH_TOKEN"] = github_token
+        env["GITHUB_TOKEN"] = github_token
+    else:
+        env.pop("GH_TOKEN", None)
+        env.pop("GITHUB_TOKEN", None)
+
+
+def build_base_env(task_input) -> dict:
+    """Build the per-turn subprocess env for a chat-CLI executor (2026-06-06).
+
+    Returns a fresh ``os.environ`` copy with THIS tenant's GitHub token applied
+    (set-or-strip via :func:`apply_git_credential_env`). Every subprocess
+    executor (codex/gemini/copilot/aider/goose/qwen — claude already had its
+    own per-turn wiring) MUST source its env from here so two concurrent chat
+    turns on the worker's thread-pool never share a credential.
+
+    This is the F01 fix: the ``execute_chat_cli`` dispatcher no longer writes a
+    process-global ``os.environ["GITHUB_TOKEN"]``; each executor fetches its own
+    tenant's token here and applies it to the per-subprocess env only.
+
+    ``_fetch_github_token`` is imported lazily to avoid the
+    ``cli_runtime <- workflows`` import cycle (workflows imports this module),
+    and so test monkeypatches on ``workflows._fetch_github_token`` take effect.
+    """
+    from workflows import _fetch_github_token  # lazy: import-cycle guard
+
+    env = os.environ.copy()
+    tenant_id = getattr(task_input, "tenant_id", "") or ""
+    try:
+        gh_token = _fetch_github_token(tenant_id)
+    except Exception:  # noqa: BLE001 — never fail a turn over token fetch
+        logger.warning("build_base_env: github token fetch failed", exc_info=True)
+        gh_token = None
+    apply_git_credential_env(env, gh_token)
+    return env
+
+
 # ── tenant workspace resolution (task #259) ──────────────────────────────
 # Per-tenant persistent workspace directory. Backed by the named
 # ``workspaces`` Docker volume that's bind-mounted on BOTH the api and
