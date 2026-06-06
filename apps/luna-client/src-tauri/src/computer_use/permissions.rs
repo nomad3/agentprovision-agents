@@ -18,19 +18,19 @@ pub struct DesktopPermissionReadiness {
 }
 
 impl PermissionProbe {
-    fn granted(required_for: &[&str], reason: &str) -> Self {
+    pub(crate) fn granted(required_for: &[&str], reason: &str) -> Self {
         Self::new("granted", required_for, reason)
     }
 
-    fn denied(required_for: &[&str], reason: &str) -> Self {
+    pub(crate) fn denied(required_for: &[&str], reason: &str) -> Self {
         Self::new("denied", required_for, reason)
     }
 
-    fn unknown(required_for: &[&str], reason: &str) -> Self {
+    pub(crate) fn unknown(required_for: &[&str], reason: &str) -> Self {
         Self::new("unknown", required_for, reason)
     }
 
-    fn not_required(required_for: &[&str], reason: &str) -> Self {
+    pub(crate) fn not_required(required_for: &[&str], reason: &str) -> Self {
         Self::new("not_required", required_for, reason)
     }
 

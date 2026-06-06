@@ -144,6 +144,14 @@ Additional discovery inputs:
     live mounts now source `/var/agentprovision/workspaces` from
     `agentprovision-agents_tenant_spaces`; local API, web, Luna web, and public
     tunnel endpoints returned `200`.
+15. Follow-up release validation on 2026-06-06 installed GitHub prerelease
+    `luna-v0.1.87` from the unsigned DMG after direct `.sha256` verification.
+    `/Applications/Luna.app` reported version `0.1.87`, launched chat-first in
+    the maximized main window, and Computer Use verified the governed strip in
+    `Control Locked` with Assist/Control disabled. The native permission strip
+    correctly reported denied/not-yet-granted Screen Recording and
+    Accessibility (`TCC 1/3`). Pressing Stop latched the app into `Stopped`, and
+    relaunch preserved the stopped posture with `Resume` visible.
 
 ---
 
@@ -672,6 +680,10 @@ Current verification finding (2026-06-06):
       Control Locked safety strip, disabled Assist/Control, and Alpha chat
       response. App-side validation passed, and the exact mount smoke command
       returned empty after the workspace volume source was renamed.
+- [x] Verify `luna-v0.1.87` unsigned development release locally: DMG checksum,
+      `/Applications/Luna.app` version `0.1.87`, maximized chat-first startup,
+      Control Locked safety strip, disabled Assist/Control, native TCC readiness
+      display, and durable Stop posture after relaunch.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -691,6 +703,9 @@ Exit criteria:
       checksum, maximized launch, locked passive control strip, and live Alpha
       chat response. The mount smoke gate returned empty after the Docker
       workspace volume source migration.
+- [x] Local install smoke from GitHub Release `luna-v0.1.87` confirms version,
+      checksum, maximized launch, locked passive control strip, TCC readiness
+      reporting, and durable Stop after relaunch.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -703,6 +718,24 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
 - [ ] Wrap existing screenshot, active app/window, and clipboard-read commands
       behind one Rust policy gate with mode checks, session binding, audit, and
       local Stop checks.
+  - [x] Add one shared Rust observation policy gate for screenshot, active
+        app/window, and clipboard read.
+  - [x] Enforce `Stopped` and non-Observe denial before native observation work
+        begins.
+  - [x] Enforce passive local permission readiness before Screen Recording,
+        Accessibility, and System Events-backed observations.
+  - [x] Emit local metadata-only `desktop-control-audit` events for observation
+        start, success, failure, and denial.
+  - [x] Gate background clipboard/activity emitters with the same local
+        observation policy before emitting frontend events, and emit matching
+        local audit events for emitted observations.
+  - [x] Keep active app/window observation fail-closed on macOS until an
+        explicit System Events setup/probe flow can mark Automation readiness as
+        granted.
+  - [ ] Bind local observation requests to the active chat session before
+        MCP/API-governed observations ship.
+  - [ ] Promote local audit events into authoritative API
+        `desktop_command_events` and display-safe `session_events`.
 - [x] Remove or narrow broad Tauri `shell:default` capability before adding
       desktop control.
 - [ ] Add local permission state for Observe and Assist tiers.
@@ -761,6 +794,11 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       default, not raw text.
 - [ ] Add user-visible "delete observations for this session" action.
 - [ ] Add unit tests for permission-denied paths.
+  - [x] Cover local observation-policy denials for stopped, locked,
+        Screen Recording denied, Accessibility denied, and System Events
+        unknown states.
+  - [ ] Cover Tauri command-level denied/error audit emission once the active
+        session/API boundary is introduced.
 
 Exit criteria:
 

@@ -5,6 +5,10 @@
 //! hard-locked elsewhere until command governance ships.
 
 pub mod permissions;
+pub mod policy;
 pub mod stop_state;
 
 pub use permissions::{current_permission_readiness, DesktopPermissionReadiness};
+pub use policy::{
+    evaluate_observation_policy, DesktopControlMode, ObservationCapability,
+};
