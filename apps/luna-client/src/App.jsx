@@ -19,6 +19,7 @@ import PodiumScene from './components/spatial/PodiumScene';
 import { useShellPresence } from './hooks/useShellPresence';
 import { useSessionEvents } from './hooks/useSessionEvents';
 import { useDesktopControlAuditBridge } from './hooks/useDesktopControlAuditBridge';
+import { useDesktopCommandDownchannel } from './hooks/useDesktopCommandDownchannel';
 import { useTrustProfile } from './hooks/useTrustProfile';
 import { useActivityTracker } from './hooks/useActivityTracker';
 import { apiJson } from './api';
@@ -150,6 +151,7 @@ function AuthenticatedApp() {
   useActivityTracker();
   useSessionEvents(activeSessionId);
   useDesktopControlAuditBridge(activeSessionId, shellId);
+  useDesktopCommandDownchannel(shellId);
 
   // Listen for session changes from ChatInterface
   useEffect(() => {

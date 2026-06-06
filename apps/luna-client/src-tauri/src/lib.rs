@@ -1084,14 +1084,13 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 
     app.global_shortcut().on_shortcut(palette_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            // Emit to frontend — React handles showing the command palette
+            // Restore/maximize/focus even when the window is already visible:
+            // macOS can report a minimized or manually resized window as
+            // visible, and the palette should always open on the full chat
+            // surface.
+            let _ = show_main_window_maximized(app);
+            // Emit to frontend — React handles showing the command palette.
             let _ = tauri::Emitter::emit(app, "toggle-palette", ());
-            // Also ensure window is visible
-            if let Some(window) = app.get_webview_window("main") {
-                if !window.is_visible().unwrap_or(true) {
-                    let _ = show_main_window_maximized(app);
-                }
-            }
         }
     })?;
 

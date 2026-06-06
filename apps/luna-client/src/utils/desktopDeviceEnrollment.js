@@ -22,6 +22,10 @@ function readCachedEnrollment(shellId) {
   return null;
 }
 
+export function getCachedDesktopDeviceEnrollment(shellId) {
+  return readCachedEnrollment(shellId);
+}
+
 function rememberEnrollment(shellId, enrollment) {
   try {
     localStorage.setItem(storageKey(shellId), JSON.stringify(enrollment));

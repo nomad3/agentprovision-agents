@@ -6,7 +6,11 @@ vi.mock('../../api', () => ({
   apiFetch: (...args) => apiFetchMock(...args),
 }));
 
-import { enrollDesktopDevice, forgetDesktopDeviceEnrollment } from '../desktopDeviceEnrollment';
+import {
+  enrollDesktopDevice,
+  forgetDesktopDeviceEnrollment,
+  getCachedDesktopDeviceEnrollment,
+} from '../desktopDeviceEnrollment';
 
 beforeEach(() => {
   apiFetchMock.mockReset();
@@ -41,8 +45,12 @@ describe('desktopDeviceEnrollment', () => {
     });
     expect(first.device_token).toBe('token-1');
     expect(second.device_token).toBe('token-1');
+    expect(
+      getCachedDesktopDeviceEnrollment('desktop-6558cd2d-fbf9-4c74-879f-25f93ffc36f4').device_token
+    ).toBe('token-1');
 
     forgetDesktopDeviceEnrollment('desktop-6558cd2d-fbf9-4c74-879f-25f93ffc36f4');
+    expect(getCachedDesktopDeviceEnrollment('desktop-6558cd2d-fbf9-4c74-879f-25f93ffc36f4')).toBeNull();
     apiFetchMock.mockResolvedValueOnce({
       json: () => Promise.resolve({
         id: 'device-row-id',
