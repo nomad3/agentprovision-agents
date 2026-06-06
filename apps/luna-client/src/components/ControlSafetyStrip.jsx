@@ -3,14 +3,19 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 const FALLBACK_STATE = {
   mode: 'control_locked',
   observe_enabled: false,
+  assist_enabled: false,
+  control_enabled: false,
   stopped: false,
   control_locked: true,
   capture_running: false,
   gesture_state: 'unknown',
   cursor_global: false,
   can_observe: false,
+  can_assist: false,
+  can_control: false,
   can_control_pointer: false,
   can_control_keyboard: false,
+  permissions: null,
   last_stop_at_ms: null,
 };
 
@@ -18,6 +23,10 @@ export function labelForControlMode(mode) {
   switch (mode) {
     case 'observe':
       return 'Observe';
+    case 'assist':
+      return 'Assist';
+    case 'control':
+      return 'Control';
     case 'stopped':
       return 'Stopped';
     default:
@@ -28,6 +37,46 @@ export function labelForControlMode(mode) {
 async function invokeControl(command) {
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke(command);
+}
+
+function permissionLabel(key) {
+  switch (key) {
+    case 'screen_recording':
+      return 'Screen';
+    case 'accessibility':
+      return 'AX';
+    case 'automation_system_events':
+      return 'Events';
+    case 'input_monitoring':
+      return 'Input';
+    case 'camera':
+      return 'Camera';
+    case 'microphone':
+      return 'Mic';
+    default:
+      return key;
+  }
+}
+
+function permissionEntries(permissions) {
+  return Object.entries(permissions || {}).map(([key, value]) => ({
+    key,
+    label: permissionLabel(key),
+    status: value?.status || 'unknown',
+    reason: value?.reason || '',
+  }));
+}
+
+export function summarizePermissions(permissions) {
+  const entries = permissionEntries(permissions);
+  if (entries.length === 0) return { label: 'TCC --', title: 'Permission readiness unavailable' };
+  const activeEntries = entries.filter((entry) => entry.status !== 'unknown');
+  const ready = activeEntries.filter((entry) => entry.status === 'granted' || entry.status === 'not_required').length;
+  const title = entries
+    .map((entry) => `${entry.label}: ${entry.status}${entry.reason ? ` — ${entry.reason}` : ''}`)
+    .join('\n');
+  if (activeEntries.length === 0) return { label: 'TCC --', title };
+  return { label: `TCC ${ready}/${activeEntries.length}`, title };
 }
 
 export default function ControlSafetyStrip() {
@@ -79,11 +128,15 @@ export default function ControlSafetyStrip() {
   }, [refresh]);
 
   const label = labelForControlMode(state.mode);
+  const permissionSummary = useMemo(
+    () => summarizePermissions(state.permissions),
+    [state.permissions],
+  );
   const title = useMemo(() => {
     const gesture = state.gesture_state || 'unknown';
     const cursor = state.cursor_global ? 'global cursor on' : 'global cursor off';
-    return `Desktop safety: ${label}; gestures ${gesture}; ${cursor}`;
-  }, [label, state.gesture_state, state.cursor_global]);
+    return `Desktop safety: ${label}; gestures ${gesture}; ${cursor}\n${permissionSummary.title}`;
+  }, [label, permissionSummary.title, state.gesture_state, state.cursor_global]);
 
   return (
     <div className={`control-safety control-safety-${state.mode}`} title={title} aria-label="Desktop control safety">
@@ -95,6 +148,20 @@ export default function ControlSafetyStrip() {
         title="Enable observe-only mode"
       >
         Observe
+      </button>
+      <button
+        className="control-safety-action"
+        disabled={busy || !state.can_assist}
+        title="Assist mode requires API governance and approval grants"
+      >
+        Assist
+      </button>
+      <button
+        className="control-safety-action"
+        disabled={busy || !state.can_control}
+        title="Control mode is locked until command governance ships"
+      >
+        Control
       </button>
       <button
         className="control-safety-action"
@@ -112,6 +179,9 @@ export default function ControlSafetyStrip() {
       >
         Stop
       </button>
+      <span className="control-safety-permissions" title={permissionSummary.title}>
+        {permissionSummary.label}
+      </span>
     </div>
   );
 }

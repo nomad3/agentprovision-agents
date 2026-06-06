@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 mod gesture;
+mod computer_use;
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -70,14 +71,19 @@ fn get_or_create_shell_id(app: tauri::AppHandle) -> Result<String, String> {
 struct ControlSafetyState {
     mode: String,
     observe_enabled: bool,
+    assist_enabled: bool,
+    control_enabled: bool,
     stopped: bool,
     control_locked: bool,
     capture_running: bool,
     gesture_state: String,
     cursor_global: bool,
     can_observe: bool,
+    can_assist: bool,
+    can_control: bool,
     can_control_pointer: bool,
     can_control_keyboard: bool,
+    permissions: computer_use::DesktopPermissionReadiness,
     last_stop_at_ms: Option<u64>,
 }
 
@@ -135,14 +141,19 @@ async fn current_control_safety_state() -> ControlSafetyState {
     ControlSafetyState {
         mode: control_mode_name(mode).to_string(),
         observe_enabled: mode == CONTROL_MODE_OBSERVE,
+        assist_enabled: false,
+        control_enabled: false,
         stopped: mode == CONTROL_MODE_STOPPED,
         control_locked: mode != CONTROL_MODE_OBSERVE,
         capture_running: CAPTURE_RUNNING.load(Ordering::SeqCst),
         gesture_state: gesture.state,
         cursor_global: gesture::global_mode(),
         can_observe: mode != CONTROL_MODE_STOPPED,
+        can_assist: false,
+        can_control: false,
         can_control_pointer: false,
         can_control_keyboard: false,
+        permissions: computer_use::current_permission_readiness(),
         last_stop_at_ms: if last_stop == 0 { None } else { Some(last_stop) },
     }
 }
@@ -780,7 +791,6 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init());
 
     // Desktop-only plugins

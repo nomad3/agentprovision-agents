@@ -9,7 +9,7 @@ Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Implementation in progress
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-tauri-computer-use-control`
+Branch: `codex/luna-phase1-control-plane`
 
 ---
 
@@ -92,6 +92,25 @@ Additional discovery inputs:
     about nine minutes in `actions/checkout` and emitted `fetch-pack` early EOF
     annotations despite succeeding; release checkout/versioning must stop
     requiring full repository history.
+11. PR #781 replaced full-history release checkout with shallow checkout,
+    tag/release-based Luna patch allocation, per-ref release concurrency, and
+    remote-tag ownership verification before publishing. Main run
+    `27050451674` produced `luna-v0.1.84` in 3m51s, down from 14m09s on
+    `0.1.83`; checkout used `fetch-depth: 1` and completed in seconds. The
+    `0.1.84` DMG checksum verified directly with `shasum -c`, installed into
+    `/Applications/Luna.app`, and Computer Use verified chat-first startup,
+    Observe -> Lock -> Observe, hard Stop latching, and locked startup after
+    relaunch.
+12. Local validation on 2026-06-06 found Luna's "not responsive" symptom was
+    caused by the local production API/tunnel/worker stack, not the Tauri UI.
+    Docker had recreated `api`, `cloudflared`, `orchestration-worker`, and
+    `code-worker` from a stale Actions runner checkout without `apps/api/app`
+    or `cloudflared/credentials.json`, causing API import failures, worker
+    `ModuleNotFoundError: No module named 'app'`, and Cloudflare `530` / tunnel
+    origin failures. Recreating those services from this checkout restored
+    `https://agentprovision.com/api/v1` to `200`; Computer Use then verified
+    `/Applications/Luna.app` could log in again and return to the chat/session
+    surface.
 
 ---
 
@@ -590,7 +609,7 @@ Current verification finding (2026-06-06):
 - [x] Signed updater publication remains signed-only. The workflow generates
       `latest.json`, uploads `Luna.app.tar.gz` plus `.sig`, and updates
       `luna-latest` only when signing secrets are complete.
-- [ ] Local unsigned-DMG verification is required for this development phase.
+- [x] Local unsigned-DMG verification is required for this development phase.
       Signed released-DMG/updater verification is deferred until Apple
       notarization and Tauri updater signing are re-enabled.
 - [x] Local unsigned app-bundle smoke completed from branch
@@ -622,7 +641,7 @@ Exit criteria:
       re-enabled.
 - [ ] Signed `latest.json` points at `nomad3/agentprovision-agents` and
       includes a non-empty signature.
-- [ ] The release path documents GitHub Actions/GitHub Releases for release
+- [x] The release path documents GitHub Actions/GitHub Releases for release
       artifacts and local unsigned builds for development smoke only.
 - [x] Local install smoke from the unsigned development app bundle confirms
       version, launch, Observe/Lock, and Stop behavior.
@@ -632,10 +651,13 @@ Exit criteria:
 Goal: ship read-only computer-use primitives with audit and explicit UX.
 
 - [ ] Add `computer_use` Rust module and move read-only primitives behind it.
+  - [x] Add Phase 1 `computer_use` module for permission readiness; moving
+        screenshot/app/clipboard primitives fully behind module boundaries is a
+        follow-up.
 - [ ] Wrap existing screenshot, active app/window, and clipboard-read commands
       behind one Rust policy gate with mode checks, session binding, audit, and
       local Stop checks.
-- [ ] Remove or narrow broad Tauri `shell:default` capability before adding
+- [x] Remove or narrow broad Tauri `shell:default` capability before adding
       desktop control.
 - [ ] Add local permission state for Observe and Assist tiers.
 - [x] Add local Tauri safety state for `control_locked`, `observe`, and
@@ -649,7 +671,7 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
 - [x] Keep native pointer actuation hard-locked in `control_locked` and
       `observe`; no pointer/keyboard action is exposed in this slice.
 - [x] Add visible Observe/Stop skeleton in the main chat nav.
-- [ ] Add visible Observe/Assist/Control/Stop control strip in main chat.
+- [x] Add visible Observe/Assist/Control/Stop control strip in main chat.
 - [ ] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
       shortcut before down-channel work.
 - [ ] Add persistent Observe/Assist indicator while either tier is active.
@@ -671,8 +693,13 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       emergency Stop.
 - [x] Retry gesture engine start when Observe is enabled after an initial
       locked-mode denial in gesture settings or calibration.
-- [ ] Register macOS permission readiness for Screen Recording, Accessibility,
+- [x] Register macOS permission readiness for Screen Recording, Accessibility,
       Automation/System Events, Input Monitoring, camera, and microphone.
+  - [x] Keep readiness probes passive on startup: Screen Recording uses
+        preflight, Accessibility uses `AXIsProcessTrusted`, and System
+        Events/Automation remains `unknown` until an explicit setup flow so
+        Luna does not trigger TCC prompts by merely opening the chat window.
+- [x] Add unit coverage for the Phase 1 permission-readiness status contract.
 - [ ] Add `desktop_control` tool group in `tool_groups.py`.
 - [ ] Add MCP tools:
   - [ ] `desktop_observe_screen`
@@ -990,10 +1017,13 @@ Exit criteria:
 
 ## Next Actions
 
-1. Operator approval on this plan.
-2. Create feature branch `codex/luna-tauri-computer-use-control`.
-3. Implement Phase 0 as the first PR.
-4. Ask Luna for review via `alpha chat` after Phase 0 diff is ready.
-5. Re-run alpha council review after Phase 1 privacy/Stop/auth changes are
-   drafted.
-6. Do not implement actuation until Phase 1/2 governance is in place.
+1. Validate and merge the Phase 1 permission-readiness/control-strip slice on
+   branch `codex/luna-phase1-control-plane`.
+2. Re-run local Luna release smoke after the next GitHub Actions prerelease.
+3. Continue Phase 1 by moving screenshot, active-app, and clipboard-read
+   primitives fully behind the `computer_use` module and adding audit event
+   plumbing.
+4. Add the `desktop_control` tool group and read-only MCP/API observation tools
+   only after the local policy/audit boundary is in place.
+5. Do not implement pointer, keyboard, clipboard-write, or global control until
+   Phase 1 audit and Phase 2 command-governance exit criteria are satisfied.
