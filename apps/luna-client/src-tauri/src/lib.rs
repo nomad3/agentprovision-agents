@@ -37,6 +37,36 @@ use tauri::{
     tray::TrayIconBuilder,
 };
 
+#[cfg(desktop)]
+fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("main window not registered".into());
+    };
+
+    window.show().map_err(|e| format!("show main window: {e}"))?;
+    let _ = window.unminimize();
+    if let Err(err) = window.maximize() {
+        log::warn!("main window maximize failed: {err}");
+    }
+    window
+        .set_focus()
+        .map_err(|e| format!("focus main window: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("main window not registered".into());
+    };
+
+    window.show().map_err(|e| format!("show main window: {e}"))?;
+    window
+        .set_focus()
+        .map_err(|e| format!("focus main window: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_platform() -> String {
     std::env::consts::OS.to_string()
@@ -698,13 +728,7 @@ async fn gesture_get_cursor_global() -> Result<bool, String> {
 /// OS — the conductor's score sheet for typed dialogue).
 #[tauri::command]
 async fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        Ok(())
-    } else {
-        Err("main window not registered".into())
-    }
+    show_main_window_maximized(&app)
 }
 
 /// Hide the secondary `main` chat window without quitting it.
@@ -1015,10 +1039,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open_chat" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                let _ = show_main_window_maximized(app);
             }
             "open_os" => {
                 if let Some(window) = app.get_webview_window("spatial_hud") {
@@ -1032,10 +1053,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 let handle = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = control_stop_all(handle.clone()).await;
-                    if let Some(window) = handle.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    let _ = show_main_window_maximized(&handle);
                 });
             }
             "quit" => {
@@ -1046,10 +1064,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_tray_icon_event(|tray, event| {
             if let tauri::tray::TrayIconEvent::Click { .. } = event {
                 let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                let _ = show_main_window_maximized(app);
             }
         })
         .build(app)?;
@@ -1074,8 +1089,7 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
             // Also ensure window is visible
             if let Some(window) = app.get_webview_window("main") {
                 if !window.is_visible().unwrap_or(true) {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = show_main_window_maximized(app);
                 }
             }
         }
@@ -1089,8 +1103,7 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
                 if window.is_visible().unwrap_or(false) {
                     let _ = window.hide();
                 } else {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = show_main_window_maximized(app);
                 }
             }
         }
@@ -1122,10 +1135,7 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = crate::control_stop_all(handle.clone()).await;
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                let _ = show_main_window_maximized(&handle);
             });
         }
     })?;
@@ -1203,6 +1213,16 @@ pub fn run() {
                 // Engine itself is NOT started here — the frontend calls
                 // `gesture_start` after a successful login so we don't burn
                 // camera + Apple Vision cycles on the login screen.
+
+                // Tauri's `maximized` window config is not enough on macOS:
+                // first launch can still restore or settle into the compact
+                // configured size. Make the chat/sessions surface explicitly
+                // fill the workspace once the native window exists.
+                let startup_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let _ = show_main_window_maximized(&startup_handle);
+                });
 
                 // Auto-updater: check on startup + every 30 min, emit
                 // `update-available` so the React banner shows. The actual
