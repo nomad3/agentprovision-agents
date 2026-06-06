@@ -12,9 +12,11 @@ session ownership and device-bound shell identity merged; observation-only
 command down-channel merged in PR #799; PR #800 client completion hardening
 merged and unsigned `luna-v0.1.96` installed locally; PR #801 backend lease
 timezone fix merged and deployed; installed `luna-v0.1.96` command smoke now
-claims and completes the governed observation command before lease expiry
+claims and completes the governed observation command before lease expiry;
+native pointer/keyboard scaffold branch is in progress with actuation still
+disabled
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-v0196-release-gate-plan`
+Current implementation branch: `codex/luna-native-control-scaffold`
 
 ---
 
@@ -404,6 +406,24 @@ Additional discovery inputs:
     recommended the next phase start with native control scaffolding plus
     denial-only tests, then signed-envelope validation, then approval grant
     consumption, and only then narrow pointer/keyboard execution.
+42. Branch `codex/luna-native-control-scaffold` starts that next phase without
+    enabling actuation. The API command taxonomy now accepts pointer and
+    keyboard scaffold actions, but enqueue records an immediate display-safe
+    denied command instead of creating claimable work. Luna's client command
+    executor explicitly completes any claimed native-control action as denied,
+    and Tauri exposes pointer/keyboard native command stubs that all return the
+    same fail-closed policy denial while `can_control_pointer` and
+    `can_control_keyboard` remain false. The client also re-checks local Stop
+    after native observation returns and before posting success, so an in-flight
+    claimed observation cannot win a success completion after Stop latches.
+43. Alpha council review for this branch could not complete as requested:
+    Claude returned `Unsupported platform: claude`, and the Codex leg reviewed
+    an older command-control ref because `codex/luna-native-control-scaffold`
+    was not pushed yet. The stale-ref review still surfaced two real follow-up
+    gates to track before live native control expands: ambient clipboard and
+    activity emissions in Tauri must be disabled or routed through display-safe
+    governed audit, and device-token command authority should explicitly reject
+    revoked/offline `device_registry` rows instead of relying only on presence.
 
 ---
 
@@ -1426,6 +1446,13 @@ Exit criteria:
       tests/api/v1/test_desktop_control_events.py
       tests/api/v1/test_desktop_device_binding.py`; `python -m py_compile`
       for touched API/router/model modules.
+- [x] Native-control scaffold API validation passed on branch
+      `codex/luna-native-control-scaffold`: native pointer/keyboard command
+      enqueue records immediate denied audit rows, remains non-claimable, and
+      sanitizes raw payload data. `python -m py_compile` passed for touched
+      API/router/test modules; targeted `ruff check` passed; and
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py -q` passed (`44 passed`).
 
 ### Tauri / Rust
 
@@ -1434,6 +1461,9 @@ Exit criteria:
       the local Cargo cache cleanup permission warning were observed.
 - [ ] Unit tests for local permission decisions.
 - [ ] Actuator denies when Observe/Assist/Control tier is disabled.
+  - [x] Native-control scaffold policy tests prove pointer/keyboard control
+        remains disabled and Stop preempts native control before any actuation
+        path. Tauri command stubs are registered but return denial-only.
 - [ ] Actuator denies expired and replayed envelopes.
 - [ ] Actuator denies unsigned envelopes and unsupported policy versions.
 - [ ] Actuator denies when device claim token is revoked or missing.
@@ -1473,6 +1503,13 @@ Exit criteria:
       tests/api/v1/test_desktop_device_binding.py -q` (`47 passed`);
       targeted `ruff check` and `python -m py_compile` for the touched API
       service/test modules.
+- [x] Native-control scaffold Luna client validation passed:
+      `npm test -- --run src/hooks/__tests__/useDesktopCommandClaims.test.jsx`
+      (`14 passed`), full `npm test -- --run` (`145 passed`),
+      `npm run build`, focused Rust policy/control tests, and full
+      `cargo test` in `apps/luna-client/src-tauri` (`69 passed`). Existing
+      Cargo cache cleanup permission warning and pre-existing Rust warnings
+      were observed.
 
 ### React / UX
 
@@ -1574,19 +1611,22 @@ Exit criteria:
 
 ## Next Actions
 
-1. Start the native control scaffolding phase without enabling actuation:
-   introduce pointer/keyboard command types, local native executor boundaries,
-   and denial-only tests proving locked Observe/Control modes cannot actuate.
-2. Add signed command-envelope validation before any pointer or keyboard
+1. Finish review/PR for `codex/luna-native-control-scaffold`; merge only if CI
+   confirms pointer/keyboard remain denial-only and no claimable native-control
+   command can execute.
+2. Close pre-live-content hardening gaps: disable or display-safe route ambient
+   clipboard/activity raw emissions, and enforce revoked/offline desktop device
+   status during claim/complete/stop.
+3. Add signed command-envelope validation before any pointer or keyboard
    execution: nonce, expiry, session, shell, device, command id, policy version,
    replay protection, revocation, and policy-decision binding.
-3. Add approval grant creation/consumption as a database compare-and-swap gate
+4. Add approval grant creation/consumption as a database compare-and-swap gate
    before enabling narrow canary pointer execution.
-4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+5. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-5. Treat the post-deploy `No connected desktop shell` observation as a
+6. Treat the post-deploy `No connected desktop shell` observation as a
    hardening follow-up: Luna should re-register shell presence after API
    restarts or heartbeat failures, not require an app restart.
-6. Include the PR #797 command-palette maximize follow-up in the next branch or
+7. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.

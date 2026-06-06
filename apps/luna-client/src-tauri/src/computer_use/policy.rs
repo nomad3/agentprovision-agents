@@ -52,6 +52,13 @@ impl ObservationCapability {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeControlCapability {
+    Pointer,
+    Keyboard,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservationPolicyDenial {
     pub action: String,
@@ -66,6 +73,21 @@ impl std::fmt::Display for ObservationPolicyDenial {
 }
 
 impl std::error::Error for ObservationPolicyDenial {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NativeControlPolicyDenial {
+    pub action: String,
+    pub capability: NativeControlCapability,
+    pub reason: String,
+}
+
+impl std::fmt::Display for NativeControlPolicyDenial {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.reason)
+    }
+}
+
+impl std::error::Error for NativeControlPolicyDenial {}
 
 pub fn evaluate_observation_policy(
     mode: DesktopControlMode,
@@ -106,12 +128,45 @@ pub fn evaluate_observation_policy(
     Ok(())
 }
 
+pub fn evaluate_native_control_policy(
+    mode: DesktopControlMode,
+    _permissions: &DesktopPermissionReadiness,
+    capability: NativeControlCapability,
+    action: &str,
+) -> Result<(), NativeControlPolicyDenial> {
+    if mode == DesktopControlMode::Stopped {
+        return Err(native_control_denial(
+            action,
+            capability,
+            format!("desktop control stopped; {action} denied"),
+        ));
+    }
+
+    Err(native_control_denial(
+        action,
+        capability,
+        format!("desktop native control disabled; {action} denied"),
+    ))
+}
+
 fn denial(
     action: &str,
     capability: ObservationCapability,
     reason: String,
 ) -> ObservationPolicyDenial {
     ObservationPolicyDenial {
+        action: action.to_string(),
+        capability,
+        reason,
+    }
+}
+
+fn native_control_denial(
+    action: &str,
+    capability: NativeControlCapability,
+    reason: String,
+) -> NativeControlPolicyDenial {
+    NativeControlPolicyDenial {
         action: action.to_string(),
         capability,
         reason,
@@ -239,5 +294,44 @@ mod tests {
             "read_clipboard",
         )
         .is_ok());
+    }
+
+    #[test]
+    fn native_pointer_and_keyboard_control_stay_disabled() {
+        let ready = readiness("granted", "granted", "granted");
+
+        let pointer = evaluate_native_control_policy(
+            DesktopControlMode::Observe,
+            &ready,
+            NativeControlCapability::Pointer,
+            "control_pointer_click",
+        )
+        .expect_err("pointer control must remain disabled");
+        assert!(pointer.reason.contains("desktop native control disabled"));
+        assert_eq!(pointer.capability, NativeControlCapability::Pointer);
+
+        let keyboard = evaluate_native_control_policy(
+            DesktopControlMode::ControlLocked,
+            &ready,
+            NativeControlCapability::Keyboard,
+            "control_keyboard_type",
+        )
+        .expect_err("keyboard control must remain disabled");
+        assert!(keyboard.reason.contains("desktop native control disabled"));
+        assert_eq!(keyboard.capability, NativeControlCapability::Keyboard);
+    }
+
+    #[test]
+    fn stopped_mode_preempts_native_control_before_disabled_reason() {
+        let ready = readiness("granted", "granted", "granted");
+
+        let stopped = evaluate_native_control_policy(
+            DesktopControlMode::Stopped,
+            &ready,
+            NativeControlCapability::Pointer,
+            "control_pointer_move",
+        )
+        .expect_err("stopped mode must preempt native control");
+        assert!(stopped.reason.contains("desktop control stopped"));
     }
 }

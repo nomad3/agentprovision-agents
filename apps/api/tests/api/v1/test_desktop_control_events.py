@@ -692,6 +692,49 @@ def test_command_enqueue_endpoint_returns_claimable_command():
     assert saved_request.tool_name == "desktop_observe_screen"
 
 
+def test_command_enqueue_endpoint_accepts_native_control_scaffold_actions():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.enqueue_desktop_command",
+        return_value=(
+            _command(
+                status="denied",
+                capability="pointer_control",
+                payload={"action": "pointer_click", "mode": "control_locked"},
+            ),
+            event,
+            {"event_id": "session-event-native", "seq_no": 12},
+        ),
+    ) as enqueue:
+        response = client.post(
+            "/api/v1/desktop-control/internal/commands",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "action": "pointer_click",
+                "tool_name": "desktop_pointer_click",
+                "payload": {"x": 100, "y": 200},
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "denied"
+    assert response.json()["capability"] == "pointer_control"
+    assert response.json()["payload"] == {
+        "action": "pointer_click",
+        "mode": "control_locked",
+    }
+    saved_request = enqueue.call_args.kwargs["request"]
+    assert saved_request.action == "pointer_click"
+    assert saved_request.tool_name == "desktop_pointer_click"
+
+
 def test_command_claim_endpoint_passes_device_token():
     client, _db = _client_for_endpoint(_user())
     event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))

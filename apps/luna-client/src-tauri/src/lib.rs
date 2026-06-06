@@ -334,12 +334,28 @@ pub(crate) fn desktop_control_allows_actuation() -> bool {
     false
 }
 
-fn ensure_desktop_control_allows_actuation(action: &str) -> Result<(), String> {
-    if desktop_control_allows_actuation() {
-        Ok(())
-    } else {
-        Err(format!("desktop pointer control locked; {action} denied"))
-    }
+fn ensure_desktop_control_allows_native_control(
+    action: &str,
+    capability: computer_use::NativeControlCapability,
+) -> Result<(), String> {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    computer_use::evaluate_native_control_policy(mode, &permissions, capability, action)
+        .map_err(|denial| denial.reason)
+}
+
+fn ensure_desktop_control_allows_pointer_actuation(action: &str) -> Result<(), String> {
+    ensure_desktop_control_allows_native_control(
+        action,
+        computer_use::NativeControlCapability::Pointer,
+    )
+}
+
+fn ensure_desktop_control_allows_keyboard_actuation(action: &str) -> Result<(), String> {
+    ensure_desktop_control_allows_native_control(
+        action,
+        computer_use::NativeControlCapability::Keyboard,
+    )
 }
 
 async fn current_control_safety_state() -> ControlSafetyState {
@@ -628,6 +644,26 @@ async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn control_pointer_move(_x: f64, _y: f64) -> Result<(), String> {
+    ensure_desktop_control_allows_pointer_actuation("control_pointer_move")
+}
+
+#[tauri::command]
+async fn control_pointer_click(_x: f64, _y: f64, _button: Option<String>) -> Result<(), String> {
+    ensure_desktop_control_allows_pointer_actuation("control_pointer_click")
+}
+
+#[tauri::command]
+async fn control_keyboard_type(_text: String) -> Result<(), String> {
+    ensure_desktop_control_allows_keyboard_actuation("control_keyboard_type")
+}
+
+#[tauri::command]
+async fn control_keyboard_key_chord(_keys: Vec<String>) -> Result<(), String> {
+    ensure_desktop_control_allows_keyboard_actuation("control_keyboard_key_chord")
+}
+
+#[tauri::command]
 async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("spatial_hud") {
         if window.is_visible().unwrap_or(false) {
@@ -713,7 +749,7 @@ async fn gesture_check_accessibility() -> Result<bool, String> {
 async fn gesture_set_cursor_global(enabled: bool) -> Result<(), String> {
     if enabled {
         ensure_desktop_control_not_stopped("gesture_set_cursor_global")?;
-        ensure_desktop_control_allows_actuation("gesture_set_cursor_global")?;
+        ensure_desktop_control_allows_pointer_actuation("gesture_set_cursor_global")?;
     }
     gesture::set_global_mode(enabled);
     Ok(())
@@ -1430,6 +1466,10 @@ pub fn run() {
             capture_screenshot,
             get_active_app,
             read_clipboard,
+            control_pointer_move,
+            control_pointer_click,
+            control_keyboard_type,
+            control_keyboard_key_chord,
             haptic_feedback,
             toggle_spatial_hud,
             start_spatial_capture,
@@ -1472,7 +1512,10 @@ mod tests {
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
         assert!(ensure_desktop_control_not_stopped("gesture_start").is_ok());
         assert!(!desktop_control_allows_actuation());
-        assert!(ensure_desktop_control_allows_actuation("gesture_set_cursor_global").is_err());
+        assert!(
+            ensure_desktop_control_allows_pointer_actuation("gesture_set_cursor_global").is_err()
+        );
+        assert!(ensure_desktop_control_allows_keyboard_actuation("control_keyboard_type").is_err());
 
         CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
         let err = ensure_desktop_control_not_stopped("gesture_start")
@@ -1480,6 +1523,9 @@ mod tests {
         assert!(err.contains("desktop control stopped"), "got: {err}");
         assert!(err.contains("gesture_start"), "got: {err}");
         assert!(!desktop_control_allows_actuation());
+        let pointer = ensure_desktop_control_allows_pointer_actuation("control_pointer_click")
+            .expect_err("stopped mode should reject pointer actuation");
+        assert!(pointer.contains("desktop control stopped"), "got: {pointer}");
 
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
     }

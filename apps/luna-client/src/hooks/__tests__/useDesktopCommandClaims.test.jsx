@@ -68,7 +68,8 @@ describe('executeClaimedDesktopCommand', () => {
   it('executes observe commands but completes with metadata-only results', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
-      .mockResolvedValueOnce('raw-screenshot-base64-must-not-forward');
+      .mockResolvedValueOnce('raw-screenshot-base64-must-not-forward')
+      .mockResolvedValueOnce({ mode: 'observe', can_observe: true });
 
     await executeClaimedDesktopCommand(
       claimedCommand('capture_screenshot'),
@@ -87,6 +88,28 @@ describe('executeClaimedDesktopCommand', () => {
     expect(JSON.stringify(body)).not.toContain('raw-screenshot-base64-must-not-forward');
   });
 
+  it('preempts observe commands if Stop is latched after native execution returns', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
+      .mockResolvedValueOnce({ app: 'Sensitive App', title: 'Sensitive Title' })
+      .mockResolvedValueOnce({ mode: 'stopped', can_observe: false });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('get_active_app');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('preempted');
+    expect(body.reason).toBe('desktop control stopped; get_active_app preempted');
+    expect(body.metadata).toEqual({ control_mode: 'stopped' });
+    expect(JSON.stringify(body)).not.toContain('Sensitive App');
+    expect(JSON.stringify(body)).not.toContain('Sensitive Title');
+  });
+
   it('denies claimed commands while observe mode is locked', async () => {
     invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
 
@@ -101,6 +124,45 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('denied');
     expect(body.reason).toContain('desktop observe locked');
+  });
+
+  it('denies native control commands without invoking local pointer or keyboard controls', async () => {
+    invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_control: false });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_click'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).not.toHaveBeenCalledWith('control_pointer_click');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop native control disabled; pointer_click denied');
+    expect(body.metadata).toEqual({
+      control_mode: 'control_locked',
+      result_kind: 'unsupported',
+    });
+  });
+
+  it('preempts native control commands when local Stop is latched', async () => {
+    invokeMock.mockResolvedValueOnce({ mode: 'stopped', can_control: false });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('keyboard_type'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).not.toHaveBeenCalledWith('control_keyboard_type');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('preempted');
+    expect(body.reason).toBe('desktop control stopped; keyboard_type preempted');
+    expect(body.metadata).toEqual({ control_mode: 'stopped' });
   });
 
   it('completes claimed commands as failed when safety state is unavailable', async () => {
@@ -194,7 +256,8 @@ describe('useDesktopCommandClaims', () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
-      .mockResolvedValueOnce({ app: 'Sensitive App', title: 'Sensitive Title' });
+      .mockResolvedValueOnce({ app: 'Sensitive App', title: 'Sensitive Title' })
+      .mockResolvedValueOnce({ mode: 'observe', can_observe: true });
 
     renderHook(() => useDesktopCommandClaims(
       '33333333-3333-3333-3333-333333333333',

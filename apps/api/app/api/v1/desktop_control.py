@@ -39,6 +39,20 @@ _TOOL_ACTIONS = {
     "desktop_observe_screen": "capture_screenshot",
     "desktop_get_active_app": "get_active_app",
     "desktop_read_clipboard": "read_clipboard",
+    "desktop_pointer_move": "pointer_move",
+    "desktop_pointer_click": "pointer_click",
+    "desktop_keyboard_type": "keyboard_type",
+    "desktop_keyboard_key_chord": "keyboard_key_chord",
+}
+
+_OBSERVATION_TOOL_ACTIONS = {
+    key: value
+    for key, value in _TOOL_ACTIONS.items()
+    if key in {
+        "desktop_observe_screen",
+        "desktop_get_active_app",
+        "desktop_read_clipboard",
+    }
 }
 
 
@@ -106,7 +120,7 @@ class DesktopObservationRequestIn(BaseModel):
 
     @model_validator(mode="after")
     def tool_matches_action(self):
-        expected = _TOOL_ACTIONS[self.tool_name]
+        expected = _OBSERVATION_TOOL_ACTIONS[self.tool_name]
         if self.action != expected:
             raise ValueError("tool_name does not match action")
         return self
@@ -136,11 +150,23 @@ class DesktopCommandEnqueueIn(BaseModel):
         ),
         max_length=96,
     )
-    action: Literal["capture_screenshot", "get_active_app", "read_clipboard"]
+    action: Literal[
+        "capture_screenshot",
+        "get_active_app",
+        "read_clipboard",
+        "pointer_move",
+        "pointer_click",
+        "keyboard_type",
+        "keyboard_key_chord",
+    ]
     tool_name: Literal[
         "desktop_observe_screen",
         "desktop_get_active_app",
         "desktop_read_clipboard",
+        "desktop_pointer_move",
+        "desktop_pointer_click",
+        "desktop_keyboard_type",
+        "desktop_keyboard_key_chord",
     ]
     nonce: str | None = Field(default=None, max_length=96)
     payload: dict[str, Any] = Field(default_factory=dict)

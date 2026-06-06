@@ -10,5 +10,6 @@ pub mod stop_state;
 
 pub use permissions::{current_permission_readiness, DesktopPermissionReadiness};
 pub use policy::{
-    evaluate_observation_policy, DesktopControlMode, ObservationCapability,
+    evaluate_native_control_policy, evaluate_observation_policy, DesktopControlMode,
+    NativeControlCapability, ObservationCapability,
 };
