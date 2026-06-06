@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +21,8 @@ from app.services.desktop_control_service import (
     record_local_observation_event,
     record_mcp_observation_request,
 )
+
+_DEFAULT_OWNER = object()
 
 
 def _user():
@@ -51,9 +54,13 @@ def _audit(**overrides):
     return LocalObservationAudit(**values)
 
 
-def _db_with_session(found=True):
+def _db_with_session(found=True, owner_user_id=_DEFAULT_OWNER):
     db = MagicMock()
-    db.query.return_value.filter.return_value.first.return_value = object() if found else None
+    if owner_user_id is _DEFAULT_OWNER:
+        owner_user_id = _user().id
+    db.query.return_value.filter.return_value.first.return_value = (
+        SimpleNamespace(owner_user_id=owner_user_id) if found else None
+    )
 
     def refresh(row):
         row.id = uuid.UUID("66666666-6666-6666-6666-666666666666")
@@ -110,6 +117,33 @@ def test_record_local_observation_rejects_cross_tenant_session():
         record_local_observation_event(db, _user(), _audit())
 
     assert exc.value.status_code == 404
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_record_local_observation_rejects_ownerless_session():
+    db = _db_with_session(found=True, owner_user_id=None)
+
+    with pytest.raises(HTTPException) as exc:
+        record_local_observation_event(db, _user(), _audit())
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop session owner is not established"
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_record_local_observation_rejects_cross_user_session():
+    db = _db_with_session(
+        found=True,
+        owner_user_id=uuid.UUID("77777777-7777-7777-7777-777777777777"),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        record_local_observation_event(db, _user(), _audit())
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop session is not owned by user"
     db.add.assert_not_called()
     db.commit.assert_not_called()
 
@@ -307,10 +341,7 @@ def test_record_mcp_observation_request_rejects_no_connected_shell():
 
 def test_record_mcp_observation_request_rejects_user_outside_tenant():
     db = MagicMock()
-    db.query.return_value.filter.return_value.first.side_effect = [
-        object(),  # session exists for tenant
-        None,  # user does not
-    ]
+    db.query.return_value.filter.return_value.first.return_value = None
 
     with pytest.raises(HTTPException) as exc:
         record_mcp_observation_request(
@@ -321,6 +352,50 @@ def test_record_mcp_observation_request_rejects_user_outside_tenant():
         )
 
     assert exc.value.status_code == 404
+    db.add.assert_not_called()
+
+
+def test_record_mcp_observation_request_rejects_ownerless_session():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [
+        object(),  # user exists for tenant
+        SimpleNamespace(owner_user_id=None),
+    ]
+
+    with pytest.raises(HTTPException) as exc:
+        record_mcp_observation_request(
+            db,
+            tenant_id=_user().tenant_id,
+            user_id=_user().id,
+            request=_mcp_request(),
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop session owner is not established"
+    db.add.assert_not_called()
+
+
+def test_record_mcp_observation_request_rejects_cross_user_session_before_shell_selection():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.side_effect = [
+        object(),  # user exists for tenant
+        SimpleNamespace(owner_user_id=uuid.UUID("77777777-7777-7777-7777-777777777777")),
+    ]
+
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        side_effect=AssertionError("shell presence should not be read before ownership passes"),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            record_mcp_observation_request(
+                db,
+                tenant_id=_user().tenant_id,
+                user_id=_user().id,
+                request=_mcp_request(),
+            )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop session is not owned by user"
     db.add.assert_not_called()
 
 

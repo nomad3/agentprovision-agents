@@ -1652,6 +1652,7 @@ class WhatsAppService:
                     agent_id=agent.id,
                     source="whatsapp",
                     external_id=session_key,
+                    owner_user_id=user.id,
                 )
                 db.add(session)
                 db.commit()
