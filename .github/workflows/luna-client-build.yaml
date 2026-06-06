@@ -156,7 +156,9 @@ jobs:
         working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: |
           DMG_PATH=$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg)
-          shasum -a 256 "$DMG_PATH" > "${DMG_PATH}.sha256"
+          DMG_DIR=$(dirname "$DMG_PATH")
+          DMG_NAME=$(basename "$DMG_PATH")
+          (cd "$DMG_DIR" && shasum -a 256 "$DMG_NAME") > "${DMG_PATH}.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
