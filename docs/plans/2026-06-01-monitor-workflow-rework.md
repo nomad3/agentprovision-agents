@@ -35,6 +35,15 @@ The "one perpetual continue_as_new chain per tenant per monitor" pattern doesn't
 ### 4. Re-enable cleanly
 Once 1-3 ship, flip `DISABLE_MONITOR_CONTINUE_AS_NEW=0`. Monitors then run on schedules/dedicated queue, filtered to tenants that need them, with bounded retries — no starvation.
 
+## Re-enable gates
+
+Before any monitor is re-enabled in production:
+- **Ownership:** each monitor type must declare the owning role/system, escalation path, and approval boundary for operationally consequential actions.
+- **State machine:** monitor runs must expose explicit states (`pending`, `running`, `blocked`, `failed`, `acknowledged`, `resolved`) so agents do not infer next steps from ad-hoc logs.
+- **Idempotency:** schedule ticks and retries must use deterministic dedupe keys, so they cannot duplicate alerts, tickets, comments, workflow runs, or handoff messages.
+- **Auditability:** every alert/no-alert decision must persist enough metadata to reconstruct tenant, source signal, threshold, tool outcome, retry count, and next owner.
+- **Human checkpoint:** re-enabling a monitor type requires a dry-run report plus an explicit human approval in the plan/checklist; no monitor should move from plan to automation authority implicitly.
+
 ## Immediate state (for the morning)
 - **Flood source stopped** (#758 launcher gate live + verified).
 - **Existing chains draining** (slowly; terminate the crashed stragglers as needed: `tctl workflow terminate --workflow_id dyn-...`).
