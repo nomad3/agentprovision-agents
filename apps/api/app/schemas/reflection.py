@@ -43,6 +43,94 @@ REFLECTION_KINDS = frozenset({
 MAX_CONTENT_LEN = 500
 
 
+# ── Pre-action reflection step contract ───────────────────────────────
+#
+# PR 1 of the trusted-teammate engines plan. Unlike NightlyReflection,
+# this is a turn-time trace: before a high-friction action, the agent
+# records what it thinks the user wants, what evidence it has, what it
+# is assuming, and which metacognitive affordance downstream policy
+# should inspect. Trace-only in PR 1; no automatic blocking.
+REFLECTION_ACTION_KINDS = frozenset({
+    "repo_edit_dirty_worktree",
+    "pr_creation",
+    "tool_failure_retry",
+    "user_specific_claim",
+    "high_stakes_advice",
+    "external_side_effect",
+})
+
+REFLECTION_UNCERTAINTY_LEVELS = frozenset({"low", "medium", "high"})
+REFLECTION_RISK_LEVELS = frozenset({"low", "medium", "high", "irreversible"})
+REFLECTION_AFFORDANCES = frozenset({
+    "commit",
+    "verify",
+    "ask_user",
+    "delegate",
+    "escalate",
+})
+
+
+@dataclass(frozen=True)
+class ReflectionStep:
+    """Structured pre-action reflection for high-friction actions.
+
+    The shape intentionally separates evidence from assumptions. This
+    is the small connective contract between metacognition, affect,
+    teamwork, and trust. It is persisted as an agent_memory trace in
+    PR 1 and remains advisory until later behavior PRs consume it.
+    """
+
+    tenant_id: str
+    agent_id: str
+    session_id: str
+    action_kind: str
+    user_intent: str
+    evidence_refs: List[str]
+    assumptions: List[str]
+    uncertainty: str
+    risk_level: str
+    required_checks: List[str]
+    recommended_affordance: str
+    created_at: str
+
+    def __post_init__(self) -> None:
+        if self.action_kind not in REFLECTION_ACTION_KINDS:
+            raise ValueError(
+                "action_kind must be one of "
+                f"{sorted(REFLECTION_ACTION_KINDS)}, got "
+                f"{self.action_kind!r}"
+            )
+        if not isinstance(self.user_intent, str) or not self.user_intent.strip():
+            raise ValueError("user_intent must be a non-empty string")
+        if not isinstance(self.evidence_refs, list):
+            raise ValueError("evidence_refs must be a list")
+        if not isinstance(self.assumptions, list):
+            raise ValueError("assumptions must be a list")
+        if self.uncertainty not in REFLECTION_UNCERTAINTY_LEVELS:
+            raise ValueError(
+                "uncertainty must be one of "
+                f"{sorted(REFLECTION_UNCERTAINTY_LEVELS)}, got "
+                f"{self.uncertainty!r}"
+            )
+        if self.risk_level not in REFLECTION_RISK_LEVELS:
+            raise ValueError(
+                "risk_level must be one of "
+                f"{sorted(REFLECTION_RISK_LEVELS)}, got "
+                f"{self.risk_level!r}"
+            )
+        if not isinstance(self.required_checks, list) or len(self.required_checks) == 0:
+            raise ValueError("required_checks must be a non-empty list")
+        if self.recommended_affordance not in REFLECTION_AFFORDANCES:
+            raise ValueError(
+                "recommended_affordance must be one of "
+                f"{sorted(REFLECTION_AFFORDANCES)}, got "
+                f"{self.recommended_affordance!r}"
+            )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 @dataclass(frozen=True)
 class NightlyReflection:
     """One synthesised note from an offline-synthesis pass.
@@ -102,5 +190,10 @@ class NightlyReflection:
 __all__ = [
     "REFLECTION_KINDS",
     "MAX_CONTENT_LEN",
+    "REFLECTION_ACTION_KINDS",
+    "REFLECTION_UNCERTAINTY_LEVELS",
+    "REFLECTION_RISK_LEVELS",
+    "REFLECTION_AFFORDANCES",
+    "ReflectionStep",
     "NightlyReflection",
 ]

@@ -184,10 +184,16 @@ def list_predictions(
     specific agent and/or decision_kind. Order by created_at DESC so
     consumers see freshest first.
 
-    decision_kind is pushed into SQL via the tags JSON column
-    (superpowers IMPORTANT #4 — the previous post-query filter
-    would have fetched every prediction row in the tenant at scale).
-    The tags array is already populated with the kind during write.
+    decision_kind is applied after deserialization. The tags column is
+    generic JSON, not JSONB/ARRAY, so SQLAlchemy's tags.contains(...) does
+    not compile to valid containment SQL on Postgres (it emits an invalid
+    `tags LIKE ... ::JSON`). decision_kind has low cardinality (a small locked
+    DECISION_KINDS set) and this read is a tenant-scoped, on-demand calibration
+    call (no hot loop), so the Python post-filter over tenant-scoped rows is
+    acceptable and behaves consistently across Postgres + the SQLite test shim.
+    The genuinely scalable path — a JSONB cast pushdown + a GIN expression
+    index on ((tags::jsonb)) — is a tracked follow-up, not needed at current
+    volume (verified: tenant-scoped index scan, no GIN index on tags today).
 
     UUID filters are cast to str so the bind value works under both
     Postgres (native uuid column, implicit string→uuid cast) and the
@@ -205,20 +211,6 @@ def list_predictions(
         )
         if agent_id_param is not None:
             q = q.filter(AgentMemory.agent_id == agent_id_param)
-        if decision_kind is not None:
-            # The tags column is JSON. Postgres has true JSON
-            # containment semantics via the @> operator; SQLite's
-            # JSON contains silently returns false for everything so
-            # we can't push the filter down there. Detect dialect and
-            # only push down on Postgres; the post-filter safety net
-            # in the deserialization loop below handles other dialects
-            # (notably SQLite-backed tests).
-            try:
-                dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
-            except AttributeError:
-                dialect_name = ""
-            if dialect_name.startswith("postgres"):
-                q = q.filter(AgentMemory.tags.contains([decision_kind]))
         rows = q.order_by(AgentMemory.created_at.desc()).all()
     except SQLAlchemyError as exc:
         logger.warning(
@@ -232,8 +224,6 @@ def list_predictions(
         p = deserialize_prediction(row.content)
         if p is None:
             continue
-        # Post-filter safety net for dialects that don't support the
-        # tags.contains() pushdown (e.g. SQLite test runs).
         if decision_kind is not None and p.decision_kind != decision_kind:
             continue
         out.append(p)

@@ -25,14 +25,25 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.agent_memory import AgentMemory
-from app.schemas.reflection import NightlyReflection
+from app.schemas.reflection import NightlyReflection, ReflectionStep
 from app.services.reflection import (
     REFLECTION_MEMORY_TYPE,
+    REFLECTION_STEP_MEMORY_TYPE,
     deserialize_reflection,
+    deserialize_reflection_step,
     serialize_reflection,
+    serialize_reflection_step,
 )
 
 logger = logging.getLogger(__name__)
+
+
+_RISK_IMPORTANCE = {
+    "low": 0.35,
+    "medium": 0.55,
+    "high": 0.8,
+    "irreversible": 1.0,
+}
 
 
 # ── Write path ────────────────────────────────────────────────────────
@@ -109,6 +120,68 @@ def write_reflection(
         return None
 
 
+def write_reflection_step(
+    db: Session,
+    *,
+    step: ReflectionStep,
+    current_tenant_id: Optional[uuid.UUID] = None,
+) -> Optional[uuid.UUID]:
+    """Persist a ReflectionStep as an agent_memory trace row.
+
+    PR 1 is trace-only: writing a row never blocks the action by
+    itself. The hard boundary here is tenant isolation. If a caller
+    passes the JWT-derived tenant and the step carries a different
+    tenant_id, the write is refused.
+    """
+    try:
+        tenant_id = uuid.UUID(step.tenant_id)
+        agent_id = uuid.UUID(step.agent_id)
+    except (ValueError, AttributeError) as exc:
+        logger.warning(
+            "reflection_io.write_reflection_step: bad tenant/agent UUID — %s",
+            exc,
+        )
+        return None
+
+    if current_tenant_id is not None and tenant_id != current_tenant_id:
+        logger.warning(
+            "reflection_io.write_reflection_step: tenant boundary "
+            "violation — step.tenant_id=%s != current_tenant_id=%s; "
+            "refusing write",
+            tenant_id, current_tenant_id,
+        )
+        return None
+
+    row = AgentMemory(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        memory_type=REFLECTION_STEP_MEMORY_TYPE,
+        content=serialize_reflection_step(step),
+        importance=_RISK_IMPORTANCE.get(step.risk_level, 0.5),
+        confidence=1.0,
+        source="trusted_teammate_reflection_step",
+        tags=[
+            "reflection_step",
+            step.action_kind,
+            f"session:{step.session_id}",
+            f"risk:{step.risk_level}",
+            f"affordance:{step.recommended_affordance}",
+        ],
+    )
+    try:
+        db.add(row)
+        db.commit()
+        return row.id
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "reflection_io.write_reflection_step: commit failed, "
+            "rolling back. err=%s",
+            exc,
+        )
+        db.rollback()
+        return None
+
+
 # ── Read paths ────────────────────────────────────────────────────────
 
 
@@ -123,17 +196,14 @@ def list_reflections(
     """Return reflections in the tenant, optionally filtered.
 
     Filters:
-      - day:    exact match on YYYY-MM-DD; SQLite-compat is handled by
-                a post-filter on the deserialized object (the tags
-                JSON column's contains() doesn't work under SQLite).
-      - kind:   one of REFLECTION_KINDS; same SQLite-compat story.
+      - day:    exact match on YYYY-MM-DD, applied after deserialization.
+      - kind:   one of REFLECTION_KINDS, applied after deserialization.
       - agent_id: real FK column, pushed down to SQL.
 
-    On Postgres both day and kind push down via the tags @> operator;
-    on SQLite the queries return all reflection rows and the
-    post-filter loop drops mismatches. The post-filter is the safety
-    net — even on Postgres, malformed tag arrays would otherwise leak
-    rows that don't match.
+    The tag column is generic JSON, not JSONB/ARRAY, so SQLAlchemy's
+    tags.contains(...) does not compile to valid containment SQL on
+    Postgres. Reflections are low-volume tenant rows, so day/kind stay
+    as Python post-filters for consistent Postgres + SQLite behavior.
 
     UUID filters cast to str so the ORM's compiled bind processor
     works under both Postgres (native uuid column) and SQLite
@@ -154,20 +224,6 @@ def list_reflections(
         if agent_id_param is not None:
             q = q.filter(AgentMemory.agent_id == agent_id_param)
 
-        try:
-            dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
-        except AttributeError:
-            dialect_name = ""
-        is_postgres = dialect_name.startswith("postgres")
-
-        if is_postgres:
-            # Push tag filters down on Postgres; SQLite's JSON contains
-            # silently returns false so we keep the post-filter.
-            if kind is not None:
-                q = q.filter(AgentMemory.tags.contains([kind]))
-            if day is not None:
-                q = q.filter(AgentMemory.tags.contains([f"day:{day}"]))
-
         rows = q.order_by(AgentMemory.created_at.desc()).all()
     except SQLAlchemyError as exc:
         logger.warning(
@@ -181,13 +237,57 @@ def list_reflections(
         r = deserialize_reflection(row.content)
         if r is None:
             continue
-        # Post-filter safety net (covers SQLite + any malformed tag
-        # arrays that slipped past Postgres' pushdown).
         if kind is not None and r.kind != kind:
             continue
         if day is not None and r.day != day:
             continue
         out.append(r)
+    return out
+
+
+def list_reflection_steps(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: Optional[str] = None,
+    action_kind: Optional[str] = None,
+    agent_id: Optional[uuid.UUID] = None,
+) -> List[ReflectionStep]:
+    """Return pre-action reflection traces for a tenant.
+
+    Mirrors list_reflections: tenant/agent filters are pushed down,
+    while tag-derived filters stay as Python post-filters because the
+    tags column is generic JSON. Tenant_id is always caller-derived.
+    """
+    tenant_id_param = str(tenant_id)
+    agent_id_param = str(agent_id) if agent_id is not None else None
+    try:
+        q = db.query(AgentMemory).filter(
+            AgentMemory.tenant_id == tenant_id_param,
+            AgentMemory.memory_type == REFLECTION_STEP_MEMORY_TYPE,
+        )
+        if agent_id_param is not None:
+            q = q.filter(AgentMemory.agent_id == agent_id_param)
+
+        rows = q.order_by(AgentMemory.created_at.desc()).all()
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "reflection_io.list_reflection_steps: query failed tenant=%s "
+            "err=%s",
+            tenant_id, exc,
+        )
+        return []
+
+    out: List[ReflectionStep] = []
+    for row in rows:
+        step = deserialize_reflection_step(row.content)
+        if step is None:
+            continue
+        if action_kind is not None and step.action_kind != action_kind:
+            continue
+        if session_id is not None and step.session_id != session_id:
+            continue
+        out.append(step)
     return out
 
 
@@ -209,6 +309,8 @@ def get_reflection_count(
 
 __all__ = [
     "write_reflection",
+    "write_reflection_step",
     "list_reflections",
+    "list_reflection_steps",
     "get_reflection_count",
 ]

@@ -17,10 +17,11 @@ def test_reflections_router_imports_clean():
     (the failure mode that took 55 min to debug in 2026-05-19)."""
     from app.api.v1 import routes  # noqa: F401
     from app.api.v1 import reflections
-    # Sanity — the router was constructed and exposes the two routes.
+    # Sanity — the router was constructed and exposes the routes.
     paths = {r.path for r in reflections.router.routes}
     assert "/luna/reflections" in paths
     assert "/luna/reflections/count" in paths
+    assert "/luna/reflection-steps" in paths
 
 
 def test_reflections_endpoint_rejects_unknown_kind():
@@ -65,3 +66,48 @@ def test_reflections_endpoint_rejects_unknown_kind():
     resp = client.get("/luna/reflections?kind=invented_kind")
     assert resp.status_code == 400
     assert "kind must be one of" in resp.text
+
+
+def test_reflection_steps_endpoint_rejects_unknown_action_kind():
+    """Misspelled action_kind must 400 instead of returning an empty
+    trace list that looks like no high-friction actions were recorded."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api import deps as api_deps
+    from app.api.v1.reflections import router
+
+    class _StubUser:
+        id = uuid.uuid4()
+        tenant_id = uuid.uuid4()
+
+    async def _stub_user():
+        return _StubUser()
+
+    def _stub_db():
+        class _NoOpDb:
+            def query(self, *a, **kw):
+                class _Q:
+                    def filter(self, *a, **kw):
+                        return self
+
+                    def order_by(self, *a, **kw):
+                        return self
+
+                    def all(self):
+                        return []
+
+                return _Q()
+        yield _NoOpDb()
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[api_deps.get_current_user] = _stub_user
+    app.dependency_overrides[api_deps.get_db] = _stub_db
+
+    client = TestClient(app)
+    resp = client.get(
+        "/luna/reflection-steps?action_kind=invented_action"
+    )
+    assert resp.status_code == 400
+    assert "action_kind must be one of" in resp.text

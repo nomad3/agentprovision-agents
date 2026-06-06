@@ -79,7 +79,7 @@ pub async fn engine_status() -> EngineStatus {
 
 pub async fn pause_engine() -> Result<(), String> {
     PAUSED.store(true, Ordering::SeqCst);
-    stop_engine().await
+    stop_engine_inner(false).await
 }
 
 pub async fn resume_engine() -> Result<(), String> {
@@ -92,6 +92,7 @@ pub async fn start_engine() -> Result<(), String> {
         log::info!("gesture: start_engine called but already running — no-op");
         return Ok(());
     }
+    PAUSED.store(false, Ordering::SeqCst);
     log::info!("gesture: start_engine called, spawning supervisor");
     let app = app_handle().ok_or_else(|| {
         log::error!("gesture: app handle not installed at start_engine");
@@ -148,6 +149,13 @@ pub async fn start_engine() -> Result<(), String> {
 }
 
 pub async fn stop_engine() -> Result<(), String> {
+    stop_engine_inner(true).await
+}
+
+async fn stop_engine_inner(clear_paused: bool) -> Result<(), String> {
+    if clear_paused {
+        PAUSED.store(false, Ordering::SeqCst);
+    }
     RUNNING.store(false, Ordering::SeqCst);
     if let Some(h) = HANDLE.lock().await.take() {
         h.abort();

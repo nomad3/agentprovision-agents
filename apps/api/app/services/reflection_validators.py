@@ -48,7 +48,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -237,7 +237,7 @@ _HARM_PATTERNS = (
                r"production|prod|database|table|user[s]?|tenant[s]?"
                r"|customer[s]?|account[s]?)\b", re.IGNORECASE),
     re.compile(r"\bdisable\b.*\b(auth|authentication|security|"
-               r"rate[\s_-]?limit|backup)\b", re.IGNORECASE),
+               r"rate[\s_-]?limit(?:ing)?|backup)\b", re.IGNORECASE),
     re.compile(r"\b(mass|bulk)\s+(send|email|message|delete|notify)\b",
                re.IGNORECASE),
     re.compile(r"\b(force|hard)[\s_-]?push\b.*\b(main|master|release)\b",

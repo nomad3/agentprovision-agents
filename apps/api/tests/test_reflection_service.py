@@ -7,11 +7,14 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from app.schemas.reflection import NightlyReflection
+from app.schemas.reflection import NightlyReflection, ReflectionStep
 from app.services.reflection import (
     REFLECTION_MEMORY_TYPE,
+    REFLECTION_STEP_MEMORY_TYPE,
     deserialize_reflection,
+    deserialize_reflection_step,
     serialize_reflection,
+    serialize_reflection_step,
 )
 
 
@@ -32,6 +35,23 @@ def _canonical() -> NightlyReflection:
     )
 
 
+def _canonical_step() -> ReflectionStep:
+    return ReflectionStep(
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        agent_id="00000000-0000-0000-0000-000000000002",
+        session_id="session-1",
+        action_kind="tool_failure_retry",
+        user_intent="Retry a failed tool call only after checking cause.",
+        evidence_refs=["tool:previous_failure"],
+        assumptions=["The tool failure may be transient."],
+        uncertainty="medium",
+        risk_level="medium",
+        required_checks=["Classify the failure before retrying."],
+        recommended_affordance="verify",
+        created_at=_now(),
+    )
+
+
 # ── memory_type discriminator ─────────────────────────────────────────
 
 
@@ -39,6 +59,10 @@ def test_memory_type_constant_is_nightly_reflection():
     """The substrate join key — agents querying by memory_type must
     use this exact string. Locks the value against accidental rename."""
     assert REFLECTION_MEMORY_TYPE == "nightly_reflection"
+
+
+def test_reflection_step_memory_type_constant():
+    assert REFLECTION_STEP_MEMORY_TYPE == "reflection_step"
 
 
 # ── serialize ──────────────────────────────────────────────────────────
@@ -107,3 +131,30 @@ def test_deserialize_returns_none_on_oversize_content():
     payload["content"] = "x" * 5000
     blob = json.dumps(payload)
     assert deserialize_reflection(blob) is None
+
+
+# ── ReflectionStep serialize / deserialize ────────────────────────────
+
+
+def test_serialize_reflection_step_produces_valid_json():
+    step = _canonical_step()
+    blob = serialize_reflection_step(step)
+    decoded = json.loads(blob)
+    assert decoded["action_kind"] == "tool_failure_retry"
+    assert decoded["recommended_affordance"] == "verify"
+
+
+def test_serialize_deserialize_reflection_step_roundtrip():
+    step = _canonical_step()
+    assert deserialize_reflection_step(serialize_reflection_step(step)) == step
+
+
+def test_deserialize_reflection_step_returns_none_on_invalid_json():
+    assert deserialize_reflection_step("not json {{{") is None
+
+
+def test_deserialize_reflection_step_returns_none_on_invariant_breach():
+    step = _canonical_step()
+    payload = step.to_dict()
+    payload["risk_level"] = "unbounded"
+    assert deserialize_reflection_step(json.dumps(payload)) is None
