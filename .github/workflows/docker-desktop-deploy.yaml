@@ -6,6 +6,7 @@ on:
     paths:
       - 'apps/**'
       - 'packages/**'  # Phase 1.5: rebuild on shared cli_orchestrator changes
+      - 'scripts/migrate_compose_workspaces_volume.sh'
       - 'docker-compose.yml'
       - '.github/workflows/docker-desktop-deploy.yaml'
   workflow_dispatch:
@@ -269,6 +270,28 @@ jobs:
         run: |
           cd "$DEPLOY_DIR"
           SERVICES="${{ steps.changes.outputs.services }}"
+          RECOVER_SERVICES="api code-worker"
+          WORKSPACES_VOLUME_NAME="${WORKSPACES_VOLUME_NAME:-agentprovision-agents_tenant_spaces}"
+          WORKSPACES_COMPLETE_MARKER=".agentprovision_workspace_volume_migrated"
+          workspace_migration_complete() {
+            docker run --rm -v "$WORKSPACES_VOLUME_NAME:/volume:ro" alpine:3.20 \
+              sh -c "test -f '/volume/$WORKSPACES_COMPLETE_MARKER'"
+          }
+          recover_on_error() {
+            status=$?
+            if [ "$status" -ne 0 ]; then
+              if workspace_migration_complete; then
+                echo "Up step failed after workspace migration; recreating workspace services on the new volume: $RECOVER_SERVICES" >&2
+                docker compose up -d --force-recreate --no-deps $RECOVER_SERVICES || true
+              else
+                echo "Up step failed before workspace migration completed; restarting existing workspace services: $RECOVER_SERVICES" >&2
+                docker compose start $RECOVER_SERVICES || true
+              fi
+            fi
+            exit "$status"
+          }
+          trap recover_on_error EXIT
+          QUIESCE_COMPOSE_SERVICES="$RECOVER_SERVICES" ./scripts/migrate_compose_workspaces_volume.sh
           # Recreate the specific services that were rebuilt above so
           # their containers swap to the fresh images. Plain `compose
           # up -d` (no service args) only starts stopped containers; it
@@ -285,6 +308,7 @@ jobs:
           # temporal, redis, etc.) without recreating live containers.
           echo "Ensuring all services are running..."
           docker compose up -d
+          trap - EXIT
 
       - name: Apply pending DB migrations
         # Runs after `docker compose up -d` so the db container is up,

@@ -367,4 +367,8 @@ volumes:
   claude_sessions:
   hf_cache:
   workspaces:
-
+    # Compose services keep using the logical `workspaces` key, but the
+    # physical Docker volume name intentionally avoids `_work`. Luna's release
+    # gate greps live Docker mount sources for `_work` to catch accidental
+    # GitHub Actions checkout bind mounts.
+    name: ${WORKSPACES_VOLUME_NAME:-agentprovision-agents_tenant_spaces}
