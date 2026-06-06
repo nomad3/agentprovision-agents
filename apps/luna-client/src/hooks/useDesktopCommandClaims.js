@@ -17,6 +17,13 @@ const OBSERVATION_COMMANDS = {
   read_clipboard: 'read_clipboard',
 };
 
+const NATIVE_CONTROL_COMMANDS = new Set([
+  'pointer_move',
+  'pointer_click',
+  'keyboard_type',
+  'keyboard_key_chord',
+]);
+
 function commandId(command) {
   return command?.desktop_command_id || command?.id;
 }
@@ -190,6 +197,45 @@ export async function executeClaimedDesktopCommand(
   const timeouts = resolveTimeouts(timeoutOverrides);
   const action = commandAction(command);
   const nativeCommand = OBSERVATION_COMMANDS[action];
+  if (NATIVE_CONTROL_COMMANDS.has(action)) {
+    let safety;
+    try {
+      safety = await invokeWithTimeout(invoke, 'control_get_safety_state', timeouts.safetyTimeoutMs);
+    } catch (error) {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'failed',
+        reasonText(error) || 'desktop safety state unavailable',
+        { result_kind: 'error' },
+        timeouts,
+      );
+      return;
+    }
+    if (safety?.mode === 'stopped') {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'preempted',
+        `desktop control stopped; ${action} preempted`,
+        { control_mode: safety?.mode || null },
+        timeouts,
+      );
+      return;
+    }
+    await completeCommand(
+      command,
+      shellId,
+      deviceToken,
+      'denied',
+      `desktop native control disabled; ${action} denied`,
+      { control_mode: safety?.mode || null, result_kind: 'unsupported' },
+      timeouts,
+    );
+    return;
+  }
   if (!nativeCommand) {
     await completeCommand(
       command,
@@ -245,6 +291,35 @@ export async function executeClaimedDesktopCommand(
 
   try {
     const result = await invokeWithTimeout(invoke, nativeCommand, timeouts.nativeTimeoutMs);
+    const postSafety = await invokeWithTimeout(
+      invoke,
+      'control_get_safety_state',
+      timeouts.safetyTimeoutMs,
+    );
+    if (postSafety?.mode === 'stopped') {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'preempted',
+        `desktop control stopped; ${action} preempted`,
+        { control_mode: postSafety?.mode || null },
+        timeouts,
+      );
+      return;
+    }
+    if (postSafety?.mode !== 'observe' || !postSafety?.can_observe) {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'denied',
+        `desktop observe locked; ${action} denied`,
+        { control_mode: postSafety?.mode || null, can_observe: Boolean(postSafety?.can_observe) },
+        timeouts,
+      );
+      return;
+    }
     await completeCommand(
       command,
       shellId,

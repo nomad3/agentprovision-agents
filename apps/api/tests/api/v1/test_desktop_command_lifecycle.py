@@ -175,6 +175,91 @@ def test_enqueue_and_claim_command_sets_device_bound_lease(db_session, seeded):
     assert "must not persist" not in str(reloaded.payload)
 
 
+def test_native_control_command_enqueue_is_denied_before_claim(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, event, _session_event = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="pointer_click",
+                tool_name="desktop_pointer_click",
+                shell_id=None,
+                nonce="native-pointer-denied",
+                payload={
+                    "x": 100,
+                    "y": 200,
+                    "raw_target_text": "must not persist",
+                },
+            ),
+        )
+        claimed, claim_event, _claim_session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert command.status == "denied"
+    assert command.capability == "pointer_control"
+    assert command.completed_at is not None
+    assert command.lease_expires_at is None
+    assert command.payload["mode"] == "control_locked"
+    assert event.event_type == "desktop_command_completed"
+    assert event.outcome == "denied"
+    assert event.reason == "desktop native control disabled; pointer_click denied"
+    assert event.event_metadata["result_kind"] == "unsupported"
+    assert "must not persist" not in str(command.payload)
+    assert "must not persist" not in str(event.event_metadata)
+    assert claimed is None
+    assert claim_event is None
+
+
+def test_native_control_denial_nonce_retry_is_idempotent(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        first = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="keyboard_type",
+                tool_name="desktop_keyboard_type",
+                shell_id=None,
+                nonce="native-keyboard-denied",
+                payload={"text": "must not persist"},
+            ),
+        )[0]
+        second = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="keyboard_type",
+                tool_name="desktop_keyboard_type",
+                shell_id=None,
+                nonce="native-keyboard-denied",
+                payload={"text": "must not persist"},
+            ),
+        )[0]
+
+    assert second.id == first.id
+    events = db_session.query(DesktopCommandEvent).filter(
+        DesktopCommandEvent.desktop_command_id == first.id,
+        DesktopCommandEvent.event_type == "desktop_command_completed",
+    ).all()
+    assert len(events) == 1
+    assert events[0].reason == "desktop native control disabled; keyboard_type denied"
+
+
 def test_duplicate_completion_is_idempotent_and_writes_one_completion_event(db_session, seeded):
     with patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",

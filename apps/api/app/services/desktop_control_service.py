@@ -45,6 +45,13 @@ _OBSERVATION_CAPABILITIES = {
     "read_clipboard": "clipboard_read",
 }
 
+_NATIVE_CONTROL_CAPABILITIES = {
+    "pointer_move": "pointer_control",
+    "pointer_click": "pointer_control",
+    "keyboard_type": "keyboard_control",
+    "keyboard_key_chord": "keyboard_control",
+}
+
 _TERMINAL_COMMAND_STATUSES = {
     "succeeded",
     "failed",
@@ -60,16 +67,21 @@ _CLAIMABLE_COMMAND_STATUSES = {
 }
 
 _COMMAND_ACTION_CAPABILITIES = {
-    "capture_screenshot": "screenshot",
-    "get_active_app": "active_app",
-    "read_clipboard": "clipboard_read",
+    **_OBSERVATION_CAPABILITIES,
+    **_NATIVE_CONTROL_CAPABILITIES,
 }
 
 _COMMAND_TOOL_ACTIONS = {
     "desktop_observe_screen": "capture_screenshot",
     "desktop_get_active_app": "get_active_app",
     "desktop_read_clipboard": "read_clipboard",
+    "desktop_pointer_move": "pointer_move",
+    "desktop_pointer_click": "pointer_click",
+    "desktop_keyboard_type": "keyboard_type",
+    "desktop_keyboard_key_chord": "keyboard_key_chord",
 }
+
+_DISABLED_NATIVE_CONTROL_ACTIONS = frozenset(_NATIVE_CONTROL_CAPABILITIES)
 
 _SAFE_METADATA_KEYS = {
     "can_observe",
@@ -301,6 +313,8 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         return f"desktop control stopped; {action} preempted"
     if normalized.startswith("desktop observe locked;"):
         return f"desktop observe locked; {action} denied"
+    if normalized.startswith("desktop native control disabled;"):
+        return f"desktop native control disabled; {action} denied"
     if normalized.startswith("desktop observation permission "):
         return f"desktop observation permission denied; {action} denied"
     if normalized.startswith("unsupported desktop command action:"):
@@ -422,7 +436,7 @@ def _matching_enqueued_command_for_nonce(
     raise HTTPException(status_code=409, detail="Desktop command nonce already used")
 
 
-def _queued_event_for_command(
+def _event_for_existing_command(
     db: Session,
     command: DesktopCommand,
     *,
@@ -431,9 +445,24 @@ def _queued_event_for_command(
     event = db.query(DesktopCommandEvent).filter(
         DesktopCommandEvent.tenant_id == command.tenant_id,
         DesktopCommandEvent.desktop_command_id == command.id,
-        DesktopCommandEvent.event_type == "desktop_command_queued",
     ).order_by(DesktopCommandEvent.created_at.asc()).first()
     if event:
+        return event
+    if command.status != "pending":
+        event = _record_command_event(
+            db,
+            command,
+            event_type="desktop_command_completed",
+            source="api",
+            outcome=command.status,
+            reason=(
+                "desktop native control disabled; "
+                f"{(command.payload or {}).get('action') or 'command'} denied"
+            ),
+            metadata={"tool_name": tool_name},
+        )
+        db.commit()
+        db.refresh(event)
         return event
     event = _record_command_event(
         db,
@@ -446,6 +475,92 @@ def _queued_event_for_command(
     db.commit()
     db.refresh(event)
     return event
+
+
+def _enqueue_disabled_native_control_command(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: DesktopCommandEnqueue,
+    shell_id: str,
+    device_id: uuid.UUID,
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None]:
+    now = _utcnow()
+    capability = _COMMAND_ACTION_CAPABILITIES[request.action]
+    reason = f"desktop native control disabled; {request.action} denied"
+    command = DesktopCommand(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=request.session_id,
+        shell_id=shell_id,
+        device_id=device_id,
+        capability=capability,
+        status="denied",
+        source="mcp",
+        nonce=request.nonce,
+        payload={
+            "action": request.action,
+            "tool_name": request.tool_name,
+            "mode": "control_locked",
+            "request": _safe_request_metadata(request.payload),
+            "native_control": {
+                "enabled": False,
+                "reason": "signed envelopes and approval grants required",
+            },
+        },
+        completed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(command)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = _matching_enqueued_command_for_nonce(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request=request,
+        )
+        if existing:
+            return existing, _event_for_existing_command(
+                db,
+                existing,
+                tool_name=request.tool_name,
+            ), None
+        raise HTTPException(status_code=409, detail="Desktop command nonce already used")
+
+    event = _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_completed",
+        source="api",
+        outcome="denied",
+        reason=reason,
+        metadata={
+            "tool_name": request.tool_name,
+            **_safe_request_metadata(request.payload),
+            "result_kind": "unsupported",
+        },
+    )
+    db.commit()
+    db.refresh(command)
+    db.refresh(event)
+
+    session_event = _publish_display_safe_session_event(
+        request.session_id,
+        event.event_type,
+        {
+            **_display_safe_command_payload(command),
+            "desktop_event_id": str(event.id),
+            "outcome": event.outcome,
+            "reason": event.reason,
+        },
+        tenant_id=tenant_id,
+    )
+    return command, event, session_event
 
 
 def _device_for_user_shell(
@@ -818,7 +933,7 @@ def enqueue_desktop_command(
         request=request,
     )
     if existing:
-        return existing, _queued_event_for_command(
+        return existing, _event_for_existing_command(
             db,
             existing,
             tool_name=request.tool_name,
@@ -826,6 +941,16 @@ def enqueue_desktop_command(
 
     shell_id, shell_capabilities, device_id = _select_connected_shell(tenant_id, request.shell_id)
     capability = _COMMAND_ACTION_CAPABILITIES[request.action]
+    if request.action in _DISABLED_NATIVE_CONTROL_ACTIONS:
+        return _enqueue_disabled_native_control_command(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request=request,
+            shell_id=shell_id,
+            device_id=device_id,
+        )
+
     required_capability = "can_observe"
     if not bool(shell_capabilities.get(required_capability)):
         raise HTTPException(status_code=409, detail="Desktop shell cannot observe")
@@ -862,7 +987,7 @@ def enqueue_desktop_command(
             request=request,
         )
         if existing:
-            return existing, _queued_event_for_command(
+            return existing, _event_for_existing_command(
                 db,
                 existing,
                 tool_name=request.tool_name,
