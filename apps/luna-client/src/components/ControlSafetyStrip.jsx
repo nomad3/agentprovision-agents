@@ -68,6 +68,42 @@ async function invokeControl(command, args) {
   return args ? invoke(command, args) : invoke(command);
 }
 
+function invokeControlWithTimeout(command, args, timeoutMs = 5000) {
+  let timeoutId;
+  return Promise.race([
+    invokeControl(command, args),
+    new Promise((_, reject) => {
+      timeoutId = window.setTimeout(() => reject(new Error(`${command} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => window.clearTimeout(timeoutId));
+}
+
+function stoppedStateFrom(current) {
+  return {
+    ...current,
+    mode: 'stopped',
+    observe_enabled: false,
+    assist_enabled: false,
+    control_enabled: false,
+    stopped: true,
+    control_locked: true,
+    capture_running: false,
+    gesture_state: 'stopped',
+    cursor_global: false,
+    can_observe: false,
+    can_assist: false,
+    can_control: false,
+    can_control_pointer: false,
+    can_control_keyboard: false,
+    macos_app_monitor: {
+      ...(current.macos_app_monitor || FALLBACK_STATE.macos_app_monitor),
+      status: 'stopped',
+      reason: 'macOS app monitoring is stopped by the local Stop latch.',
+    },
+    last_stop_at_ms: Date.now(),
+  };
+}
+
 function permissionLabel(key) {
   switch (key) {
     case 'screen_recording':
@@ -196,6 +232,19 @@ export default function ControlSafetyStrip() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [permissionsOpen]);
 
+  useEffect(() => {
+    const handleFocus = () => refresh();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [refresh]);
+
   const handleActivityPayload = useCallback((payload) => {
     const safePayload = sanitizeMacosAppMonitorEvent(payload, null);
     const label = activeAppLabelFromMonitorEvent(safePayload);
@@ -235,15 +284,19 @@ export default function ControlSafetyStrip() {
 
   const run = useCallback(async (command) => {
     setBusy(true);
+    const optimisticStop = command === 'control_stop_all';
+    if (optimisticStop) {
+      publishState(stoppedStateFrom(state));
+    }
     try {
-      const next = await invokeControl(command);
+      const next = await invokeControlWithTimeout(command, undefined, optimisticStop ? 1500 : 5000);
       publishState(next);
     } catch {
-      await refresh();
+      if (!optimisticStop) await refresh();
     } finally {
       setBusy(false);
     }
-  }, [publishState, refresh]);
+  }, [publishState, refresh, state]);
 
   const openPermissionSetup = useCallback(async (permission) => {
     if (!canOpenPermissionSetup(permission)) return;

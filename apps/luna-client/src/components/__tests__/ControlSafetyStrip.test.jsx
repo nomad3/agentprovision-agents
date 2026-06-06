@@ -104,6 +104,38 @@ describe('ControlSafetyStrip', () => {
     expect(screen.getByText('Control Locked')).toBeInTheDocument();
   });
 
+  it('refreshes permission readiness when Luna regains focus', async () => {
+    invokeMock
+      .mockResolvedValueOnce({
+        mode: 'control_locked',
+        permissions: {
+          screen_recording: {
+            status: 'denied',
+            reason: 'macOS Screen Recording preflight is denied or not yet granted.',
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        mode: 'control_locked',
+        permissions: {
+          screen_recording: {
+            status: 'granted',
+            reason: 'macOS Screen Recording preflight is granted.',
+          },
+        },
+      });
+
+    render(<ControlSafetyStrip />);
+
+    expect(await screen.findByText('TCC 0/1')).toBeInTheDocument();
+    fireEvent.focus(window);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByText('TCC 1/1')).toBeInTheDocument();
+  });
+
   it('shows disabled assist/control gates before command governance ships', async () => {
     invokeMock.mockResolvedValueOnce({
       mode: 'control_locked',
@@ -298,6 +330,26 @@ describe('ControlSafetyStrip', () => {
       expect(invokeMock).toHaveBeenCalledWith('control_stop_all');
     });
     expect(screen.getByText('Stopped')).toBeInTheDocument();
+  });
+
+  it('shows stopped immediately if the native Stop command is slow', async () => {
+    invokeMock
+      .mockResolvedValueOnce({
+        mode: 'observe',
+        can_observe: true,
+        permissions: {
+          screen_recording: { status: 'granted', reason: 'ok' },
+          accessibility: { status: 'granted', reason: 'ok' },
+        },
+      })
+      .mockImplementationOnce(() => new Promise(() => {}));
+
+    render(<ControlSafetyStrip />);
+
+    expect(await screen.findByText('Observe', { selector: '.control-safety-label' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^stop$/i }));
+
+    expect(screen.getByText('Stopped', { selector: '.control-safety-label' })).toBeInTheDocument();
   });
 
   it('locks observation without latching stopped mode', async () => {

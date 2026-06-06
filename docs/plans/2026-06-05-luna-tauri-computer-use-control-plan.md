@@ -906,6 +906,50 @@ Additional discovery inputs:
     notary-queue backlog draining (entry 82) — re-run `gh workflow run
     luna-client-build.yaml --ref codex/luna-native-boundary-proof` (default
     1800s poll) once the queue is healthy.
+86. Signed Luna `0.1.105` local TCC validation found the next permission
+    onboarding gap. `/Applications/Luna.app` now has stable Developer ID
+    identity `com.agentprovision.luna | team KF9LPYY7KK`, but old ad-hoc Luna
+    grants can leave System Settings showing a misleading enabled `Luna` row
+    while Apple's live preflight still returns denied for the running signed
+    app. The local host reset Luna-scoped TCC decisions with
+    `tccutil reset All/ScreenCapture/Accessibility/AppleEvents/Camera/Microphone/ListenEvent com.agentprovision.luna`;
+    after relaunch, clicking Luna's Screen `Enable` button registered the
+    current signed app in `Screen & System Audio Recording`, and after explicit
+    user approval plus relaunch/focus refresh Computer Use verified Luna now
+    reports `TCC 3/3` with Screen Recording `granted`, Accessibility `granted`,
+    and Input Monitoring `not_required`; after relaunch, Automation/System
+    Events also resolved to `granted` and the installed app showed `TCC 4/4`.
+    Luna remained `Stopped Alpha OK Mac Stopped` with Assist/Control disabled.
+    Product
+    implication: setup buttons must trigger native macOS prompt APIs where
+    available before deep-linking to Settings, and the UI must repoll readiness
+    when Luna regains focus after the user returns from System Settings. This
+    branch now adds Accessibility prompt registration via
+    `AXIsProcessTrustedWithOptions`, asks Automation/System Events with
+    `AEDeterminePermissionToAutomateTarget(..., ask_user_if_needed=true)`, and
+    refreshes permission readiness on focus/visibility changes. This remains
+    setup-only: it cannot and must not silently grant OS permissions or unlock
+    Assist/Control.
+87. Follow-up Computer Use smoke after Screen/AX were granted reached
+    `Control Locked Alpha OK Mac Locked`, then `Observe Alpha OK Mac Ready`
+    with Assist/Control still disabled and no pointer/keyboard actuation.
+    Pressing Stop wrote the durable `desktop-control-stop` latch before any
+    secondary teardown, but the current installed WebView stayed visually in
+    Observe with the Stop button disabled until app relaunch; relaunch restored
+    `Stopped Alpha OK Mac Stopped`, proving the native latch was authoritative
+    and the UI was stale. The branch now adds a WebView-side Stop fallback:
+    pressing Stop immediately publishes an optimistic stopped posture, clears
+    local control affordances, and times out a slow native Stop invoke instead
+    of leaving the UI in Observe. This does not weaken safety because native
+    Stop already persists the latch before gesture teardown; it only makes the
+    visible state fail closed when the bridge is slow.
+88. Luna Supervisor reviewed entry 86/87 via Alpha Chat and accepted the branch
+    framing as TCC readiness plus Stop fail-closed UX hardening only. Her merge
+    condition remains unchanged: review must confirm the patch does not add any
+    native pointer, keyboard, Assist, or Control execution path. Native
+    actuation stays blocked until approval-envelope authenticity, replay
+    defense, revocation, session/device/command binding, and denial audit gates
+    are proven at the native boundary.
 
 ---
 

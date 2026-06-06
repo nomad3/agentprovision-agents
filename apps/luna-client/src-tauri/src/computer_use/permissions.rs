@@ -264,12 +264,66 @@ fn privacy_pane_url(permission: &str) -> Option<&'static str> {
 
 #[cfg(target_os = "macos")]
 fn maybe_request_permission_prompt(permission: &str) {
-    if permission == "screen_recording" {
-        extern "C" {
-            fn CGRequestScreenCaptureAccess() -> bool;
-        }
-        let _ = unsafe { CGRequestScreenCaptureAccess() };
+    match permission {
+        "screen_recording" => request_screen_capture_prompt(),
+        "accessibility" => request_accessibility_prompt(),
+        "automation_system_events" => request_system_events_automation_prompt(),
+        _ => {}
     }
+}
+
+#[cfg(target_os = "macos")]
+fn request_screen_capture_prompt() {
+    extern "C" {
+        fn CGRequestScreenCaptureAccess() -> bool;
+    }
+    let _ = unsafe { CGRequestScreenCaptureAccess() };
+}
+
+#[cfg(target_os = "macos")]
+fn request_accessibility_prompt() {
+    use std::ffi::c_void;
+
+    type CFDictionaryRef = *const c_void;
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        static kAXTrustedCheckOptionPrompt: *const c_void;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: *const c_void;
+        fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: isize,
+            key_callbacks: *const c_void,
+            value_callbacks: *const c_void,
+        ) -> CFDictionaryRef;
+        fn CFRelease(value: *const c_void);
+    }
+
+    let keys = [unsafe { kAXTrustedCheckOptionPrompt }];
+    let values = [unsafe { kCFBooleanTrue }];
+    let options = unsafe {
+        CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr(),
+            values.as_ptr(),
+            1,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+    if options.is_null() {
+        return;
+    }
+
+    let _ = unsafe { AXIsProcessTrustedWithOptions(options) };
+    unsafe { CFRelease(options) };
 }
 
 #[cfg(target_os = "macos")]
@@ -480,6 +534,16 @@ enum MacAutomationStatus {
 
 #[cfg(target_os = "macos")]
 fn system_events_automation_status() -> MacAutomationStatus {
+    determine_system_events_automation_status(false)
+}
+
+#[cfg(target_os = "macos")]
+fn request_system_events_automation_prompt() {
+    let _ = determine_system_events_automation_status(true);
+}
+
+#[cfg(target_os = "macos")]
+fn determine_system_events_automation_status(ask_user_if_needed: bool) -> MacAutomationStatus {
     use std::ffi::c_void;
 
     type OSStatus = i32;
@@ -535,7 +599,12 @@ fn system_events_automation_status() -> MacAutomationStatus {
     }
 
     let status = unsafe {
-        AEDeterminePermissionToAutomateTarget(&target, TYPE_WILDCARD, TYPE_WILDCARD, false)
+        AEDeterminePermissionToAutomateTarget(
+            &target,
+            TYPE_WILDCARD,
+            TYPE_WILDCARD,
+            ask_user_if_needed,
+        )
     };
     let _ = unsafe { AEDisposeDesc(&mut target) };
 
