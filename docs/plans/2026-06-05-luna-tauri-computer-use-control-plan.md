@@ -10,12 +10,11 @@ Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
 session ownership and device-bound shell identity merged; observation-only
 command down-channel merged in PR #799; PR #800 client completion hardening
-merged and unsigned `luna-v0.1.96` installed locally; installed smoke found
-API completion rejecting the client's `/complete` call because of mixed
-timezone lease comparison, now under follow-up branch
-`codex/luna-v0196-validation`
+merged and unsigned `luna-v0.1.96` installed locally; PR #801 backend lease
+timezone fix merged and deployed; installed `luna-v0.1.96` command smoke now
+claims and completes the governed observation command before lease expiry
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-v0196-validation`
+Current implementation branch: `codex/luna-v0196-release-gate-plan`
 
 ---
 
@@ -377,6 +376,34 @@ Additional discovery inputs:
     Follow-up branch `codex/luna-v0196-validation` normalizes lease timestamps
     before Python comparisons and adds a regression test for naive future
     leases loaded from the database.
+39. PR #801 merged the API-only backend lease-time normalization into `main`
+    on 2026-06-06 UTC as merge commit `e6990445`. Post-merge broad Tests run
+    `27059025321` passed, Docker Desktop Deployment run `27059025330` passed,
+    and the live API returned `200` at both `https://agentprovision.com/api/v1`
+    and `http://localhost:8000/api/v1`. Luna's exact Docker mount gate returned
+    no output:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+40. No new Luna desktop release was expected from PR #801 because it changed
+    only the API. The installed `/Applications/Luna.app` remained unsigned
+    development prerelease `luna-v0.1.96` with ad-hoc signature and no
+    `TeamIdentifier`. Computer Use verified the app opens expanded by default,
+    remains logged in, and shows `Control Locked` with Assist/Control disabled.
+    The first smoke immediately after API deploy returned `409 No connected
+    desktop shell` because the deployment restarted the API's in-memory
+    presence store while the already-running client still believed it was
+    registered. After a clean Luna restart, the shell re-registered and the
+    governed `get_active_app` smoke command
+    `0dd3bb2a-d119-4e77-8580-96a356c7b529` was enqueued, claimed, and completed
+    before lease expiry with status `denied`, outcomes
+    `requested/started/denied`, reason
+    `desktop observe locked; get_active_app denied`, and
+    `marker_persisted=false`. API logs showed `/complete` returning `200` with
+    no recurrence of the mixed-timezone `TypeError` or HTTP 500.
+41. Luna lead release-gate review approved the PR #801 API-only gate. She
+    treated the post-deploy shell re-registration issue as non-blocking and
+    recommended the next phase start with native control scaffolding plus
+    denial-only tests, then signed-envelope validation, then approval grant
+    consumption, and only then narrow pointer/keyboard execution.
 
 ---
 
@@ -1486,19 +1513,23 @@ Exit criteria:
       bundle version `0.1.95`, ad-hoc unsigned development signature confirmed,
       chat-first expanded startup verified with Computer Use, API/tunnel stack
       healthy, and Luna's exact Docker `_work` mount gate returned no output.
-- [ ] `luna-v0.1.95` command down-channel smoke: installed app claimed an
-      internal `get_active_app` command, but did not post terminal completion;
-      backend expired the lease. Keep this open until the follow-up branch is
-      merged, released, installed, and a claimed command completes locally.
+- [x] `luna-v0.1.95` command down-channel smoke follow-up: installed app
+      claimed an internal `get_active_app` command, but did not post terminal
+      completion; backend expired the lease. Closed by PR #800 client
+      hardening plus PR #801 API lease-time fix, validated with the installed
+      `luna-v0.1.96` command smoke.
 - [x] `luna-v0.1.96` release/install smoke: DMG checksum verified, installed
       bundle version `0.1.96`, ad-hoc unsigned development signature confirmed,
       chat-first expanded startup verified with Computer Use, durable
       `Stopped` relaunch verified, and Luna lead review response visible.
-- [ ] `luna-v0.1.96` command down-channel smoke: installed app claimed
+- [x] `luna-v0.1.96` command down-channel smoke: installed app claimed
       `get_active_app` and attempted `/complete`, but API completion raised a
-      mixed-timezone lease comparison error and the command expired. Keep this
-      open until the timezone fix is merged, released, installed, and a claimed
-      command completes before backend lease expiry.
+      mixed-timezone lease comparison error and the command expired before PR
+      #801. After PR #801 deployed, the same installed app was restarted to
+      re-register shell presence; command
+      `0dd3bb2a-d119-4e77-8580-96a356c7b529` was queued, claimed, and completed
+      before lease expiry with status `denied`, `/complete` HTTP 200, no raw
+      marker persistence, and no `TypeError`/500 recurrence.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1543,17 +1574,19 @@ Exit criteria:
 
 ## Next Actions
 
-1. Finish `codex/luna-v0196-validation`: keep the branch scoped to backend
-   lease timezone normalization plus plan updates, run focused API tests, and
-   submit PR/CI.
-2. After merge, install the next unsigned development release locally and rerun
-   the command down-channel smoke. Pass condition: the installed app claims the
-   command and posts terminal completion before backend lease expiry.
-3. Rerun the exact Docker `_work` mount gate after the post-merge deployment.
-   The pass condition remains zero output:
-   `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+1. Start the native control scaffolding phase without enabling actuation:
+   introduce pointer/keyboard command types, local native executor boundaries,
+   and denial-only tests proving locked Observe/Control modes cannot actuate.
+2. Add signed command-envelope validation before any pointer or keyboard
+   execution: nonce, expiry, session, shell, device, command id, policy version,
+   replay protection, revocation, and policy-decision binding.
+3. Add approval grant creation/consumption as a database compare-and-swap gate
+   before enabling narrow canary pointer execution.
 4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-5. Include the PR #797 command-palette maximize follow-up in the next branch or
+5. Treat the post-deploy `No connected desktop shell` observation as a
+   hardening follow-up: Luna should re-register shell presence after API
+   restarts or heartbeat failures, not require an app restart.
+6. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.
