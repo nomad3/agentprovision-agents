@@ -7,10 +7,10 @@
 
 Date: 2026-06-05
 Operator: Simon Aguilera
-Status: Implementation in progress
+Status: Phase 1 audit spine merged; read-only MCP observation tools pending
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
 Branch: `codex/luna-phase1-control-plane`; current follow-up branch:
-`codex/luna-desktop-command-events`
+`codex/luna-release-validation-phase2`
 
 ---
 
@@ -209,9 +209,37 @@ Additional discovery inputs:
     `maximum_attempts=1` for the scaffold persist and aggregate activities.
     Local validation of `tests/test_skill_eval_iteration_workflow.py` now exits
     cleanly with 3 passing tests.
-21. Final PR #793 validation on head `945ccabf` passed GitHub Actions run
+21. PR #793 validation on head `945ccabf` passed GitHub Actions run
     `27055003884`: API unit in 2m38s, API integration with PostgreSQL/pgvector
     in 4m18s, Luna client jest+cargo in 1m10s, and aggregate status in 7s.
+22. PR #793 final head `a5d2891f` passed the required PR gates and merged into
+    `main` on 2026-06-06 UTC as merge commit `8c6449cf`. Post-merge GitHub
+    Actions passed the broad Tests run `27055213272`, Docker Desktop Deployment
+    run `27055213275`, and Luna Client Tauri Build run `27055213274`. The Luna
+    build produced unsigned development prerelease `luna-v0.1.92`; signing,
+    notarization, and stable updater manifest publication were skipped as
+    expected for the current unsigned development release posture.
+23. Installed-release validation for `luna-v0.1.92` downloaded
+    `Luna_0.1.92_aarch64.dmg` plus `.sha256`, verified directly with
+    `shasum -c`, installed `/Applications/Luna.app`, and confirmed bundle
+    version `0.1.92` with id `com.agentprovision.luna`. The exact Luna mount
+    gate,
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`,
+    returned no output. Computer Use verified chat-first maximized startup,
+    durable `Stopped` relaunch, `Resume -> Control Locked`, `Observe` without
+    unlocking Assist/Control, and `Stop` relatch. TCC readiness remained
+    passive: Screen Recording and Accessibility were denied/not-yet-granted,
+    System Events was unknown, and no macOS privacy-setting changes were made.
+24. Branch `codex/luna-release-validation-phase2` started the next Phase 1
+    slice after release validation: MCP desktop observation tools are now
+    registered and call an internal-key API request endpoint. The endpoint
+    requires auth-bound `X-Tenant-Id` and `X-User-Id`, validates session scope,
+    selects only a connected `desktop-<uuid>` shell from Luna presence, derives
+    capability from the requested tool/action, and writes display-safe
+    `desktop_observation_denied` events while no API-to-Tauri command
+    down-channel exists. This intentionally returns no screenshot pixels,
+    clipboard text, active-window title, OCR text, bundle id, path, or raw
+    desktop content.
 
 ---
 
@@ -749,6 +777,11 @@ Current verification finding (2026-06-06):
       maximized chat-first startup, durable `Stopped` relaunch, expanded TCC
       details, `Resume -> Observe`, metadata-only denied screenshot audit, and
       Stop relatch.
+- [x] Verify `luna-v0.1.92` unsigned development release locally after PR
+      #793: DMG checksum, `/Applications/Luna.app` version `0.1.92`, maximized
+      chat-first startup, durable `Stopped` relaunch, `Resume -> Control
+      Locked`, `Observe` with Assist/Control still disabled, and Stop relatch.
+      The exact Docker `_work` mount smoke command returned no output.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -775,6 +808,10 @@ Exit criteria:
       checksum, maximized launch, TCC readiness detail, `Resume -> Observe`,
       denied screenshot metadata-only audit, Stop relatch, and durable stopped
       relaunch.
+- [x] Local install smoke from GitHub Release `luna-v0.1.92` confirms version,
+      checksum, maximized chat-first launch, durable stopped relaunch,
+      `Resume -> Control Locked -> Observe`, Assist/Control disabled, Stop
+      relatch, and an empty exact Docker `_work` mount gate.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -873,12 +910,19 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
   - [x] Add CI recovery coverage so existing unit jobs can compile
         PostgreSQL-typed models under SQLite without weakening the real
         PostgreSQL integration gate.
-- [ ] Add MCP tools:
-  - [ ] `desktop_observe_screen`
-  - [ ] `desktop_get_active_app`
-  - [ ] `desktop_read_clipboard`
+- [x] Add MCP tools:
+  - [x] `desktop_observe_screen`
+  - [x] `desktop_get_active_app`
+  - [x] `desktop_read_clipboard`
+  - [x] Current Phase 1 behavior records a governed request/denial through the
+        API and returns the audit envelope. Live content delivery remains
+        blocked until the Tauri command down-channel ships.
 - [ ] Ensure agent-initiated observations go through MCP/API governance, not
       direct frontend invokes.
+  - [x] The registered MCP tools call
+        `/api/v1/desktop-control/internal/observations/request` with internal-key,
+        tenant, and user headers; they do not call native Tauri commands or
+        return raw desktop content.
 - [ ] Emit authoritative observation events into `desktop_command_events` and
       display-safe summaries into `session_events`.
   - [x] Add Phase 1 local-observation ingestion for `started`, `succeeded`,
@@ -1143,6 +1187,10 @@ Exit criteria:
       retries for the scaffold failure-counting path.
 - [x] Fresh GitHub Actions API unit, API integration, and Luna client gates pass
       on PR #793 after the CI recovery patch.
+- [x] Final PR #793 gate passed on head `a5d2891f`; post-merge broad Tests run
+      `27055213272` passed on merge commit `8c6449cf`.
+- [x] Phase 1 MCP request/audit slice local API validation passed:
+      `pytest tests/api/v1/test_desktop_control_events.py -q` (`14 passed`).
 
 ### Tauri / Rust
 
@@ -1159,6 +1207,11 @@ Exit criteria:
 - [ ] Existing direct screenshot, active-app, clipboard, and shell paths cannot
       bypass the policy gate.
 - [ ] macOS permission probes disable unavailable tiers and emit denial events.
+- [x] GitHub Luna client `jest + cargo` gate passed on PR #793 and again in
+      post-merge main Tests run `27055213272`.
+- [x] Phase 1 MCP tool validation passed:
+      `pytest tests/test_desktop_control_tool.py -q` in `apps/mcp-server`
+      (`6 passed`), plus targeted `ruff` for touched API and MCP files.
 
 ### React / UX
 
@@ -1180,8 +1233,13 @@ Exit criteria:
 
 - [x] Fresh launch: only `Luna` chat visible.
 - [x] Fresh launch: installed `luna-v0.1.86` opens maximized by default.
+- [x] Fresh launch: installed `luna-v0.1.92` opens maximized by default.
 - [x] Fresh launch: Control strip starts `Control Locked`, with Assist and
       Control disabled.
+- [x] Fresh relaunch: installed `luna-v0.1.92` starts in durable `Stopped` with
+      `Resume` visible.
+- [x] `luna-v0.1.92` Computer Use smoke: `Resume -> Control Locked -> Observe`
+      keeps Assist/Control disabled, and `Stop` relatches the safe state.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1226,17 +1284,16 @@ Exit criteria:
 
 ## Next Actions
 
-1. Push the PR #793 CI recovery patch, rerun GitHub Actions, and keep the PR
-   unmerged until API unit, API integration, and Luna client gates are green.
-2. Ask Luna, Claude Code, and Codex council to review the pushed PR diff for
-   scope, privacy, tenant/session/shell binding, and release-readiness.
-3. Merge PR #793 only after the review gate and CI gate pass, then validate the
-   resulting unsigned GitHub Actions Luna release locally with Computer Use.
-4. Re-run Luna's exact Docker mount gate after the installed-release validation:
-   `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
-   The pass condition is zero output.
-5. Continue Phase 1 by adding MCP/API-governed read-only observation tools
-   (`desktop_observe_screen`, `desktop_get_active_app`,
-   `desktop_read_clipboard`) only after the local audit spine has merged.
-6. Do not implement pointer, keyboard, clipboard-write, or global control until
+1. Push `codex/luna-release-validation-phase2`, open a PR, and run the API unit,
+   MCP, and broad CI gates for the MCP request/audit slice.
+2. Ask Luna, Claude Code, and Codex council to review the next pushed diff for
+   privacy, tenant/session/shell binding, and release-readiness before merge.
+3. Implement the Phase 2 API-to-Tauri command down-channel only after this
+   request/audit slice is merged. Observation result delivery must require a
+   connected shell claim/lease before returning screenshots, active-app
+   summaries, or clipboard metadata.
+4. Keep validating every merged Luna release by installing the GitHub Actions
+   DMG locally, smoking it with Computer Use, and rerunning the exact Docker
+   `_work` mount gate. The pass condition is zero output.
+5. Do not implement pointer, keyboard, clipboard-write, or global control until
    Phase 1 audit and Phase 2 command-governance exit criteria are satisfied.

@@ -23,11 +23,22 @@ _SAFE_FAILURE_REASONS = (
     "Active app lookup failed",
 )
 
+_SAFE_DENIAL_REASONS = (
+    "desktop observation down-channel unavailable;",
+    "desktop shell cannot observe;",
+)
+
 _PERMISSION_STATUS_FIELDS = (
     ("screen_recording", "screen_recording_status"),
     ("accessibility", "accessibility_status"),
     ("automation_system_events", "automation_system_events_status"),
 )
+
+_OBSERVATION_CAPABILITIES = {
+    "capture_screenshot": "screenshot",
+    "get_active_app": "active_app",
+    "read_clipboard": "clipboard_read",
+}
 
 
 @dataclass(frozen=True)
@@ -48,20 +59,74 @@ class LocalObservationAudit:
     automation_system_events_status: str | None
 
 
-def _ensure_session_owned(db: Session, session_id: uuid.UUID, user: User) -> None:
+@dataclass(frozen=True)
+class McpObservationRequest:
+    session_id: uuid.UUID
+    action: str
+    shell_id: str | None
+    tool_name: str
+
+
+def _ensure_session_for_tenant(db: Session, session_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
     exists = db.query(ChatSession.id).filter(
         ChatSession.id == session_id,
-        ChatSession.tenant_id == user.tenant_id,
+        ChatSession.tenant_id == tenant_id,
     ).first()
     if not exists:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+def _ensure_session_owned(db: Session, session_id: uuid.UUID, user: User) -> None:
+    _ensure_session_for_tenant(db, session_id, user.tenant_id)
+
+
+def _ensure_user_for_tenant(db: Session, user_id: uuid.UUID, tenant_id: uuid.UUID) -> None:
+    exists = db.query(User.id).filter(
+        User.id == user_id,
+        User.tenant_id == tenant_id,
+    ).first()
+    if not exists:
+        raise HTTPException(status_code=404, detail="User not found")
+
+
+def _presence_for_tenant(tenant_id: uuid.UUID) -> dict[str, Any]:
+    return luna_presence_service.get_presence(tenant_id)
+
+
 def _ensure_shell_connected(shell_id: str, user: User) -> None:
-    snapshot = luna_presence_service.get_presence(user.tenant_id)
+    snapshot = _presence_for_tenant(user.tenant_id)
     connected_shells = set(snapshot.get("connected_shells") or [])
     if shell_id not in connected_shells:
         raise HTTPException(status_code=409, detail="Desktop shell is not connected")
+
+
+def _select_connected_shell(
+    tenant_id: uuid.UUID,
+    requested_shell_id: str | None,
+) -> tuple[str, dict[str, Any]]:
+    snapshot = _presence_for_tenant(tenant_id)
+    connected_shells = list(snapshot.get("connected_shells") or [])
+    connected = set(connected_shells)
+    if requested_shell_id:
+        if requested_shell_id not in connected:
+            raise HTTPException(status_code=409, detail="Desktop shell is not connected")
+        selected = requested_shell_id
+    else:
+        active_shell = snapshot.get("active_shell")
+        if active_shell in connected:
+            selected = active_shell
+        elif len(connected_shells) == 1:
+            selected = connected_shells[0]
+        else:
+            raise HTTPException(status_code=409, detail="No connected desktop shell")
+
+    raw_caps = (snapshot.get("shell_capabilities") or {}).get(selected) or {}
+    capabilities = {
+        key: bool(value)
+        for key, value in raw_caps.items()
+        if key.startswith("can_") and isinstance(value, bool)
+    }
+    return selected, capabilities
 
 
 def _display_safe_payload(event: DesktopCommandEvent) -> dict[str, Any]:
@@ -100,6 +165,9 @@ def _safe_reason(audit: LocalObservationAudit) -> str | None:
     for prefix in _SAFE_FAILURE_REASONS:
         if normalized.startswith(prefix):
             return prefix
+    for prefix in _SAFE_DENIAL_REASONS:
+        if normalized.startswith(prefix):
+            return f"{prefix} {audit.action} request denied"
     if audit.outcome == "denied":
         return "desktop observation denied"
     if audit.outcome == "failed":
@@ -159,6 +227,78 @@ def record_local_observation_event(
     except Exception:
         logger.exception(
             "desktop-control: failed to mirror event %s into session_events",
+            event.id,
+        )
+
+    return event, session_event
+
+
+def record_mcp_observation_request(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: McpObservationRequest,
+) -> tuple[DesktopCommandEvent, dict[str, Any] | None]:
+    """Record an MCP/API-governed observation request.
+
+    This phase intentionally does not execute desktop observations from the
+    server side: Tauri has no command-claim down-channel yet. Recording a
+    denied event keeps the MCP tool honest while preserving tenant/session/shell
+    auditability and display-safe session replay.
+    """
+    _ensure_session_for_tenant(db, request.session_id, tenant_id)
+    _ensure_user_for_tenant(db, user_id, tenant_id)
+    shell_id, shell_capabilities = _select_connected_shell(tenant_id, request.shell_id)
+
+    capability = _OBSERVATION_CAPABILITIES[request.action]
+    can_observe = bool(shell_capabilities.get("can_observe"))
+    if can_observe:
+        reason = f"desktop observation down-channel unavailable; {request.action} request denied"
+        mode = "observe"
+        down_channel_reason = "not_implemented"
+    else:
+        reason = f"desktop shell cannot observe; {request.action} request denied"
+        mode = "control_locked"
+        down_channel_reason = "shell_not_observable"
+
+    event = DesktopCommandEvent(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=request.session_id,
+        event_type="desktop_observation_denied",
+        source="mcp",
+        action=request.action,
+        capability=capability,
+        outcome="denied",
+        reason=reason,
+        mode=mode,
+        shell_id=shell_id,
+        event_metadata={
+            "request_id": str(uuid.uuid4()),
+            "tool_name": request.tool_name,
+            "down_channel": {
+                "available": False,
+                "reason": down_channel_reason,
+            },
+            "shell_capabilities": shell_capabilities,
+        },
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+
+    session_event = None
+    try:
+        session_event = publish_session_event(
+            str(request.session_id),
+            event.event_type,
+            _display_safe_payload(event),
+            tenant_id=str(tenant_id),
+        )
+    except Exception:
+        logger.exception(
+            "desktop-control: failed to mirror MCP request event %s into session_events",
             event.id,
         )
 
