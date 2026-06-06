@@ -58,6 +58,8 @@ export function labelForControlMode(mode) {
       return 'Control';
     case 'stopped':
       return 'Stopped';
+    case 'stopping':
+      return 'Stopping';
     default:
       return 'Control Locked';
   }
@@ -78,17 +80,21 @@ function invokeControlWithTimeout(command, args, timeoutMs = 5000) {
   ]).finally(() => window.clearTimeout(timeoutId));
 }
 
-function stoppedStateFrom(current) {
+function readSafetyStateWithTimeout(timeoutMs = 1500) {
+  return invokeControlWithTimeout('control_get_safety_state', undefined, timeoutMs);
+}
+
+function stoppingStateFrom(current) {
   return {
     ...current,
-    mode: 'stopped',
+    mode: 'stopping',
     observe_enabled: false,
     assist_enabled: false,
     control_enabled: false,
-    stopped: true,
+    stopped: false,
     control_locked: true,
     capture_running: false,
-    gesture_state: 'stopped',
+    gesture_state: 'stopping',
     cursor_global: false,
     can_observe: false,
     can_assist: false,
@@ -97,10 +103,9 @@ function stoppedStateFrom(current) {
     can_control_keyboard: false,
     macos_app_monitor: {
       ...(current.macos_app_monitor || FALLBACK_STATE.macos_app_monitor),
-      status: 'stopped',
-      reason: 'macOS app monitoring is stopped by the local Stop latch.',
+      status: 'locked',
+      reason: 'macOS app monitoring is pending local Stop confirmation.',
     },
-    last_stop_at_ms: Date.now(),
   };
 }
 
@@ -286,13 +291,24 @@ export default function ControlSafetyStrip() {
     setBusy(true);
     const optimisticStop = command === 'control_stop_all';
     if (optimisticStop) {
-      publishState(stoppedStateFrom(state));
+      publishState(stoppingStateFrom(state));
     }
     try {
       const next = await invokeControlWithTimeout(command, undefined, optimisticStop ? 1500 : 5000);
       publishState(next);
     } catch {
-      if (!optimisticStop) await refresh();
+      if (optimisticStop) {
+        try {
+          const refreshed = await readSafetyStateWithTimeout(1500);
+          publishState(
+            refreshed?.mode === 'stopped' ? refreshed : stoppingStateFrom(refreshed || state),
+          );
+        } catch {
+          publishState(stoppingStateFrom(state));
+        }
+      } else {
+        await refresh();
+      }
     } finally {
       setBusy(false);
     }
@@ -339,6 +355,7 @@ export default function ControlSafetyStrip() {
   }, [label, permissionSummary.title, state.gesture_state, state.cursor_global]);
   const alphaKernel = state.alpha_kernel || FALLBACK_STATE.alpha_kernel;
   const macosMonitor = state.macos_app_monitor || FALLBACK_STATE.macos_app_monitor;
+  const stopping = state.mode === 'stopping';
   const alphaTitle = alphaKernel.available
     ? `Alpha CLI kernel: ${alphaKernel.binary_path || 'available'}`
     : `Alpha CLI kernel: ${alphaKernel.reason || 'missing'}`;
@@ -372,21 +389,21 @@ export default function ControlSafetyStrip() {
         <button
           className="control-safety-action"
           onClick={() => run('control_observe_status')}
-          disabled={busy || state.mode === 'observe' || !state.can_observe}
+          disabled={busy || stopping || state.mode === 'observe' || !state.can_observe}
           title="Enable observe-only mode"
         >
           Observe
         </button>
         <button
           className="control-safety-action"
-          disabled={busy || !state.can_assist}
+          disabled={busy || stopping || !state.can_assist}
           title="Assist mode requires API governance and approval grants"
         >
           Assist
         </button>
         <button
           className="control-safety-action"
-          disabled={busy || !state.can_control}
+          disabled={busy || stopping || !state.can_control}
           title="Control mode is locked until command governance ships"
         >
           Control
@@ -394,7 +411,7 @@ export default function ControlSafetyStrip() {
         <button
           className="control-safety-action"
           onClick={() => run('control_lock_all')}
-          disabled={busy || state.mode === 'control_locked' || state.mode === 'stopped'}
+          disabled={busy || stopping || state.mode === 'control_locked' || state.mode === 'stopped'}
           title="Lock observation without latching Stop"
         >
           Lock
@@ -402,7 +419,7 @@ export default function ControlSafetyStrip() {
         <button
           className="control-safety-action control-safety-stop"
           onClick={() => run('control_stop_all')}
-          disabled={busy || state.mode === 'stopped'}
+          disabled={busy || stopping || state.mode === 'stopped'}
           title="Stop all local desktop control and capture loops"
         >
           Stop

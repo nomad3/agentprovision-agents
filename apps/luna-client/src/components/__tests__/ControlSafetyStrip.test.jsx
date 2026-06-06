@@ -329,10 +329,12 @@ describe('ControlSafetyStrip', () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('control_stop_all');
     });
-    expect(screen.getByText('Stopped')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Stopped')).toBeInTheDocument();
+    });
   });
 
-  it('shows stopped immediately if the native Stop command is slow', async () => {
+  it('shows stopping, not stopped, while native Stop confirmation is pending', async () => {
     invokeMock
       .mockResolvedValueOnce({
         mode: 'observe',
@@ -349,7 +351,9 @@ describe('ControlSafetyStrip', () => {
     expect(await screen.findByText('Observe', { selector: '.control-safety-label' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^stop$/i }));
 
-    expect(screen.getByText('Stopped', { selector: '.control-safety-label' })).toBeInTheDocument();
+    expect(screen.getByText('Stopping', { selector: '.control-safety-label' })).toBeInTheDocument();
+    expect(screen.queryByText('Stopped', { selector: '.control-safety-label' })).toBeNull();
+    expect(screen.getByRole('button', { name: /^stop$/i })).toBeDisabled();
   });
 
   it('locks observation without latching stopped mode', async () => {

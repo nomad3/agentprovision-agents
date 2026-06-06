@@ -172,6 +172,30 @@ function envelopeBindingFields(command, action, shellId, expectedContext = {}) {
   };
 }
 
+function nativeBoundaryProofRequest(command, action, shellId, expectedContext = {}) {
+  return {
+    ...envelopeBindingFields(command, action, shellId, expectedContext),
+    command_envelope: command?.payload?.command_envelope || null,
+    approval: command?.payload?.approval || null,
+  };
+}
+
+function nativeBoundaryCompletion(action, proof, fallbackMode = null) {
+  const reason = proof?.allowed
+    ? `desktop native control disabled; ${action} denied`
+    : (proof?.reason || `desktop native control disabled; ${action} denied`);
+  return {
+    status: reason.toLowerCase().includes('stopped') ? 'preempted' : 'denied',
+    reason,
+    metadata: {
+      control_mode: proof?.mode || fallbackMode || null,
+      native_boundary_audit_event_id: proof?.audit_event_id || null,
+      native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
+      result_kind: 'native_boundary_denial',
+    },
+  };
+}
+
 function validateClaimedCommandEnvelope(command, action, shellId, expectedContext = {}) {
   const envelope = command?.payload?.command_envelope;
   if (!envelope || typeof envelope !== 'object') {
@@ -345,6 +369,10 @@ async function invokeWithTimeout(invoke, command, timeoutMs) {
   return withTimeout(() => invoke(command), timeoutMs, `Tauri command ${command}`);
 }
 
+async function invokeWithArgsTimeout(invoke, command, args, timeoutMs) {
+  return withTimeout(() => invoke(command, args), timeoutMs, `Tauri command ${command}`);
+}
+
 export async function executeClaimedDesktopCommand(
   command,
   shellId,
@@ -358,6 +386,29 @@ export async function executeClaimedDesktopCommand(
   if (OBSERVATION_COMMANDS[action] || NATIVE_CONTROL_COMMANDS.has(action)) {
     const envelopeCheck = validateClaimedCommandEnvelope(command, action, shellId, expectedContext);
     if (!envelopeCheck.ok) {
+      if (NATIVE_CONTROL_COMMANDS.has(action)) {
+        try {
+          const proof = await invokeWithArgsTimeout(
+            invoke,
+            'control_prove_native_command_boundary',
+            { request: nativeBoundaryProofRequest(command, action, shellId, expectedContext) },
+            timeouts.nativeTimeoutMs,
+          );
+          const completion = nativeBoundaryCompletion(action, proof);
+          await completeCommand(
+            command,
+            shellId,
+            deviceToken,
+            completion.status,
+            completion.reason,
+            completion.metadata,
+            timeouts,
+          );
+          return;
+        } catch (error) {
+          console.warn('[Luna] native boundary proof failed for malformed claim:', reasonText(error));
+        }
+      }
       await completeCommand(
         command,
         shellId,
@@ -400,13 +451,34 @@ export async function executeClaimedDesktopCommand(
       );
       return;
     }
+    let proof;
+    try {
+      proof = await invokeWithArgsTimeout(
+        invoke,
+        'control_prove_native_command_boundary',
+        { request: nativeBoundaryProofRequest(command, action, shellId, expectedContext) },
+        timeouts.nativeTimeoutMs,
+      );
+    } catch (error) {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'failed',
+        reasonText(error) || 'desktop native-control boundary unavailable',
+        { control_mode: safety?.mode || null, result_kind: 'error' },
+        timeouts,
+      );
+      return;
+    }
+    const completion = nativeBoundaryCompletion(action, proof, safety?.mode || null);
     await completeCommand(
       command,
       shellId,
       deviceToken,
-      'denied',
-      `desktop native control disabled; ${action} denied`,
-      { control_mode: safety?.mode || null, result_kind: 'unsupported' },
+      completion.status,
+      completion.reason,
+      completion.metadata,
       timeouts,
     );
     return;

@@ -59,6 +59,15 @@ pub enum NativeControlCapability {
     Keyboard,
 }
 
+impl NativeControlCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pointer => "pointer_control",
+            Self::Keyboard => "keyboard_control",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct NativeControlCommandEnvelope {
     /// Placeholder for the future signature-verification result. This must be

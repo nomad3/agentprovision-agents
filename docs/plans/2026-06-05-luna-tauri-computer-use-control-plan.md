@@ -942,7 +942,11 @@ Additional discovery inputs:
     local control affordances, and times out a slow native Stop invoke instead
     of leaving the UI in Observe. This does not weaken safety because native
     Stop already persists the latch before gesture teardown; it only makes the
-    visible state fail closed when the bridge is slow.
+    visible state fail closed when the bridge is slow. Luna re-review later
+    tightened this: the UI must not claim `Stopped` until native
+    `control_stop_all` returns or a confirmed safety refresh reports the Stop
+    latch. The branch now shows a disabled `Stopping` posture during pending
+    native confirmation; `Stopped` is published only from native state.
 88. Luna Supervisor reviewed entry 86/87 via Alpha Chat and accepted the branch
     framing as TCC readiness plus Stop fail-closed UX hardening only. Her merge
     condition remains unchanged: review must confirm the patch does not add any
@@ -950,6 +954,35 @@ Additional discovery inputs:
     actuation stays blocked until approval-envelope authenticity, replay
     defense, revocation, session/device/command binding, and denial audit gates
     are proven at the native boundary.
+89. Native-boundary proof slice added on `codex/luna-native-boundary-proof`.
+    Native pointer/keyboard claims now pass through a proof-only Tauri command
+    before terminal command completion. Valid-looking claims run JS preflight
+    first and then the Rust proof; malformed native-control claims also call the
+    Rust proof when possible, so missing/malformed envelopes are rejected at the
+    native boundary rather than only in the WebView. The Rust boundary
+    independently rejects missing envelopes, malformed/unsigned envelopes,
+    expired envelopes, replayed nonces, revoked grants, wrong shell/session/
+    device/command bindings, and approval grant mismatches; it emits
+    `desktop_native_control_denied` display-safe audit metadata and returns a
+    structured denial result to the claim loop.
+    The proof still sets `tier_enabled=false`, so even a valid native-control
+    envelope completes as `desktop native control tier disabled` and no
+    `control_pointer_*` or `control_keyboard_*` macOS path is invoked. Local
+    validation passed `cargo fmt --check`, `cargo check`, `cargo test`, `npm
+    test -- ControlSafetyStrip.test.jsx --run`, `npm test --
+    useDesktopCommandClaims.test.jsx --run`, `npm run build`, and `git diff
+    --check`. Remaining caveat: cryptographic verification is not implemented
+    in this slice; Rust checks envelope metadata plus signature presence, while
+    API-side HMAC signing remains the current server verifier.
+90. Mainline PR #817 merged `docs/plans/2026-06-06-grounded-agentprovision-pattern.md`
+    as merge `3442a3fe`, adding the claim ledger, assumption firewall,
+    grounding statuses, desktop-native grounding surface, and PR ladder. The
+    Luna computer-use plan should now treat native-control envelope proofs as
+    evidence contracts: denial audit events and future approval-verifier traces
+    must be joinable to claim/action provenance, missing checks, risk posture,
+    and operator-visible grounding state. The next native-control work should
+    align with the grounded plan's sequence: measure/trace first, enforce next,
+    and only then consider canary actuation.
 
 ---
 
@@ -2493,14 +2526,11 @@ Exit criteria:
 
 ## Next Actions
 
-1. Continue the next gated phase after the merged approval trust-boundary
-   slice: prove the native boundary rejects every missing, malformed, expired,
-   replayed, revoked, wrong-device, wrong-session, or wrong-command approval
-   envelope immediately before macOS invoke. Keep pointer/keyboard disabled.
-2. Validate the current branch's first-use permission onboarding in a local
-   Luna build: TCC detail rows must offer direct setup actions for missing
-   permissions, open the correct macOS pane, refresh readiness afterward, and
-   leave Assist/Control and pointer/keyboard actuation disabled.
+1. Review the native-boundary proof slice with Luna/council and confirm no new
+   pointer, keyboard, Assist, or Control execution path was introduced.
+2. Exercise the proof command in an installed local branch build once a native
+   command claim can be queued safely, and verify `desktop_native_control_denied`
+   audit metadata reaches the expected Luna/session surfaces.
 3. Extend the Alpha-kernel adapter beyond readiness:
    auth/session handoff, chat-job streaming from `alpha`, cancellation, error
    display, offline behavior, release packaging, and app-monitor event mapping
@@ -2508,12 +2538,13 @@ Exit criteria:
 4. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
-5. Add Tauri-side public-key command-envelope validation before any pointer or
-   keyboard execution: nonce, expiry, session, shell, device, command id, policy
-   version, replay protection, revocation, and policy-decision binding.
-6. Re-review approval grant creation/consumption with council and Luna, then add
-   Tauri-side public-key/Ed25519 verification or an equivalent local verifier
-   before enabling narrow canary pointer execution.
+5. Add Tauri-side cryptographic command-envelope validation before any pointer
+   or keyboard execution: public-key/Ed25519 or equivalent local verifier,
+   nonce expiry, session, shell, device, command id, policy version, replay
+   protection, revocation, and policy-decision binding.
+6. Re-review approval grant creation/consumption with council and Luna after the
+   local verifier lands, then decide whether a narrow canary pointer execution
+   gate can be designed without broad macOS actuation.
 7. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
