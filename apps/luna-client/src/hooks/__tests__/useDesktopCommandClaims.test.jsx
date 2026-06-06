@@ -31,12 +31,16 @@ import {
   useDesktopCommandClaims,
 } from '../useDesktopCommandClaims';
 
-function claimedCommand(action = 'capture_screenshot') {
+function claimedCommand(action = 'capture_screenshot', envelopeNonce = null) {
+  const payload = { action, mode: 'observe' };
+  if (envelopeNonce) {
+    payload.command_envelope = { nonce: envelopeNonce };
+  }
   return {
     desktop_command_id: '99999999-9999-9999-9999-999999999999',
     status: 'claimed',
     shell_id: 'desktop-44444444-4444-4444-4444-444444444444',
-    payload: { action, mode: 'observe' },
+    payload,
   };
 }
 
@@ -124,6 +128,24 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('denied');
     expect(body.reason).toContain('desktop observe locked');
+  });
+
+  it('forwards the signed envelope nonce on completion when claim includes one', async () => {
+    invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('read_clipboard', 'envelope-nonce-test'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.metadata).toEqual({
+      control_mode: 'control_locked',
+      can_observe: true,
+      envelope_nonce: 'envelope-nonce-test',
+    });
   });
 
   it('denies native control commands without invoking local pointer or keyboard controls', async () => {

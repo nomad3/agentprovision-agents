@@ -1,6 +1,10 @@
 """Governed Luna desktop-control audit helpers."""
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -12,8 +16,10 @@ from sqlalchemy import or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.chat import ChatSession
 from app.models.desktop_command import DesktopCommand
+from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
 from app.models.user import User
@@ -88,6 +94,9 @@ _DISABLED_NATIVE_CONTROL_ACTIONS = frozenset(_NATIVE_CONTROL_CAPABILITIES)
 _SAFE_METADATA_KEYS = {
     "can_observe",
     "control_mode",
+    "envelope_hash",
+    "envelope_nonce",
+    "envelope_policy_version",
     "payload_key_count",
     "result_fields",
     "result_kind",
@@ -102,6 +111,10 @@ _SAFE_CONTROL_MODES = {"control_locked", "observe", "stopped"}
 
 DEFAULT_COMMAND_LEASE_SECONDS = 30
 DEFAULT_COMMAND_PENDING_TTL_SECONDS = 300
+CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1
+DESKTOP_COMMAND_ENVELOPE_SCHEMA = "agentprovision.desktop_command_envelope.v1"
+DESKTOP_COMMAND_ENVELOPE_ALGORITHM = "HMAC-SHA256"
+DESKTOP_COMMAND_ENVELOPE_KEY_ID = "agentprovision-desktop-command-hmac-v1"
 
 
 @dataclass(frozen=True)
@@ -210,7 +223,13 @@ def _presence_for_tenant(tenant_id: uuid.UUID) -> dict[str, Any]:
     return luna_presence_service.get_presence(tenant_id)
 
 
+def _ensure_desktop_shell_id(shell_id: str) -> None:
+    if not isinstance(shell_id, str) or not shell_id.startswith("desktop-"):
+        raise HTTPException(status_code=409, detail="Desktop shell id is invalid")
+
+
 def _bound_device_for_shell(snapshot: dict[str, Any], shell_id: str) -> uuid.UUID:
+    _ensure_desktop_shell_id(shell_id)
     raw_device_id = (snapshot.get("shell_devices") or {}).get(shell_id)
     if not raw_device_id:
         raise HTTPException(status_code=409, detail="Desktop shell device is not bound")
@@ -221,6 +240,7 @@ def _bound_device_for_shell(snapshot: dict[str, Any], shell_id: str) -> uuid.UUI
 
 
 def _ensure_shell_bound(shell_id: str, user: User) -> uuid.UUID:
+    _ensure_desktop_shell_id(shell_id)
     snapshot = _presence_for_tenant(user.tenant_id)
     connected_shells = set(snapshot.get("connected_shells") or [])
     if shell_id not in connected_shells:
@@ -262,6 +282,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
 def _as_aware_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -289,6 +318,10 @@ def _safe_metadata(raw: dict[str, Any] | None) -> dict[str, Any]:
         } and isinstance(value, int):
             safe[normalized_key] = max(0, value)
         elif normalized_key == "control_mode" and value in _SAFE_CONTROL_MODES:
+            safe[normalized_key] = value
+        elif normalized_key in {"envelope_hash", "envelope_nonce"} and isinstance(value, str):
+            safe[normalized_key] = value[:96]
+        elif normalized_key == "envelope_policy_version" and isinstance(value, int):
             safe[normalized_key] = value
         elif normalized_key == "can_observe" and isinstance(value, bool):
             safe[normalized_key] = value
@@ -321,6 +354,16 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         return f"desktop observation permission denied; {action} denied"
     if normalized.startswith("unsupported desktop command action:"):
         return "unsupported desktop command action"
+    if normalized in {
+        "desktop command envelope missing",
+        "desktop command envelope nonce missing",
+        "desktop command envelope nonce mismatch",
+        "desktop command envelope expired",
+        "desktop command envelope replay denied",
+        "desktop command envelope signature invalid",
+        "desktop command envelope binding mismatch",
+    }:
+        return normalized
     if normalized == "desktop command pending ttl expired":
         return normalized
     if normalized in {"operator Stop", "local Stop latched", "desktop control stopped"}:
@@ -589,6 +632,312 @@ def _device_for_user_shell(
     if (device.config or {}).get("shell_id") != shell_id:
         raise HTTPException(status_code=403, detail="Device is not bound to shell")
     return device.id
+
+
+def _canonical_json(value: dict[str, Any]) -> bytes:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _desktop_command_envelope_secret() -> bytes:
+    # First trust-edge slice: API-issued envelopes are verified server-side and
+    # Tauri native actuation still denies by default. Public-key/Ed25519 client
+    # verification is the next slice once the envelope contract is stable.
+    secret = settings.JWT_AGENT_TOKEN_SECRET or settings.SECRET_KEY
+    return secret.encode("utf-8")
+
+
+def _sign_envelope_payload(payload: dict[str, Any]) -> str:
+    digest = hmac.new(
+        _desktop_command_envelope_secret(),
+        _canonical_json(payload),
+        hashlib.sha256,
+    ).digest()
+    return _b64url(digest)
+
+
+def _envelope_hash(envelope: dict[str, Any]) -> str:
+    return hashlib.sha256(_canonical_json(envelope)).hexdigest()
+
+
+def _unsigned_envelope_payload(envelope: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in envelope.items()
+        if key != "signature"
+    }
+
+
+def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
+    signature = envelope.get("signature")
+    if not isinstance(signature, str) or not signature:
+        return False
+    expected = _sign_envelope_payload(_unsigned_envelope_payload(envelope))
+    return hmac.compare_digest(signature, expected)
+
+
+def _build_signed_command_envelope(
+    command: DesktopCommand,
+    *,
+    user: User,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> tuple[dict[str, Any], str]:
+    action = str((command.payload or {}).get("action") or "desktop_command")
+    tool_name = str((command.payload or {}).get("tool_name") or "")
+    mode = str((command.payload or {}).get("mode") or "control_locked")
+    envelope = {
+        "schema": DESKTOP_COMMAND_ENVELOPE_SCHEMA,
+        "signed": True,
+        "signature_alg": DESKTOP_COMMAND_ENVELOPE_ALGORITHM,
+        "key_id": DESKTOP_COMMAND_ENVELOPE_KEY_ID,
+        "policy_version": CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION,
+        "issuer": "agentprovision-api",
+        "tenant_id": str(command.tenant_id),
+        "user_id": str(user.id),
+        "session_id": str(command.session_id),
+        "desktop_command_id": str(command.id),
+        "correlation_id": str(command.correlation_id) if command.correlation_id else None,
+        "shell_id": command.shell_id,
+        "device_id": str(command.device_id) if command.device_id else None,
+        "action": action,
+        "tool_name": tool_name,
+        "capability": command.capability,
+        "mode": mode,
+        "risk_tier": "native_control" if action in _NATIVE_CONTROL_CAPABILITIES else "observe",
+        "policy_decision": "lease_claimed",
+        "nonce": str(uuid.uuid4()),
+        "issued_at": issued_at.isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "expires_at_ms": int(expires_at.timestamp() * 1000),
+    }
+    envelope["signature"] = _sign_envelope_payload(envelope)
+    return envelope, _envelope_hash(envelope)
+
+
+def _persist_command_envelope_nonce(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    envelope: dict[str, Any],
+    envelope_hash: str,
+    issued_at: datetime,
+    expires_at: datetime,
+) -> DesktopCommandEnvelopeNonce:
+    nonce_row = DesktopCommandEnvelopeNonce(
+        tenant_id=command.tenant_id,
+        desktop_command_id=command.id,
+        session_id=command.session_id,
+        shell_id=command.shell_id,
+        device_id=command.device_id,
+        nonce=envelope["nonce"],
+        envelope_hash=envelope_hash,
+        status="issued",
+        issued_at=issued_at,
+        expires_at=expires_at,
+        created_at=issued_at,
+        updated_at=issued_at,
+    )
+    db.add(nonce_row)
+    return nonce_row
+
+
+def _envelope_metadata(envelope: dict[str, Any] | None, envelope_hash: str | None = None) -> dict[str, Any]:
+    if not envelope:
+        return {}
+    metadata: dict[str, Any] = {
+        "envelope_nonce": envelope.get("nonce"),
+        "envelope_policy_version": envelope.get("policy_version"),
+    }
+    if envelope_hash:
+        metadata["envelope_hash"] = envelope_hash
+    return metadata
+
+
+def _deny_command_for_envelope_failure(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None, bool]:
+    now = _utcnow()
+    result = db.execute(
+        update(DesktopCommand)
+        .where(
+            DesktopCommand.id == command.id,
+            DesktopCommand.tenant_id == command.tenant_id,
+            DesktopCommand.status.in_(("claimed", "running")),
+        )
+        .values(
+            status="denied",
+            completed_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Desktop command lease is no longer valid")
+    command.status = "denied"
+    command.completed_at = now
+    command.updated_at = now
+    event = _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_envelope_denied",
+        source="api",
+        outcome="denied",
+        reason=reason,
+        metadata=metadata,
+    )
+    db.commit()
+    db.refresh(command)
+    db.refresh(event)
+    session_event = _publish_display_safe_session_event(
+        command.session_id,
+        event.event_type,
+        {
+            **_display_safe_command_payload(command),
+            "desktop_event_id": str(event.id),
+            "outcome": event.outcome,
+            "reason": event.reason,
+        },
+        tenant_id=command.tenant_id,
+    )
+    return command, event, session_event, False
+
+
+def _consume_command_envelope_or_deny(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    user: User,
+    completion: DesktopCommandCompletion,
+    token_device_id: uuid.UUID,
+    now: datetime,
+) -> tuple[DesktopCommand, DesktopCommandEvent | None, dict[str, Any] | None, bool] | None:
+    envelope = (command.payload or {}).get("command_envelope")
+    if not isinstance(envelope, dict):
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope missing",
+        )
+
+    completion_nonce = (completion.metadata or {}).get("envelope_nonce")
+    metadata = _envelope_metadata(envelope, _envelope_hash(envelope))
+    if not isinstance(completion_nonce, str) or not completion_nonce:
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope nonce missing",
+            metadata=metadata,
+        )
+    if completion_nonce != envelope.get("nonce"):
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope nonce mismatch",
+            metadata={**metadata, "envelope_nonce": completion_nonce},
+        )
+    if not _verify_envelope_signature(envelope):
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope signature invalid",
+            metadata=metadata,
+        )
+
+    expires_at = _as_aware_utc(_parse_iso_datetime(envelope.get("expires_at")))
+    if expires_at is None or expires_at <= now:
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope expired",
+            metadata=metadata,
+        )
+
+    expected = {
+        "tenant_id": str(command.tenant_id),
+        "user_id": str(user.id),
+        "session_id": str(command.session_id),
+        "desktop_command_id": str(command.id),
+        "shell_id": command.shell_id,
+        "device_id": str(token_device_id),
+        "capability": command.capability,
+        "action": str((command.payload or {}).get("action") or "desktop_command"),
+        "policy_version": CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION,
+    }
+    if any(envelope.get(key) != value for key, value in expected.items()):
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope binding mismatch",
+            metadata=metadata,
+        )
+
+    nonce_row = db.query(DesktopCommandEnvelopeNonce).filter(
+        DesktopCommandEnvelopeNonce.tenant_id == command.tenant_id,
+        DesktopCommandEnvelopeNonce.nonce == completion_nonce,
+    ).first()
+    if not nonce_row or str(nonce_row.desktop_command_id) != str(command.id):
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope binding mismatch",
+            metadata=metadata,
+        )
+    nonce_expires_at = _as_aware_utc(nonce_row.expires_at)
+    if nonce_expires_at is None or nonce_expires_at <= now:
+        nonce_row.status = "expired"
+        nonce_row.updated_at = now
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope expired",
+            metadata=metadata,
+        )
+    if nonce_row.status != "issued":
+        nonce_row.status = "replayed"
+        nonce_row.updated_at = now
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope replay denied",
+            metadata=metadata,
+        )
+
+    result = db.execute(
+        update(DesktopCommandEnvelopeNonce)
+        .where(
+            DesktopCommandEnvelopeNonce.id == nonce_row.id,
+            DesktopCommandEnvelopeNonce.tenant_id == command.tenant_id,
+            DesktopCommandEnvelopeNonce.status == "issued",
+        )
+        .values(
+            status="consumed",
+            consumed_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        return _deny_command_for_envelope_failure(
+            db,
+            command,
+            reason="desktop command envelope replay denied",
+            metadata=metadata,
+        )
+    return None
 
 
 def _expire_stale_leases(
@@ -1079,9 +1428,25 @@ def claim_next_desktop_command(
                 event,
                 status="expired",
                 tenant_id=user.tenant_id,
-            )
+        )
         return None, None, None
 
+    payload = dict(command.payload or {})
+    envelope, envelope_hash = _build_signed_command_envelope(
+        command,
+        user=user,
+        issued_at=now,
+        expires_at=lease_expires_at,
+    )
+    payload["command_envelope"] = envelope
+    _persist_command_envelope_nonce(
+        db,
+        command,
+        envelope=envelope,
+        envelope_hash=envelope_hash,
+        issued_at=now,
+        expires_at=lease_expires_at,
+    )
     result = db.execute(
         update(DesktopCommand)
         .where(
@@ -1094,6 +1459,7 @@ def claim_next_desktop_command(
             lease_owner_shell_id=claim.shell_id,
             lease_expires_at=lease_expires_at,
             claimed_at=now,
+            payload=payload,
             updated_at=now,
         )
         .execution_options(synchronize_session=False)
@@ -1106,6 +1472,7 @@ def claim_next_desktop_command(
     command.lease_owner_shell_id = claim.shell_id
     command.lease_expires_at = lease_expires_at
     command.claimed_at = now
+    command.payload = payload
     command.updated_at = now
     event = _record_command_event(
         db,
@@ -1113,7 +1480,10 @@ def claim_next_desktop_command(
         event_type="desktop_command_claimed",
         source="tauri",
         outcome="started",
-        metadata={"lease_expires_at": lease_expires_at.isoformat()},
+        metadata={
+            "lease_expires_at": lease_expires_at.isoformat(),
+            **_envelope_metadata(envelope, envelope_hash),
+        },
     )
     db.commit()
     db.refresh(command)
@@ -1197,6 +1567,25 @@ def complete_desktop_command(
         )
         return command, event, session_event, False
 
+    envelope_denial = _consume_command_envelope_or_deny(
+        db,
+        command,
+        user=user,
+        completion=completion,
+        token_device_id=token_device_id,
+        now=now,
+    )
+    if envelope_denial is not None:
+        return envelope_denial
+
+    envelope = (command.payload or {}).get("command_envelope")
+    completion_metadata = {
+        **(completion.metadata or {}),
+        **_envelope_metadata(
+            envelope if isinstance(envelope, dict) else None,
+            _envelope_hash(envelope) if isinstance(envelope, dict) else None,
+        ),
+    }
     result = db.execute(
         update(DesktopCommand)
         .where(
@@ -1231,7 +1620,7 @@ def complete_desktop_command(
         source="tauri",
         outcome=completion.status,
         reason=completion.reason,
-        metadata=completion.metadata,
+        metadata=completion_metadata,
     )
     db.commit()
     db.refresh(command)
