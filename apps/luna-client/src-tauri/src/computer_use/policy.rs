@@ -277,10 +277,21 @@ fn permission_status<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::computer_use::permissions::{DesktopPermissionReadiness, PermissionProbe};
+    use crate::computer_use::permissions::{
+        DesktopPermissionReadiness, PermissionAppIdentity, PermissionProbe,
+    };
 
     fn readiness(screen: &str, ax: &str, automation: &str) -> DesktopPermissionReadiness {
         DesktopPermissionReadiness {
+            app_identity: PermissionAppIdentity {
+                bundle_id: Some("com.agentprovision.luna.test".to_string()),
+                executable_path: None,
+                app_bundle_path: None,
+                code_signature_identifier: None,
+                code_signature_team_identifier: None,
+                code_signature_kind: None,
+                permission_scope_note: "test TCC identity".to_string(),
+            },
             screen_recording: probe(screen),
             accessibility: probe(ax),
             automation_system_events: probe(automation),

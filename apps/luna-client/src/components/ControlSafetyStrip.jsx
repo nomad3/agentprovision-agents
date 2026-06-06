@@ -39,6 +39,15 @@ const FALLBACK_STATE = {
   last_stop_at_ms: null,
 };
 
+const PERMISSION_KEYS = [
+  'screen_recording',
+  'accessibility',
+  'automation_system_events',
+  'input_monitoring',
+  'camera',
+  'microphone',
+];
+
 export function labelForControlMode(mode) {
   switch (mode) {
     case 'observe':
@@ -54,9 +63,9 @@ export function labelForControlMode(mode) {
   }
 }
 
-async function invokeControl(command) {
+async function invokeControl(command, args) {
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke(command);
+  return args ? invoke(command, args) : invoke(command);
 }
 
 function permissionLabel(key) {
@@ -79,13 +88,22 @@ function permissionLabel(key) {
 }
 
 function permissionEntries(permissions) {
-  return Object.entries(permissions || {}).map(([key, value]) => ({
-    key,
-    label: permissionLabel(key),
-    status: value?.status || 'unknown',
-    reason: value?.reason || '',
-    requiredFor: value?.required_for || [],
-  }));
+  return PERMISSION_KEYS
+    .filter((key) => permissions?.[key])
+    .map((key) => {
+      const value = permissions[key];
+      return {
+        key,
+        label: permissionLabel(key),
+        status: value?.status || 'unknown',
+        reason: value?.reason || '',
+        requiredFor: value?.required_for || [],
+      };
+    });
+}
+
+export function permissionIdentity(permissions) {
+  return permissions?.app_identity || null;
 }
 
 export function summarizePermissions(permissions) {
@@ -113,6 +131,16 @@ export function labelForPermissionStatus(status) {
   }
 }
 
+export function canOpenPermissionSetup(permission) {
+  return ['denied', 'unknown'].includes(permission?.status);
+}
+
+export function labelForPermissionSetupAction(permission) {
+  if (permission?.status === 'denied') return 'Enable';
+  if (permission?.status === 'unknown') return 'Open';
+  return '';
+}
+
 export function labelForAlphaKernelStatus(status, available) {
   if (available || status === 'available') return 'Alpha OK';
   return 'Alpha --';
@@ -137,6 +165,7 @@ export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [permissionBusy, setPermissionBusy] = useState(null);
   const [activeApp, setActiveApp] = useState(null);
 
   const publishState = useCallback((next) => {
@@ -157,6 +186,15 @@ export default function ControlSafetyStrip() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!permissionsOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setPermissionsOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [permissionsOpen]);
 
   const handleActivityPayload = useCallback((payload) => {
     const safePayload = sanitizeMacosAppMonitorEvent(payload, null);
@@ -207,6 +245,19 @@ export default function ControlSafetyStrip() {
     }
   }, [publishState, refresh]);
 
+  const openPermissionSetup = useCallback(async (permission) => {
+    if (!canOpenPermissionSetup(permission)) return;
+    setPermissionBusy(permission.key);
+    try {
+      const next = await invokeControl('control_open_permission_setup', { permission: permission.key });
+      publishState(next);
+    } catch {
+      await refresh();
+    } finally {
+      setPermissionBusy(null);
+    }
+  }, [publishState, refresh]);
+
   const label = labelForControlMode(state.mode);
   const permissionSummary = useMemo(
     () => summarizePermissions(state.permissions),
@@ -216,6 +267,18 @@ export default function ControlSafetyStrip() {
     () => permissionEntries(state.permissions),
     [state.permissions],
   );
+  const identity = useMemo(
+    () => permissionIdentity(state.permissions),
+    [state.permissions],
+  );
+  const signatureLabel = useMemo(() => {
+    if (!identity) return null;
+    return [
+      identity.code_signature_kind,
+      identity.code_signature_identifier,
+      identity.code_signature_team_identifier ? `team ${identity.code_signature_team_identifier}` : null,
+    ].filter(Boolean).join(' | ');
+  }, [identity]);
   const title = useMemo(() => {
     const gesture = state.gesture_state || 'unknown';
     const cursor = state.cursor_global ? 'global cursor on' : 'global cursor off';
@@ -313,19 +376,62 @@ export default function ControlSafetyStrip() {
         </button>
       </div>
       {permissionsOpen && (
-        <div className="control-permissions" aria-label="Permission readiness details">
-          {permissionDetails.length === 0 ? (
-            <div className="control-permission control-permission-unknown">
-              <span className="control-permission-main">
-                <span className="control-permission-name">TCC</span>
-                <span className="control-permission-detail">Permission readiness is unavailable.</span>
-              </span>
-              <span className="control-permission-status">Unknown</span>
+        <div
+          className="control-permissions-backdrop"
+          onClick={() => setPermissionsOpen(false)}
+        >
+          <div
+            className="control-permissions"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Permission readiness details"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="control-permissions-header">
+              <span className="control-permissions-title">Mac Permissions</span>
+              <span className="control-permissions-summary">{permissionSummary.label}</span>
+              <button
+                className="control-permissions-close"
+                type="button"
+                aria-label="Close permission readiness details"
+                onClick={() => setPermissionsOpen(false)}
+              >
+                Close
+              </button>
             </div>
-          ) : permissionDetails.map((permission) => (
-            <div className={`control-permission control-permission-${permission.status}`} key={permission.key}>
-              <span className="control-permission-main">
-                <span className="control-permission-name">{permission.label}</span>
+            {identity && (
+              <div className="control-permissions-identity">
+                <span className="control-permissions-identity-title">Running Luna Identity</span>
+                {identity.bundle_id && (
+                  <span className="control-permissions-identity-line">Bundle: {identity.bundle_id}</span>
+                )}
+                {signatureLabel && (
+                  <span className="control-permissions-identity-line">Signature: {signatureLabel}</span>
+                )}
+                {identity.app_bundle_path && (
+                  <span className="control-permissions-identity-line">App: {identity.app_bundle_path}</span>
+                )}
+                {identity.permission_scope_note && (
+                  <span className="control-permissions-identity-note">{identity.permission_scope_note}</span>
+                )}
+              </div>
+            )}
+            <div className="control-permissions-list">
+              {permissionDetails.length === 0 ? (
+                <div className="control-permission control-permission-unknown">
+                  <span className="control-permission-main">
+                    <span className="control-permission-name">TCC</span>
+                    <span className="control-permission-detail">Permission readiness is unavailable.</span>
+                  </span>
+                  <span className="control-permission-status">Unknown</span>
+                </div>
+              ) : permissionDetails.map((permission) => {
+                const setupAllowed = canOpenPermissionSetup(permission);
+                const setupLabel = labelForPermissionSetupAction(permission);
+                return (
+                  <div className={`control-permission control-permission-${permission.status}`} key={permission.key}>
+                <span className="control-permission-main">
+                  <span className="control-permission-name">{permission.label}</span>
                 {permission.reason && (
                   <span className="control-permission-detail">{permission.reason}</span>
                 )}
@@ -334,10 +440,27 @@ export default function ControlSafetyStrip() {
                     Required for: {permission.requiredFor.join(', ')}
                   </span>
                 )}
-              </span>
-              <span className="control-permission-status">{labelForPermissionStatus(permission.status)}</span>
+                </span>
+                <span className="control-permission-side">
+                  <span className="control-permission-status">{labelForPermissionStatus(permission.status)}</span>
+                  {setupAllowed && (
+                    <button
+                      className="control-permission-action"
+                      type="button"
+                      disabled={busy || permissionBusy === permission.key}
+                      onClick={() => openPermissionSetup(permission)}
+                      aria-label={`${setupLabel} ${permission.label} permission`}
+                      title={`Open macOS settings for ${permission.label}`}
+                    >
+                      {permissionBusy === permission.key ? 'Opening' : setupLabel}
+                    </button>
+                  )}
+                </span>
+              </div>
+                );
+              })}
             </div>
-          ))}
+          </div>
         </div>
       )}
     </div>

@@ -8,5 +8,7 @@
   <string>Luna uses Accessibility access to move the cursor and click via hand gestures.</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Luna uses your microphone for push-to-talk voice dispatch on the spatial podium.</string>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Luna uses System Events automation to read the active application name and window metadata while observe mode is enabled.</string>
 </dict>
 </plist>

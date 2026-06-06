@@ -30,11 +30,11 @@ const SWEEP_CONTINUOUS_STEP_EPSILON: f32 = 0.001;
 
 #[derive(Clone, Copy)]
 struct Sample {
-    palm: Landmark,        // landmark 9 — middle MCP, palm-center proxy
-    thumb_tip: Landmark,   // landmark 4
-    index_tip: Landmark,   // landmark 8
-    pinky_mcp: Landmark,   // landmark 17 — used with wrist for palm axis
-    wrist: Landmark,       // landmark 0
+    palm: Landmark,      // landmark 9 — middle MCP, palm-center proxy
+    thumb_tip: Landmark, // landmark 4
+    index_tip: Landmark, // landmark 8
+    pinky_mcp: Landmark, // landmark 17 — used with wrist for palm axis
+    wrist: Landmark,     // landmark 0
     ts: i64,
 }
 
@@ -73,11 +73,21 @@ impl MotionAnalyzer {
         // within 200ms; pinch is a sustained distance change; rotate is palm
         // angle velocity; sweep is a large slow lateral palm move). Swipe is
         // the fallback for the small/fast lateral case.
-        if let Some(m) = self.classify_tap() { return Some(m); }
-        if let Some(m) = self.classify_pinch() { return Some(m); }
-        if let Some(m) = self.classify_rotate() { return Some(m); }
-        if let Some(m) = self.classify_sweep() { return Some(m); }
-        if let Some(m) = self.classify_swipe() { return Some(m); }
+        if let Some(m) = self.classify_tap() {
+            return Some(m);
+        }
+        if let Some(m) = self.classify_pinch() {
+            return Some(m);
+        }
+        if let Some(m) = self.classify_rotate() {
+            return Some(m);
+        }
+        if let Some(m) = self.classify_sweep() {
+            return Some(m);
+        }
+        if let Some(m) = self.classify_swipe() {
+            return Some(m);
+        }
 
         Some(Motion {
             kind: MotionKind::None,
@@ -101,7 +111,11 @@ impl MotionAnalyzer {
         let dur = end.ts - start.ts;
         if mag >= SWIPE_MIN_MAGNITUDE && dur > 0 {
             let dir = if dx.abs() > dy.abs() {
-                if dx > 0.0 { Direction::Right } else { Direction::Left }
+                if dx > 0.0 {
+                    Direction::Right
+                } else {
+                    Direction::Left
+                }
             } else if dy > 0.0 {
                 Direction::Down
             } else {
@@ -131,7 +145,11 @@ impl MotionAnalyzer {
         if delta.abs() < PINCH_DELTA_THRESHOLD {
             return None;
         }
-        let direction = if delta < 0.0 { Direction::In } else { Direction::Out };
+        let direction = if delta < 0.0 {
+            Direction::In
+        } else {
+            Direction::Out
+        };
         Some(Motion {
             kind: MotionKind::Pinch,
             direction: Some(direction),
@@ -145,7 +163,9 @@ impl MotionAnalyzer {
         // dips below TAP_PINCH_THRESHOLD then recovers, all within 200ms.
         // Look for it in the last ~6 samples (≈200ms at 30fps).
         let n = self.samples.len();
-        if n < 4 { return None; }
+        if n < 4 {
+            return None;
+        }
         let tail: Vec<&Sample> = self.samples.iter().rev().take(8).collect();
         let dur = tail.first()?.ts - tail.last()?.ts;
         if dur <= 0 || dur > TAP_MAX_DURATION_MS {
@@ -163,7 +183,9 @@ impl MotionAnalyzer {
         }
         for s in tail.iter().rev().skip(min_idx + 1) {
             let d = pinch_distance(s);
-            if d > max_dist_after { max_dist_after = d; }
+            if d > max_dist_after {
+                max_dist_after = d;
+            }
         }
         if min_dist < TAP_PINCH_THRESHOLD && max_dist_after > TAP_PINCH_THRESHOLD * 2.0 {
             return Some(Motion {
@@ -181,7 +203,9 @@ impl MotionAnalyzer {
         let end = self.samples.back()?;
         let buffer_start = self.samples.front()?;
         let buffer_dx = end.palm.x - buffer_start.palm.x;
-        if buffer_dx.abs() < SWEEP_MIN_MAGNITUDE { return None; }
+        if buffer_dx.abs() < SWEEP_MIN_MAGNITUDE {
+            return None;
+        }
 
         let mut start_index = end_index;
         while start_index > 0 {
@@ -202,12 +226,22 @@ impl MotionAnalyzer {
         let dy = end.palm.y - start.palm.y;
         let mag = (dx * dx + dy * dy).sqrt();
         let dur = end.ts - start.ts;
-        if mag < SWEEP_MIN_MAGNITUDE { return None; }
-        if dur < SWEEP_MIN_DURATION_MS || dur > SWEEP_MAX_DURATION_MS { return None; }
+        if mag < SWEEP_MIN_MAGNITUDE {
+            return None;
+        }
+        if dur < SWEEP_MIN_DURATION_MS || dur > SWEEP_MAX_DURATION_MS {
+            return None;
+        }
         // Sweep is dominantly horizontal — reject if the vertical component
         // is bigger.
-        if dy.abs() > dx.abs() { return None; }
-        let direction = if dx > 0.0 { Direction::Right } else { Direction::Left };
+        if dy.abs() > dx.abs() {
+            return None;
+        }
+        let direction = if dx > 0.0 {
+            Direction::Right
+        } else {
+            Direction::Left
+        };
         Some(Motion {
             kind: MotionKind::Sweep,
             direction: Some(direction),
@@ -228,12 +262,20 @@ impl MotionAnalyzer {
         let angle_end = palm_angle(end);
         let mut delta = angle_end - angle_start;
         // Normalize to (-π, π]
-        while delta > std::f32::consts::PI { delta -= 2.0 * std::f32::consts::PI; }
-        while delta <= -std::f32::consts::PI { delta += 2.0 * std::f32::consts::PI; }
+        while delta > std::f32::consts::PI {
+            delta -= 2.0 * std::f32::consts::PI;
+        }
+        while delta <= -std::f32::consts::PI {
+            delta += 2.0 * std::f32::consts::PI;
+        }
         if delta.abs() < ROTATE_DELTA_RADIANS {
             return None;
         }
-        let direction = if delta > 0.0 { Direction::Cw } else { Direction::Ccw };
+        let direction = if delta > 0.0 {
+            Direction::Cw
+        } else {
+            Direction::Ccw
+        };
         Some(Motion {
             kind: MotionKind::Rotate,
             direction: Some(direction),
@@ -255,10 +297,7 @@ impl MotionAnalyzer {
     // last N ms of motion instead of the entire ring buffer (which fills
     // to ~1 s and then permanently exceeds the per-classifier ceilings).
     fn window_start(&self, end_ts: i64, max_age_ms: i64) -> Option<&Sample> {
-        let candidate = self
-            .samples
-            .iter()
-            .find(|s| end_ts - s.ts <= max_age_ms)?;
+        let candidate = self.samples.iter().find(|s| end_ts - s.ts <= max_age_ms)?;
         if candidate.ts < end_ts {
             Some(candidate)
         } else {

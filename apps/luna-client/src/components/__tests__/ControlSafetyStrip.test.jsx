@@ -8,10 +8,13 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import ControlSafetyStrip, {
+  canOpenPermissionSetup,
   labelForAlphaKernelStatus,
   labelForControlMode,
   labelForMacosMonitorStatus,
+  labelForPermissionSetupAction,
   labelForPermissionStatus,
+  permissionIdentity,
   summarizePermissions,
 } from '../ControlSafetyStrip';
 
@@ -35,12 +38,33 @@ describe('ControlSafetyStrip', () => {
       accessibility: { status: 'denied', reason: 'missing' },
       input_monitoring: { status: 'not_required', reason: 'not used' },
       camera: { status: 'unknown', reason: 'deferred' },
+      app_identity: {
+        bundle_id: 'com.agentprovision.luna',
+        code_signature_identifier: 'luna-debug',
+      },
     });
 
     expect(summary.label).toBe('TCC 2/3');
     expect(summary.title).toContain('Screen: granted');
     expect(summary.title).toContain('AX: denied');
     expect(summary.title).toContain('Camera: unknown');
+    expect(summary.title).not.toContain('app_identity');
+  });
+
+  it('keeps running app identity metadata separate from permission rows', () => {
+    const permissions = {
+      screen_recording: { status: 'granted', reason: 'ok' },
+      app_identity: {
+        bundle_id: 'com.agentprovision.luna',
+        app_bundle_path: '/Applications/Luna.app',
+      },
+    };
+
+    expect(permissionIdentity(permissions)).toEqual({
+      bundle_id: 'com.agentprovision.luna',
+      app_bundle_path: '/Applications/Luna.app',
+    });
+    expect(summarizePermissions(permissions).label).toBe('TCC 1/1');
   });
 
   it('maps permission readiness states to operator labels', () => {
@@ -48,6 +72,12 @@ describe('ControlSafetyStrip', () => {
     expect(labelForPermissionStatus('denied')).toBe('Denied');
     expect(labelForPermissionStatus('not_required')).toBe('Not Required');
     expect(labelForPermissionStatus('unknown')).toBe('Unknown');
+    expect(canOpenPermissionSetup({ status: 'denied' })).toBe(true);
+    expect(canOpenPermissionSetup({ status: 'unknown' })).toBe(true);
+    expect(canOpenPermissionSetup({ status: 'granted' })).toBe(false);
+    expect(canOpenPermissionSetup({ status: 'not_required' })).toBe(false);
+    expect(labelForPermissionSetupAction({ status: 'denied' })).toBe('Enable');
+    expect(labelForPermissionSetupAction({ status: 'unknown' })).toBe('Open');
   });
 
   it('maps local kernel and macOS monitor states to compact labels', () => {
@@ -159,6 +189,13 @@ describe('ControlSafetyStrip', () => {
       mode: 'control_locked',
       can_observe: true,
       permissions: {
+        app_identity: {
+          bundle_id: 'com.agentprovision.luna',
+          app_bundle_path: '/tmp/Luna.app',
+          code_signature_identifier: 'luna-debug',
+          code_signature_kind: 'ad-hoc',
+          permission_scope_note: 'macOS grants TCC permissions to the running app identity.',
+        },
         screen_recording: {
           status: 'granted',
           reason: 'macOS Screen Recording preflight is granted.',
@@ -177,11 +214,55 @@ describe('ControlSafetyStrip', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Permission readiness TCC 1/2' }));
 
     expect(screen.getByLabelText('Permission readiness details')).toBeInTheDocument();
+    expect(screen.getByText('Running Luna Identity')).toBeInTheDocument();
+    expect(screen.getByText('Bundle: com.agentprovision.luna')).toBeInTheDocument();
+    expect(screen.getByText('Signature: ad-hoc | luna-debug')).toBeInTheDocument();
+    expect(screen.getByText('App: /tmp/Luna.app')).toBeInTheDocument();
     expect(screen.getByText('Screen')).toBeInTheDocument();
     expect(screen.getByText('Granted')).toBeInTheDocument();
     expect(screen.getByText('AX')).toBeInTheDocument();
     expect(screen.getByText('Denied')).toBeInTheDocument();
     expect(screen.getByText('Required for: active app, pointer control')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enable AX permission' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enable Screen permission' })).toBeNull();
+  });
+
+  it('opens the native macOS permission helper from denied TCC rows', async () => {
+    invokeMock
+      .mockResolvedValueOnce({
+        mode: 'control_locked',
+        can_observe: true,
+        permissions: {
+          accessibility: {
+            status: 'denied',
+            reason: 'macOS Accessibility trust preflight is denied or not yet granted.',
+            required_for: ['active app', 'pointer control'],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        mode: 'control_locked',
+        can_observe: true,
+        permissions: {
+          accessibility: {
+            status: 'denied',
+            reason: 'macOS Accessibility trust preflight is denied or not yet granted.',
+            required_for: ['active app', 'pointer control'],
+          },
+        },
+      });
+
+    render(<ControlSafetyStrip />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Permission readiness TCC 0/1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Enable AX permission' }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith(
+        'control_open_permission_setup',
+        { permission: 'accessibility' },
+      );
+    });
   });
 
   it('arms observe-only mode from the local UI', async () => {

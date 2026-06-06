@@ -676,6 +676,17 @@ async fn control_clear_stop(app: tauri::AppHandle) -> Result<ControlSafetyState,
     Ok(state)
 }
 
+#[tauri::command]
+async fn control_open_permission_setup(
+    app: tauri::AppHandle,
+    permission: String,
+) -> Result<ControlSafetyState, String> {
+    computer_use::permissions::open_permission_setup(&permission)?;
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
 /// Resolve (and create) Luna's Tauri app-data dir for durable safety state.
 fn luna_app_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let dir = app
@@ -1700,6 +1711,7 @@ pub fn run() {
             control_stop_all,
             control_lock_all,
             control_clear_stop,
+            control_open_permission_setup,
             capture_screenshot,
             get_active_app,
             read_clipboard,
@@ -1972,13 +1984,13 @@ mod tests {
         assert_eq!(event["from_app"], "Terminal");
         assert_eq!(event["to_app"], "Luna");
         assert_eq!(event["detail_level"], "metadata_only");
-        assert_eq!(
-            event["schema"],
-            "agentprovision.macos_app_monitor_event.v1"
-        );
+        assert_eq!(event["schema"], "agentprovision.macos_app_monitor_event.v1");
         assert!(uuid::Uuid::parse_str(event["event_id"].as_str().unwrap()).is_ok());
         assert_eq!(event["observed_at_ms"], 12345000);
-        assert!(event["active_context_id"].as_str().unwrap().starts_with("Luna:"));
+        assert!(event["active_context_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("Luna:"));
         assert_eq!(event["window_title_present"], true);
         assert_eq!(event["window_title_chars"], 24);
         assert!(event.get("window_title").is_none());

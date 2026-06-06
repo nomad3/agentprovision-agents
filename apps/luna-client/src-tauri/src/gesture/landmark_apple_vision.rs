@@ -52,7 +52,11 @@ impl LandmarkExtractor for AppleVisionExtractor {
         let n = n.min(2);
         (0..n)
             .map(|h| {
-                let mut lm = [Landmark { x: 0.0, y: 0.0, z: 0.0 }; 21];
+                let mut lm = [Landmark {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                }; 21];
                 for i in 0..21 {
                     let base = (h * 21 + i) * 3;
                     lm[i] = Landmark {
@@ -62,7 +66,11 @@ impl LandmarkExtractor for AppleVisionExtractor {
                     };
                 }
                 HandFrame {
-                    handedness: if left[h] == 1 { Hand::Left } else { Hand::Right },
+                    handedness: if left[h] == 1 {
+                        Hand::Left
+                    } else {
+                        Hand::Right
+                    },
                     landmarks: lm,
                     confidence: conf[h],
                 }

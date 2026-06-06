@@ -54,7 +54,10 @@ fn frame_with_palm_angle(angle_rad: f32) -> HandFrame {
 fn detects_swipe_right() {
     let mut a = MotionAnalyzer::new();
     for i in 0..10 {
-        a.push(&frame_with_palm_at(i as f32 * 0.05, 0.5), 1_700_000_000_000 + i * 30);
+        a.push(
+            &frame_with_palm_at(i as f32 * 0.05, 0.5),
+            1_700_000_000_000 + i * 30,
+        );
     }
     let m = a.classify().expect("motion should classify");
     assert_eq!(m.kind, MotionKind::Swipe);
@@ -121,7 +124,10 @@ fn small_fast_motion_is_swipe_not_sweep() {
     let mut a = MotionAnalyzer::new();
     // Magnitude 0.30, duration ~270ms — too small for sweep, fits swipe.
     for i in 0..10 {
-        a.push(&frame_with_palm_at(i as f32 * 0.033, 0.5), 1_700_000_000_000 + i * 30);
+        a.push(
+            &frame_with_palm_at(i as f32 * 0.033, 0.5),
+            1_700_000_000_000 + i * 30,
+        );
     }
     let m = a.classify().unwrap();
     assert_eq!(m.kind, MotionKind::Swipe);
@@ -132,7 +138,10 @@ fn detects_tap() {
     let mut a = MotionAnalyzer::new();
     // Open → close → open in ~150ms.
     for i in 0..3 {
-        a.push(&frame_with_pinch(0.30, 0.5, 0.5), 1_700_000_000_000 + i * 25);
+        a.push(
+            &frame_with_pinch(0.30, 0.5, 0.5),
+            1_700_000_000_000 + i * 25,
+        );
     }
     a.push(&frame_with_pinch(0.04, 0.5, 0.5), 1_700_000_000_075);
     a.push(&frame_with_pinch(0.04, 0.5, 0.5), 1_700_000_000_100);
@@ -168,7 +177,9 @@ fn detects_swipe_right_after_idle_history() {
     // With the buffer-spanning bug, the classifier saw dur ≈ 970ms and
     // bailed because dur > SWIPE_MAX_DURATION_MS. With the fix it sees
     // only the trailing 270ms swipe.
-    let m = a.classify().expect("swipe must still classify with idle history in buffer");
+    let m = a
+        .classify()
+        .expect("swipe must still classify with idle history in buffer");
     assert_eq!(m.kind, MotionKind::Swipe);
     assert_eq!(m.direction, Some(Direction::Right));
 }
@@ -185,7 +196,9 @@ fn detects_pinch_in_after_idle_history() {
         let d = 0.30 - (i as f32 + 1.0) * 0.027;
         a.push(&frame_with_pinch(d, 0.5, 0.5), base + 500 + i * 30);
     }
-    let m = a.classify().expect("pinch must still classify with idle history in buffer");
+    let m = a
+        .classify()
+        .expect("pinch must still classify with idle history in buffer");
     assert_eq!(m.kind, MotionKind::Pinch);
     assert_eq!(m.direction, Some(Direction::In));
 }
@@ -202,7 +215,9 @@ fn detects_rotate_cw_after_idle_history() {
         let angle = (i as f32 + 1.0) * 0.12;
         a.push(&frame_with_palm_angle(angle), base + 500 + i * 30);
     }
-    let m = a.classify().expect("rotate must still classify with idle history in buffer");
+    let m = a
+        .classify()
+        .expect("rotate must still classify with idle history in buffer");
     assert_eq!(m.kind, MotionKind::Rotate);
     assert_eq!(m.direction, Some(Direction::Cw));
 }

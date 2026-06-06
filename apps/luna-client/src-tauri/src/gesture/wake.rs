@@ -72,15 +72,23 @@ impl WakeMachine {
 
     pub fn tick(&mut self, input: WakeInput, now_ms: i64) {
         match (self.state, input) {
-            (WakeState::Sleeping, WakeInput::Pose { pose: Some(p), confidence })
-                if confidence >= ARM_CONFIDENCE && is_wake_pose(p) =>
-            {
+            (
+                WakeState::Sleeping,
+                WakeInput::Pose {
+                    pose: Some(p),
+                    confidence,
+                },
+            ) if confidence >= ARM_CONFIDENCE && is_wake_pose(p) => {
                 self.state = WakeState::Arming;
                 self.arming_started_at = Some(now_ms);
             }
-            (WakeState::Arming, WakeInput::Pose { pose: Some(p), confidence })
-                if confidence >= ARM_CONFIDENCE && is_wake_pose(p) =>
-            {
+            (
+                WakeState::Arming,
+                WakeInput::Pose {
+                    pose: Some(p),
+                    confidence,
+                },
+            ) if confidence >= ARM_CONFIDENCE && is_wake_pose(p) => {
                 if let Some(start) = self.arming_started_at {
                     if now_ms - start >= ARM_HOLD_MS {
                         self.state = WakeState::Armed;
@@ -104,7 +112,10 @@ impl WakeMachine {
             //         2026-05-08 (also advance hold on flicker).
             (
                 WakeState::Arming,
-                WakeInput::Pose { pose: Some(_), confidence },
+                WakeInput::Pose {
+                    pose: Some(_),
+                    confidence,
+                },
             ) if confidence >= ARM_ABORT_CONFIDENCE => {
                 if let Some(start) = self.arming_started_at {
                     if now_ms - start >= ARM_HOLD_MS {

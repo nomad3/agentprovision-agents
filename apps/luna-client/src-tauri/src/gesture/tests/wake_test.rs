@@ -37,12 +37,18 @@ fn three_pose_500ms_arms() {
     // 2026-05-05 (post-0.1.62 live diagnostic).
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Three), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::Three),
+            confidence: 0.95,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Arming);
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Three), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::Three),
+            confidence: 0.95,
+        },
         600,
     );
     assert_eq!(m.state(), WakeState::Armed);
@@ -52,7 +58,10 @@ fn three_pose_500ms_arms() {
 fn four_pose_also_arms() {
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Four), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::Four),
+            confidence: 0.95,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Arming);
@@ -64,7 +73,10 @@ fn fist_pose_does_not_wake() {
     // not start the wake hold.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Fist), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::Fist),
+            confidence: 0.95,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Sleeping);
@@ -75,7 +87,10 @@ fn point_pose_does_not_wake() {
     // Point is for cursor steering, not waking the machine.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Point), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::Point),
+            confidence: 0.95,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Sleeping);
@@ -94,22 +109,39 @@ fn pose_flicker_during_arming_does_not_reset() {
     // disappears or confidence collapses.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.9,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Arming);
     // Pose classifier flicker — same hand, briefly classified as Fist.
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Fist), confidence: 0.9 },
+        WakeInput::Pose {
+            pose: Some(Pose::Fist),
+            confidence: 0.9,
+        },
         200,
     );
-    assert_eq!(m.state(), WakeState::Arming, "flicker should not abort hold");
+    assert_eq!(
+        m.state(),
+        WakeState::Arming,
+        "flicker should not abort hold"
+    );
     // Recover to OpenPalm and finish the 500ms hold.
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.95,
+        },
         600,
     );
-    assert_eq!(m.state(), WakeState::Armed, "hold should complete after flicker");
+    assert_eq!(
+        m.state(),
+        WakeState::Armed,
+        "hold should complete after flicker"
+    );
 }
 
 #[test]
@@ -119,11 +151,20 @@ fn arming_aborts_when_hand_disappears() {
     // back to Sleeping immediately.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.9,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Arming);
-    m.tick(WakeInput::Pose { pose: None, confidence: 0.0 }, 200);
+    m.tick(
+        WakeInput::Pose {
+            pose: None,
+            confidence: 0.0,
+        },
+        200,
+    );
     assert_eq!(m.state(), WakeState::Sleeping);
 }
 
@@ -133,11 +174,17 @@ fn arming_aborts_on_confidence_collapse() {
     // (e.g. hand moved out of frame, partial occlusion) should also abort.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.9,
+        },
         0,
     );
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::Three), confidence: 0.2 },
+        WakeInput::Pose {
+            pose: Some(Pose::Three),
+            confidence: 0.2,
+        },
         200,
     );
     assert_eq!(m.state(), WakeState::Sleeping);
@@ -173,18 +220,30 @@ fn empty_frames_after_arming_disarm() {
     // that regression.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.9,
+        },
         0,
     );
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.9 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.9,
+        },
         600,
     );
     assert_eq!(m.state(), WakeState::Armed);
 
     // Stream of "no hands detected" frames. Activity should NOT refresh.
     for ts in (700..6000).step_by(33) {
-        m.tick(WakeInput::Pose { pose: None, confidence: 0.0 }, ts);
+        m.tick(
+            WakeInput::Pose {
+                pose: None,
+                confidence: 0.0,
+            },
+            ts,
+        );
     }
     assert_eq!(m.state(), WakeState::Sleeping);
 }
@@ -243,7 +302,10 @@ fn arming_survives_per_frame_idle_ticks() {
     let mut t: i64 = 0;
     while t <= total_ms {
         m.tick(
-            WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.95 },
+            WakeInput::Pose {
+                pose: Some(Pose::OpenPalm),
+                confidence: 0.95,
+            },
             t,
         );
         m.tick(WakeInput::Idle, t);
@@ -268,23 +330,35 @@ fn arming_completes_when_user_switches_to_non_wake_pose_mid_hold() {
     // hand visible to the camera is enough intent signal.
     let mut m = WakeMachine::new();
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::OpenPalm), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::OpenPalm),
+            confidence: 0.95,
+        },
         0,
     );
     assert_eq!(m.state(), WakeState::Arming);
     // User immediately switches to ThumbUp and holds it
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::ThumbUp), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::ThumbUp),
+            confidence: 0.95,
+        },
         100,
     );
     assert_eq!(m.state(), WakeState::Arming, "still arming during hold");
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::ThumbUp), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::ThumbUp),
+            confidence: 0.95,
+        },
         300,
     );
     assert_eq!(m.state(), WakeState::Arming, "still arming under 500ms");
     m.tick(
-        WakeInput::Pose { pose: Some(Pose::ThumbUp), confidence: 0.95 },
+        WakeInput::Pose {
+            pose: Some(Pose::ThumbUp),
+            confidence: 0.95,
+        },
         600,
     );
     assert_eq!(
