@@ -105,7 +105,7 @@ def main() -> int:
             id=f"F1.migdrift.{n}",
             title=f"file not applied: {missing_apply}",
             where=f"{MIGRATIONS_DIR}/{missing_apply}",
-            evidence=f"file exists on disk but no _migrations row recorded",
+            evidence="file exists on disk but no _migrations row recorded",
             reproducer=f"ls {MIGRATIONS_DIR}/{missing_apply} && docker exec {args.container} psql -U postgres {args.db} -c \"SELECT 1 FROM _migrations WHERE filename='{missing_apply}';\"",
             why_it_smells="migration .sql file in repo never applied — either dead/abandoned or missed in deploy",
             suggested_action="document",

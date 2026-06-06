@@ -63,7 +63,7 @@ def scan(root: Path, pre: Preflight) -> list[Finding]:
                 id=f"F3.rllog.{n}",
                 title=f"decision function without RL log: {node.name}",
                 where=f"{py}:{node.lineno}",
-                evidence=f"name matches decision-verb regex and no rl_experience log call found in the function or module",
+                evidence="name matches decision-verb regex and no rl_experience log call found in the function or module",
                 reproducer=f"python3 scripts/smell/missing_rl_log.py {root}",
                 why_it_smells="autonomous decision goes un-tracked — breaks Alpha CLI kernel §5 RL discipline",
                 suggested_action="refactor",

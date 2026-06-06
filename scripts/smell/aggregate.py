@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from collections import defaultdict
 
 RESULTS_DIR = Path("/tmp/smell_results")
 REPORT_PATH = Path("docs/reports/2026-05-28-core-primitives-smell-report.md")
@@ -30,6 +29,11 @@ def fail_loud(dim: str, payload: dict) -> None:
     pre = payload.get("preflight", {})
     findings = payload.get("findings", [])
     cmds = pre.get("commands_attempted", [])
+    if pre.get("exit_summary") == "degraded":
+        sys.stderr.write(
+            f"FAIL-LOUD: dimension {dim} reported degraded preflight; aborting.\n"
+        )
+        sys.exit(2)
     if not findings and (not cmds or all(c.get("exit", 1) != 0 for c in cmds)):
         sys.stderr.write(
             f"FAIL-LOUD: dimension {dim} returned ZERO findings AND no preflight evidence; aborting.\n"
@@ -145,7 +149,7 @@ def main() -> int:
     # 4. Appendix A — methods log
     lines.append("## Appendix A — Methods log")
     lines.append("")
-    lines.append(f"Fan-out commit SHA: `ba378a44b25d5f6bec13ea74afbd22ffae25c5b2`")
+    lines.append("Fan-out commit SHA: `ba378a44b25d5f6bec13ea74afbd22ffae25c5b2`")
     lines.append("")
     for dim in DIMS:
         p = payloads[dim]

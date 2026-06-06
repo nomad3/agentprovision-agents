@@ -72,6 +72,7 @@ jobs:
               - '.github/workflows/tests.yaml'
             scripts:
               - 'scripts/claudia_bridge.py'
+              - 'scripts/smell/**'
               - 'scripts/tests/**'
               - '.github/workflows/tests.yaml'
 
@@ -97,8 +98,9 @@ jobs:
       - name: Run script tests
         id: script_tests
         run: |
-          python -m py_compile scripts/claudia_bridge.py scripts/tests/test_claudia_bridge.py
-          pytest scripts/tests/test_claudia_bridge.py -q
+          python -m py_compile scripts/claudia_bridge.py scripts/smell/*.py scripts/tests/test_claudia_bridge.py scripts/tests/test_smell_aggregate.py
+          node --check scripts/smell/unrouted_pages.js
+          pytest scripts/tests/test_claudia_bridge.py scripts/tests/test_smell_aggregate.py -q
       - name: Publish script test status
         id: script_status
         if: always()
