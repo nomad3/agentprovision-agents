@@ -119,6 +119,20 @@ def _mcp_request(**overrides):
     return McpObservationRequest(**values)
 
 
+def _command(**overrides):
+    values = {
+        "id": uuid.UUID("99999999-9999-9999-9999-999999999999"),
+        "status": "claimed",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "device_id": _DEVICE_REGISTRY_ID,
+        "capability": "screenshot",
+        "lease_expires_at": None,
+        "payload": {"action": "capture_screenshot", "mode": "observe"},
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def test_record_local_observation_rejects_cross_tenant_session():
     db = _db_with_session(found=False)
 
@@ -631,3 +645,135 @@ def test_mcp_observation_endpoint_returns_display_safe_denial():
     }
     saved_request = record.call_args.kwargs["request"]
     assert saved_request.tool_name == "desktop_get_active_app"
+
+
+def test_command_enqueue_endpoint_returns_claimable_command():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.enqueue_desktop_command",
+        return_value=(
+            _command(status="pending"),
+            event,
+            {"event_id": "session-event-3", "seq_no": 9},
+        ),
+    ) as enqueue:
+        response = client.post(
+            "/api/v1/desktop-control/internal/commands",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "action": "capture_screenshot",
+                "tool_name": "desktop_observe_screen",
+                "payload": {"reason": "smoke"},
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {
+        "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+        "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+        "session_event_id": "session-event-3",
+        "session_seq_no": 9,
+        "status": "pending",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "device_id": "88888888-8888-8888-8888-888888888888",
+        "capability": "screenshot",
+        "lease_expires_at": None,
+        "payload": {"action": "capture_screenshot", "mode": "observe"},
+        "idempotent": False,
+    }
+    saved_request = enqueue.call_args.kwargs["request"]
+    assert saved_request.tool_name == "desktop_observe_screen"
+
+
+def test_command_claim_endpoint_passes_device_token():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.claim_next_desktop_command",
+        return_value=(
+            _command(),
+            event,
+            {"event_id": "session-event-4", "seq_no": 10},
+        ),
+    ) as claim:
+        response = client.post(
+            "/api/v1/desktop-control/commands/claim",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "lease_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "claimed"
+    assert response.json()["command"]["desktop_command_id"] == "99999999-9999-9999-9999-999999999999"
+    assert claim.call_args.kwargs["device_token"] == "secret-device-token"
+
+
+def test_command_complete_endpoint_returns_idempotent_terminal_status():
+    client, _db = _client_for_endpoint(_user())
+
+    with patch(
+        "app.api.v1.desktop_control.complete_desktop_command",
+        return_value=(
+            _command(status="succeeded"),
+            None,
+            None,
+            True,
+        ),
+    ) as complete:
+        response = client.post(
+            "/api/v1/desktop-control/commands/99999999-9999-9999-9999-999999999999/complete",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "status": "failed",
+                "reason": "late duplicate",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["idempotent"] is True
+    assert complete.call_args.kwargs["device_token"] == "secret-device-token"
+
+
+def test_command_stop_endpoint_returns_preempted_event_ids():
+    client, _db = _client_for_endpoint(_user())
+    first_event = SimpleNamespace(id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+    second_event = SimpleNamespace(id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+
+    with patch(
+        "app.api.v1.desktop_control.preempt_desktop_commands_for_stop",
+        return_value=(2, [first_event, second_event], []),
+    ) as stop:
+        response = client.post(
+            "/api/v1/desktop-control/commands/stop",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "reason": "operator Stop",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "status": "preempted",
+        "preempted_count": 2,
+        "desktop_event_ids": [
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        ],
+    }
+    assert stop.call_args.kwargs["device_token"] == "secret-device-token"
