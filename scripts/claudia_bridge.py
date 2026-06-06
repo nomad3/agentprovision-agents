@@ -22,7 +22,9 @@ import hmac
 import json
 import os
 import re
+import socket
 import sys
+import uuid
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +33,12 @@ from typing import Any
 
 DEFAULT_ROOT = ".claudia"
 QUEUE_DIRS = ("inbox", "status", "outbox", "archive")
+MAX_BODY_BYTES = 256 * 1024
+READ_TIMEOUT_SECONDS = 5.0
+
+
+class PayloadTooLarge(ValueError):
+    pass
 
 
 def utc_now() -> str:
@@ -46,7 +54,7 @@ def normalize_task_id(value: str | None, title: str, created_at: str) -> str:
     if value:
         return slugify(str(value))
     stamp = created_at.replace(":", "").replace("-", "")
-    return f"{stamp}-{slugify(title)}"
+    return f"{stamp}-{uuid.uuid4().hex[:8]}-{slugify(title)}"
 
 
 def queue_root(path: str | Path) -> Path:
@@ -68,7 +76,7 @@ def ensure_queue(root: Path) -> None:
 
 def write_atomic(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
 
@@ -77,6 +85,10 @@ def read_body(body: str | None, body_file: str | None) -> str:
     if body_file:
         return Path(body_file).read_text(encoding="utf-8")
     return body or ""
+
+
+def default_reply_to(root: Path) -> str:
+    return str(root / "outbox" / "<task-id>.md")
 
 
 def render_task(
@@ -118,7 +130,7 @@ def create_task(args: argparse.Namespace) -> Path:
     root = queue_root(args.root)
     ensure_queue(root)
     body = read_body(args.body, args.body_file)
-    reply_to = args.reply_to or f"{DEFAULT_ROOT}/outbox/<task-id>.md"
+    reply_to = args.reply_to or default_reply_to(root)
     task_id, markdown = render_task(
         title=args.title,
         body=body,
@@ -134,8 +146,8 @@ def create_task(args: argparse.Namespace) -> Path:
 
 def poll_tasks(args: argparse.Namespace) -> int:
     root = queue_root(args.root)
-    ensure_queue(root)
-    tasks = sorted((root / "inbox").glob("*.md"))
+    inbox = root / "inbox"
+    tasks = sorted(inbox.glob("*.md")) if inbox.exists() else []
     if not tasks:
         print("No pending Claudia tasks.")
         return 0
@@ -195,8 +207,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True, "time": utc_now()})
 
     def do_POST(self) -> None:
-        length = int(self.headers.get("content-length", "0"))
-        raw = self.rfile.read(length)
+        try:
+            raw = self._read_raw_body()
+        except PayloadTooLarge as exc:
+            self._send_json(413, {"ok": False, "error": str(exc)})
+            return
+        except ValueError as exc:
+            self._send_json(400, {"ok": False, "error": str(exc)})
+            return
         if not verify_signature(self.secret, raw, self.headers.get("x-claudia-signature")):
             self._send_json(401, {"ok": False, "error": "invalid signature"})
             return
@@ -226,7 +244,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
             title=title,
             body=body,
             source=str(payload.get("source") or "webhook"),
-            reply_to=str(payload.get("reply_to") or f"{DEFAULT_ROOT}/outbox/<task-id>.md"),
+            reply_to=str(payload.get("reply_to") or default_reply_to(self.root)),
             labels=[str(label) for label in labels],
             task_id=payload.get("task_id"),
         )
@@ -244,6 +262,25 @@ class BridgeHandler(BaseHTTPRequestHandler):
         path = self.root / "outbox" / f"{slugify(task_id)}.md"
         write_atomic(path, f"# Claudia Reply\n\nTask ID: `{task_id}`\nCreated: `{utc_now()}`\n\n{body}\n")
         return path
+
+    def _read_raw_body(self) -> bytes:
+        raw_length = self.headers.get("content-length", "0")
+        try:
+            length = int(raw_length)
+        except ValueError as exc:
+            raise ValueError("content-length must be an integer") from exc
+        if length < 0:
+            raise ValueError("content-length must be non-negative")
+        if length > MAX_BODY_BYTES:
+            raise PayloadTooLarge(f"request body exceeds {MAX_BODY_BYTES} bytes")
+        self.connection.settimeout(READ_TIMEOUT_SECONDS)
+        try:
+            raw_body = self.rfile.read(length)
+        except socket.timeout as exc:
+            raise ValueError("request body read timed out") from exc
+        if len(raw_body) != length:
+            raise ValueError("request body ended before content-length bytes were read")
+        return raw_body
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, sort_keys=True).encode("utf-8")
