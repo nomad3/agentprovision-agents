@@ -7,7 +7,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args) => invokeMock(...args),
 }));
 
-import ControlSafetyStrip, { labelForControlMode } from '../ControlSafetyStrip';
+import ControlSafetyStrip, { labelForControlMode, summarizePermissions } from '../ControlSafetyStrip';
 
 beforeEach(() => {
   invokeMock.mockReset();
@@ -16,9 +16,25 @@ beforeEach(() => {
 describe('ControlSafetyStrip', () => {
   it('maps control modes to operator labels', () => {
     expect(labelForControlMode('observe')).toBe('Observe');
+    expect(labelForControlMode('assist')).toBe('Assist');
+    expect(labelForControlMode('control')).toBe('Control');
     expect(labelForControlMode('stopped')).toBe('Stopped');
     expect(labelForControlMode('control_locked')).toBe('Control Locked');
     expect(labelForControlMode('other')).toBe('Control Locked');
+  });
+
+  it('summarizes permission readiness without exposing raw values', () => {
+    const summary = summarizePermissions({
+      screen_recording: { status: 'granted', reason: 'ok' },
+      accessibility: { status: 'denied', reason: 'missing' },
+      input_monitoring: { status: 'not_required', reason: 'not used' },
+      camera: { status: 'unknown', reason: 'deferred' },
+    });
+
+    expect(summary.label).toBe('TCC 2/3');
+    expect(summary.title).toContain('Screen: granted');
+    expect(summary.title).toContain('AX: denied');
+    expect(summary.title).toContain('Camera: unknown');
   });
 
   it('loads the safety state on mount', async () => {
@@ -34,6 +50,25 @@ describe('ControlSafetyStrip', () => {
       expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
     });
     expect(screen.getByText('Control Locked')).toBeInTheDocument();
+  });
+
+  it('shows disabled assist/control gates before command governance ships', async () => {
+    invokeMock.mockResolvedValueOnce({
+      mode: 'control_locked',
+      can_observe: true,
+      can_assist: false,
+      can_control: false,
+      permissions: {
+        screen_recording: { status: 'granted', reason: 'ok' },
+        accessibility: { status: 'denied', reason: 'missing' },
+      },
+    });
+
+    render(<ControlSafetyStrip />);
+
+    expect(await screen.findByRole('button', { name: /^assist$/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^control$/i })).toBeDisabled();
+    expect(screen.getByText('TCC 1/2')).toBeInTheDocument();
   });
 
   it('arms observe-only mode from the local UI', async () => {
