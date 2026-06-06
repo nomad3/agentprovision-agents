@@ -125,7 +125,7 @@ export default function ControlSafetyStrip() {
     } finally {
       setBusy(false);
     }
-  }, [refresh]);
+  }, [publishState, refresh]);
 
   const label = labelForControlMode(state.mode);
   const permissionSummary = useMemo(
@@ -189,7 +189,11 @@ export default function ControlSafetyStrip() {
           Resume
         </button>
       )}
-      <span className="control-safety-permissions" title={permissionSummary.title}>
+      <span
+        className="control-safety-permissions"
+        title={permissionSummary.title}
+        aria-label={`Permission readiness ${permissionSummary.label}`}
+      >
         {permissionSummary.label}
       </span>
     </div>
