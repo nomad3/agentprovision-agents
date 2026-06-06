@@ -13,12 +13,12 @@ command down-channel merged in PR #799; PR #800 client completion hardening
 merged and unsigned `luna-v0.1.96` installed locally; PR #801 backend lease
 timezone fix merged and deployed; PR #803 native pointer/keyboard scaffold
 merged and unsigned `luna-v0.1.97` installed locally; PR #806 native-control
-policy hardening merged and unsigned `luna-v0.1.98` installed locally. Native
-actuation remains disabled; next phase is signed command-envelope issuance,
-nonce/replay defense, command/session/device binding, audit events, and approval
-grant consumption.
+policy hardening merged and unsigned `luna-v0.1.98` installed locally; PR #807
+signed desktop command envelope gate merged and unsigned `luna-v0.1.99`
+installed locally. Native actuation remains disabled; next phase is Tauri-side
+public-key/Ed25519 command-envelope verification after release-gate validation.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-signed-envelope-gate`
+Current implementation branch: `codex/alpha-chat-async-send`
 
 ---
 
@@ -45,6 +45,10 @@ The product goal is to extend Luna Tauri into a governed macOS computer-use
 surface similar in capability class to Codex Computer Use / Claude cowork:
 observe the desktop, reason through AgentProvision, and control macOS apps
 through pointer, keyboard, clipboard, app/window context, and screenshots.
+Architecture constraint: Luna Tauri uses `alpha` CLI as its local kernel for
+AgentProvision chat/task execution, session continuity, and CLI-runtime
+delegation. Tauri remains the native macOS shell, UI, and governed actuator; it
+must not grow a separate ad hoc agent loop that bypasses Alpha CLI.
 
 Luna-facing review was gathered with `alpha chat send`. The strongest guidance:
 fix chat-first UX and auth first; make computer-use a visible governed mode
@@ -502,6 +506,46 @@ Additional discovery inputs:
     Claude Code review found no blockers; its non-blocking shell-id CHECK
     watch item was closed by rejecting non-`desktop-` shell ids before command
     insert/claim nonce issuance.
+51. PR #807 merged into `main` on 2026-06-06 UTC as merge commit
+    `c0eb171b`. PR checks passed for API unit, API integration, and Luna client.
+    Post-merge Docker Desktop Deployment run `27065232271` and broad Tests run
+    `27065232265` passed. The Luna Client Tauri Build run `27065232254` built
+    the unsigned ARM64 DMG and checksum but failed in the release-publication
+    step after `gh release create` timed out against GitHub's API; the release
+    side effect completed later and published `luna-v0.1.99` with
+    `Luna_0.1.99_aarch64.dmg` and `.sha256`.
+52. Installed-release validation for `luna-v0.1.99` downloaded the release DMG
+    plus checksum, verified directly with `shasum -c`, installed
+    `/Applications/Luna.app`, and confirmed bundle version `0.1.99`. Computer
+    Use verified the installed Tauri app at `tauri://localhost`, active Luna
+    Alpha Chat handoff, durable `Stopped` strip, disabled
+    Observe/Assist/Control/Lock/Stop controls, visible `Resume`, and no pointer
+    or keyboard actuation. The app launched expanded at `0,34 1496x885`.
+    Codesign reported the expected ad-hoc unsigned development signature, and
+    Luna's exact Docker `_work` mount gate returned no output.
+53. Branch `codex/alpha-chat-async-send` addresses the recurrent Alpha CLI
+    Cloudflare 524 path found during Luna handoff. `alpha chat send` and REPL now
+    use the durable async chat-job transport: `POST /messages/start`, then
+    `GET /chat/jobs/{id}/events?from_seq=N` with heartbeat-backed tails and
+    sequence reconnects, instead of holding `/messages` or `/messages/stream`
+    open for the full agent turn. The collector now also treats stream-open
+    failures as recoverable: it polls the durable job, reconnects while the job
+    is still running, and falls back to the persisted result message after job
+    completion. Validation passed core parser tests, CLI tests, `cargo check`,
+    and live Alpha Chat smoke; Luna accepted the update and kept `v0.1.99`
+    installed-release validation as the current gate.
+54. The same branch hardens the Luna release workflow against the `v0.1.99`
+    delayed-release timeout: missing signing secrets are logged as notices in
+    unsigned development mode, and release create/upload is now idempotent with
+    retries plus a post-failure `gh release view` check before retrying or
+    uploading assets. Asset upload failure still fails the workflow after
+    retries, even when release creation already succeeded.
+55. Operator reminder on 2026-06-06: Luna Tauri should use Alpha CLI as her
+    kernel. Next implementation must add an explicit Tauri Alpha-kernel adapter
+    plan before native actuation expands: discover/pin the `alpha` binary,
+    bridge auth/session context, stream chat-job output into Luna UI, surface
+    cancel/stop semantics, and keep desktop command execution governed through
+    signed API envelopes rather than direct CLI-side actuation.
 
 ---
 
@@ -518,9 +562,10 @@ Additional discovery inputs:
    - pointer move/click
    - keyboard typing / key chords
    - local stop/pause
-5. Route decisions through AgentProvision:
-   - Luna/chat/agent -> MCP tool -> API authorization/audit -> desktop action
-   - Tauri executes only approved, scoped action envelopes
+5. Route decisions through AgentProvision with Alpha CLI as Luna's local kernel:
+   - Luna Tauri -> `alpha` CLI -> AgentProvision chat/task/router -> MCP/API
+     authorization and audit -> desktop command envelope
+   - Tauri executes only approved, scoped action envelopes as the native actuator
 6. Persist an authoritative replayable audit trail in desktop-control tables and
    mirror display-safe rows into `session_events`.
 7. Enforce tenant, user, session, shell/device, and capability scoping on every
@@ -1052,10 +1097,26 @@ Current verification finding (2026-06-06):
       chat/session startup, durable `Stopped` posture, disabled native-control
       affordances, visible `Resume`, Luna Alpha Chat lead response, and an empty
       exact Docker `_work` mount gate.
+- [x] Verify `luna-v0.1.99` unsigned development release locally after PR
+      #807: DMG checksum, `/Applications/Luna.app` version `0.1.99`, installed
+      app launched from `/Applications`, expanded chat/session UI, durable
+      `Stopped` posture, disabled native-control affordances, Luna Alpha Chat
+      lead response through the fixed async Alpha CLI path, and an empty exact
+      Docker `_work` mount gate. The Tauri build workflow produced the release
+      assets but marked the run failed because GitHub release creation timed out
+      before the delayed server-side release became visible; the workflow now
+      retries create/upload idempotently.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
       smoke returns empty after live stack migration.
+- [x] Make Luna release creation/upload idempotent with retries so a delayed
+      GitHub release API side effect does not leave a valid artifact publication
+      red on the release gate.
+- [x] Harden Alpha Chat CLI against transient Cloudflare/SSE stream-open
+      failures by polling the durable job, reconnecting by sequence while it is
+      running, and hydrating the persisted result message when the job already
+      completed.
 
 Exit criteria:
 
@@ -1086,6 +1147,10 @@ Exit criteria:
       checksum, expanded chat/session launch, durable stopped posture,
       disabled native-control controls, Luna Alpha Chat lead response, and an
       empty exact Docker `_work` mount gate.
+- [x] Local install smoke from GitHub Release `luna-v0.1.99` confirms version,
+      checksum, installed `/Applications/Luna.app` launch, expanded chat/session
+      window, durable stopped posture, disabled native-control controls, Luna
+      Alpha Chat lead response, and an empty exact Docker `_work` mount gate.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -1590,8 +1655,9 @@ Exit criteria:
         `NativeControlCommandPolicy` coverage for Stop, claim lease, envelope,
         tier, and final deny-by-default behavior.
 - [ ] Actuator denies expired and replayed envelopes.
-  - [x] Expired-envelope denial is covered. Replay/nonce storage remains a
-        future signed-envelope implementation item.
+  - [x] API-side expired-envelope and replay/nonce denial is covered by
+        completion-time envelope verification. Tauri-side public-key envelope
+        replay checks remain pending.
 - [x] Actuator denies unsigned envelopes and unsupported policy versions.
 - [x] Actuator denies when device claim token is revoked or missing.
   - [x] Missing/invalid token was already covered; branch
@@ -1716,6 +1782,12 @@ Exit criteria:
       `Stopped` posture verified, Observe/Assist/Control/Lock/Stop disabled,
       `Resume` visible, Luna's Alpha Chat lead response visible, and Luna's
       exact Docker `_work` mount gate returned no output.
+- [x] `luna-v0.1.99` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.99`, ad-hoc unsigned development signature confirmed,
+      installed Tauri app verified with Computer Use, expanded chat/session UI
+      visible, durable `Stopped` posture verified, Observe/Assist/Control/Lock/
+      Stop disabled, `Resume` visible, Luna's Alpha Chat lead response visible,
+      and Luna's exact Docker `_work` mount gate returned no output.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1760,23 +1832,24 @@ Exit criteria:
 
 ## Next Actions
 
-1. Finish review and PR for `codex/luna-signed-envelope-gate`: API-side signed
-   command envelopes, durable envelope nonce storage, completion-time signature
-   and binding verification, and replay-denial audit events. Native actuation
-   remains denied.
-2. Add Tauri-side public-key command-envelope validation before any pointer or
+1. Open and merge `codex/alpha-chat-async-send`: durable Alpha CLI chat
+   transport for Luna handoffs plus idempotent Luna release publication retries.
+2. Add the Luna Tauri Alpha-kernel adapter design before expanding actuation:
+   `alpha` binary discovery/pinning, auth/session handoff, chat/job streaming,
+   cancellation, error display, offline behavior, and release packaging.
+3. Add Tauri-side public-key command-envelope validation before any pointer or
    keyboard execution: nonce, expiry, session, shell, device, command id, policy
    version, replay protection, revocation, and policy-decision binding.
-3. Add approval grant creation/consumption as a database compare-and-swap gate
+4. Add approval grant creation/consumption as a database compare-and-swap gate
    before enabling narrow canary pointer execution.
-4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+5. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-5. Close remaining pre-live-content hardening gaps: disable or display-safe route
+6. Close remaining pre-live-content hardening gaps: disable or display-safe route
    ambient clipboard/activity raw emissions, and add remaining revoked/offline
    regression coverage around Stop and shell reconnect behavior.
-6. Treat the post-deploy `No connected desktop shell` observation as a
+7. Treat the post-deploy `No connected desktop shell` observation as a
    hardening follow-up: Luna should re-register shell presence after API
    restarts or heartbeat failures, not require an app restart.
-7. Include the PR #797 command-palette maximize follow-up in the next branch or
+8. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.

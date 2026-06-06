@@ -139,26 +139,26 @@ migration (PR #570) is the long-term fix.
 
 ### Cloudflare 524 on `alpha chat send`
 
-**Symptom:** long prompts to `alpha chat send` hit a `524` from
-Cloudflare and the CLI exits with a partial response.
+**Symptom:** older CLI builds hit a `524` from Cloudflare during long
+`alpha chat send` turns and exit with a partial response.
 
-**Cause:** `alpha chat send` streams over SSE through the Cloudflare
-tunnel, which terminates idle streams at the 524 deadline.
+**Cause:** the legacy chat path held `/messages` or `/messages/stream`
+open for the whole agent turn. Cloudflare terminates idle long-held
+requests at the 524 deadline.
 
-**Fix:** use `alpha run --fanout <cli> --background` instead. The
-durable Temporal path doesn't depend on a long-held HTTP connection
-and survives Cloudflare's idle cutoff.
+**Fix:** upgrade to a CLI build that uses the async chat-job transport:
+`POST /messages/start`, then `GET /chat/jobs/{id}/events?from_seq=N`.
+The start request returns immediately; event tails are heartbeat-backed
+and reconnectable by sequence number.
+
+For autonomous multi-minute work that should survive terminal close or
+laptop reboot, use the durable Temporal task path:
 
 ```bash
 alpha run --fanout claude_code "<long prompt>" --background
 # Returns immediately with a task_id; tail with:
 alpha watch <task_id>
 ```
-
-The async chat-result pattern (PR #570 — `/messages/start` + `/jobs/{id}/events`
-+ `/jobs/{id}/cancel`, backed by `chat_jobs` table from migration 137)
-will replace the SSE path for `alpha chat send` itself. CLI-side
-feature flag to opt in to the new path is queued.
 
 ## `alpha integration`
 

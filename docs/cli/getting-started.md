@@ -96,8 +96,10 @@ alpha chat send "draft a discovery email" --agent <agent_uuid>
 alpha chat send "what about the second one?" --session <session_uuid>
 ```
 
-Backed by SSE over HTTPS through Cloudflare. **Idle streams get cut
-around the 524 deadline**, so for multi-minute turns use Pattern B
+Backed by the async chat-job transport over HTTPS: the CLI starts the
+turn with `/messages/start`, then tails `/chat/jobs/{id}/events` with
+heartbeats and reconnect-by-sequence support. For autonomous multi-minute
+tasks that should survive terminal close or laptop reboot, use Pattern B
 below.
 
 ### Pattern B — `alpha run --fanout` (long turns, durable, resumable)

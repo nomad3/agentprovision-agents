@@ -141,6 +141,38 @@ pub struct ChatTurn {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatJobStart {
+    pub job_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatJobSnapshot {
+    pub id: Uuid,
+    pub session_id: Uuid,
+    pub tenant_id: Uuid,
+    pub user_id: Uuid,
+    pub status: String,
+    #[serde(default)]
+    pub result_message_id: Option<Uuid>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub cancel_requested: bool,
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatJobEventPayload {
+    pub seq: u64,
+    pub kind: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
     pub id: Uuid,
     pub name: String,

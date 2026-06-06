@@ -132,7 +132,7 @@ jobs:
             APPLE_TEAM_ID \
             TAURI_SIGNING_PRIVATE_KEY; do
             if [ -z "${!name}" ]; then
-              echo "::error::$name is required for signed Luna releases"
+              echo "::notice::$name is not configured; unsigned development mode remains enabled"
               missing=1
             fi
           done
@@ -277,15 +277,60 @@ jobs:
             exit 1
           fi
 
-          # Create or Update release with ALL assets in one shot
-          # This is more reliable than separate create and upload calls
-          gh release create "$TAG" \
-            "${ASSETS[@]}" \
-            --title "Luna $VERSION" \
-            --notes "$RELEASE_NOTES" \
-            --verify-tag \
-            "${RELEASE_FLAGS[@]}" \
-            || gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          release_exists() {
+            gh release view "$TAG" >/dev/null 2>&1
+          }
+
+          upload_assets() {
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG" "${ASSETS[@]}" --clobber; then
+                return 0
+              fi
+              sleep $((attempt * 10))
+            done
+            return 1
+          }
+
+          create_release() {
+            gh release create "$TAG" \
+              "${ASSETS[@]}" \
+              --title "Luna $VERSION" \
+              --notes "$RELEASE_NOTES" \
+              --verify-tag \
+              "${RELEASE_FLAGS[@]}"
+          }
+
+          # GitHub's release API can time out after creating the release
+          # server-side. Treat create/upload as idempotent: after any failed
+          # create, poll for the release before retrying or uploading assets.
+          if release_exists; then
+            if upload_assets; then
+              exit 0
+            fi
+            echo "::error::${TAG} exists, but asset upload failed after retries"
+            exit 1
+          fi
+
+          for attempt in 1 2 3; do
+            if create_release; then
+              if upload_assets; then
+                exit 0
+              fi
+              echo "::error::Created ${TAG}, but asset upload failed after retries"
+              exit 1
+            fi
+            sleep $((attempt * 10))
+            if release_exists; then
+              if upload_assets; then
+                exit 0
+              fi
+              echo "::error::${TAG} appeared after create failure, but asset upload failed after retries"
+              exit 1
+            fi
+          done
+
+          echo "::error::Failed to create or update ${TAG} after retries"
+          exit 1
 
       - name: Publish stable Luna updater manifest
         if: steps.signing.outputs.signed == 'true'
