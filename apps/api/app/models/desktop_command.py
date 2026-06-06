@@ -39,6 +39,7 @@ class DesktopCommand(Base):
     )
     shell_id = Column(String(96), nullable=False, index=True)
     device_id = Column(UUID(as_uuid=True), ForeignKey("device_registry.id", ondelete="SET NULL"), nullable=True)
+    approval_id = Column(UUID(as_uuid=True), nullable=True, index=True)
     correlation_id = Column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4, index=True)
     capability = Column(String(64), nullable=False)
     status = Column(String(32), nullable=False, default="pending", index=True)

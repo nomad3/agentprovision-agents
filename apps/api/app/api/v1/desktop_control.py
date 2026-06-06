@@ -20,6 +20,7 @@ from app.core.rate_limit import limiter
 from app.models.user import User as UserModel
 from app.services.desktop_control_service import (
     DesktopCommandClaim,
+    DesktopCommandApprovalGrantCreate,
     DesktopCommandCompletion,
     DesktopCommandEnqueue,
     DesktopCommandStop,
@@ -27,6 +28,7 @@ from app.services.desktop_control_service import (
     McpObservationRequest,
     claim_next_desktop_command,
     complete_desktop_command,
+    create_desktop_approval_grant,
     enqueue_desktop_command,
     preempt_desktop_commands_for_stop,
     record_local_observation_event,
@@ -169,6 +171,7 @@ class DesktopCommandEnqueueIn(BaseModel):
         "desktop_keyboard_key_chord",
     ]
     nonce: str | None = Field(default=None, max_length=96)
+    approval_id: uuid.UUID | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -187,6 +190,7 @@ class DesktopCommandOut(BaseModel):
     status: str
     shell_id: str
     device_id: uuid.UUID | None = None
+    approval_id: uuid.UUID | None = None
     capability: str
     lease_expires_at: str | None = None
     payload: dict[str, Any] | None = None
@@ -244,6 +248,45 @@ class DesktopCommandStopIn(BaseModel):
     reason: str = Field(default="desktop control stopped", max_length=512)
 
 
+class DesktopApprovalGrantIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    shell_id: str | None = Field(
+        default=None,
+        pattern=(
+            r"^desktop-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        ),
+        max_length=96,
+    )
+    desktop_command_id: uuid.UUID | None = None
+    risk_tier: Literal["observe", "native_control"]
+    capability: Literal[
+        "screenshot",
+        "active_app",
+        "clipboard_read",
+        "pointer_control",
+        "keyboard_control",
+    ]
+    max_actions: int = Field(default=1, ge=1, le=20)
+    expires_in_seconds: int = Field(default=60, ge=5, le=600)
+    target_binding: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesktopApprovalGrantOut(BaseModel):
+    approval_id: uuid.UUID
+    session_id: uuid.UUID
+    shell_id: str
+    device_id: uuid.UUID | None = None
+    desktop_command_id: uuid.UUID | None = None
+    risk_tier: str
+    capability: str
+    status: str
+    remaining_actions: int
+    expires_at: str
+
+
 class DesktopCommandStopOut(BaseModel):
     status: Literal["preempted"] = "preempted"
     preempted_count: int
@@ -259,6 +302,7 @@ def _command_out(command, event=None, session_event=None, *, idempotent: bool = 
         status=command.status,
         shell_id=command.shell_id,
         device_id=command.device_id,
+        approval_id=command.approval_id,
         capability=command.capability,
         lease_expires_at=command.lease_expires_at.isoformat() if command.lease_expires_at else None,
         payload=command.payload or None,
@@ -349,6 +393,40 @@ def request_desktop_observation(
         capability=event.capability,
         reason=event.reason,
         down_channel_available=bool(down_channel.get("available")),
+    )
+
+
+@router.post(
+    "/internal/approval-grants",
+    response_model=DesktopApprovalGrantOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("120/minute")
+def create_approval_grant(
+    request: Request,
+    payload: DesktopApprovalGrantIn,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    grant = create_desktop_approval_grant(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        request=DesktopCommandApprovalGrantCreate(**payload.model_dump()),
+    )
+    return DesktopApprovalGrantOut(
+        approval_id=grant.id,
+        session_id=grant.session_id,
+        shell_id=grant.shell_id,
+        device_id=grant.device_id,
+        desktop_command_id=grant.desktop_command_id,
+        risk_tier=grant.risk_tier,
+        capability=grant.capability,
+        status=grant.status,
+        remaining_actions=grant.remaining_actions,
+        expires_at=grant.expires_at.isoformat(),
     )
 
 

@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.models.chat import ChatSession
 from app.models.desktop_command import DesktopCommand
+from app.models.desktop_command_approval_grant import DesktopCommandApprovalGrant
 from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
@@ -21,12 +22,14 @@ from app.models.user import User
 from app.services.desktop_control_service import (
     DEFAULT_COMMAND_PENDING_TTL_SECONDS,
     DesktopCommandClaim,
+    DesktopCommandApprovalGrantCreate,
     DesktopCommandCompletion,
     DesktopCommandEnqueue,
     DesktopCommandStop,
     _utcnow,
     claim_next_desktop_command,
     complete_desktop_command,
+    create_desktop_approval_grant,
     enqueue_desktop_command,
     preempt_desktop_commands_for_stop,
 )
@@ -100,8 +103,8 @@ def _presence(can_observe: bool = True, *, device_id: uuid.UUID = DEVICE_ID):
     }
 
 
-def _enqueue(db: Session, *, nonce: str | None = None):
-    return enqueue_desktop_command(
+def _enqueue(db: Session, *, nonce: str | None = None, grant: bool = True):
+    command = enqueue_desktop_command(
         db,
         tenant_id=TENANT_ID,
         user_id=USER_ID,
@@ -118,6 +121,27 @@ def _enqueue(db: Session, *, nonce: str | None = None):
             },
         ),
     )[0]
+    if grant:
+        existing_grant = db.query(DesktopCommandApprovalGrant).filter(
+            DesktopCommandApprovalGrant.tenant_id == TENANT_ID,
+            DesktopCommandApprovalGrant.desktop_command_id == command.id,
+            DesktopCommandApprovalGrant.status == "active",
+        ).first()
+        if existing_grant is None:
+            create_desktop_approval_grant(
+                db,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandApprovalGrantCreate(
+                    session_id=SESSION_ID,
+                    desktop_command_id=command.id,
+                    risk_tier="observe",
+                    capability=command.capability,
+                    expires_in_seconds=60,
+                ),
+            )
+        db.refresh(command)
+    return command
 
 
 def _completion_metadata(db: Session, command: DesktopCommand, **metadata):
@@ -212,8 +236,17 @@ def test_claim_issues_signed_command_envelope_and_nonce_row(db_session, seeded):
     assert envelope["device_id"] == str(DEVICE_ID)
     assert envelope["action"] == "capture_screenshot"
     assert envelope["capability"] == "screenshot"
+    assert envelope["approval_id"] == str(claimed.approval_id)
+    assert envelope["approval_risk_tier"] == "observe"
     assert envelope["nonce"]
     assert envelope["signature"]
+    assert claimed.payload["approval"]["approval_id"] == str(claimed.approval_id)
+    assert claimed.payload["approval"]["risk_tier"] == "observe"
+    grant = db_session.query(DesktopCommandApprovalGrant).filter(
+        DesktopCommandApprovalGrant.id == claimed.approval_id,
+    ).one()
+    assert grant.status == "consumed"
+    assert grant.remaining_actions == 0
     nonce_row = db_session.query(DesktopCommandEnvelopeNonce).filter(
         DesktopCommandEnvelopeNonce.tenant_id == TENANT_ID,
         DesktopCommandEnvelopeNonce.nonce == envelope["nonce"],
@@ -226,6 +259,136 @@ def test_claim_issues_signed_command_envelope_and_nonce_row(db_session, seeded):
     assert event.event_metadata["envelope_nonce"] == envelope["nonce"]
     assert event.event_metadata["envelope_policy_version"] == 1
     assert len(event.event_metadata["envelope_hash"]) == 64
+
+
+def test_claim_without_approval_grant_waits_before_lease(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-approval-missing", grant=False)
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None
+    assert event is None
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "pending"
+    assert reloaded.lease_owner_shell_id is None
+    assert db_session.query(DesktopCommandEnvelopeNonce).count() == 0
+
+
+def test_claim_with_explicit_missing_approval_id_denies_before_lease(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-approval-id-missing", grant=False)
+        command.approval_id = uuid.UUID("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
+        db_session.commit()
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None
+    assert event.event_type == "desktop_command_approval_denied"
+    assert event.reason == "desktop command approval grant missing"
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "denied"
+    assert db_session.query(DesktopCommandEnvelopeNonce).count() == 0
+
+
+def test_exhausted_approval_grant_denies_claim_before_envelope(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-approval-exhausted", grant=False)
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                desktop_command_id=command.id,
+                risk_tier="observe",
+                capability=command.capability,
+                expires_in_seconds=60,
+            ),
+        )
+        grant.status = "consumed"
+        grant.remaining_actions = 0
+        command.approval_id = grant.id
+        db_session.commit()
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None
+    assert event.event_type == "desktop_command_approval_denied"
+    assert event.reason == "desktop command approval grant exhausted"
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "denied"
+    assert db_session.query(DesktopCommandEnvelopeNonce).count() == 0
+
+
+def test_approval_grant_rejects_command_not_owned_by_user(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-approval-wrong-user", grant=False)
+        command.user_id = None
+        db_session.commit()
+        with pytest.raises(HTTPException) as exc:
+            create_desktop_approval_grant(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandApprovalGrantCreate(
+                    session_id=SESSION_ID,
+                    desktop_command_id=command.id,
+                    risk_tier="observe",
+                    capability=command.capability,
+                    expires_in_seconds=60,
+                ),
+            )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop command is not owned by user"
+
+
+def test_approval_grant_rejects_risk_capability_mismatch(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            create_desktop_approval_grant(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandApprovalGrantCreate(
+                    session_id=SESSION_ID,
+                    shell_id=SHELL_ID,
+                    risk_tier="observe",
+                    capability="pointer_control",
+                    expires_in_seconds=60,
+                ),
+            )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Desktop approval capability does not match risk tier"
 
 
 def test_enqueue_rejects_non_desktop_active_shell_before_command_insert(db_session, seeded):
@@ -566,6 +729,39 @@ def test_completion_after_stop_returns_preempted_not_success(db_session, seeded)
     assert completed.status == "preempted"
     assert event is None
     assert idempotent is True
+
+
+def test_stop_revokes_active_session_approval_grants(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                shell_id=SHELL_ID,
+                risk_tier="observe",
+                capability="screenshot",
+                max_actions=2,
+                expires_in_seconds=120,
+            ),
+        )
+        count, events, _session_events = preempt_desktop_commands_for_stop(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            stop=DesktopCommandStop(session_id=SESSION_ID, shell_id=SHELL_ID, reason="operator Stop"),
+        )
+
+    db_session.refresh(grant)
+    assert count == 0
+    assert events == []
+    assert grant.status == "revoked"
+    assert grant.revoked_at is not None
+    assert grant.remaining_actions == 2
 
 
 def test_expired_lease_rejects_success_completion(db_session, seeded):

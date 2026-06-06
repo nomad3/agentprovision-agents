@@ -19,10 +19,12 @@ installed locally; PR #808 Alpha CLI async chat-kernel transport merged and
 unsigned `luna-v0.1.100` installed locally; PR #810 macOS Alpha-kernel/readiness
 merged and unsigned `luna-v0.1.101` installed locally; PR #811 local claimed
 command-envelope preflight merged and unsigned `luna-v0.1.102` installed
-locally. Native actuation remains disabled; current branch hardens the
-macOS-only app-monitor event contract and UI/API forwarding path.
+locally; PR #812 macOS app-monitor event-contract hardening merged and unsigned
+`luna-v0.1.103` installed locally. Native actuation remains disabled; current
+branch adds explicit approval grant creation/claim-time CAS consumption before
+any native invoke path can proceed.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-v0102-validation-next`
+Current implementation branch: `codex/luna-alpha-kernel-adapter`
 
 ---
 
@@ -655,6 +657,45 @@ Additional discovery inputs:
     Raw window titles, subprocess args, clipboard values, paths, and screenshot
     pixels remain out of the monitor payload, and native pointer/keyboard
     actuation remains disabled.
+70. PR #812 merged into `main` on 2026-06-06 UTC as merge commit `dc2e4257`.
+    Post-merge broad Tests, Docker Desktop Deployment, and Luna Client Tauri
+    Build all passed. GitHub Actions published unsigned development prerelease
+    `luna-v0.1.103`; the DMG and `.sha256` were downloaded, `shasum -c`
+    verified the checksum, `/Applications/Luna.app` reported bundle version
+    `0.1.103`, and codesign reported the expected ad-hoc signature with no
+    `TeamIdentifier`. Computer Use verified expanded chat/session startup at
+    `0,38 1728x1079`, `Stopped Alpha OK Mac Stopped`, disabled Observe/
+    Assist/Control/Lock/Stop controls, visible `Resume`, and no native
+    actuation. Luna's exact Docker `_work` mount gate returned no output.
+71. Luna Supervisor ACKed the `v0.1.103` installed-release gate through the
+    installed Luna app's Alpha Chat. She approved continuing from the next
+    gated phase and named the highest-priority blocker before native actuation:
+    claim authenticity and replay resistance at the local native boundary.
+    Every action must come from a fresh, signed, correctly scoped approval
+    envelope with replay/revocation checks before any native call. Pointer and
+    keyboard remain disabled.
+72. Branch `codex/luna-alpha-kernel-adapter` starts the approval trust boundary
+    slice: explicit `desktop_command_approval_grants` records, an internal
+    grant-creation endpoint, claim-time database compare-and-swap consumption,
+    approval identity/risk binding in signed command envelopes, Luna client
+    preflight denial for missing or mismatched approval metadata, and
+    display-safe denial/audit behavior when commands lack usable grants.
+    Council review found three issues and the branch now addresses them:
+    grantless commands remain pending/claim-empty until approval or TTL instead
+    of being terminally denied before a command-bound grant can be created;
+    Stop revokes active session/shell/device approval grants; and command-bound
+    approval grants have database FK plus active-grant uniqueness constraints.
+    The client preflight now requires top-level command, payload approval, and
+    envelope approval IDs to match exactly.
+73. Luna Supervisor ACKed the branch through the installed Luna app's Alpha
+    Chat and found no blocker before opening the PR, with the explicit framing
+    that this is trust-boundary plumbing and not native actuation enablement.
+    Pre-PR Computer Use smoke on installed `/Applications/Luna.app` version
+    `0.1.103` verified the live shell remains responsive: `Resume` moved from
+    `Stopped Alpha OK Mac Stopped` to `Control Locked Alpha OK Mac Locked`,
+    `Observe` moved to `Observe Alpha OK Mac Denied` while macOS Screen
+    Recording/Accessibility were denied, Assist and Control stayed disabled,
+    and `Stop` returned the app to `Stopped Alpha OK Mac Stopped`.
 
 ---
 
@@ -820,7 +861,10 @@ Action envelope shape:
   "device_id": "optional durable desktop device id",
   "issuer": "agentprovision-api",
   "policy_version": "desktop-control-v1",
-  "capability": "pointer.click",
+  "capability": "pointer_control",
+  "risk_tier": "native_control",
+  "approval_id": "uuid",
+  "approval_risk_tier": "native_control",
   "target": {
     "bundle_id": "com.apple.Safari",
     "app": "Safari",
@@ -839,11 +883,11 @@ Action envelope shape:
   "approval": {
     "approval_id": "uuid",
     "mode": "one_action",
-    "risk_tier": "control",
+    "risk_tier": "native_control",
+    "capability": "pointer_control",
     "approved_by_user_id": "uuid",
     "approved_at": "2026-06-05T00:00:00Z",
     "expires_at": "2026-06-05T00:00:10Z",
-    "capabilities": ["pointer.click"],
     "max_actions": 1,
     "target_binding": {
       "bundle_id": "com.apple.Safari",
@@ -1501,10 +1545,20 @@ Goal: add the missing API-to-Tauri path for action envelopes.
       transitions, retry limits, and duplicate completion handling.
   - [x] Implement one active claim lease with CAS status transitions and
         duplicate terminal completion idempotency. Retry limits remain pending.
-- [ ] Add atomic approval consumption/decrement during command claim or
+- [x] Add atomic approval consumption/decrement during command claim or
       execution.
-- [ ] Implement approval consumption as a database compare-and-swap update inside
+  - [x] Branch `codex/luna-alpha-kernel-adapter` adds explicit
+        `desktop_command_approval_grants` rows, an internal grant-creation
+        endpoint, approval identity/risk binding in command payloads and signed
+        envelopes, and fail-closed claim denial when a command has no usable
+        grant.
+- [x] Implement approval consumption as a database compare-and-swap update inside
       the command claim transaction.
+  - [x] Claim updates require tenant/user/session/shell/device/capability/
+        risk/status/expiry/remaining-action predicates and decrement
+        `remaining_actions` before a lease/envelope is issued. Missing,
+        expired, exhausted, replayed, revoked, or binding-mismatched grants emit
+        display-safe denial audit and never reach native invocation.
 - [ ] Add command correlation IDs across API, Tauri, MCP, audit, and
       `session_events`.
 - [ ] Add config/env/Helm updates in the same PR as any signing, enrollment, or
@@ -1884,7 +1938,7 @@ Exit criteria:
       `npm test -- --run` (`158 passed`), `npm run build`, and
       `git diff --check`. The build kept the existing Vite dynamic/static
       import and chunk-size warnings.
-- [x] macOS app-monitor event-contract validation passed on branch
+  - [x] macOS app-monitor event-contract validation passed on branch
       `codex/luna-v0102-validation-next`: focused `npm test -- --run
       src/utils/__tests__/macosAppMonitor.test.js
       src/hooks/__tests__/useActivityTracker.test.jsx
@@ -1897,6 +1951,16 @@ Exit criteria:
       targeted `ruff check` and `python -m py_compile` for the activity API;
       and `git diff --check`. Existing Vite chunk/import warnings and the
       local Cargo cache cleanup permission warning remain non-blocking.
+  - [x] Approval trust-boundary focused validation passed on branch
+        `codex/luna-alpha-kernel-adapter`: `pytest
+        tests/api/v1/test_desktop_command_lifecycle.py
+        tests/api/v1/test_desktop_control_events.py
+        tests/api/v1/test_desktop_device_binding.py -q` (`65 passed`),
+        `npm test -- --run src/hooks/__tests__/useDesktopCommandClaims.test.jsx`
+        (`28 passed`), full `npm test -- --run` in `apps/luna-client`
+        (`167 passed`), `npm run build`, targeted `ruff check`, `python -m
+        py_compile` for touched API route/service/model/test files, and
+        `git diff --check`.
 
 ### React / UX
 
@@ -1999,6 +2063,19 @@ Exit criteria:
       visible, window geometry measured `0,34 1496x933`, Luna ACKed the gate in
       Alpha Chat, and Luna's exact Docker `_work` mount gate returned no
       output.
+- [x] `luna-v0.1.103` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.103`, ad-hoc unsigned development signature confirmed,
+      no `TeamIdentifier`, installed Tauri app verified with Computer Use,
+      expanded chat/session UI visible at `0,38 1728x1079`, `Stopped Alpha OK
+      Mac Stopped` safety strip verified, Observe/Assist/Control/Lock/Stop
+      disabled, `Resume` visible, no native actuation, Luna ACKed the gate in
+      Alpha Chat, and Luna's exact Docker `_work` mount gate returned no
+      output.
+- [x] `luna-v0.1.103` pre-PR Computer Use build smoke on
+      `codex/luna-alpha-kernel-adapter`: installed bundle version `0.1.103`
+      remained responsive; `Resume -> Control Locked`, `Observe -> Mac Denied`,
+      and `Stop -> Stopped` transitions worked; Assist and Control stayed
+      disabled throughout; pointer/keyboard actuation remained unavailable.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -2043,12 +2120,12 @@ Exit criteria:
 
 ## Next Actions
 
-1. Review and merge the macOS app-monitor event-contract slice after
-   Luna/council review: versioned metadata-only app-switch envelopes, UI/API
-   sanitizer allowlist, server-side raw field stripping, context hash, and no
-   raw title/subprocess/clipboard forwarding. Keep native pointer/keyboard
-   actuation disabled.
-2. Extend the Alpha-kernel adapter beyond readiness in the next slice:
+1. Review and merge the approval trust-boundary slice after Luna/council review:
+   explicit approval grants, claim-time CAS consumption, signed-envelope
+   approval binding, client preflight denial for missing/mismatched approvals,
+   and display-safe denial audit. Keep native pointer/keyboard actuation
+   disabled.
+2. Extend the Alpha-kernel adapter beyond readiness after the approval gate:
    auth/session handoff, chat-job streaming from `alpha`, cancellation, error
    display, offline behavior, release packaging, and app-monitor event mapping
    into Luna UI.
@@ -2058,7 +2135,8 @@ Exit criteria:
 4. Add Tauri-side public-key command-envelope validation before any pointer or
    keyboard execution: nonce, expiry, session, shell, device, command id, policy
    version, replay protection, revocation, and policy-decision binding.
-5. Add approval grant creation/consumption as a database compare-and-swap gate
+5. Re-review approval grant creation/consumption with council and Luna, then add
+   Tauri-side public-key/Ed25519 verification or an equivalent local verifier
    before enabling narrow canary pointer execution.
 6. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,

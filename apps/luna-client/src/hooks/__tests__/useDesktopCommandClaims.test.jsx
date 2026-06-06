@@ -35,6 +35,7 @@ const SESSION_ID = '33333333-3333-3333-3333-333333333333';
 const SHELL_ID = 'desktop-44444444-4444-4444-4444-444444444444';
 const DEVICE_ID = '88888888-8888-8888-8888-888888888888';
 const COMMAND_ID = '99999999-9999-9999-9999-999999999999';
+const APPROVAL_ID = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
 const DEFAULT_ENVELOPE_NONCE = 'envelope-nonce-test';
 
 const CAPABILITY_BY_ACTION = {
@@ -48,6 +49,9 @@ const CAPABILITY_BY_ACTION = {
 };
 
 function validEnvelope(action, overrides = {}) {
+  const riskTier = action?.startsWith('pointer') || action?.startsWith('keyboard')
+    ? 'native_control'
+    : 'observe';
   return {
     schema: 'agentprovision.desktop_command_envelope.v1',
     signed: true,
@@ -64,9 +68,9 @@ function validEnvelope(action, overrides = {}) {
     action,
     capability: CAPABILITY_BY_ACTION[action],
     mode: 'observe',
-    risk_tier: action?.startsWith('pointer') || action?.startsWith('keyboard')
-      ? 'native_control'
-      : 'observe',
+    risk_tier: riskTier,
+    approval_id: APPROVAL_ID,
+    approval_risk_tier: riskTier,
     policy_decision: 'lease_claimed',
     nonce: DEFAULT_ENVELOPE_NONCE,
     issued_at: new Date(Date.now() - 1000).toISOString(),
@@ -78,7 +82,20 @@ function validEnvelope(action, overrides = {}) {
 }
 
 function claimedCommand(action = 'capture_screenshot', envelopeOverrides = {}) {
-  const payload = { action, mode: 'observe' };
+  const riskTier = action?.startsWith('pointer') || action?.startsWith('keyboard')
+    ? 'native_control'
+    : 'observe';
+  const payload = {
+    action,
+    mode: 'observe',
+    approval: {
+      approval_id: APPROVAL_ID,
+      risk_tier: riskTier,
+      capability: CAPABILITY_BY_ACTION[action],
+      remaining_actions: 0,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    },
+  };
   if (envelopeOverrides !== null) {
     payload.command_envelope = validEnvelope(action, envelopeOverrides);
   }
@@ -88,6 +105,7 @@ function claimedCommand(action = 'capture_screenshot', envelopeOverrides = {}) {
     status: 'claimed',
     shell_id: SHELL_ID,
     device_id: DEVICE_ID,
+    approval_id: APPROVAL_ID,
     capability: CAPABILITY_BY_ACTION[action],
     payload,
   };
@@ -214,6 +232,60 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.status).toBe('denied');
     expect(body.reason).toBe('desktop command envelope missing');
     expect(body.metadata).toEqual({ result_kind: 'error' });
+  });
+
+  it('denies claimed commands without approval metadata before native invocation', async () => {
+    const command = claimedCommand('get_active_app');
+    delete command.payload.approval;
+    delete command.approval_id;
+
+    await executeClaimedDesktopCommand(
+      command,
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command approval grant missing');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
+  });
+
+  it('denies claimed commands with approval risk mismatch before native invocation', async () => {
+    const command = claimedCommand('get_active_app', { approval_risk_tier: 'native_control' });
+
+    await executeClaimedDesktopCommand(
+      command,
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command approval grant binding mismatch');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
+  });
+
+  it('denies claimed commands with mismatched approval ids before native invocation', async () => {
+    const command = claimedCommand('get_active_app');
+    command.payload.approval.approval_id = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+
+    await executeClaimedDesktopCommand(
+      command,
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command approval grant binding mismatch');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
   });
 
   it('denies expired claimed envelopes before native invocation', async () => {
