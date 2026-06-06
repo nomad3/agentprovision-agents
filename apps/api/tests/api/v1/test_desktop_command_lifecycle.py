@@ -293,6 +293,41 @@ def test_expired_lease_rejects_success_completion(db_session, seeded):
     assert idempotent is False
 
 
+def test_completion_accepts_naive_future_lease_from_database(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-naive-future-lease")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        command.lease_expires_at = (_utcnow() + timedelta(seconds=30)).replace(tzinfo=None)
+        db_session.commit()
+        db_session.expire_all()
+
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="denied",
+                reason="desktop observe locked; get_active_app denied",
+                metadata={"result_kind": "error"},
+            ),
+        )
+
+    assert completed.status == "denied"
+    assert event.event_type == "desktop_command_completed"
+    assert event.outcome == "denied"
+    assert idempotent is False
+
+
 def test_stale_pending_command_expires_before_claim(db_session, seeded):
     with patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
