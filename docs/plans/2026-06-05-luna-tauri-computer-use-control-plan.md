@@ -16,12 +16,12 @@ merged and unsigned `luna-v0.1.97` installed locally; PR #806 native-control
 policy hardening merged and unsigned `luna-v0.1.98` installed locally; PR #807
 signed desktop command envelope gate merged and unsigned `luna-v0.1.99`
 installed locally; PR #808 Alpha CLI async chat-kernel transport merged and
-unsigned `luna-v0.1.100` installed locally. Native actuation remains disabled;
-current branch adds macOS-only Alpha-kernel readiness and metadata-only native
-app-monitor status before Tauri-side public-key/Ed25519 command-envelope
-verification.
+unsigned `luna-v0.1.100` installed locally; PR #810 macOS Alpha-kernel/readiness
+merged and unsigned `luna-v0.1.101` installed locally. Native actuation remains
+disabled; current branch adds local claimed command-envelope preflight before
+Luna invokes any native observation/control stub.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-macos-alpha-kernel`
+Current implementation branch: `codex/luna-v0101-approval-trust`
 
 ---
 
@@ -607,6 +607,26 @@ Additional discovery inputs:
     Alpha Chat review was requested with the post-fix validation summary, but
     the durable Alpha Chat job did not return an ACK during this turn; no
     hanging local Alpha CLI process remained after cleanup.
+65. PR #810 merged into `main` on 2026-06-06 UTC as merge commit `a0f88f44`.
+    Post-merge broad Tests, Docker Desktop Deployment, and Luna Client Tauri
+    Build all passed. GitHub Actions published unsigned development prerelease
+    `luna-v0.1.101`; the DMG and `.sha256` were downloaded, `shasum -c`
+    verified the checksum, `/Applications/Luna.app` reported bundle version
+    `0.1.101`, and codesign reported the expected ad-hoc signature with no
+    `TeamIdentifier`. Computer Use verified the expanded chat/session UI,
+    safety strip `Stopped Alpha OK Mac Stopped`, disabled Observe/Assist/
+    Control/Lock/Stop, visible `Resume`, and no pointer/keyboard actuation.
+    Luna's exact Docker `_work` mount gate returned no output.
+66. The CLI Alpha Chat path still returned a Cloudflare HTML error for this
+    handoff (`400 Bad Request`), so the Luna release-gate and next-slice
+    context was sent through the installed Luna app's Alpha Chat UI with
+    Computer Use. Luna ACKed the gate, found no blocker to
+    `codex/luna-v0101-approval-trust`, and approved proceeding with local
+    claimed-envelope preflight before any native invoke while keeping
+    pointer/keyboard disabled. Her guardrail: claimed envelopes must fail
+    closed on missing/expired/replayed/revoked claims, bind to tenant/user/
+    session/shell/device/command, and produce audit-only outcomes until
+    approval trust is proven.
 
 ---
 
@@ -1180,6 +1200,12 @@ Current verification finding (2026-06-06):
       `Stopped` posture, disabled native-control affordances, visible Luna
       Alpha Chat handoff, expected ad-hoc unsigned development signature, and
       an empty exact Docker `_work` mount gate.
+- [x] Verify `luna-v0.1.101` unsigned development release locally after PR
+      #810: DMG checksum, `/Applications/Luna.app` version `0.1.101`, installed
+      app launched from `/Applications`, expanded chat/session UI, `Stopped
+      Alpha OK Mac Stopped` safety strip, disabled native-control affordances,
+      visible `Resume`, expected ad-hoc unsigned development signature, and an
+      empty exact Docker `_work` mount gate.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -1230,6 +1256,10 @@ Exit criteria:
       window, durable stopped posture, disabled native-control controls, Luna
       Alpha Chat handoff visibility, expected ad-hoc signature, and an empty
       exact Docker `_work` mount gate.
+- [x] Local install smoke from GitHub Release `luna-v0.1.101` confirms version,
+      checksum, installed `/Applications/Luna.app` launch, expanded chat/session
+      window, `Stopped Alpha OK Mac Stopped`, disabled native-control controls,
+      expected ad-hoc signature, and an empty exact Docker `_work` mount gate.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -1423,6 +1453,13 @@ Goal: add the missing API-to-Tauri path for action envelopes.
         HMAC envelope over tenant/user/session/command/shell/device/action/
         capability/policy/expiry/nonce fields and keeps Tauri native actuation
         denied by default. Tauri-side public-key verification remains pending.
+  - [x] Add Luna client claimed-envelope preflight before any native invoke:
+        claimed commands with missing nonce, missing/invalid signature metadata,
+        unsupported schema/policy/issuer, stale expiry, or mismatched command/
+        session/shell/device/action/capability binding complete as denied before
+        Luna calls local observation commands or native-control stubs. This is
+        contract validation only; cryptographic public-key/Ed25519 verification
+        in Tauri remains pending.
 - [ ] Add server-time TTL, nonce storage, monotonic per-device sequence numbers,
       and replay-window cleanup.
   - [x] Add server-time lease expiry and pending-command TTL for the
@@ -1808,6 +1845,17 @@ Exit criteria:
       -q` (`1 passed`), and `git diff --check`. The local Cargo cache cleanup
       permission warning and existing gesture/spatial warnings remain
       non-blocking.
+- [x] Claimed-envelope preflight focused Luna client validation passed on branch
+      `codex/luna-v0101-approval-trust`: `npm test -- --run
+      src/hooks/__tests__/useDesktopCommandClaims.test.jsx` (`25 passed`).
+      Added coverage proves valid claim envelopes are the normal path and that
+      missing, nonce-less, unsigned, expired, command/session/shell/device/
+      action/capability-mismatched envelopes complete as denied before native
+      invocation.
+- [x] Claimed-envelope preflight broader Luna client validation passed:
+      `npm test -- --run` (`158 passed`), `npm run build`, and
+      `git diff --check`. The build kept the existing Vite dynamic/static
+      import and chunk-size warnings.
 
 ### React / UX
 
@@ -1896,6 +1944,12 @@ Exit criteria:
       visible, durable `Stopped` posture verified, Observe/Assist/Control/Lock/
       Stop disabled, `Resume` visible, Luna's Alpha Chat handoff visible, and
       Luna's exact Docker `_work` mount gate returned no output.
+- [x] `luna-v0.1.101` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.101`, ad-hoc unsigned development signature confirmed,
+      installed Tauri app verified with Computer Use, expanded chat/session UI
+      visible, `Stopped Alpha OK Mac Stopped` safety strip verified, Observe/
+      Assist/Control/Lock/Stop disabled, `Resume` visible, no native actuation,
+      and Luna's exact Docker `_work` mount gate returned no output.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.

@@ -31,17 +31,70 @@ import {
   useDesktopCommandClaims,
 } from '../useDesktopCommandClaims';
 
-function claimedCommand(action = 'capture_screenshot', envelopeNonce = null) {
+const SESSION_ID = '33333333-3333-3333-3333-333333333333';
+const SHELL_ID = 'desktop-44444444-4444-4444-4444-444444444444';
+const DEVICE_ID = '88888888-8888-8888-8888-888888888888';
+const COMMAND_ID = '99999999-9999-9999-9999-999999999999';
+const DEFAULT_ENVELOPE_NONCE = 'envelope-nonce-test';
+
+const CAPABILITY_BY_ACTION = {
+  capture_screenshot: 'screenshot',
+  get_active_app: 'active_app',
+  read_clipboard: 'clipboard_read',
+  pointer_move: 'pointer_control',
+  pointer_click: 'pointer_control',
+  keyboard_type: 'keyboard_control',
+  keyboard_key_chord: 'keyboard_control',
+};
+
+function validEnvelope(action, overrides = {}) {
+  return {
+    schema: 'agentprovision.desktop_command_envelope.v1',
+    signed: true,
+    signature_alg: 'HMAC-SHA256',
+    key_id: 'agentprovision-desktop-command-hmac-v1',
+    policy_version: 1,
+    issuer: 'agentprovision-api',
+    tenant_id: '11111111-1111-1111-1111-111111111111',
+    user_id: '22222222-2222-2222-2222-222222222222',
+    session_id: SESSION_ID,
+    desktop_command_id: COMMAND_ID,
+    shell_id: SHELL_ID,
+    device_id: DEVICE_ID,
+    action,
+    capability: CAPABILITY_BY_ACTION[action],
+    mode: 'observe',
+    risk_tier: action?.startsWith('pointer') || action?.startsWith('keyboard')
+      ? 'native_control'
+      : 'observe',
+    policy_decision: 'lease_claimed',
+    nonce: DEFAULT_ENVELOPE_NONCE,
+    issued_at: new Date(Date.now() - 1000).toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    expires_at_ms: Date.now() + 60_000,
+    signature: 'valid-test-signature',
+    ...overrides,
+  };
+}
+
+function claimedCommand(action = 'capture_screenshot', envelopeOverrides = {}) {
   const payload = { action, mode: 'observe' };
-  if (envelopeNonce) {
-    payload.command_envelope = { nonce: envelopeNonce };
+  if (envelopeOverrides !== null) {
+    payload.command_envelope = validEnvelope(action, envelopeOverrides);
   }
   return {
-    desktop_command_id: '99999999-9999-9999-9999-999999999999',
+    desktop_command_id: COMMAND_ID,
+    session_id: SESSION_ID,
     status: 'claimed',
-    shell_id: 'desktop-44444444-4444-4444-4444-444444444444',
+    shell_id: SHELL_ID,
+    device_id: DEVICE_ID,
+    capability: CAPABILITY_BY_ACTION[action],
     payload,
   };
+}
+
+function withEnvelope(metadata = {}, nonce = DEFAULT_ENVELOPE_NONCE) {
+  return { ...metadata, envelope_nonce: nonce };
 }
 
 function jsonResponse(body) {
@@ -85,10 +138,10 @@ describe('executeClaimedDesktopCommand', () => {
     expect(invokeMock).toHaveBeenCalledWith('capture_screenshot');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('succeeded');
-    expect(body.metadata).toEqual({
+    expect(body.metadata).toEqual(withEnvelope({
       result_kind: 'binary',
       result_size_bytes: 29,
-    });
+    }));
     expect(JSON.stringify(body)).not.toContain('raw-screenshot-base64-must-not-forward');
   });
 
@@ -109,7 +162,7 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('preempted');
     expect(body.reason).toBe('desktop control stopped; get_active_app preempted');
-    expect(body.metadata).toEqual({ control_mode: 'stopped' });
+    expect(body.metadata).toEqual(withEnvelope({ control_mode: 'stopped' }));
     expect(JSON.stringify(body)).not.toContain('Sensitive App');
     expect(JSON.stringify(body)).not.toContain('Sensitive Title');
   });
@@ -134,7 +187,7 @@ describe('executeClaimedDesktopCommand', () => {
     invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
 
     await executeClaimedDesktopCommand(
-      claimedCommand('read_clipboard', 'envelope-nonce-test'),
+      claimedCommand('read_clipboard', { nonce: 'custom-envelope-nonce-test' }),
       'desktop-44444444-4444-4444-4444-444444444444',
       'device-token-test',
       invokeMock,
@@ -144,8 +197,113 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.metadata).toEqual({
       control_mode: 'control_locked',
       can_observe: true,
-      envelope_nonce: 'envelope-nonce-test',
+      envelope_nonce: 'custom-envelope-nonce-test',
     });
+  });
+
+  it('denies malformed claimed envelopes before native invocation', async () => {
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app', null),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope missing');
+    expect(body.metadata).toEqual({ result_kind: 'error' });
+  });
+
+  it('denies expired claimed envelopes before native invocation', async () => {
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app', {
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+        expires_at_ms: Date.now() - 60_000,
+      }),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope expired');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
+  });
+
+  it('denies claimed envelopes with a missing nonce before native invocation', async () => {
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app', { nonce: '' }),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope nonce missing');
+    expect(body.metadata).toEqual({ result_kind: 'error' });
+  });
+
+  it('denies claimed envelopes without signature metadata before native invocation', async () => {
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app', { signature: '' }),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope signature invalid');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
+  });
+
+  it('denies claimed envelopes bound to another session before native invocation', async () => {
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app', {
+        session_id: '33333333-3333-3333-3333-333333333334',
+      }),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+      {},
+      { sessionId: '33333333-3333-3333-3333-333333333333' },
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope binding mismatch');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
+  });
+
+  it.each([
+    ['command id', { desktop_command_id: '99999999-9999-9999-9999-999999999998' }],
+    ['shell id', { shell_id: 'desktop-55555555-5555-5555-5555-555555555555' }],
+    ['device id', { device_id: '88888888-8888-8888-8888-888888888887' }],
+    ['action', { action: 'read_clipboard' }],
+    ['capability', { capability: 'clipboard_read' }],
+  ])('denies claimed envelopes with a mismatched %s before native invocation', async (_label, override) => {
+    await executeClaimedDesktopCommand(
+      claimedCommand('get_active_app', override),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+      {},
+      { sessionId: '33333333-3333-3333-3333-333333333333' },
+    );
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope binding mismatch');
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
   });
 
   it('denies native control commands without invoking local pointer or keyboard controls', async () => {
@@ -163,10 +321,10 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('denied');
     expect(body.reason).toBe('desktop native control disabled; pointer_click denied');
-    expect(body.metadata).toEqual({
+    expect(body.metadata).toEqual(withEnvelope({
       control_mode: 'control_locked',
       result_kind: 'unsupported',
-    });
+    }));
   });
 
   it('preempts native control commands when local Stop is latched', async () => {
@@ -184,7 +342,7 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('preempted');
     expect(body.reason).toBe('desktop control stopped; keyboard_type preempted');
-    expect(body.metadata).toEqual({ control_mode: 'stopped' });
+    expect(body.metadata).toEqual(withEnvelope({ control_mode: 'stopped' }));
   });
 
   it('completes claimed commands as failed when safety state is unavailable', async () => {
@@ -201,7 +359,7 @@ describe('executeClaimedDesktopCommand', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('get_active_app');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('failed');
-    expect(body.metadata).toEqual({ result_kind: 'error' });
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
   });
 
   it('retries terminal completion before letting executor errors escape', async () => {
@@ -240,7 +398,7 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('failed');
     expect(body.reason).toContain('timed out');
-    expect(body.metadata).toEqual({ result_kind: 'error' });
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
   });
 
   it('completes claimed commands as failed when a native observe command hangs', async () => {
@@ -260,7 +418,7 @@ describe('executeClaimedDesktopCommand', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('failed');
     expect(body.reason).toContain('timed out');
-    expect(body.metadata).toEqual({ result_kind: 'error' });
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
   });
 });
 
@@ -297,10 +455,10 @@ describe('useDesktopCommandClaims', () => {
       lease_seconds: 30,
     });
     const completeBody = JSON.parse(completeCalls()[0][1].body);
-    expect(completeBody.metadata).toEqual({
+    expect(completeBody.metadata).toEqual(withEnvelope({
       result_kind: 'json',
       result_fields: ['app', 'title_chars', 'title_present'],
-    });
+    }));
     expect(JSON.stringify(completeBody)).not.toContain('Sensitive App');
     expect(JSON.stringify(completeBody)).not.toContain('Sensitive Title');
   });
@@ -330,7 +488,7 @@ describe('useDesktopCommandClaims', () => {
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('failed');
     expect(body.reason).toContain('timed out');
-    expect(body.metadata).toEqual({ result_kind: 'error' });
+    expect(body.metadata).toEqual(withEnvelope({ result_kind: 'error' }));
   });
 
   it('denies a claimed command through the hook while observe mode is locked', async () => {
