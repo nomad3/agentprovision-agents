@@ -810,8 +810,10 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // default tray click.
     let open_chat = MenuItem::with_id(app, "open_chat", "Open Luna", true, None::<&str>)?;
     let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS / Labs", true, None::<&str>)?;
+    // Emergency Stop reachable even when the main window is hidden/unfocused.
+    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Desktop Control", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Luna", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_chat, &open_os, &quit_item])?;
+    let menu = Menu::with_items(app, &[&open_chat, &open_os, &stop_all, &quit_item])?;
 
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
@@ -829,6 +831,18 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+            }
+            "stop_all" => {
+                // Latch the emergency Stop (now durable across relaunch) and
+                // surface the main window so the operator sees the stopped state.
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = control_stop_all(handle.clone()).await;
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                });
             }
             "quit" => {
                 app.exit(0);
@@ -856,6 +870,8 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     let palette_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
     let hud_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyL);
     let gesture_killswitch = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyG);
+    // Cmd+Shift+Period — global emergency Stop for all desktop control.
+    let desktop_stop = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Period);
 
     app.global_shortcut().on_shortcut(palette_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
@@ -899,6 +915,22 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
                     let _ = crate::gesture::resume_engine().await;
                 } else {
                     let _ = crate::gesture::pause_engine().await;
+                }
+            });
+        }
+    })?;
+
+    // Cmd+Shift+Period — global emergency Stop. Latches the durable desktop
+    // control Stop from anywhere (even when Luna is hidden/unfocused) and
+    // surfaces the main window so the operator sees the stopped state.
+    app.global_shortcut().on_shortcut(desktop_stop, move |app, _shortcut, event| {
+        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::control_stop_all(handle.clone()).await;
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
                 }
             });
         }
