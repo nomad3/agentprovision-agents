@@ -101,6 +101,11 @@ def test_chat_cli_workflow_dispatch_failure_rolls_back(tracking_db, monkeypatch)
         lambda slug, tenant: fake_skill,
     )
     monkeypatch.setattr(
+        csm,
+        "_load_persona_prompt",
+        lambda db, tenant_id, agent_slug: (None, None),
+    )
+    monkeypatch.setattr(
         csm, "resolve_primary_agent_slug",
         lambda db, tenant_id: "luna",
     )
@@ -118,6 +123,10 @@ def test_chat_cli_workflow_dispatch_failure_rolls_back(tracking_db, monkeypatch)
     import asyncio as _asyncio
 
     def _boom(*args, **kwargs):
+        for arg in args:
+            close = getattr(arg, "close", None)
+            if close is not None:
+                close()
         raise RuntimeError("synthetic dispatch failure")
 
     monkeypatch.setattr(_asyncio, "run", _boom)
@@ -129,6 +138,18 @@ def test_chat_cli_workflow_dispatch_failure_rolls_back(tracking_db, monkeypatch)
     monkeypatch.setattr(
         csm, "generate_mcp_config",
         lambda *a, **kw: {"mcpServers": {}},
+    )
+    # P0a token mint lookup may query Agent before Temporal dispatch.
+    # Return no agent so this narrow rollback test reaches the synthetic
+    # asyncio.run failure without needing a real schema.
+    class _FakeQuery:
+        def filter(self, *a, **k): return self
+        def first(self): return None
+        def all(self): return []
+    monkeypatch.setattr(
+        tracking_db,
+        "query",
+        lambda *a, **k: _FakeQuery(),
     )
 
     response, metadata = csm._run_agent_session_legacy(
@@ -171,6 +192,11 @@ def test_local_tool_agent_failure_rolls_back(tracking_db, monkeypatch):
         lambda slug, tenant: fake_skill,
     )
     monkeypatch.setattr(
+        csm,
+        "_load_persona_prompt",
+        lambda db, tenant_id, agent_slug: (None, None),
+    )
+    monkeypatch.setattr(
         csm, "resolve_primary_agent_slug",
         lambda db, tenant_id: "luna",
     )
@@ -189,9 +215,8 @@ def test_local_tool_agent_failure_rolls_back(tracking_db, monkeypatch):
         lambda *a, **k: _FakeQuery(),
     )
 
-    # Make local_tool_agent.run raise. We patch via importlib because
-    # the import is inside the function body.
-    import importlib
+    # Make local_tool_agent.run raise. Patch sys.modules because the
+    # import is inside the function body.
     import sys
     fake_lta = type(sys)("app.services.local_tool_agent")
 
@@ -231,9 +256,8 @@ def test_local_tool_agent_failure_rolls_back(tracking_db, monkeypatch):
 def test_mint_agent_token_failure_rolls_back(tracking_db, monkeypatch):
     """When the resilient flag is on and mint_agent_token raises (e.g.
     because the Agent table query failed or the JWT secret is missing),
-    the handler must roll back. The next line calls
-    ``generate_mcp_config(..., db=db)`` which would otherwise inherit
-    the poison.
+    the handler must roll back before raising the now-fatal P0a dispatch
+    error.
     """
     from app.services import cli_session_manager as csm
 
@@ -241,6 +265,11 @@ def test_mint_agent_token_failure_rolls_back(tracking_db, monkeypatch):
     monkeypatch.setattr(
         csm.skill_manager, "get_skill_by_slug",
         lambda slug, tenant: fake_skill,
+    )
+    monkeypatch.setattr(
+        csm,
+        "_load_persona_prompt",
+        lambda db, tenant_id, agent_slug: (None, None),
     )
     monkeypatch.setattr(
         csm, "resolve_primary_agent_slug",
@@ -296,20 +325,20 @@ def test_mint_agent_token_failure_rolls_back(tracking_db, monkeypatch):
 
     monkeypatch.setattr(_asyncio, "run", _fake_run)
 
-    response, metadata = csm._run_agent_session_legacy(
-        db=tracking_db,
-        tenant_id=uuid.uuid4(),
-        user_id=uuid.uuid4(),
-        platform="claude_code",
-        agent_slug="luna",
-        message="hi",
-        channel="whatsapp",
-        sender_phone="+1234",
-        conversation_summary="",
-        pre_built_memory_context={},
-    )
+    with pytest.raises(RuntimeError, match="agent_token mint failed"):
+        csm._run_agent_session_legacy(
+            db=tracking_db,
+            tenant_id=uuid.uuid4(),
+            user_id=uuid.uuid4(),
+            platform="claude_code",
+            agent_slug="luna",
+            message="hi",
+            channel="whatsapp",
+            sender_phone="+1234",
+            conversation_summary="",
+            pre_built_memory_context={},
+        )
 
-    # Mint failure is non-fatal; the function should still return ok-ish.
     # The crucial assertion: rollback fired and session is usable.
     assert tracking_db.rollback_call_count >= 1
     _assert_session_usable(tracking_db)
