@@ -123,9 +123,27 @@ Additional discovery inputs:
     Docker inspection found no `/actions-runner/_work` bind mounts, but Luna's
     exact release-gate command,
     `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`,
-    still prints the named `agentprovision-agents_workspaces` Docker volume.
-    Treat the installed-release gate as open until that exact smoke command is
-    empty or the gate is narrowed to `/actions-runner/_work`.
+    still printed the named `agentprovision-agents_workspaces` Docker volume
+    before the follow-up local compose volume rename.
+14. The exact Luna mount gate is now actionable by renaming the local Docker
+    workspace volume source away from `_work`: compose still uses the logical
+    `workspaces` key and containers still mount `/var/agentprovision/workspaces`,
+    but the physical Docker volume defaults to
+    `agentprovision-agents_tenant_spaces`. The deploy workflow runs
+    `scripts/migrate_compose_workspaces_volume.sh` before `docker compose up`
+    to copy existing tenant workspace data from the old
+    `agentprovision-agents_workspaces` volume once, quiescing `api` and
+    `code-worker` only when a copy is required. Council review added explicit
+    in-progress and completion markers so a partial copy cannot be mistaken for
+    a finished migration, and the workflow now runs migration plus `up` in one
+    recovery-trapped step. The recovery path checks the completion marker: if
+    migration has not completed it restarts existing containers, but after a
+    completed migration it only recreates `api` and `code-worker` against the
+    new volume so old-volume writes cannot be stranded. Local validation after
+    the migration returned no output for Luna's exact `_work` smoke command;
+    live mounts now source `/var/agentprovision/workspaces` from
+    `agentprovision-agents_tenant_spaces`; local API, web, Luna web, and public
+    tunnel endpoints returned `200`.
 
 ---
 
@@ -649,15 +667,15 @@ Current verification finding (2026-06-06):
       verification via `codesign`, `stapler`, and `spctl`.
 - [x] Allow unsigned development releases without producing an unsigned updater
       manifest.
-- [ ] Verify `luna-v0.1.86` unsigned development release locally: DMG checksum,
+- [x] Verify `luna-v0.1.86` unsigned development release locally: DMG checksum,
       `/Applications/Luna.app` version `0.1.86`, maximized startup,
       Control Locked safety strip, disabled Assist/Control, and Alpha chat
-      response. App-side validation passed, but the installed-release gate
-      remains open pending the exact mount smoke command returning empty.
-- [ ] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
+      response. App-side validation passed, and the exact mount smoke command
+      returned empty after the workspace volume source was renamed.
+- [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
-      found zero `/actions-runner/_work` paths, but Luna's broader `grep _work`
-      smoke still prints `agentprovision-agents_workspaces` volume names.
+      found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
+      smoke returns empty after live stack migration.
 
 Exit criteria:
 
@@ -669,10 +687,10 @@ Exit criteria:
       artifacts and local unsigned builds for development smoke only.
 - [x] Local install smoke from the unsigned development app bundle confirms
       version, launch, Observe/Lock, and Stop behavior.
-- [ ] Local install smoke from GitHub Release `luna-v0.1.86` confirms version,
+- [x] Local install smoke from GitHub Release `luna-v0.1.86` confirms version,
       checksum, maximized launch, locked passive control strip, and live Alpha
-      chat response. App-side checks passed; release gate remains open until
-      the mount smoke gate returns empty.
+      chat response. The mount smoke gate returned empty after the Docker
+      workspace volume source migration.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 

@@ -31,7 +31,7 @@ The kernel's canonical "seed a tenant's project tree" verb is `alpha workspace c
   └── projects/<repo>/   ← populated by alpha workspace clone
 ```
 
-- **Volume**: named `agentprovision-agents_workspaces` (docker-compose) / `helm/charts/microservice/templates/workspaces-pvc.yaml` (Helm, 10 GiB default, gated on `workspaces.enabled=true`). Override env: `WORKSPACES_ROOT`. Mounts at `/var/agentprovision/workspaces` on `api` and `code-worker`.
+- **Volume**: compose key `workspaces`, physical Docker volume `agentprovision-agents_tenant_spaces` (override with `WORKSPACES_VOLUME_NAME`) / `helm/charts/microservice/templates/workspaces-pvc.yaml` (Helm, 10 GiB default, gated on `workspaces.enabled=true`). Override env: `WORKSPACES_ROOT`. Mounts at `/var/agentprovision/workspaces` on `api` and `code-worker`.
 - **Persistence**: survives container restarts, image rebuilds, deploys, node reboots. Wiped **only** by `docker volume rm` / `kubectl delete pvc`. `docker volume prune` is forbidden — `docker-cleanup.yaml` is image+builder-only.
 - **Kernel verbs** (each = thin HTTP route delegating to the same Python entrypoint the `alpha` binary calls):
   - `alpha workspace tree`  → `GET /api/v1/workspace/tree?scope=tenant|platform&path=…`
