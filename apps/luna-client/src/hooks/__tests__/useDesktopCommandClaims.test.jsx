@@ -95,7 +95,7 @@ describe('executeClaimedDesktopCommand', () => {
   it('preempts observe commands if Stop is latched after native execution returns', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
-      .mockResolvedValueOnce({ app: 'Sensitive App', title: 'Sensitive Title' })
+      .mockResolvedValueOnce({ app: 'Sensitive App', title_present: true, title_chars: 15 })
       .mockResolvedValueOnce({ mode: 'stopped', can_observe: false });
 
     await executeClaimedDesktopCommand(
@@ -278,7 +278,7 @@ describe('useDesktopCommandClaims', () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true })
-      .mockResolvedValueOnce({ app: 'Sensitive App', title: 'Sensitive Title' })
+      .mockResolvedValueOnce({ app: 'Sensitive App', title_present: true, title_chars: 15 })
       .mockResolvedValueOnce({ mode: 'observe', can_observe: true });
 
     renderHook(() => useDesktopCommandClaims(
@@ -299,7 +299,7 @@ describe('useDesktopCommandClaims', () => {
     const completeBody = JSON.parse(completeCalls()[0][1].body);
     expect(completeBody.metadata).toEqual({
       result_kind: 'json',
-      result_fields: ['app', 'title'],
+      result_fields: ['app', 'title_chars', 'title_present'],
     });
     expect(JSON.stringify(completeBody)).not.toContain('Sensitive App');
     expect(JSON.stringify(completeBody)).not.toContain('Sensitive Title');

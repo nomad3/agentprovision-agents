@@ -1,9 +1,9 @@
-use tauri::{Emitter, Manager};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
+use tauri::{Emitter, Manager};
 
-mod gesture;
 mod computer_use;
+mod gesture;
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -43,7 +43,9 @@ fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
         return Err("main window not registered".into());
     };
 
-    window.show().map_err(|e| format!("show main window: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("show main window: {e}"))?;
     let _ = window.unminimize();
     if let Err(err) = window.maximize() {
         log::warn!("main window maximize failed: {err}");
@@ -60,7 +62,9 @@ fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
         return Err("main window not registered".into());
     };
 
-    window.show().map_err(|e| format!("show main window: {e}"))?;
+    window
+        .show()
+        .map_err(|e| format!("show main window: {e}"))?;
     window
         .set_focus()
         .map_err(|e| format!("focus main window: {e}"))?;
@@ -77,11 +81,166 @@ fn get_arch() -> String {
     std::env::consts::ARCH.to_string()
 }
 
+#[tauri::command]
+fn alpha_kernel_status() -> AlphaKernelStatus {
+    discover_alpha_kernel()
+}
+
 fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn executable_file_exists(path: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn available_alpha_kernel(path: std::path::PathBuf, source: &str) -> AlphaKernelStatus {
+    AlphaKernelStatus {
+        status: "available".to_string(),
+        available: true,
+        binary_path: Some(path.to_string_lossy().to_string()),
+        source: Some(source.to_string()),
+        manages_chat_jobs: true,
+        manages_tasks: true,
+        cli_parity_required: true,
+        platform_scope: "macos".to_string(),
+        reason: None,
+    }
+}
+
+fn missing_alpha_kernel(reason: String) -> AlphaKernelStatus {
+    AlphaKernelStatus {
+        status: "missing".to_string(),
+        available: false,
+        binary_path: None,
+        source: None,
+        manages_chat_jobs: true,
+        manages_tasks: true,
+        cli_parity_required: true,
+        platform_scope: "macos".to_string(),
+        reason: Some(reason),
+    }
+}
+
+fn discover_alpha_kernel() -> AlphaKernelStatus {
+    if let Ok(value) = std::env::var("LUNA_ALPHA_CLI") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            let path = std::path::PathBuf::from(trimmed);
+            return if executable_file_exists(&path) {
+                available_alpha_kernel(path, "LUNA_ALPHA_CLI")
+            } else {
+                missing_alpha_kernel(format!(
+                    "LUNA_ALPHA_CLI does not point to an executable alpha CLI: {trimmed}"
+                ))
+            };
+        }
+    }
+
+    let mut candidates: Vec<(std::path::PathBuf, &'static str)> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push((
+            std::path::PathBuf::from(home).join(".local/bin/alpha"),
+            "home",
+        ));
+    }
+    candidates.push((
+        std::path::PathBuf::from("/opt/homebrew/bin/alpha"),
+        "homebrew",
+    ));
+    candidates.push((
+        std::path::PathBuf::from("/usr/local/bin/alpha"),
+        "usr_local",
+    ));
+    if let Some(paths) = std::env::var_os("PATH") {
+        for entry in std::env::split_paths(&paths) {
+            candidates.push((entry.join("alpha"), "PATH"));
+        }
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for (path, source) in candidates {
+        let key = path.to_string_lossy().to_string();
+        if !seen.insert(key) {
+            continue;
+        }
+        if executable_file_exists(&path) {
+            return available_alpha_kernel(path, source);
+        }
+    }
+
+    missing_alpha_kernel(
+        "Alpha CLI was not found in LUNA_ALPHA_CLI, standard local paths, or PATH.".to_string(),
+    )
+}
+
+fn current_macos_app_monitor_status(
+    mode: u8,
+    permissions: &computer_use::DesktopPermissionReadiness,
+) -> MacosAppMonitorStatus {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = mode;
+        MacosAppMonitorStatus {
+            platform: std::env::consts::OS.to_string(),
+            status: "unsupported".to_string(),
+            reason: "Native app monitoring is scoped to macOS for this phase.".to_string(),
+            accessibility_status: permissions.accessibility.status.clone(),
+            automation_system_events_status: permissions.automation_system_events.status.clone(),
+            observed_at_ms: None,
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let (status, reason) = if mode == CONTROL_MODE_STOPPED {
+            (
+                "stopped",
+                "Desktop Stop is latched; macOS app monitoring is off.",
+            )
+        } else if mode != CONTROL_MODE_OBSERVE {
+            (
+                "locked",
+                "Observe-only mode is not armed; macOS app monitoring is locked.",
+            )
+        } else if permissions.accessibility.status != "granted" {
+            (
+                "denied",
+                "macOS Accessibility is required before Luna can monitor the active app.",
+            )
+        } else {
+            (
+                "ready",
+                "macOS active-app monitoring is ready in metadata-only mode.",
+            )
+        };
+
+        MacosAppMonitorStatus {
+            platform: "macos".to_string(),
+            status: status.to_string(),
+            reason: reason.to_string(),
+            accessibility_status: permissions.accessibility.status.clone(),
+            automation_system_events_status: permissions.automation_system_events.status.clone(),
+            observed_at_ms: None,
+        }
+    }
 }
 
 fn valid_desktop_shell_id(id: &str) -> bool {
@@ -128,8 +287,33 @@ struct ControlSafetyState {
     can_control: bool,
     can_control_pointer: bool,
     can_control_keyboard: bool,
+    alpha_kernel: AlphaKernelStatus,
+    macos_app_monitor: MacosAppMonitorStatus,
     permissions: computer_use::DesktopPermissionReadiness,
     last_stop_at_ms: Option<u64>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct AlphaKernelStatus {
+    status: String,
+    available: bool,
+    binary_path: Option<String>,
+    source: Option<String>,
+    manages_chat_jobs: bool,
+    manages_tasks: bool,
+    cli_parity_required: bool,
+    platform_scope: String,
+    reason: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct MacosAppMonitorStatus {
+    platform: String,
+    status: String,
+    reason: String,
+    accessibility_status: String,
+    automation_system_events_status: String,
+    observed_at_ms: Option<u64>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -373,6 +557,8 @@ async fn current_control_safety_state() -> ControlSafetyState {
     let mode = CONTROL_MODE.load(Ordering::SeqCst);
     let last_stop = LAST_STOP_AT_MS.load(Ordering::SeqCst);
     let gesture = gesture::engine_status().await;
+    let permissions = computer_use::current_permission_readiness();
+    let macos_app_monitor = current_macos_app_monitor_status(mode, &permissions);
     ControlSafetyState {
         mode: control_mode_name(mode).to_string(),
         observe_enabled: mode == CONTROL_MODE_OBSERVE,
@@ -388,8 +574,14 @@ async fn current_control_safety_state() -> ControlSafetyState {
         can_control: false,
         can_control_pointer: false,
         can_control_keyboard: false,
-        permissions: computer_use::current_permission_readiness(),
-        last_stop_at_ms: if last_stop == 0 { None } else { Some(last_stop) },
+        alpha_kernel: discover_alpha_kernel(),
+        macos_app_monitor,
+        permissions,
+        last_stop_at_ms: if last_stop == 0 {
+            None
+        } else {
+            Some(last_stop)
+        },
     }
 }
 
@@ -501,7 +693,9 @@ fn persist_stop_latch(app: &tauri::AppHandle, stopped: bool, at_ms: u64) {
     match luna_app_data_dir(app) {
         Ok(dir) => {
             if let Err(e) = computer_use::stop_state::persist_stop(&dir, stopped, at_ms) {
-                log::warn!("desktop control: failed to persist Stop latch (stopped={stopped}): {e}");
+                log::warn!(
+                    "desktop control: failed to persist Stop latch (stopped={stopped}): {e}"
+                );
             }
         }
         Err(e) => log::warn!("desktop control: cannot resolve app data dir for Stop latch: {e}"),
@@ -557,12 +751,11 @@ async fn capture_screenshot(app: tauri::AppHandle) -> Result<String, String> {
             return Err(reason);
         }
 
-        let bytes = std::fs::read(&path)
-            .map_err(|e| {
-                let reason = format!("Failed to read screenshot: {}", e);
-                fail_observation_audit(&app, &audit, &reason);
-                reason
-            })?;
+        let bytes = std::fs::read(&path).map_err(|e| {
+            let reason = format!("Failed to read screenshot: {}", e);
+            fail_observation_audit(&app, &audit, &reason);
+            reason
+        })?;
         let _ = std::fs::remove_file(&path);
 
         complete_observation_audit(&app, &audit);
@@ -608,7 +801,9 @@ async fn get_active_app(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         fail_observation_audit(&app, &audit, &reason);
         return Err(reason);
     }
-    let app_name = String::from_utf8_lossy(&app_output.stdout).trim().to_string();
+    let app_name = String::from_utf8_lossy(&app_output.stdout)
+        .trim()
+        .to_string();
 
     let safe_name = app_name.replace('\\', "\\\\").replace('"', "\\\"");
     let title_output = Command::new("osascript")
@@ -624,10 +819,7 @@ async fn get_active_app(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
     };
 
     complete_observation_audit(&app, &audit);
-    Ok(serde_json::json!({
-        "app": app_name,
-        "title": window_title,
-    }))
+    Ok(build_active_app_metadata(&app_name, &window_title))
 }
 
 #[tauri::command]
@@ -638,13 +830,11 @@ async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
         computer_use::ObservationCapability::ClipboardRead,
     )?;
     use std::process::Command;
-    let output = Command::new("pbpaste")
-        .output()
-        .map_err(|e| {
-            let reason = format!("Clipboard read failed: {}", e);
-            fail_observation_audit(&app, &audit, &reason);
-            reason
-        })?;
+    let output = Command::new("pbpaste").output().map_err(|e| {
+        let reason = format!("Clipboard read failed: {}", e);
+        fail_observation_audit(&app, &audit, &reason);
+        reason
+    })?;
     if !output.status.success() {
         let reason = "Clipboard read failed".to_string();
         fail_observation_audit(&app, &audit, &reason);
@@ -825,15 +1015,11 @@ async fn updater_signing_status() -> Result<bool, String> {
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     if !updater_signing_configured() {
-        log::error!(
-            "update: signing not configured — install_update will not run"
-        );
-        return Err(
-            "auto-install requires updater signing to be configured \
+        log::error!("update: signing not configured — install_update will not run");
+        return Err("auto-install requires updater signing to be configured \
              (set TAURI_SIGNING_PRIVATE_KEY secret and embed pubkey in \
              tauri.conf.json). Falling back to manual download."
-                .to_string(),
-        );
+            .to_string());
     }
     log::info!("update: install_update invoked");
     use tauri_plugin_updater::UpdaterExt;
@@ -888,7 +1074,10 @@ struct ProjectionResult {
 }
 
 #[tauri::command]
-async fn project_embeddings(vectors: Vec<Vec<f32>>, ids: Vec<String>) -> Result<Vec<ProjectionResult>, String> {
+async fn project_embeddings(
+    vectors: Vec<Vec<f32>>,
+    ids: Vec<String>,
+) -> Result<Vec<ProjectionResult>, String> {
     // Phase 1: deterministic scatter projection based on embedding values.
     // Full UMAP dimensionality reduction is a Phase 2 item — requires a
     // suitable Rust UMAP crate with a lib target (umap-rs has none).
@@ -900,14 +1089,23 @@ async fn project_embeddings(vectors: Vec<Vec<f32>>, ids: Vec<String>) -> Result<
         return Err("Vectors and IDs length mismatch".to_string());
     }
 
-    let results = vectors.iter().zip(ids.iter()).map(|(v, id)| {
-        // Use first three principal components as a cheap approximation.
-        // Scale to [-100, 100] range for the Three.js scene.
-        let x = v.get(0).copied().unwrap_or(0.0) * 100.0;
-        let y = v.get(1).copied().unwrap_or(0.0) * 100.0;
-        let z = v.get(2).copied().unwrap_or(0.0) * 100.0;
-        ProjectionResult { id: id.clone(), x, y, z }
-    }).collect();
+    let results = vectors
+        .iter()
+        .zip(ids.iter())
+        .map(|(v, id)| {
+            // Use first three principal components as a cheap approximation.
+            // Scale to [-100, 100] range for the Three.js scene.
+            let x = v.get(0).copied().unwrap_or(0.0) * 100.0;
+            let y = v.get(1).copied().unwrap_or(0.0) * 100.0;
+            let z = v.get(2).copied().unwrap_or(0.0) * 100.0;
+            ProjectionResult {
+                id: id.clone(),
+                x,
+                y,
+                z,
+            }
+        })
+        .collect();
 
     Ok(results)
 }
@@ -915,11 +1113,15 @@ async fn project_embeddings(vectors: Vec<Vec<f32>>, ids: Vec<String>) -> Result<
 /// Resolve the real tool/app from generic process names.
 /// - Terminal/iTerm2: checks window title for running commands (claude, docker, npm, etc.)
 /// - Electron: extracts real app name from window title
+#[cfg(test)]
 fn resolve_app_context(app_name: &str, window_title: &str) -> String {
     let lower_title = window_title.to_lowercase();
 
     // Terminal emulators: detect what's running inside
-    if matches!(app_name, "Terminal" | "iTerm2" | "Alacritty" | "kitty" | "Warp" | "Hyper") {
+    if matches!(
+        app_name,
+        "Terminal" | "iTerm2" | "Alacritty" | "kitty" | "Warp" | "Hyper"
+    ) {
         let tools = [
             ("claude", "Claude Code"),
             ("codex", "Codex CLI"),
@@ -977,8 +1179,48 @@ fn resolve_app_context(app_name: &str, window_title: &str) -> String {
     app_name.to_string()
 }
 
+fn active_app_context_key(app_name: &str, window_title: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    app_name.hash(&mut hasher);
+    window_title.hash(&mut hasher);
+    format!("{}:{:x}", app_name, hasher.finish())
+}
+
+fn build_metadata_app_switch_event(
+    from_app: &str,
+    to_app: &str,
+    window_title: &str,
+    duration_secs: u64,
+    timestamp: u64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "app_switch",
+        "from_app": from_app,
+        "to_app": to_app,
+        "duration_secs": duration_secs,
+        "timestamp": timestamp,
+        "platform": "macos",
+        "monitor_source": "tauri_activity_tracker",
+        "detail_level": "metadata_only",
+        "window_title_present": !window_title.is_empty(),
+        "window_title_chars": window_title.chars().count(),
+    })
+}
+
+fn build_active_app_metadata(app_name: &str, window_title: &str) -> serde_json::Value {
+    serde_json::json!({
+        "app": app_name,
+        "title_present": !window_title.is_empty(),
+        "title_chars": window_title.chars().count(),
+    })
+}
+
 /// Get deeper subprocess context: what project/repo is the user working on,
 /// what commands are running in their terminal sessions.
+#[cfg(test)]
+#[allow(dead_code)]
 fn get_subprocess_context() -> serde_json::Value {
     use std::process::Command;
 
@@ -1009,7 +1251,10 @@ fn get_subprocess_context() -> serde_json::Value {
 
     // Get the current git repo if we're in one (from the most recent terminal cwd)
     let git_output = Command::new("sh")
-        .args(["-c", "lsof -c Terminal -c iTerm2 -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}'"])
+        .args([
+            "-c",
+            "lsof -c Terminal -c iTerm2 -a -d cwd 2>/dev/null | tail -1 | awk '{print $NF}'",
+        ])
         .output();
 
     let cwd = match git_output {
@@ -1024,6 +1269,7 @@ fn get_subprocess_context() -> serde_json::Value {
 }
 
 /// Extract project name from command args (looks for repo paths)
+#[cfg(test)]
 fn extract_project_from_args(args: &str) -> String {
     // Look for common project path patterns
     for part in args.split_whitespace() {
@@ -1040,8 +1286,13 @@ fn extract_project_from_args(args: &str) -> String {
     String::new()
 }
 
+#[cfg(test)]
 fn truncate_str(s: &str, max: usize) -> &str {
-    if s.len() <= max { s } else { &s[..max] }
+    if s.len() <= max {
+        s
+    } else {
+        &s[..max]
+    }
 }
 
 fn base64_encode(data: &[u8]) -> String {
@@ -1076,7 +1327,13 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let open_chat = MenuItem::with_id(app, "open_chat", "Open Luna", true, None::<&str>)?;
     let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS / Labs", true, None::<&str>)?;
     // Emergency Stop reachable even when the main window is hidden/unfocused.
-    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Desktop Control", true, None::<&str>)?;
+    let stop_all = MenuItem::with_id(
+        app,
+        "stop_all",
+        "Stop All Desktop Control",
+        true,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Luna", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open_chat, &open_os, &stop_all, &quit_item])?;
 
@@ -1129,62 +1386,66 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     // Cmd+Shift+Period — global emergency Stop for all desktop control.
     let desktop_stop = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Period);
 
-    app.global_shortcut().on_shortcut(palette_shortcut, move |app, _shortcut, event| {
-        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            // Restore/maximize/focus even when the window is already visible:
-            // macOS can report a minimized or manually resized window as
-            // visible, and the palette should always open on the full chat
-            // surface.
-            let _ = show_main_window_maximized(app);
-            // Emit to frontend — React handles showing the command palette.
-            let _ = tauri::Emitter::emit(app, "toggle-palette", ());
-        }
-    })?;
+    app.global_shortcut()
+        .on_shortcut(palette_shortcut, move |app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                // Restore/maximize/focus even when the window is already visible:
+                // macOS can report a minimized or manually resized window as
+                // visible, and the palette should always open on the full chat
+                // surface.
+                let _ = show_main_window_maximized(app);
+                // Emit to frontend — React handles showing the command palette.
+                let _ = tauri::Emitter::emit(app, "toggle-palette", ());
+            }
+        })?;
 
     // Cmd+Shift+L toggles the primary `main` chat/session window.
     // Spatial HUD is an explicit Labs surface opened from the tray/menu.
-    app.global_shortcut().on_shortcut(hud_shortcut, move |app, _shortcut, event| {
-        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            if let Some(window) = app.get_webview_window("main") {
-                if window.is_visible().unwrap_or(false) {
-                    let _ = window.hide();
-                } else {
-                    let _ = show_main_window_maximized(app);
+    app.global_shortcut()
+        .on_shortcut(hud_shortcut, move |app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                if let Some(window) = app.get_webview_window("main") {
+                    if window.is_visible().unwrap_or(false) {
+                        let _ = window.hide();
+                    } else {
+                        let _ = show_main_window_maximized(app);
+                    }
                 }
             }
-        }
-    })?;
+        })?;
 
     // Cmd+Shift+G — gesture engine kill-switch (toggle pause/resume).
-    app.global_shortcut().on_shortcut(gesture_killswitch, move |_app, _shortcut, event| {
-        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            tauri::async_runtime::spawn(async move {
-                if !crate::desktop_control_observe_enabled() {
-                    let _ = crate::gesture::stop_engine().await;
-                    return;
-                }
-                let status = crate::gesture::engine_status().await;
-                if status.state == "paused" {
-                    let _ = crate::gesture::resume_engine().await;
-                } else {
-                    let _ = crate::gesture::pause_engine().await;
-                }
-            });
-        }
-    })?;
+    app.global_shortcut()
+        .on_shortcut(gesture_killswitch, move |_app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                tauri::async_runtime::spawn(async move {
+                    if !crate::desktop_control_observe_enabled() {
+                        let _ = crate::gesture::stop_engine().await;
+                        return;
+                    }
+                    let status = crate::gesture::engine_status().await;
+                    if status.state == "paused" {
+                        let _ = crate::gesture::resume_engine().await;
+                    } else {
+                        let _ = crate::gesture::pause_engine().await;
+                    }
+                });
+            }
+        })?;
 
     // Cmd+Shift+Period — global emergency Stop. Latches the durable desktop
     // control Stop from anywhere (even when Luna is hidden/unfocused) and
     // surfaces the main window so the operator sees the stopped state.
-    app.global_shortcut().on_shortcut(desktop_stop, move |app, _shortcut, event| {
-        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            let handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = crate::control_stop_all(handle.clone()).await;
-                let _ = show_main_window_maximized(&handle);
-            });
-        }
-    })?;
+    app.global_shortcut()
+        .on_shortcut(desktop_stop, move |app, _shortcut, event| {
+            if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::control_stop_all(handle.clone()).await;
+                    let _ = show_main_window_maximized(&handle);
+                });
+            }
+        })?;
 
     Ok(())
 }
@@ -1333,15 +1594,15 @@ pub fn run() {
                     }
                 }
             });
-            // Activity tracker — monitors app switches + window context for pattern detection
-            // Captures: app name, window title, and for terminals/Electron apps, the
-            // actual tool/project running inside (e.g., "claude" in Terminal, real app
-            // name from Electron window titles).
+            // Activity tracker — monitors macOS app switches in metadata-only mode.
+            // Raw window titles and subprocess args stay local; emitted events include
+            // only app names plus coarse title metadata.
             let activity_handle = app.handle().clone();
             let activity_running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
             let activity_flag = activity_running.clone();
             std::thread::spawn(move || {
-                let mut last_context = String::new(); // "app:title" composite key
+                let mut last_context = String::new();
+                let mut last_app = String::new();
                 let mut last_switch = std::time::Instant::now();
                 while activity_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(5));
@@ -1378,11 +1639,8 @@ pub fn run() {
                         _ => String::new(),
                     };
 
-                    // Resolve the real tool for terminals and Electron apps
-                    let resolved_app = resolve_app_context(&app_name, &window_title);
-
                     // Only emit on context change (app + title)
-                    let context_key = format!("{}:{}", resolved_app, window_title);
+                    let context_key = active_app_context_key(&app_name, &window_title);
                     if context_key != last_context {
                         let audit = match begin_observation_audit(
                             &activity_handle,
@@ -1397,57 +1655,19 @@ pub fn run() {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
                             .as_secs();
-                        // Get subprocess context for deeper insight
-                        let subprocess = get_subprocess_context();
 
-                        // Emit the main app switch event
-                        let event = serde_json::json!({
-                            "type": "app_switch",
-                            "from_app": last_context.split(':').next().unwrap_or(""),
-                            "to_app": resolved_app,
-                            "window_title": window_title,
-                            "subprocess": subprocess,
-                            "duration_secs": duration_secs,
-                            "timestamp": timestamp,
-                        });
+                        let event = build_metadata_app_switch_event(
+                            &last_app,
+                            &app_name,
+                            &window_title,
+                            duration_secs,
+                            timestamp,
+                        );
                         let _ = tauri::Emitter::emit(&activity_handle, "activity-event", &event);
-
-                        // For editors: also emit events for detected CLI tools
-                        // so the pattern detector sees "Claude Code", "Docker CLI", etc.
-                        if let Some(procs) = subprocess.get("active_processes").and_then(|v| v.as_array()) {
-                            for proc in procs {
-                                let cmd = proc.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                                let project = proc.get("project").and_then(|v| v.as_str()).unwrap_or("");
-                                let tool_name = match cmd {
-                                    c if c.contains("claude") => "Claude Code",
-                                    c if c.contains("codex") => "Codex CLI",
-                                    c if c.contains("docker") => "Docker",
-                                    c if c.contains("cargo") => "Cargo",
-                                    c if c.contains("npm") || c.contains("node") => "Node.js",
-                                    c if c.contains("python") || c.contains("uvicorn") => "Python",
-                                    c if c.contains("kubectl") => "kubectl",
-                                    c if c.contains("vite") => "Vite",
-                                    _ => continue,
-                                };
-                                let tool_label = if project.is_empty() {
-                                    tool_name.to_string()
-                                } else {
-                                    format!("{} ({})", tool_name, project)
-                                };
-                                let tool_event = serde_json::json!({
-                                    "type": "app_switch",
-                                    "from_app": &resolved_app,
-                                    "to_app": tool_label,
-                                    "window_title": proc.get("args").and_then(|v| v.as_str()).unwrap_or(""),
-                                    "duration_secs": 0,
-                                    "timestamp": timestamp,
-                                });
-                                let _ = tauri::Emitter::emit(&activity_handle, "activity-event", &tool_event);
-                            }
-                        }
 
                         complete_observation_audit(&activity_handle, &audit);
                         last_context = context_key;
+                        last_app = app_name;
                         last_switch = std::time::Instant::now();
                     }
                 }
@@ -1468,6 +1688,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_platform,
             get_arch,
+            alpha_kernel_status,
             get_or_create_shell_id,
             control_get_safety_state,
             control_observe_status,
@@ -1536,7 +1757,10 @@ mod tests {
         assert!(!desktop_control_allows_actuation());
         let pointer = ensure_desktop_control_allows_pointer_actuation("control_pointer_click")
             .expect_err("stopped mode should reject pointer actuation");
-        assert!(pointer.contains("desktop control stopped"), "got: {pointer}");
+        assert!(
+            pointer.contains("desktop control stopped"),
+            "got: {pointer}"
+        );
 
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
     }
@@ -1555,7 +1779,10 @@ mod tests {
         CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
         let stopped = ensure_desktop_control_allows_observation("capture_screenshot")
             .expect_err("stopped mode should reject observation");
-        assert!(stopped.contains("desktop control stopped"), "got: {stopped}");
+        assert!(
+            stopped.contains("desktop control stopped"),
+            "got: {stopped}"
+        );
 
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
     }
@@ -1566,8 +1793,14 @@ mod tests {
         // A Lock must never silently leave a latched Stop — only an explicit
         // Resume (control_clear_stop) may. This pins the AuthContext
         // logout/stale-token control_lock_all path against un-stopping.
-        assert_eq!(next_mode_for_lock(CONTROL_MODE_STOPPED), CONTROL_MODE_STOPPED);
-        assert_eq!(next_mode_for_lock(CONTROL_MODE_OBSERVE), CONTROL_MODE_LOCKED);
+        assert_eq!(
+            next_mode_for_lock(CONTROL_MODE_STOPPED),
+            CONTROL_MODE_STOPPED
+        );
+        assert_eq!(
+            next_mode_for_lock(CONTROL_MODE_OBSERVE),
+            CONTROL_MODE_LOCKED
+        );
         assert_eq!(next_mode_for_lock(CONTROL_MODE_LOCKED), CONTROL_MODE_LOCKED);
     }
 
@@ -1586,7 +1819,19 @@ mod tests {
         // OS family must be one of the standard Rust constants — guards
         // against accidental hard-coding.
         assert!(
-            matches!(p.as_str(), "macos" | "linux" | "windows" | "ios" | "android" | "freebsd" | "netbsd" | "openbsd" | "dragonfly" | "solaris"),
+            matches!(
+                p.as_str(),
+                "macos"
+                    | "linux"
+                    | "windows"
+                    | "ios"
+                    | "android"
+                    | "freebsd"
+                    | "netbsd"
+                    | "openbsd"
+                    | "dragonfly"
+                    | "solaris"
+            ),
             "unexpected platform: {p}",
         );
     }
@@ -1645,7 +1890,9 @@ mod tests {
     // ── extract_project_from_args ───────────────────────────────────────
     #[test]
     fn extract_project_from_github_path() {
-        let got = extract_project_from_args("claude /Users/me/Documents/GitHub/agentprovision-agents/apps");
+        let got = extract_project_from_args(
+            "claude /Users/me/Documents/GitHub/agentprovision-agents/apps",
+        );
         assert_eq!(got, "agentprovision-agents");
     }
 
@@ -1706,6 +1953,36 @@ mod tests {
         assert_eq!(got, "Slack");
     }
 
+    #[test]
+    fn metadata_app_switch_event_omits_raw_window_and_subprocess_context() {
+        let event = build_metadata_app_switch_event(
+            "Terminal",
+            "Luna",
+            "secret repo window title",
+            12,
+            12345,
+        );
+
+        assert_eq!(event["type"], "app_switch");
+        assert_eq!(event["from_app"], "Terminal");
+        assert_eq!(event["to_app"], "Luna");
+        assert_eq!(event["detail_level"], "metadata_only");
+        assert_eq!(event["window_title_present"], true);
+        assert_eq!(event["window_title_chars"], 24);
+        assert!(event.get("window_title").is_none());
+        assert!(event.get("subprocess").is_none());
+    }
+
+    #[test]
+    fn active_app_metadata_omits_raw_window_title() {
+        let event = build_active_app_metadata("Code", "secret repo window title");
+
+        assert_eq!(event["app"], "Code");
+        assert_eq!(event["title_present"], true);
+        assert_eq!(event["title_chars"], 24);
+        assert!(event.get("title").is_none());
+    }
+
     // ── ProjectionResult / project_embeddings logic ─────────────────────
     //
     // `project_embeddings` is `async fn` but does no IO — we drive it with
@@ -1753,11 +2030,9 @@ mod tests {
     #[test]
     fn project_embeddings_handles_short_vectors() {
         // Vectors with fewer than 3 dims should pad with 0 not panic.
-        let result = tauri::async_runtime::block_on(project_embeddings(
-            vec![vec![0.5]],
-            vec!["x".into()],
-        ))
-        .expect("ok");
+        let result =
+            tauri::async_runtime::block_on(project_embeddings(vec![vec![0.5]], vec!["x".into()]))
+                .expect("ok");
         assert_eq!(result[0].x, 50.0);
         assert_eq!(result[0].y, 0.0);
         assert_eq!(result[0].z, 0.0);

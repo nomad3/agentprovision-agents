@@ -46,7 +46,7 @@ impl ObservationCapability {
     fn required_grants(self) -> &'static [&'static str] {
         match self {
             Self::Screenshot => &["screen_recording"],
-            Self::ActiveApp => &["accessibility", "automation_system_events"],
+            Self::ActiveApp => &["accessibility"],
             Self::ClipboardRead => &[],
         }
     }
@@ -358,16 +358,15 @@ mod tests {
     }
 
     #[test]
-    fn active_app_requires_system_events_automation_grant() {
+    fn active_app_allows_passive_system_events_probe_unknown() {
         let unknown = readiness("granted", "granted", "unknown");
-        let err = evaluate_observation_policy(
+        assert!(evaluate_observation_policy(
             DesktopControlMode::Observe,
             &unknown,
             ObservationCapability::ActiveApp,
             "get_active_app",
         )
-        .expect_err("active app context uses System Events automation");
-        assert!(err.reason.contains("automation_system_events"));
+        .is_ok());
     }
 
     #[test]
