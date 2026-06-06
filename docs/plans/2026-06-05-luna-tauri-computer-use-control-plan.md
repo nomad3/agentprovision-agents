@@ -549,6 +549,22 @@ Exit criteria:
 Goal: make the GitHub Actions/GitHub Releases path trustworthy before shipping
 desktop-control capabilities.
 
+Current verification finding (2026-06-06):
+
+- [x] PR #777 fixed the self-hosted macOS runner checkout blocker by moving
+      Luna release checkout into a per-run isolated path. Main run
+      `27047038881` completed checkout, dependency install, and version
+      calculation.
+- [ ] Signed release publication is currently blocked by missing GitHub release
+      secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
+      `APPLE_PASSWORD`, `APPLE_TEAM_ID`, and `TAURI_SIGNING_PRIVATE_KEY`.
+      `KEYCHAIN_PASSWORD` exists, but the repo does not currently have the
+      Apple notarization/certificate or Tauri updater signing secrets required
+      by the hardened release workflow.
+- [ ] Local released-DMG verification is blocked until those secrets are
+      configured and the `Luna Client -- Tauri Build` workflow successfully
+      publishes a new `luna-v*` release plus `luna-latest` manifest.
+
 - [x] Change Luna updater endpoint to a Luna-specific manifest URL, for example
       a stable `luna-latest` release asset.
 - [x] Replace remaining `nomad3/servicetsunami-agents` release URLs with
