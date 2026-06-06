@@ -2232,6 +2232,17 @@ Exit criteria:
       TCC-scope note, Screen/AX `Enable`, Camera/Mic `Open`, no Assist/Control
       enablement, and correct routing to Screen & System Audio Recording,
       Accessibility, Camera, and Microphone settings panes.
+- [x] PR #816 review gate update: Luna Code Reviewer returned no code-level
+      native-control blocker and recommended holding only for signed/notarized
+      CI plus first-DMG install/updater validation. Luna Supervisor Alpha Chat
+      hit the known Cloudflare 524 path. Claude hosted `ultrareview` was
+      unavailable because usage credits were exhausted; local Claude Code
+      Opus/max fallback was requested. Codex review found a release-workflow
+      blocker for signed manual branch builds: `luna-latest` publication was
+      gated only on signed mode, while release creation is skipped off `main`/
+      `luna-v*` tags. The in-flight branch run `27071553333` was cancelled
+      before release-publication steps, and the workflow guard was tightened so
+      stable updater manifest publication only runs on `main` or `luna-v*` tags.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
