@@ -440,6 +440,18 @@
   color: #ffb0b0;
 }
 
+/* Resume is the only escape from a latched (now durable) Stop — make it
+   unmistakable so a stopped user always sees the way back. */
+.control-safety-resume {
+  color: #0b1f17;
+  background: #63d297;
+  font-weight: 600;
+}
+
+.control-safety-resume:hover:not(:disabled) {
+  background: #7ce0aa;
+}
+
 .control-safety-permissions {
   height: 22px;
   padding: 0 6px;

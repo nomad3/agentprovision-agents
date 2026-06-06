@@ -176,9 +176,14 @@ async fn control_observe_status(app: tauri::AppHandle) -> Result<ControlSafetySt
 
 #[tauri::command]
 async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    let at = now_unix_ms();
     CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
-    LAST_STOP_AT_MS.store(now_unix_ms(), Ordering::SeqCst);
+    LAST_STOP_AT_MS.store(at, Ordering::SeqCst);
     CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    // Persist the latch FIRST so Stop survives app relaunch even if the engine
+    // teardown below errors. The in-memory latch above is already authoritative
+    // for this session; persistence is best-effort and never blocks Stop.
+    persist_stop_latch(&app, true, at);
     gesture::set_global_mode(false);
     gesture::stop_engine().await?;
     let state = current_control_safety_state().await;
@@ -197,6 +202,60 @@ async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
+}
+
+/// Explicitly clear the durable Stop latch — the user-initiated "resume" out of
+/// emergency Stop. This is the ONLY way out of STOPPED: relaunching no longer
+/// clears it (see `restore_persisted_stop`). Drops to the safe LOCKED posture
+/// (observe off, nothing armed); the user must then opt back into Observe, so a
+/// resume can never silently re-arm observation.
+#[tauri::command]
+async fn control_clear_stop(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    persist_stop_latch(&app, false, 0);
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+/// Resolve (and create) Luna's Tauri app-data dir for durable safety state.
+fn luna_app_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve Luna app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create Luna app data dir: {e}"))?;
+    Ok(dir)
+}
+
+/// Best-effort write/clear of the durable Stop latch. Never fails the caller:
+/// the in-memory `CONTROL_MODE` is authoritative for the running session, and a
+/// failed persist only means the latch won't survive relaunch (logged).
+fn persist_stop_latch(app: &tauri::AppHandle, stopped: bool, at_ms: u64) {
+    match luna_app_data_dir(app) {
+        Ok(dir) => {
+            if let Err(e) = computer_use::stop_state::persist_stop(&dir, stopped, at_ms) {
+                log::warn!("desktop control: failed to persist Stop latch (stopped={stopped}): {e}");
+            }
+        }
+        Err(e) => log::warn!("desktop control: cannot resolve app data dir for Stop latch: {e}"),
+    }
+}
+
+/// Restore the durable Stop latch at startup. If the user latched Stop in a
+/// prior run, Luna comes back STOPPED (the safest posture) until the user
+/// explicitly clears it via `control_clear_stop`. Best-effort: a resolve/read
+/// failure leaves the default LOCKED mode, which is itself safe (nothing armed).
+fn restore_persisted_stop(app: &tauri::AppHandle) {
+    let Ok(dir) = luna_app_data_dir(app) else {
+        return;
+    };
+    if let Some(at_ms) = computer_use::stop_state::load_stop(&dir) {
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        LAST_STOP_AT_MS.store(at_ms, Ordering::SeqCst);
+        log::info!("desktop control: restored durable Stop latch from a prior session");
+    }
 }
 
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
@@ -839,6 +898,11 @@ pub fn run() {
                     .build(),
             )?;
 
+            // Restore a durable emergency Stop latched in a prior session so
+            // Luna comes back STOPPED rather than silently re-armable on launch
+            // (control plan Stop Semantics invariant #5).
+            restore_persisted_stop(app.handle());
+
             #[cfg(desktop)]
             {
                 setup_tray(app)?;
@@ -1026,6 +1090,7 @@ pub fn run() {
             control_observe_status,
             control_stop_all,
             control_lock_all,
+            control_clear_stop,
             capture_screenshot,
             get_active_app,
             read_clipboard,

@@ -137,6 +137,33 @@ describe('ControlSafetyStrip', () => {
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
 
+  it('exposes a Resume action to clear a latched Stop (the only escape from stopped)', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'stopped', can_observe: false })
+      .mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
+
+    render(<ControlSafetyStrip />);
+
+    const resume = await screen.findByRole('button', { name: /^resume$/i });
+    expect(resume).toBeEnabled();
+
+    fireEvent.click(resume);
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('control_clear_stop');
+    });
+    expect(screen.getByText('Control Locked')).toBeInTheDocument();
+  });
+
+  it('does not show Resume unless Stop is latched', async () => {
+    invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_observe: true });
+
+    render(<ControlSafetyStrip />);
+
+    await screen.findByRole('button', { name: /^observe$/i });
+    expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull();
+  });
+
   it('broadcasts native safety state changes for shell presence sync', async () => {
     const handler = vi.fn();
     window.addEventListener('luna:control-safety-changed', handler);
