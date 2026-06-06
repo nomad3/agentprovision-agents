@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -125,6 +126,7 @@ def _command(**overrides):
         "status": "claimed",
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
         "device_id": _DEVICE_REGISTRY_ID,
+        "approval_id": None,
         "capability": "screenshot",
         "lease_expires_at": None,
         "payload": {"action": "capture_screenshot", "mode": "observe"},
@@ -683,6 +685,7 @@ def test_command_enqueue_endpoint_returns_claimable_command():
         "status": "pending",
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
         "device_id": "88888888-8888-8888-8888-888888888888",
+        "approval_id": None,
         "capability": "screenshot",
         "lease_expires_at": None,
         "payload": {"action": "capture_screenshot", "mode": "observe"},
@@ -690,6 +693,60 @@ def test_command_enqueue_endpoint_returns_claimable_command():
     }
     saved_request = enqueue.call_args.kwargs["request"]
     assert saved_request.tool_name == "desktop_observe_screen"
+
+
+def test_approval_grant_endpoint_returns_explicit_grant():
+    client, _db = _client_for_endpoint(_user())
+    grant = SimpleNamespace(
+        id=uuid.UUID("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"),
+        session_id=uuid.UUID("33333333-3333-3333-3333-333333333333"),
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        device_id=_DEVICE_REGISTRY_ID,
+        desktop_command_id=uuid.UUID("99999999-9999-9999-9999-999999999999"),
+        risk_tier="observe",
+        capability="screenshot",
+        status="active",
+        remaining_actions=1,
+        expires_at=datetime(2026, 6, 6, 17, 0, 0, tzinfo=timezone.utc),
+    )
+
+    with patch(
+        "app.api.v1.desktop_control.create_desktop_approval_grant",
+        return_value=grant,
+    ) as create_grant:
+        response = client.post(
+            "/api/v1/desktop-control/internal/approval-grants",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+                "risk_tier": "observe",
+                "capability": "screenshot",
+                "max_actions": 1,
+                "expires_in_seconds": 60,
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json() == {
+        "approval_id": "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "device_id": "88888888-8888-8888-8888-888888888888",
+        "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+        "risk_tier": "observe",
+        "capability": "screenshot",
+        "status": "active",
+        "remaining_actions": 1,
+        "expires_at": "2026-06-06T17:00:00+00:00",
+    }
+    saved_request = create_grant.call_args.kwargs["request"]
+    assert saved_request.risk_tier == "observe"
+    assert saved_request.desktop_command_id == uuid.UUID("99999999-9999-9999-9999-999999999999")
 
 
 def test_command_enqueue_endpoint_accepts_native_control_scaffold_actions():

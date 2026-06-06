@@ -12,13 +12,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from fastapi import HTTPException
-from sqlalchemy import or_, update
+from sqlalchemy import case, or_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.chat import ChatSession
 from app.models.desktop_command import DesktopCommand
+from app.models.desktop_command_approval_grant import DesktopCommandApprovalGrant
 from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
@@ -97,6 +98,9 @@ _SAFE_METADATA_KEYS = {
     "envelope_hash",
     "envelope_nonce",
     "envelope_policy_version",
+    "approval_id",
+    "approval_remaining_actions",
+    "approval_risk_tier",
     "payload_key_count",
     "result_fields",
     "result_kind",
@@ -151,6 +155,19 @@ class DesktopCommandEnqueue:
     shell_id: str | None
     payload: dict[str, Any]
     nonce: str | None = None
+    approval_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class DesktopCommandApprovalGrantCreate:
+    session_id: uuid.UUID
+    risk_tier: Literal["observe", "native_control"]
+    capability: str
+    shell_id: str | None = None
+    desktop_command_id: uuid.UUID | None = None
+    max_actions: int = 1
+    expires_in_seconds: int = 60
+    target_binding: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -323,6 +340,15 @@ def _safe_metadata(raw: dict[str, Any] | None) -> dict[str, Any]:
             safe[normalized_key] = value[:96]
         elif normalized_key == "envelope_policy_version" and isinstance(value, int):
             safe[normalized_key] = value
+        elif normalized_key == "approval_id" and isinstance(value, str):
+            try:
+                safe[normalized_key] = str(uuid.UUID(value))
+            except (TypeError, ValueError):
+                continue
+        elif normalized_key == "approval_risk_tier" and value in {"observe", "native_control"}:
+            safe[normalized_key] = value
+        elif normalized_key == "approval_remaining_actions" and isinstance(value, int):
+            safe[normalized_key] = max(0, value)
         elif normalized_key == "can_observe" and isinstance(value, bool):
             safe[normalized_key] = value
         elif normalized_key == "result_fields" and isinstance(value, list):
@@ -362,6 +388,12 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         "desktop command envelope replay denied",
         "desktop command envelope signature invalid",
         "desktop command envelope binding mismatch",
+        "desktop command approval grant missing",
+        "desktop command approval grant expired",
+        "desktop command approval grant revoked",
+        "desktop command approval grant exhausted",
+        "desktop command approval grant binding mismatch",
+        "desktop command approval grant replay denied",
     }:
         return normalized
     if normalized == "desktop command pending ttl expired":
@@ -385,6 +417,7 @@ def _display_safe_command_payload(command: DesktopCommand) -> dict[str, Any]:
         "correlation_id": str(command.correlation_id) if command.correlation_id else None,
         "shell_id": command.shell_id,
         "device_id": str(command.device_id) if command.device_id else None,
+        "approval_id": str(command.approval_id) if command.approval_id else None,
         "source": command.source,
         "capability": command.capability,
         "status": command.status,
@@ -434,6 +467,7 @@ def _record_command_event(
         user_id=command.user_id,
         session_id=command.session_id,
         desktop_command_id=command.id,
+        approval_id=command.approval_id,
         correlation_id=command.correlation_id,
         event_type=event_type,
         source=source,
@@ -476,6 +510,7 @@ def _matching_enqueued_command_for_nonce(
         and payload.get("action") == request.action
         and payload.get("tool_name") == request.tool_name
         and (request.shell_id is None or existing.shell_id == request.shell_id)
+        and (request.approval_id is None or existing.approval_id == request.approval_id)
     ):
         return existing
     raise HTTPException(status_code=409, detail="Desktop command nonce already used")
@@ -540,6 +575,7 @@ def _enqueue_disabled_native_control_command(
         session_id=request.session_id,
         shell_id=shell_id,
         device_id=device_id,
+        approval_id=request.approval_id,
         capability=capability,
         status="denied",
         source="mcp",
@@ -634,6 +670,248 @@ def _device_for_user_shell(
     return device.id
 
 
+def _risk_tier_for_action(action: str) -> Literal["observe", "native_control"]:
+    return "native_control" if action in _NATIVE_CONTROL_CAPABILITIES else "observe"
+
+
+def _capability_matches_risk_tier(capability: str, risk_tier: str) -> bool:
+    if risk_tier == "observe":
+        return capability in set(_OBSERVATION_CAPABILITIES.values())
+    if risk_tier == "native_control":
+        return capability in set(_NATIVE_CONTROL_CAPABILITIES.values())
+    return False
+
+
+def _approval_metadata(grant: DesktopCommandApprovalGrant | None) -> dict[str, Any]:
+    if grant is None:
+        return {}
+    return {
+        "approval_id": str(grant.id),
+        "approval_risk_tier": grant.risk_tier,
+        "approval_remaining_actions": int(grant.remaining_actions or 0),
+    }
+
+
+def _approval_payload(grant: DesktopCommandApprovalGrant) -> dict[str, Any]:
+    return {
+        "approval_id": str(grant.id),
+        "risk_tier": grant.risk_tier,
+        "capability": grant.capability,
+        "remaining_actions": int(grant.remaining_actions or 0),
+        "expires_at": grant.expires_at.isoformat() if grant.expires_at else None,
+    }
+
+
+def _deny_pending_command_for_approval_failure(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None]:
+    now = _utcnow()
+    result = db.execute(
+        update(DesktopCommand)
+        .where(
+            DesktopCommand.id == command.id,
+            DesktopCommand.tenant_id == command.tenant_id,
+            DesktopCommand.status == "pending",
+        )
+        .values(
+            status="denied",
+            completed_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Desktop command approval claim is no longer valid")
+    command.status = "denied"
+    command.completed_at = now
+    command.updated_at = now
+    event = _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_approval_denied",
+        source="api",
+        outcome="denied",
+        reason=reason,
+        metadata=metadata,
+    )
+    db.commit()
+    db.refresh(command)
+    db.refresh(event)
+    session_event = _publish_display_safe_session_event(
+        command.session_id,
+        event.event_type,
+        {
+            **_display_safe_command_payload(command),
+            "desktop_event_id": str(event.id),
+            "outcome": event.outcome,
+            "reason": event.reason,
+        },
+        tenant_id=command.tenant_id,
+    )
+    return command, event, session_event
+
+
+def _matching_approval_grant(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    user: User,
+    token_device_id: uuid.UUID,
+    action: str,
+    risk_tier: str,
+    now: datetime,
+) -> DesktopCommandApprovalGrant | None:
+    query = db.query(DesktopCommandApprovalGrant).filter(
+        DesktopCommandApprovalGrant.tenant_id == command.tenant_id,
+        DesktopCommandApprovalGrant.user_id == user.id,
+        DesktopCommandApprovalGrant.session_id == command.session_id,
+        DesktopCommandApprovalGrant.shell_id == command.shell_id,
+        DesktopCommandApprovalGrant.device_id == token_device_id,
+        DesktopCommandApprovalGrant.risk_tier == risk_tier,
+        DesktopCommandApprovalGrant.capability == command.capability,
+        DesktopCommandApprovalGrant.status == "active",
+        DesktopCommandApprovalGrant.remaining_actions > 0,
+        DesktopCommandApprovalGrant.expires_at > now,
+    )
+    if command.approval_id:
+        query = query.filter(DesktopCommandApprovalGrant.id == command.approval_id)
+    else:
+        query = query.filter(
+            or_(
+                DesktopCommandApprovalGrant.desktop_command_id == command.id,
+                DesktopCommandApprovalGrant.desktop_command_id.is_(None),
+            )
+        )
+    grant = query.order_by(
+        DesktopCommandApprovalGrant.desktop_command_id.desc(),
+        DesktopCommandApprovalGrant.created_at.asc(),
+    ).first()
+    if grant is None:
+        return None
+    if grant.desktop_command_id and str(grant.desktop_command_id) != str(command.id):
+        return None
+    target_action = (grant.target_binding or {}).get("action")
+    if target_action and target_action != action:
+        return None
+    return grant
+
+
+def _approval_denial_reason(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    now: datetime,
+) -> str:
+    if not command.approval_id:
+        command_bound_exists = db.query(DesktopCommandApprovalGrant.id).filter(
+            DesktopCommandApprovalGrant.tenant_id == command.tenant_id,
+            DesktopCommandApprovalGrant.desktop_command_id == command.id,
+        ).first()
+        if not command_bound_exists:
+            return "desktop command approval grant missing"
+    candidate = None
+    if command.approval_id:
+        candidate = db.query(DesktopCommandApprovalGrant).filter(
+            DesktopCommandApprovalGrant.tenant_id == command.tenant_id,
+            DesktopCommandApprovalGrant.id == command.approval_id,
+        ).first()
+    else:
+        candidate = db.query(DesktopCommandApprovalGrant).filter(
+            DesktopCommandApprovalGrant.tenant_id == command.tenant_id,
+            DesktopCommandApprovalGrant.desktop_command_id == command.id,
+        ).first()
+    if not candidate:
+        return "desktop command approval grant missing"
+    expires_at = _as_aware_utc(candidate.expires_at)
+    if candidate.status == "revoked":
+        return "desktop command approval grant revoked"
+    if expires_at is None or expires_at <= now or candidate.status == "expired":
+        return "desktop command approval grant expired"
+    if candidate.status == "consumed" or int(candidate.remaining_actions or 0) <= 0:
+        return "desktop command approval grant exhausted"
+    return "desktop command approval grant binding mismatch"
+
+
+def _consume_approval_grant_or_deny(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    user: User,
+    token_device_id: uuid.UUID,
+    now: datetime,
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None] | DesktopCommandApprovalGrant | None:
+    action = str((command.payload or {}).get("action") or "desktop_command")
+    risk_tier = _risk_tier_for_action(action)
+    grant = _matching_approval_grant(
+        db,
+        command,
+        user=user,
+        token_device_id=token_device_id,
+        action=action,
+        risk_tier=risk_tier,
+        now=now,
+    )
+    if grant is None:
+        reason = _approval_denial_reason(db, command, now=now)
+        if reason == "desktop command approval grant missing" and command.approval_id is None:
+            return None
+        return _deny_pending_command_for_approval_failure(
+            db,
+            command,
+            reason=reason,
+        )
+
+    result = db.execute(
+        update(DesktopCommandApprovalGrant)
+        .where(
+            DesktopCommandApprovalGrant.id == grant.id,
+            DesktopCommandApprovalGrant.tenant_id == command.tenant_id,
+            DesktopCommandApprovalGrant.user_id == user.id,
+            DesktopCommandApprovalGrant.session_id == command.session_id,
+            DesktopCommandApprovalGrant.shell_id == command.shell_id,
+            DesktopCommandApprovalGrant.device_id == token_device_id,
+            DesktopCommandApprovalGrant.risk_tier == risk_tier,
+            DesktopCommandApprovalGrant.capability == command.capability,
+            DesktopCommandApprovalGrant.status == "active",
+            DesktopCommandApprovalGrant.remaining_actions > 0,
+            DesktopCommandApprovalGrant.expires_at > now,
+            or_(
+                DesktopCommandApprovalGrant.desktop_command_id == command.id,
+                DesktopCommandApprovalGrant.desktop_command_id.is_(None),
+            ),
+        )
+        .values(
+            remaining_actions=DesktopCommandApprovalGrant.remaining_actions - 1,
+            status=case(
+                (DesktopCommandApprovalGrant.remaining_actions <= 1, "consumed"),
+                else_=DesktopCommandApprovalGrant.status,
+            ),
+            consumed_at=case(
+                (DesktopCommandApprovalGrant.remaining_actions <= 1, now),
+                else_=DesktopCommandApprovalGrant.consumed_at,
+            ),
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        return _deny_pending_command_for_approval_failure(
+            db,
+            command,
+            reason="desktop command approval grant replay denied",
+            metadata=_approval_metadata(grant),
+        )
+    db.flush()
+    db.refresh(grant)
+    command.approval_id = grant.id
+    return grant
+
+
 def _canonical_json(value: dict[str, Any]) -> bytes:
     return json.dumps(
         value,
@@ -694,6 +972,7 @@ def _build_signed_command_envelope(
     action = str((command.payload or {}).get("action") or "desktop_command")
     tool_name = str((command.payload or {}).get("tool_name") or "")
     mode = str((command.payload or {}).get("mode") or "control_locked")
+    risk_tier = _risk_tier_for_action(action)
     envelope = {
         "schema": DESKTOP_COMMAND_ENVELOPE_SCHEMA,
         "signed": True,
@@ -712,7 +991,9 @@ def _build_signed_command_envelope(
         "tool_name": tool_name,
         "capability": command.capability,
         "mode": mode,
-        "risk_tier": "native_control" if action in _NATIVE_CONTROL_CAPABILITIES else "observe",
+        "risk_tier": risk_tier,
+        "approval_id": str(command.approval_id) if command.approval_id else None,
+        "approval_risk_tier": risk_tier,
         "policy_decision": "lease_claimed",
         "nonce": str(uuid.uuid4()),
         "issued_at": issued_at.isoformat(),
@@ -876,6 +1157,8 @@ def _consume_command_envelope_or_deny(
         "capability": command.capability,
         "action": str((command.payload or {}).get("action") or "desktop_command"),
         "policy_version": CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION,
+        "approval_id": str(command.approval_id) if command.approval_id else None,
+        "approval_risk_tier": _risk_tier_for_action(str((command.payload or {}).get("action") or "desktop_command")),
     }
     if any(envelope.get(key) != value for key, value in expected.items()):
         return _deny_command_for_envelope_failure(
@@ -1070,6 +1353,7 @@ def _publish_display_safe_command_event(
             "desktop_command_id": str(event.desktop_command_id),
             "shell_id": event.shell_id,
             "device_id": str(event.device_id) if event.device_id else None,
+            "approval_id": str(event.approval_id) if event.approval_id else None,
             "capability": event.capability,
             "status": status,
             "outcome": event.outcome,
@@ -1184,6 +1468,79 @@ def record_local_observation_event(
         )
 
     return event, session_event
+
+
+def create_desktop_approval_grant(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: DesktopCommandApprovalGrantCreate,
+) -> DesktopCommandApprovalGrant:
+    _ensure_user_for_tenant(db, user_id, tenant_id)
+    _ensure_session_owned_by_user(db, request.session_id, tenant_id, user_id)
+    if request.risk_tier not in {"observe", "native_control"}:
+        raise HTTPException(status_code=422, detail="Unsupported desktop approval risk tier")
+    if not _capability_matches_risk_tier(request.capability, request.risk_tier):
+        raise HTTPException(status_code=422, detail="Desktop approval capability does not match risk tier")
+    max_actions = max(1, min(int(request.max_actions), 20))
+    expires_in_seconds = max(5, min(int(request.expires_in_seconds), 600))
+    now = _utcnow()
+
+    command: DesktopCommand | None = None
+    if request.desktop_command_id:
+        command = db.query(DesktopCommand).filter(
+            DesktopCommand.id == request.desktop_command_id,
+            DesktopCommand.tenant_id == tenant_id,
+            DesktopCommand.session_id == request.session_id,
+        ).first()
+        if not command:
+            raise HTTPException(status_code=404, detail="Desktop command not found")
+        if str(command.user_id) != str(user_id):
+            raise HTTPException(status_code=403, detail="Desktop command is not owned by user")
+        if command.status in _TERMINAL_COMMAND_STATUSES:
+            raise HTTPException(status_code=409, detail="Desktop command is already terminal")
+        action = str((command.payload or {}).get("action") or "desktop_command")
+        if _risk_tier_for_action(action) != request.risk_tier:
+            raise HTTPException(status_code=422, detail="Desktop approval risk tier does not match command")
+        if command.capability != request.capability:
+            raise HTTPException(status_code=422, detail="Desktop approval capability does not match command")
+        shell_id = command.shell_id
+        device_id = command.device_id
+    else:
+        if request.capability not in set(_COMMAND_ACTION_CAPABILITIES.values()):
+            raise HTTPException(status_code=422, detail="Unsupported desktop approval capability")
+        shell_id, _shell_capabilities, device_id = _select_connected_shell(tenant_id, request.shell_id)
+
+    if device_id is None:
+        raise HTTPException(status_code=409, detail="Desktop shell device is not bound")
+    grant = DesktopCommandApprovalGrant(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=request.session_id,
+        shell_id=shell_id,
+        device_id=device_id,
+        desktop_command_id=request.desktop_command_id,
+        risk_tier=request.risk_tier,
+        capability=request.capability,
+        status="active",
+        target_binding=request.target_binding or {},
+        max_actions=max_actions,
+        remaining_actions=max_actions,
+        approved_by_user_id=user_id,
+        approved_at=now,
+        expires_at=now + timedelta(seconds=expires_in_seconds),
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(grant)
+    db.flush()
+    if command is not None:
+        command.approval_id = grant.id
+        command.updated_at = now
+    db.commit()
+    db.refresh(grant)
+    return grant
 
 
 def record_mcp_observation_request(
@@ -1315,6 +1672,7 @@ def enqueue_desktop_command(
         session_id=request.session_id,
         shell_id=shell_id,
         device_id=device_id,
+        approval_id=request.approval_id,
         capability=capability,
         status="pending",
         source="mcp",
@@ -1431,7 +1789,35 @@ def claim_next_desktop_command(
         )
         return None, None, None
 
+    approval_result = _consume_approval_grant_or_deny(
+        db,
+        command,
+        user=user,
+        token_device_id=token_device_id,
+        now=now,
+    )
+    if approval_result is None:
+        db.commit()
+        for expired_event in expired_events:
+            _publish_display_safe_command_event(
+                expired_event,
+                status="expired",
+                tenant_id=user.tenant_id,
+            )
+        return None, None, None
+    if isinstance(approval_result, tuple):
+        _denied_command, denied_event, denied_session_event = approval_result
+        for expired_event in expired_events:
+            _publish_display_safe_command_event(
+                expired_event,
+                status="expired",
+                tenant_id=user.tenant_id,
+            )
+        return None, denied_event, denied_session_event
+    approval_grant = approval_result
+
     payload = dict(command.payload or {})
+    payload["approval"] = _approval_payload(approval_grant)
     envelope, envelope_hash = _build_signed_command_envelope(
         command,
         user=user,
@@ -1459,6 +1845,7 @@ def claim_next_desktop_command(
             lease_owner_shell_id=claim.shell_id,
             lease_expires_at=lease_expires_at,
             claimed_at=now,
+            approval_id=approval_grant.id,
             payload=payload,
             updated_at=now,
         )
@@ -1472,8 +1859,17 @@ def claim_next_desktop_command(
     command.lease_owner_shell_id = claim.shell_id
     command.lease_expires_at = lease_expires_at
     command.claimed_at = now
+    command.approval_id = approval_grant.id
     command.payload = payload
     command.updated_at = now
+    _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_approval_consumed",
+        source="api",
+        outcome="approved",
+        metadata=_approval_metadata(approval_grant),
+    )
     event = _record_command_event(
         db,
         command,
@@ -1482,6 +1878,7 @@ def claim_next_desktop_command(
         outcome="started",
         metadata={
             "lease_expires_at": lease_expires_at.isoformat(),
+            **_approval_metadata(approval_grant),
             **_envelope_metadata(envelope, envelope_hash),
         },
     )
@@ -1665,6 +2062,22 @@ def preempt_desktop_commands_for_stop(
         session_id=stop.session_id,
         shell_id=stop.shell_id,
         device_id=token_device_id,
+    )
+    db.execute(
+        update(DesktopCommandApprovalGrant)
+        .where(
+            DesktopCommandApprovalGrant.tenant_id == user.tenant_id,
+            DesktopCommandApprovalGrant.session_id == stop.session_id,
+            DesktopCommandApprovalGrant.shell_id == stop.shell_id,
+            DesktopCommandApprovalGrant.device_id == token_device_id,
+            DesktopCommandApprovalGrant.status == "active",
+        )
+        .values(
+            status="revoked",
+            revoked_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
     )
     commands = db.query(DesktopCommand).filter(
         DesktopCommand.tenant_id == user.tenant_id,

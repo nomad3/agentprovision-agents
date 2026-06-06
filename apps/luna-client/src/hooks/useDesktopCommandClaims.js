@@ -27,6 +27,7 @@ const NATIVE_CONTROL_COMMANDS = new Set([
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA = 'agentprovision.desktop_command_envelope.v1';
 const DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1;
 const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG = 'HMAC-SHA256';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ACTION_CAPABILITIES = {
   capture_screenshot: 'screenshot',
@@ -166,6 +167,8 @@ function envelopeBindingFields(command, action, shellId, expectedContext = {}) {
     device_id: command?.device_id || null,
     action,
     capability: command?.capability || ACTION_CAPABILITIES[action] || null,
+    approval_id: command?.approval_id || null,
+    approval_risk_tier: NATIVE_CONTROL_COMMANDS.has(action) ? 'native_control' : 'observe',
   };
 }
 
@@ -214,6 +217,49 @@ function validateClaimedCommandEnvelope(command, action, shellId, expectedContex
     return {
       ok: false,
       reason: 'desktop command envelope expired',
+      metadata: { result_kind: 'error' },
+    };
+  }
+
+  const approval = command?.payload?.approval;
+  if (!approval || typeof approval !== 'object') {
+    return {
+      ok: false,
+      reason: 'desktop command approval grant missing',
+      metadata: { result_kind: 'error' },
+    };
+  }
+  const commandApprovalId = command?.approval_id;
+  const payloadApprovalId = approval.approval_id;
+  if (
+    typeof commandApprovalId !== 'string'
+    || !UUID_PATTERN.test(commandApprovalId)
+    || typeof payloadApprovalId !== 'string'
+    || !UUID_PATTERN.test(payloadApprovalId)
+  ) {
+    return {
+      ok: false,
+      reason: 'desktop command approval grant missing',
+      metadata: { result_kind: 'error' },
+    };
+  }
+  if (commandApprovalId !== payloadApprovalId) {
+    return {
+      ok: false,
+      reason: 'desktop command approval grant binding mismatch',
+      metadata: { result_kind: 'error' },
+    };
+  }
+  const expectedRiskTier = NATIVE_CONTROL_COMMANDS.has(action) ? 'native_control' : 'observe';
+  if (
+    approval.risk_tier !== expectedRiskTier
+    || approval.capability !== (command?.capability || ACTION_CAPABILITIES[action])
+    || envelope.risk_tier !== expectedRiskTier
+    || envelope.approval_risk_tier !== expectedRiskTier
+  ) {
+    return {
+      ok: false,
+      reason: 'desktop command approval grant binding mismatch',
       metadata: { result_kind: 'error' },
     };
   }
