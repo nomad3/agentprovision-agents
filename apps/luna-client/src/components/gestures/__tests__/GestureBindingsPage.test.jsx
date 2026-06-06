@@ -52,4 +52,31 @@ describe('GestureBindingsPage', () => {
     expect(invokeMock).toHaveBeenCalledWith('gesture_check_accessibility', undefined);
     expect(invokeMock).toHaveBeenCalledWith('gesture_get_cursor_global', undefined);
   });
+
+  it('retries gesture start when observe mode is enabled after an initial lock denial', async () => {
+    let gestureStartCalls = 0;
+    invokeMock.mockImplementation((command) => {
+      if (command === 'gesture_start') {
+        gestureStartCalls += 1;
+        return gestureStartCalls === 1
+          ? Promise.reject(new Error('desktop observe locked'))
+          : Promise.resolve(null);
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<GestureBindingsPage />);
+
+    await waitFor(() => {
+      expect(gestureStartCalls).toBe(1);
+    });
+
+    window.dispatchEvent(new CustomEvent('luna:control-safety-changed', {
+      detail: { mode: 'observe' },
+    }));
+
+    await waitFor(() => {
+      expect(gestureStartCalls).toBe(2);
+    });
+  });
 });

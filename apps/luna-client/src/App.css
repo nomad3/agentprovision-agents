@@ -440,6 +440,19 @@
   color: #ffb0b0;
 }
 
+.luna-floating-safety {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 2200;
+  max-width: calc(100vw - 24px);
+}
+
+.luna-floating-safety .control-safety {
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.28);
+}
+
 .notif-wrapper {
   position: relative;
 }

@@ -26,6 +26,12 @@ const MIN_REFRESH_DELAY_MS = 60 * 1000;
 const MAX_REFRESH_DELAY_MS = 12 * 60 * 60 * 1000;
 const AUTH_CHANNEL = 'luna-auth';
 
+function lockNativeDesktopControl() {
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('control_lock_all').catch(() => {}))
+    .catch(() => {});
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -44,6 +50,7 @@ export function AuthProvider({ children }) {
       refreshTimerRef.current = null;
     }
     localStorage.removeItem('luna_token');
+    lockNativeDesktopControl();
     setUser(null);
     notifyAuthChange('logout');
   }, [notifyAuthChange]);
@@ -98,6 +105,7 @@ export function AuthProvider({ children }) {
         refreshTimerRef.current = null;
       }
       localStorage.removeItem('luna_token');
+      lockNativeDesktopControl();
       setUser(null);
     } finally {
       setLoading(false);

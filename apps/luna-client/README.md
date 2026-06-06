@@ -65,9 +65,18 @@ Type-check Rust:
 cd src-tauri && cargo check
 ```
 
-## Don't build releases locally
+## Release and local smoke builds
 
-Push to `main` and let GitHub Actions build the macOS ARM64 DMG and Tauri updater archive via [`.github/workflows/luna-client-build.yaml`](../../.github/workflows/luna-client-build.yaml). The workflow publishes a versioned `luna-v*` GitHub Release, uploads `Luna.app.tar.gz` plus its `.sig`, and updates the stable `luna-latest/latest.json` updater manifest. Local production builds are only for smoke checks and must not be used as release artifacts.
+Push to `main` and let GitHub Actions build the macOS ARM64 DMG via [`.github/workflows/luna-client-build.yaml`](../../.github/workflows/luna-client-build.yaml). During active development, the workflow intentionally supports unsigned `--no-sign` DMGs when Apple/Tauri signing secrets are absent. Signed updater artifacts (`Luna.app.tar.gz`, `.sig`, and `luna-latest/latest.json`) are published only when signing is configured.
+
+Local unsigned builds are allowed for smoke checks:
+
+```bash
+cd apps/luna-client
+cargo tauri build --debug --bundles app --no-sign
+```
+
+Do not use local builds as production release artifacts.
 
 ## Key integrations (in `src-tauri/src/lib.rs`)
 

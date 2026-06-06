@@ -71,6 +71,25 @@ describe('ControlSafetyStrip', () => {
     expect(screen.getByText('Stopped')).toBeInTheDocument();
   });
 
+  it('locks observation without latching stopped mode', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'observe' })
+      .mockResolvedValueOnce({
+        mode: 'control_locked',
+        can_observe: true,
+        gesture_state: 'stopped',
+      });
+
+    render(<ControlSafetyStrip />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^lock$/i }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('control_lock_all');
+    });
+    expect(screen.getByText('Control Locked')).toBeInTheDocument();
+  });
+
   it('keeps observe disabled after local stop is latched', async () => {
     invokeMock.mockResolvedValueOnce({ mode: 'stopped', can_observe: false });
 

@@ -53,6 +53,19 @@ export default function ControlSafetyStrip() {
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let unlisten;
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen('control-safety-changed', (event) => {
+          publishState(event.payload);
+        });
+      } catch {}
+    })();
+    return () => { unlisten?.(); };
+  }, [publishState]);
+
   const run = useCallback(async (command) => {
     setBusy(true);
     try {
@@ -82,6 +95,14 @@ export default function ControlSafetyStrip() {
         title="Enable observe-only mode"
       >
         Observe
+      </button>
+      <button
+        className="control-safety-action"
+        onClick={() => run('control_lock_all')}
+        disabled={busy || state.mode === 'control_locked' || state.mode === 'stopped'}
+        title="Lock observation without latching Stop"
+      >
+        Lock
       </button>
       <button
         className="control-safety-action control-safety-stop"
