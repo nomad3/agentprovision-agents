@@ -306,9 +306,20 @@ async def startup_proactive_workflows():
     """
     import asyncio
     import logging as _logging
+    import os as _os
     from app.db.session import SessionLocal as _SL
 
     logger = _logging.getLogger(__name__)
+
+    # Kill-switch (2026-06-01 incident): this hook auto-launches Autonomous
+    # Learning + Inbox + Competitor monitors for EVERY tenant (~44) on every API
+    # boot — they continue_as_new on the shared orchestration queue and starved
+    # PostChatMemory (memory write-back). When DISABLE_MONITOR_CONTINUE_AS_NEW=1
+    # we skip the auto-launch entirely so the queue stays clear while the monitors
+    # are reworked onto a dedicated queue. Flip to 0 to re-enable.
+    if _os.environ.get("DISABLE_MONITOR_CONTINUE_AS_NEW", "").strip() in ("1", "true", "yes"):
+        logger.info("Proactive workflow auto-start SKIPPED (DISABLE_MONITOR_CONTINUE_AS_NEW set)")
+        return
 
     async def _launch():
         # Give Temporal a few seconds to be ready
@@ -357,9 +368,64 @@ async def startup_proactive_workflows():
 
 @app.on_event("shutdown")
 async def shutdown_whatsapp():
-    """Gracefully disconnect all neonize clients."""
+    """Clean WhatsApp drain on shutdown (session-durability design §1).
+
+    Bounded-waits for in-flight WhatsApp turns, then per-account disconnect +
+    VALIDATED session save under the session lock, so a restart never
+    SIGKILLs a mid-write neonize SQLite — the root cause of session
+    corruption → forced QR re-pair.
+
+    Budget — must fit the 180s container stop_grace_period. uvicorn's
+    --timeout-graceful-shutdown (10s, delivered via the
+    UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN env in docker-compose/helm — the
+    Dockerfile CMD flag is INERT in this bind-mount deploy, which never
+    rebuilds the image) runs BEFORE this lifespan hook, so the drain + its
+    fallback share the remaining ~170s.
+    Worst case = uvicorn(10) + drain(_DRAIN_CAP_S) + fallback(_FALLBACK_CAP_S)
+    + teardown margin. We keep 10 + 140 + 8 = 158s < 180s with ~22s margin.
+    (Luna review: the prior 10 + 165 + 10 = 185s overflowed and could
+    SIGKILL the fallback mid-run.) Both fallbacks are timeout-bounded so the
+    handler can never itself hang pod termination.
+    """
+    import asyncio
+    import logging
+    _log = logging.getLogger(__name__)
+    _DRAIN_CAP_S = 140
+    _FALLBACK_CAP_S = 8
     try:
         from app.services.whatsapp_service import whatsapp_service
-        await whatsapp_service.shutdown()
+        await asyncio.wait_for(whatsapp_service.drain_and_shutdown(), timeout=_DRAIN_CAP_S)
+    except asyncio.TimeoutError:
+        _log.warning("WhatsApp drain exceeded %ss budget — falling back to plain shutdown", _DRAIN_CAP_S)
+        try:
+            from app.services.whatsapp_service import whatsapp_service
+            await asyncio.wait_for(whatsapp_service.shutdown(), timeout=_FALLBACK_CAP_S)
+        except Exception:
+            pass
     except Exception:
-        pass
+        # Never block pod termination on WhatsApp teardown.
+        try:
+            from app.services.whatsapp_service import whatsapp_service
+            await asyncio.wait_for(whatsapp_service.shutdown(), timeout=_FALLBACK_CAP_S)
+        except Exception:
+            pass
+
+    # Force a clean process exit. After lifespan shutdown completes, neonize's
+    # Go runtime keeps PID 1 alive — its cgo worker threads are NOT Python
+    # threads (threading.enumerate() shows only MainThread) and survive
+    # client.disconnect(), so uvicorn finishes but the process never exits;
+    # docker then SIGKILLs it at the stop grace, re-introducing the ~180s
+    # "restart hang" AFTER the validated saves (verified live 2026-06-02:
+    # drain completed in ~11s, then the process hung ~165s to SIGKILL). The
+    # drain above already did the only shutdown-critical work (validated
+    # session saves), so exiting now is safe and gives a ~12s restart.
+    # Gated to the container (IN_DOCKER) so test/local imports that never run
+    # under uvicorn are unaffected. flush first since _exit skips buffers.
+    if _os.environ.get("IN_DOCKER") == "1":
+        _log.info("WhatsApp drain done — forcing clean process exit (neonize Go runtime blocks normal termination)")
+        for _h in logging.getLogger().handlers:
+            try:
+                _h.flush()
+            except Exception:
+                pass
+        _os._exit(0)

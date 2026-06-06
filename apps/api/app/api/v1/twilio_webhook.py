@@ -424,6 +424,7 @@ async def twilio_inbound_sms(request: Request) -> Response:
                 agent_id=agent.id,
                 source="twilio_sms",
                 external_id=session_key,
+                owner_user_id=user.id,
             )
             db.add(session)
             db.commit()

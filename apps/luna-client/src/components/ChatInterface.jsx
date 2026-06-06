@@ -215,12 +215,12 @@ export default function ChatInterface({ handoff, requestAction }) {
         <div className="messages-area">
           {messages.length === 0 && !streaming && (
             <div className="chat-welcome">
-              <h2>Luna OS Spatial Workstation</h2>
-              <p>Type a message below to start your first raid or explore the Knowledge Nebula.</p>
+              <h2>Luna Chat</h2>
+              <p>Type a message below to start a session with Luna.</p>
               <div className="welcome-tips">
-                <div className="tip"><code>Cmd+Shift+L</code> to toggle Spatial HUD</div>
-                <div className="tip"><code>WASD</code> to fly through memory stars</div>
-                <div className="tip"><code>Tab</code> to view Shared Blackboard</div>
+                <div className="tip"><code>Cmd+Shift+L</code> to focus chat</div>
+                <div className="tip"><code>Cmd+Shift+Space</code> to open commands</div>
+                <div className="tip">Sessions and memory stay in this window</div>
               </div>
             </div>
           )}

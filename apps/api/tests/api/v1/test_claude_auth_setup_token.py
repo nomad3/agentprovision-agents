@@ -24,7 +24,6 @@ Design: docs/plans/2026-05-16-oauth-reconnect-token-format-mismatch.md
 
 from __future__ import annotations
 
-import os
 import re
 import threading
 import uuid
@@ -356,7 +355,6 @@ def test_migration_revokes_existing_session_tokens(monkeypatch):
     rows = cur.execute(
         "SELECT credential_key, status, integration_config_id FROM integration_credentials"
     ).fetchall()
-    by_key = {(k, cfg): s for (k, s, cfg) in rows}
     # Both claude session_token rows revoked.
     for (k, _s, cfg) in rows:
         if k == "session_token" and cfg == cfg_claude:
@@ -381,13 +379,11 @@ def test_migration_revokes_existing_session_tokens(monkeypatch):
     conn.close()
 
 
-# ── _run_login: spawn cmd is `claude setup-token` ─────────────────────────
+# ── _run_login: spawn cmd is subscription OAuth ───────────────────────────
 
 
-def test_run_login_spawns_setup_token_not_auth_login(monkeypatch):
-    """Lock in the spawn command. A regression that flips back to
-    `claude auth login --claudeai` would re-introduce the entire bug
-    class — this assertion fails first to catch that immediately.
+def test_run_login_spawns_subscription_oauth_login(monkeypatch):
+    """Lock in the spawn command for Claude subscription OAuth.
 
     We don't drive the full state machine here; we only need to
     inspect the `subprocess.Popen` invocation. The thread is short-
@@ -412,11 +408,7 @@ def test_run_login_spawns_setup_token_not_auth_login(monkeypatch):
     mgr = ca.ClaudeAuthManager()
     mgr._run_login(state)
 
-    assert captured_cmd.get("cmd") == ["claude", "setup-token"], (
-        f"Wrong spawn cmd: {captured_cmd.get('cmd')!r} — "
-        "must be `claude setup-token` to produce a valid "
-        "CLAUDE_CODE_OAUTH_TOKEN-shaped artefact"
-    )
+    assert captured_cmd.get("cmd") == ["claude", "auth", "login", "--claudeai"]
     # Subprocess spawn failure → state must be terminal 'failed'.
     assert state.status == "failed"
 

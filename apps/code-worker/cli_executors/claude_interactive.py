@@ -164,6 +164,8 @@ def decide_pty_action(
     resent: bool = False,
     response_substantive: bool = False,
     post_submit_first_output_seconds: float | None = None,
+    long_task_idle_seconds: float | None = None,
+    answer_file_max_seconds: float | None = None,
 ) -> str:
     """Decide the next PTY action for one loop tick (pure — no I/O).
 
@@ -325,10 +327,35 @@ def decide_pty_action(
     #     nothing to wait for, so the legacy idle /exit applies immediately.
     if awaiting_answer_file:
         baseline = submitted_at if submitted_at is not None else start
-        if now - baseline < first_output_seconds:
+        if long_task_idle_seconds is not None:
+            # NEW (2026-06-01) — the answer file only lands at the END of a turn,
+            # so while it's missing we must tell "Claude still working" apart from
+            # "wedged / done-without-file". Two bounds, in order:
+            #   (1) ABSOLUTE ceiling since submit (``answer_file_max_seconds``): a
+            #       turn that paints chrome forever but never writes the file is
+            #       killed in bounded minutes — NOT left to burn the 900s outer
+            #       timeout (×relaunch). Fires regardless of ongoing output.
+            #   (2) ACTIVITY window (``long_task_idle_seconds``): while output is
+            #       still flowing (tool spinner/progress on a legit multi-repo
+            #       "pull my work repos"), keep waiting. Replaces the old fixed
+            #       90s-since-submit cap that false-killed those pulls (exit 143)
+            #       once a quiet git-network gap >= idle_exit_seconds hit past 90s.
+            # Invariant: idle_exit_seconds < long_task_idle_seconds < answer_file_max_seconds < timeout.
+            _ceiling = (
+                answer_file_max_seconds
+                if answer_file_max_seconds is not None
+                else first_output_seconds
+            )
+            if now - baseline >= _ceiling:
+                return "exit"
+            if now - last_output < max(idle_exit_seconds, long_task_idle_seconds):
+                return "wait"
+        elif now - baseline < first_output_seconds:
+            # Legacy path (knobs not supplied, e.g. direct callers/tests):
+            # suppress the idle /exit until first_output_seconds since submit.
             return "wait"
 
-    # Fallback (cap exceeded, or no answer file expected): legacy idle /exit.
+    # Fallback (window/ceiling exceeded, or no answer file expected): legacy idle /exit.
     if now - last_output >= idle_exit_seconds:
         return "exit"
     return "wait"
@@ -519,6 +546,21 @@ def run_claude_interactive_with_heartbeat(
         post_submit_first_output_seconds
         if post_submit_first_output_seconds is not None
         else float(os.environ.get("CLAUDE_CODE_INTERACTIVE_POST_SUBMIT_FIRST_OUTPUT_SECONDS", "35"))
+    )
+    # Long-tool-turn caps (2026-06-01): a multi-repo "pull my work repos" runs
+    # minutes with quiet git-network stretches. While awaiting the answer file we
+    # keep waiting as long as Claude is still painting output within
+    # ``long_task_idle_seconds``, bounded by an absolute ``answer_file_max_seconds``
+    # ceiling so a wedged-but-painting turn still dies well under the outer timeout.
+    # max()-floored so a misconfigured knob can never invert the invariant
+    # idle_exit_seconds < long_task_idle_seconds < answer_file_max_seconds.
+    long_task_idle_seconds = max(
+        idle_exit_seconds,
+        float(os.environ.get("CLAUDE_CODE_INTERACTIVE_LONG_TASK_IDLE_SECONDS", "180")),
+    )
+    answer_file_max_seconds = max(
+        long_task_idle_seconds + 1.0,
+        float(os.environ.get("CLAUDE_CODE_INTERACTIVE_ANSWER_FILE_MAX_SECONDS", "480")),
     )
     # Defect 1: text and Enter are written in two phases, so keep them apart.
     text_bytes = (prompt or "").encode()
@@ -717,6 +759,8 @@ def run_claude_interactive_with_heartbeat(
                 resent=resent,
                 response_substantive=response_substantive,
                 post_submit_first_output_seconds=post_submit_first_output_seconds,
+                long_task_idle_seconds=long_task_idle_seconds,
+                answer_file_max_seconds=answer_file_max_seconds,
             )
 
             if action == "wait":

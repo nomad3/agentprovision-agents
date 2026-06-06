@@ -24,13 +24,25 @@ services:
       dockerfile: apps/api/Dockerfile
     ports:
       - "${API_PORT:-8000}:8000"
-    # Bumped from docker-compose's 10s default so uvicorn can drain
-    # in-flight chat requests on SIGTERM before docker SIGKILLs. Luna
-    # chat turns can run 30-90s against Codex (longer when Gemini
-    # quota cooldown forces a fallback chain); the prior 10s killed
-    # responses mid-stream on every merge-triggered redeploy. Mirrors
-    # helm/values/agentprovision-api.yaml — keep in sync per the no-
-    # drift rule. See concern memory 25307912.
+    # Ceiling for the whole SIGTERM->exit sequence. Mirrors
+    # helm/values/agentprovision-api.yaml — keep in sync per the no-drift
+    # rule. See concern memory 25307912.
+    #
+    # Budget that must fit inside this 180s (do NOT drop toward 30s):
+    #   1. uvicorn --timeout-graceful-shutdown 10 (apps/api/Dockerfile) —
+    #      bounds the request-drain so the never-ending SSE streams can't
+    #      hang shutdown forever (the real ~180s restart hang). NOTE: this
+    #      also cuts an in-flight BLOCKING chat turn (/messages/stream et al.)
+    #      that has run >10s — an accepted, retryable, deploy-time trade.
+    #   2. then the WhatsApp clean-shutdown drain (shutdown_whatsapp ->
+    #      whatsapp_service.drain_and_shutdown, _DRAIN_CAP_S=140) bounded-
+    #      waits for in-flight WhatsApp turns, then per-account disconnect +
+    #      VALIDATED session save; fallback shutdown() _FALLBACK_CAP_S=8.
+    # Worst case 10 + 140 + 8 = 158s < 180s (~22s margin). A shorter grace
+    # would SIGKILL the api mid-SQLite-write and re-introduce the session
+    # corruption -> forced QR re-pair the drain eliminates. See
+    # docs/plans/2026-06-02-api-shutdown-sse-drain-fix.md +
+    # docs/plans/2026-06-02-whatsapp-session-durability-design.md.
     stop_grace_period: 180s
     volumes:
       - ./apps/api:/app
@@ -64,6 +76,16 @@ services:
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/agentprovision
       - MCP_SERVER_URL=http://mcp-tools:8086
+      # Bound uvicorn's request-drain on SIGTERM so the never-ending SSE
+      # streams can't hang shutdown (the ~180s restart hang) and the WhatsApp
+      # clean-shutdown drain actually runs. uvicorn reads this via its click
+      # auto_envvar_prefix=UVICORN, i.e. UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN ==
+      # --timeout-graceful-shutdown. We set it as ENV (not just the Dockerfile
+      # CMD flag) because this deploy bind-mounts apps/api and does NOT rebuild
+      # the api image — a CMD-only change never reaches the running container,
+      # but env vars are applied on every recreate. See
+      # docs/plans/2026-06-02-api-shutdown-sse-drain-fix.md.
+      - UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-10}
       - PLATFORM_CLAUDE_CODE_TOKEN=${PLATFORM_CLAUDE_CODE_TOKEN:-}
       - HF_HUB_ENABLE_HF_TRANSFER=0
       - HF_HUB_DISABLE_XET=1
@@ -74,6 +96,10 @@ services:
       - EXPLORATION_RATE=${EXPLORATION_RATE:-0.0}
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
+      # Kill-switch (2026-06-01): skip the per-tenant monitor auto-launch on API
+      # startup (startup_proactive_workflows) — they starved the orchestration
+      # queue. =1 while monitors are reworked onto a dedicated queue.
+      - DISABLE_MONITOR_CONTINUE_AS_NEW=${DISABLE_MONITOR_CONTINUE_AS_NEW:-1}
       - EMBEDDING_SERVICE_URL=embedding-service:50051
       - MEMORY_CORE_URL=memory-core:50052
       - USE_RUST_EMBEDDING=true
@@ -160,6 +186,12 @@ services:
       - HF_HUB_DISABLE_XET=1
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
+      # Kill-switch for the self-perpetuating monitor loops (inbox/competitor/
+      # autonomous-learning) — they continue_as_new on the shared orchestration
+      # queue and starved PostChatMemory. =1 makes each chain EXIT as it wakes
+      # instead of perpetuating. Set while the monitors are reworked (dedicated
+      # queue). Flip to 0 to re-enable.
+      - DISABLE_MONITOR_CONTINUE_AS_NEW=${DISABLE_MONITOR_CONTINUE_AS_NEW:-1}
       - EMBEDDING_SERVICE_URL=embedding-service:50051
       - MEMORY_CORE_URL=memory-core:50052
       - USE_RUST_EMBEDDING=true
@@ -224,6 +256,12 @@ services:
       # See apps/code-worker/workflows.py::_prepare_codex_home and
       # docs/plans/2026-05-16-codex-mcp-tool-access-fix.md.
       - CODEX_USE_RMCP_CLIENT=${CODEX_USE_RMCP_CLIENT:-true}
+      # Codex model default. Codex's built-in default (gpt-5.3-codex) is an
+      # API-tier model that ChatGPT-account (subscription) auth REJECTS — every
+      # turn exits 1 (the 2026-06-02 outage). gpt-5.5 is supported on subscription
+      # auth. A per-tenant selection from the /integrations Codex connect flow
+      # overrides this default once wired. Mirrors helm code-worker values (no drift).
+      - CODEX_MODEL=${CODEX_MODEL:-gpt-5.5}
       # Empty default (NOT a fake ghp_placeholder): the per-turn tenant GitHub
       # OAuth token is fetched at runtime (cli_executors/claude.py); a real
       # static token is optional. A fake token makes gh/git retry against a bad
@@ -259,6 +297,14 @@ services:
       - DISABLE_AUTOUPDATER=1
       - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
       - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+      # We use OAuth / Max-subscription auth for Claude Code, NOT the Anthropic
+      # API key. The shared env_file (apps/api/.env) carries ANTHROPIC_API_KEY
+      # for the API; blank it for the WORKER (environment overrides env_file) so a
+      # stray key can't hijack Claude to Console (API) billing ahead of the
+      # subscription. claude.py also pops it per-subprocess (belt-and-suspenders);
+      # api_key tenants get their key per-turn from the credential vault, not this
+      # var, so this is safe for all tenant types. (Codex + Luna review, 2026-06-01.)
+      - ANTHROPIC_API_KEY=
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -321,4 +367,8 @@ volumes:
   claude_sessions:
   hf_cache:
   workspaces:
-
+    # Compose services keep using the logical `workspaces` key, but the
+    # physical Docker volume name intentionally avoids `_work`. Luna's release
+    # gate greps live Docker mount sources for `_work` to catch accidental
+    # GitHub Actions checkout bind mounts.
+    name: ${WORKSPACES_VOLUME_NAME:-agentprovision-agents_tenant_spaces}

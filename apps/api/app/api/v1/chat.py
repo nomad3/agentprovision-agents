@@ -547,135 +547,19 @@ def post_message_start(
     # request-scoped `db` is not safe to share across threads.
     import threading
 
+    # Job body lives in chat_jobs.run_job_blocking — shared verbatim with the
+    # WhatsApp dedicated-executor dispatch so both channels have one
+    # lifecycle (ownership guard, cancel-bail, chunk, finish/fail). It opens
+    # its own SessionLocal(); the request-scoped `db` is not safe across
+    # threads.
     def _run_job():
-        import time as _time
-        from app.db.session import SessionLocal
-
-        wdb = SessionLocal()
-
-        # Cancel-propagation contract (BLOCKER #2 from review):
-        # cancel_job() only flips `cancel_requested`. The worker MUST
-        # poll for that flag between phases and self-flip via
-        # observe_cancel(). Granularity is "between each side-effect"
-        # not "inside post_user_message" — post_user_message is a
-        # single synchronous call we don't have hooks into. Phases
-        # gated below:
-        #   (i)   before start_job's lifecycle.started event
-        #   (ii)  before post_user_message
-        #   (iii) before the final chunk event
-        #   (iv)  before finish_job
-        def _bail_if_cancelled() -> bool:
-            if chat_jobs_service.is_cancel_requested(wdb, job_id=job_uuid):
-                chat_jobs_service.append_event(
-                    wdb,
-                    job_id=job_uuid,
-                    kind="lifecycle",
-                    payload={"event": "cancelled"},
-                )
-                chat_jobs_service.observe_cancel(wdb, job_id=job_uuid)
-                return True
-            return False
-
-        try:
-            chat_jobs_service.start_job(wdb, job_id=job_uuid)
-            if _bail_if_cancelled():
-                return
-            chat_jobs_service.append_event(
-                wdb,
-                job_id=job_uuid,
-                kind="lifecycle",
-                payload={"event": "started"},
-            )
-
-            # Re-fetch the session in the worker's own DB scope so we
-            # don't reuse a request-scoped ORM identity across threads.
-            wsession = chat_service.get_session(
-                wdb, session_id=sid, tenant_id=tenant_id
-            )
-            if not wsession:
-                chat_jobs_service.append_event(
-                    wdb,
-                    job_id=job_uuid,
-                    kind="lifecycle",
-                    payload={"event": "error", "detail": "session vanished"},
-                )
-                chat_jobs_service.fail_job(
-                    wdb, job_id=job_uuid, error="Chat session not found",
-                )
-                return
-
-            if _bail_if_cancelled():
-                return
-
-            t0 = _time.perf_counter()
-            user_msg, assistant_msg = chat_service.post_user_message(
-                wdb,
-                session=wsession,
-                user_id=user_id,
-                content=content,
-            )
-
-            if _bail_if_cancelled():
-                return
-
-            # Emit a single `chunk` event with the full text. The
-            # client renders it the same way it would render a stream
-            # of small chunks — the protocol is the same shape.
-            #
-            # Future: code-worker iterations will emit progressive
-            # `chunk` events as the CLI streams them. For now the
-            # CLI path returns whole-message; we wrap that in the
-            # event-log shape so the client code is forward-compatible.
-            text_out = assistant_msg.content or ""
-            chat_jobs_service.append_event(
-                wdb,
-                job_id=job_uuid,
-                kind="chunk",
-                payload={"text": text_out},
-            )
-
-            chat_jobs_service.append_event(
-                wdb,
-                job_id=job_uuid,
-                kind="lifecycle",
-                payload={
-                    "event": "done",
-                    "user_message_id": str(user_msg.id),
-                    "assistant_message_id": str(assistant_msg.id),
-                    "elapsed_s": _time.perf_counter() - t0,
-                },
-            )
-            if _bail_if_cancelled():
-                return
-            # finish_job is gated on status NOT IN terminal; even if the
-            # cancel beat us here, observe_cancel(running -> cancelled)
-            # makes this UPDATE a no-op. Race-free by SQL constraint.
-            chat_jobs_service.finish_job(
-                wdb,
-                job_id=job_uuid,
-                result_message_id=assistant_msg.id,
-            )
-        except Exception as exc:
-            logger.exception("[chat-job %s] worker crashed", job_uuid)
-            try:
-                chat_jobs_service.append_event(
-                    wdb,
-                    job_id=job_uuid,
-                    kind="lifecycle",
-                    payload={"event": "error", "detail": str(exc)[:512]},
-                )
-            except Exception:
-                pass
-            try:
-                chat_jobs_service.fail_job(
-                    wdb,
-                    job_id=job_uuid,
-                    error=str(exc),
-                )
-            except Exception:
-                pass
-        finally:
-            wdb.close()
+        chat_jobs_service.run_job_blocking(
+            job_uuid,
+            session_id=sid,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            content=content,
+        )
 
     threading.Thread(target=_run_job, daemon=True).start()
     return _JobStartResponse(job_id=job_uuid)

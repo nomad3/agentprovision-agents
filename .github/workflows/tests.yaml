@@ -32,6 +32,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       luna_client: ${{ steps.filter.outputs.luna_client }}
       device_bridge: ${{ steps.filter.outputs.device_bridge }}
+      scripts: ${{ steps.filter.outputs.scripts }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -69,6 +70,53 @@ jobs:
             device_bridge:
               - 'apps/device-bridge/**'
               - '.github/workflows/tests.yaml'
+            scripts:
+              - 'scripts/claudia_bridge.py'
+              - 'scripts/tests/**'
+              - '.github/workflows/tests.yaml'
+
+  # ─── repo scripts ───────────────────────────────────────────────────────
+  script_tests:
+    name: scripts (pytest)
+    needs: changes
+    if: needs.changes.outputs.scripts == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    outputs:
+      status: ${{ steps.script_status.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install dependencies
+        id: install
+        run: pip install pytest
+      - name: Run script tests
+        id: script_tests
+        run: |
+          python -m py_compile scripts/claudia_bridge.py scripts/tests/test_claudia_bridge.py
+          pytest scripts/tests/test_claudia_bridge.py -q
+      - name: Publish script test status
+        id: script_status
+        if: always()
+        env:
+          INSTALL: ${{ steps.install.outcome }}
+          TESTS: ${{ steps.script_tests.outcome }}
+        run: |
+          if [ "$INSTALL" = "success" ] && [ "$TESTS" = "success" ]; then
+            echo "status=success" >> "$GITHUB_OUTPUT"
+          elif [ "$INSTALL" = "cancelled" ] || [ "$TESTS" = "cancelled" ]; then
+            echo "status=cancelled" >> "$GITHUB_OUTPUT"
+          elif [ "$INSTALL" != "success" ]; then
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+          elif [ "$TESTS" = "skipped" ]; then
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failure" >> "$GITHUB_OUTPUT"
+          fi
 
   # ─── apps/api ────────────────────────────────────────────────────────────
   api:
@@ -408,7 +456,7 @@ jobs:
   report:
     name: Aggregate test status
     if: github.event_name == 'pull_request' && always()
-    needs: [api, api_integration, web, mcp, code_worker, rust, luna_client, device_bridge]
+    needs: [api, api_integration, web, mcp, code_worker, rust, luna_client, device_bridge, script_tests]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -426,6 +474,7 @@ jobs:
           RUST: ${{ needs.rust.result }}
           LUNA: ${{ needs.luna_client.result }}
           DEV:  ${{ needs.device_bridge.result }}
+          SCRIPTS: ${{ needs.script_tests.outputs.status || needs.script_tests.result }}
         run: |
           icon () {
             case "$1" in
@@ -449,6 +498,7 @@ jobs:
             echo "| apps/embedding-service + memory-core | $(icon $RUST) | — |"
             echo "| apps/luna-client | $(icon $LUNA) | — |"
             echo "| apps/device-bridge | $(icon $DEV) | — |"
+            echo "| scripts | $(icon $SCRIPTS) | — |"
             echo
             echo "_Tests are non-blocking — red status reports the regression but does not gate merge. See \`docs/plans/2026-05-03-test-suite-modernization-design.md\`._"
           } > comment.md

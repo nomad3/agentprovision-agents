@@ -13,7 +13,7 @@
  *
  * Persists `gesture_calibrated=1` in localStorage when complete.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useGesture } from '../../hooks/useGesture';
 
 const STEPS = [
@@ -54,7 +54,19 @@ export default function GestureCalibration({ onDone }) {
   const [cameras, setCameras] = useState([]);
   const [cameraIndex, setCameraIndex] = useState(0);
   const [accessibilityOk, setAccessibilityOk] = useState(null);
+  const [engineStartError, setEngineStartError] = useState(null);
   const { wakeState, status } = useGesture();
+
+  const startGestureEngine = useCallback(async () => {
+    try {
+      const tauri = await import('@tauri-apps/api/core').catch(() => null);
+      if (!tauri) return;
+      await tauri.invoke('gesture_start');
+      setEngineStartError(null);
+    } catch (e) {
+      setEngineStartError(String(e?.message || e));
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,13 +74,29 @@ export default function GestureCalibration({ onDone }) {
       try {
         const tauri = await import('@tauri-apps/api/core').catch(() => null);
         if (!tauri || cancelled) return;
+        await startGestureEngine();
         const cams = await tauri.invoke('gesture_list_cameras');
         if (cancelled) return;
         if (Array.isArray(cams)) setCameras(cams);
       } catch {}
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+      import('@tauri-apps/api/core')
+        .then((tauri) => tauri.invoke('gesture_stop').catch(() => {}))
+        .catch(() => {});
+    };
+  }, [startGestureEngine]);
+
+  useEffect(() => {
+    const handleSafetyChanged = (event) => {
+      if (event.detail?.mode === 'observe') {
+        startGestureEngine();
+      }
+    };
+    window.addEventListener('luna:control-safety-changed', handleSafetyChanged);
+    return () => window.removeEventListener('luna:control-safety-changed', handleSafetyChanged);
+  }, [startGestureEngine]);
 
   const cur = STEPS[step];
 
@@ -134,6 +162,7 @@ export default function GestureCalibration({ onDone }) {
         {(cur.key === 'pose' || cur.key === 'wake') && (
           <div style={{ margin: '12px 0', padding: 8, background: '#001020', borderRadius: 4, fontSize: 12, fontFamily: 'ui-monospace, Menlo, monospace' }}>
             engine: {status.state} · wake: <b>{wakeState}</b>
+            {engineStartError && <div style={{ marginTop: 6, color: '#fa6' }}>engine start blocked: {engineStartError}</div>}
           </div>
         )}
 
