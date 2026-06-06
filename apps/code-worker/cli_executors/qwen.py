@@ -101,7 +101,9 @@ def execute_qwen_chat(task_input, session_dir: str):
         "json",
     ]
 
-    env = os.environ.copy()
+    # Per-turn env with THIS tenant's GitHub token (set-or-strip) — never the
+    # process-global the old dispatcher wrote (F01 cross-tenant bleed).
+    env = cli_runtime.build_base_env(task_input)
     env["HOME"] = tenant_home
     env["QWEN_API_KEY"] = api_key
     # Qwen Code reads OpenAI-compatible env vars when targeting DashScope

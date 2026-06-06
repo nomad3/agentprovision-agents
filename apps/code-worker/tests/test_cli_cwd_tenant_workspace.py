@@ -305,7 +305,9 @@ class TestCopilotChatCwdScoped:
     def test_subprocess_cwd_set_to_tenant_workspace(
         self, monkeypatch, tmp_path, fake_workspaces_root,
     ):
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+        # F01: per-tenant token comes from the fetch (build_base_env), not a
+        # stale process-global GITHUB_TOKEN.
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp_fake")
         session_dir = tmp_path / "session"
         session_dir.mkdir()
         monkeypatch.setattr(wf, "_prepare_copilot_home", lambda sd, mcp: str(session_dir))

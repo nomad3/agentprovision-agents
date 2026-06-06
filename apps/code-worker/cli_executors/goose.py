@@ -218,7 +218,9 @@ def execute_goose_chat(task_input, session_dir: str):
         cmd += ["--no-session"]
     cmd += ["--provider", provider, "--model", model, "--text", prompt]
 
-    env = os.environ.copy()
+    # Per-turn env with THIS tenant's GitHub token (set-or-strip) — never the
+    # process-global the old dispatcher wrote (F01 cross-tenant bleed).
+    env = cli_runtime.build_base_env(task_input)
     env["HOME"] = tenant_home
     # XDG_CONFIG_HOME explicit — Goose follows the XDG spec, so this
     # lets us pin config independently of $HOME if a future refactor

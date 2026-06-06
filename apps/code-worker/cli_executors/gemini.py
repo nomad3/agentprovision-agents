@@ -111,7 +111,9 @@ def execute_gemini_chat(task_input, session_dir: str, image_path: str):
         "json",
     ]
 
-    env = os.environ.copy()
+    # Per-turn env with THIS tenant's GitHub token (set-or-strip) — never the
+    # process-global the old dispatcher wrote (F01 cross-tenant bleed).
+    env = cli_runtime.build_base_env(task_input)
     env["HOME"] = tenant_home  # Tell Gemini CLI where to find .gemini/
     env["GEMINI_TELEMETRY"] = "0"
     # Bypass gemini-cli's "trusted folders" gate. The CLI added it as a

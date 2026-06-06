@@ -146,9 +146,13 @@ class TestImageHandling:
 
 
 class TestGithubTokenIntegration:
-    """When a GitHub token is found, it is exported and git is configured."""
+    """F01: GitHub auth is wired PER-TURN, PER-SUBPROCESS by each executor via
+    ``cli_runtime.build_base_env`` — the dispatcher no longer mutates the shared
+    WORKSPACE git remote / global ``gh auth`` / process-global ``os.environ``
+    (those raced across concurrent tenants on the worker thread-pool)."""
 
-    def test_token_wires_git_remote_and_gh_auth(self, monkeypatch):
+    def test_dispatcher_does_not_mutate_shared_git_or_global_env(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         seen: list[list] = []
 
         def fake_run(cmd, **kwargs):
@@ -160,6 +164,9 @@ class TestGithubTokenIntegration:
             return R()
 
         monkeypatch.setattr(wf.subprocess, "run", fake_run)
+        # mkdir of the per-tenant session dir under /home/codeworker — no-op so
+        # the dispatcher runs anywhere; the assertions are about shared state.
+        monkeypatch.setattr(wf.os, "makedirs", lambda *a, **k: None)
         monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "ghp_abc")
         monkeypatch.setattr(
             wf, "_execute_claude_chat",
@@ -168,12 +175,12 @@ class TestGithubTokenIntegration:
 
         wf.execute_chat_cli(_make_input(platform="claude_code"))
 
-        # Two subprocess.run calls expected: git remote set-url + gh auth login.
-        joined = [" ".join(c) if isinstance(c, list) else c for c in seen]
-        assert any("remote" in s and "set-url" in s for s in joined)
-        assert any("gh" in s and "auth" in s and "login" in s for s in joined)
-        # Token must be exported into the env.
-        assert os.environ.get("GITHUB_TOKEN") == "ghp_abc"
+        joined = [" ".join(c) if isinstance(c, list) else str(c) for c in seen]
+        # No shared WORKSPACE git remote rewrite, no global gh auth login.
+        assert not any("set-url" in s for s in joined)
+        assert not any("auth" in s and "login" in s for s in joined)
+        # No process-global token export — the cross-tenant bleed.
+        assert "GITHUB_TOKEN" not in os.environ
 
 
 # ── git credential wiring (2026-05-31) ──────────────────────────────────

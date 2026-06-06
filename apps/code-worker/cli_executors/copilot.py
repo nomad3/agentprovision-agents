@@ -36,16 +36,13 @@ def execute_copilot_chat(task_input, session_dir: str):
     that any GITHUB_TOKEN baked into the container image (used for git
     operations) doesn't override per-tenant Copilot subscription routing.
 
-    Token reuse: ``execute_chat_cli`` already fetches the per-tenant
-    github token + sets ``os.environ["GITHUB_TOKEN"]`` at the top of
-    every chat dispatch (for git remote setup). Reuse that value here
-    instead of re-fetching from the API — saves 2-3 HTTP round-trips
-    per chat turn on the Copilot path. Fall back to a fresh fetch
-    only when env is empty (defensive, e.g. if execute_chat_cli was
-    bypassed by a different caller). I6 from the holistic review.
+    Per-turn token (F01): the token comes from
+    ``cli_runtime.build_base_env`` — a fresh ``os.environ`` copy with THIS
+    tenant's token applied (set-or-strip). The old path read a process-global
+    ``os.environ["GITHUB_TOKEN"]`` the dispatcher wrote, which bled across
+    concurrent tenants on the worker thread-pool.
     """
     from workflows import (
-        _fetch_github_token,
         _prepare_copilot_home,
         _INTEGRATION_NOT_CONNECTED_MESSAGES,
         ChatCliResult,
@@ -53,9 +50,10 @@ def execute_copilot_chat(task_input, session_dir: str):
         API_BASE_URL,
         API_INTERNAL_KEY,
     )
-    token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        token = _fetch_github_token(task_input.tenant_id)
+    # Build the per-turn env first; its GITHUB_TOKEN/GH_TOKEN are THIS tenant's
+    # (or stripped) — never a stale process-global from another tenant's turn.
+    env = cli_runtime.build_base_env(task_input)
+    token = env.get("GITHUB_TOKEN")
     if not token:
         return ChatCliResult(
             response_text="",
@@ -96,7 +94,7 @@ def execute_copilot_chat(task_input, session_dir: str):
     if os.path.isdir(WORKSPACE):
         cmd.extend(["--add-dir", WORKSPACE])
 
-    env = os.environ.copy()
+    # ``env`` was built above via cli_runtime.build_base_env (per-turn token).
     # Highest-precedence auth env var (per `copilot help environment`).
     # Setting only COPILOT_GITHUB_TOKEN means a tenant-OAuth value here
     # always wins over the container's GITHUB_TOKEN (which is the platform

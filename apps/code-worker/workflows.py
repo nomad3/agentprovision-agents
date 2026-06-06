@@ -1182,30 +1182,16 @@ def execute_chat_cli(task_input: ChatCliInput) -> ChatCliResult:
     """
     logger.info("Executing chat CLI for platform %s, tenant %s", task_input.platform, task_input.tenant_id)
     try:
-        # Fetch GitHub token from vault for git operations
-        github_token = _fetch_github_token(task_input.tenant_id)
-        if github_token:
-            os.environ["GITHUB_TOKEN"] = github_token
-            # Update git remote with token
-            subprocess.run(
-                ["git", "remote", "set-url", "origin",
-                 f"https://{github_token}@github.com/nomad3/agentprovision-agents.git"],
-                cwd=WORKSPACE, capture_output=True,
-            )
-            # Auth gh CLI
-            subprocess.run(
-                ["gh", "auth", "login", "--with-token"],
-                input=github_token, text=True, cwd=WORKSPACE, capture_output=True,
-            )
-        else:
-            # CROSS-TENANT BLEED GUARD (Codex review, 2026-05-31): this token is
-            # written process-globally, so a tenant with NO token must clear any
-            # value a PRIOR tenant's turn left behind — otherwise every executor
-            # that copies os.environ (codex/gemini/copilot) would inherit it and
-            # the system gh credential helper would auth the wrong tenant's clone.
-            # (claude.py also strips per-turn; the proper fix is per-turn env for
-            # all executors — tracked follow-up. This guards the sequential case.)
-            os.environ.pop("GITHUB_TOKEN", None)
+        # GitHub auth is now wired PER-TURN, PER-SUBPROCESS — NOT process-global.
+        # F01 fix (2026-06-06): the old code wrote os.environ["GITHUB_TOKEN"] and
+        # mutated the shared WORKSPACE git remote + `gh auth login` here. Because
+        # the worker runs activities in a thread-pool, two concurrent tenants' chat
+        # turns raced on that global and a tenant's codex/gemini/copilot git op
+        # could authenticate with another tenant's credential (cross-tenant bleed).
+        # Each executor now sources its env from cli_runtime.build_base_env(task_input),
+        # which fetches THIS tenant's token and applies it (set-or-strip) to the
+        # per-subprocess env only. The system `!gh auth git-credential` helper
+        # resolves GH_TOKEN/GITHUB_TOKEN from that env. Nothing process-global.
 
         # Persistent session directory per tenant (not temp — survives across calls)
         # Must NOT be under /tmp — Codex refuses to create helper binaries in temp dirs
