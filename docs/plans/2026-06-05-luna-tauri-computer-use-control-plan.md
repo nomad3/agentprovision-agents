@@ -83,6 +83,15 @@ Additional discovery inputs:
    `shasum -c` failed after downloading the assets into a normal folder. Future
    release checksums must use the DMG basename so operators can verify them
    directly after download.
+10. PR #780 fixed future checksum assets and triggered `luna-v0.1.83`.
+    GitHub Actions built and published the unsigned prerelease successfully;
+    the downloaded `.sha256` verified directly with `shasum -c`, and the DMG
+    installed locally as `/Applications/Luna.app` version `0.1.83`. Computer
+    Use again verified chat-first startup, no Orchestra/Luna OS auto-open,
+    Observe -> Lock -> Observe, and hard Stop latching. The run still spent
+    about nine minutes in `actions/checkout` and emitted `fetch-pack` early EOF
+    annotations despite succeeding; release checkout/versioning must stop
+    requiring full repository history.
 
 ---
 
@@ -185,6 +194,10 @@ Release hardening requirements:
 7. Published `.sha256` assets must contain the DMG basename, not the CI build
    path, so `shasum -c Luna_<version>_aarch64.dmg.sha256` works after a normal
    release download.
+8. The release workflow must use shallow checkout and tag-based Luna patch
+   allocation instead of `git rev-list --count` over full history. Main-branch
+   release builds must be serialized so two queued builds cannot claim the
+   same next Luna version.
 
 ### Alpha Control Reuse
 
