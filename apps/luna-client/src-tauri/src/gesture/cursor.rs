@@ -175,6 +175,7 @@ fn ensure_display_size() -> (i32, i32) {
 /// Luna isn't frontmost.
 #[cfg(target_os = "macos")]
 pub async fn move_abs(x: f32, y: f32) {
+    if !crate::desktop_control_allows_actuation() { return; }
     if !ACCESSIBILITY_OK.load(Ordering::SeqCst) { return; }
     if !GLOBAL_MODE.load(Ordering::SeqCst) && !frontmost_is_luna_cached() { return; }
 
@@ -193,6 +194,7 @@ pub async fn move_abs(x: f32, y: f32) {
 
 #[cfg(target_os = "macos")]
 pub async fn click() {
+    if !crate::desktop_control_allows_actuation() { return; }
     if !ACCESSIBILITY_OK.load(Ordering::SeqCst) { return; }
     if !GLOBAL_MODE.load(Ordering::SeqCst) && !frontmost_is_luna_cached() { return; }
 

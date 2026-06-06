@@ -26,6 +26,7 @@ const ROTATE_MAX_DURATION_MS: i64 = 600;
 const SWEEP_MIN_MAGNITUDE: f32 = 0.50;
 const SWEEP_MIN_DURATION_MS: i64 = 400;
 const SWEEP_MAX_DURATION_MS: i64 = 1200;
+const SWEEP_CONTINUOUS_STEP_EPSILON: f32 = 0.001;
 
 #[derive(Clone, Copy)]
 struct Sample {
@@ -176,8 +177,27 @@ impl MotionAnalyzer {
     }
 
     fn classify_sweep(&self) -> Option<Motion> {
-        let start = self.samples.front()?;
+        let end_index = self.samples.len().checked_sub(1)?;
         let end = self.samples.back()?;
+        let buffer_start = self.samples.front()?;
+        let buffer_dx = end.palm.x - buffer_start.palm.x;
+        if buffer_dx.abs() < SWEEP_MIN_MAGNITUDE { return None; }
+
+        let mut start_index = end_index;
+        while start_index > 0 {
+            let prev = self.samples.get(start_index - 1)?;
+            let current = self.samples.get(start_index)?;
+            let step_dx = current.palm.x - prev.palm.x;
+            if buffer_dx > 0.0 && step_dx > SWEEP_CONTINUOUS_STEP_EPSILON {
+                start_index -= 1;
+            } else if buffer_dx < 0.0 && step_dx < -SWEEP_CONTINUOUS_STEP_EPSILON {
+                start_index -= 1;
+            } else {
+                break;
+            }
+        }
+
+        let start = self.samples.get(start_index)?;
         let dx = end.palm.x - start.palm.x;
         let dy = end.palm.y - start.palm.y;
         let mag = (dx * dx + dy * dy).sqrt();

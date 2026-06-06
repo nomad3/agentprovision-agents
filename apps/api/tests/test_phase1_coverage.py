@@ -19,7 +19,6 @@ Modules touched here:
 """
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import timedelta
 from unittest.mock import MagicMock
@@ -568,7 +567,6 @@ class TestSafetyEnforcementPure:
         assert auto_channel in out.rationale
 
     def test_resolve_automated_channel_no_op_for_web(self):
-        from app.schemas.safety_policy import PolicyDecision
         from app.services.safety_enforcement import (
             _resolve_automated_channel_decision,
         )
@@ -985,7 +983,7 @@ class TestAgentRouterPure:
     def test_greeting_template_intent_match(self):
         from app.services.agent_router import _greeting_template
         out = _greeting_template(
-            {"name": "greeting or small talk"}, "hi", "luna"
+            {"name": "greeting or small talk"}, "hola", "luna"
         )
         assert out is not None
         assert "Luna" in out
@@ -1003,11 +1001,10 @@ class TestAgentRouterPure:
         assert out is not None
         assert out.startswith("¡Hola!")
 
-    def test_greeting_template_english_response(self):
+    def test_greeting_template_english_falls_through(self):
         from app.services.agent_router import _greeting_template
         out = _greeting_template(None, "hi", "luna")
-        assert out is not None
-        assert out.startswith("Hi!")
+        assert out is None
 
     def test_greeting_template_question_disqualifies(self):
         from app.services.agent_router import _greeting_template
@@ -1031,7 +1028,7 @@ class TestAgentRouterPure:
 
     def test_greeting_template_custom_agent_name(self):
         from app.services.agent_router import _greeting_template
-        out = _greeting_template(None, "hi", "data_analyst")
+        out = _greeting_template(None, "hola", "data_analyst")
         assert out is not None
         assert "Data Analyst" in out
 
@@ -2154,7 +2151,7 @@ class TestMemoryVisibility:
         produce a compiled WHERE clause that mentions all three branches."""
         from sqlalchemy import Column, String
         from sqlalchemy.dialects.postgresql import ARRAY
-        from sqlalchemy.orm import declarative_base, Query
+        from sqlalchemy.orm import declarative_base
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
         from app.memory.visibility import apply_visibility
@@ -2181,4 +2178,3 @@ class TestMemoryVisibility:
             assert "luna" in sql
         finally:
             session.close()
-

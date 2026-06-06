@@ -209,19 +209,19 @@ def get_latest_session_affect(
     Phase 1 PR C: read path for the prompt-side style injection.
     Tenant-scoped — foreign sessions return None.
     """
-    episode = (
+    episodes = (
         db.query(ConversationEpisode)
         .filter(
             ConversationEpisode.session_id == session_id,
             ConversationEpisode.tenant_id == tenant_id,
-            ConversationEpisode.affect_vector.isnot(None),
         )
         .order_by(ConversationEpisode.created_at.desc())
-        .first()
+        .all()
     )
-    if episode is None or episode.affect_vector is None:
-        return None
-    return PADVector.from_dict(episode.affect_vector)
+    for episode in episodes:
+        if episode.affect_vector is not None:
+            return PADVector.from_dict(episode.affect_vector)
+    return None
 
 
 def build_affect_addendum_for_session(

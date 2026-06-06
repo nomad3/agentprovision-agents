@@ -24,11 +24,25 @@ function decodeJwtExp(token) {
 const REFRESH_LEAD_MS = 5 * 60 * 1000;
 const MIN_REFRESH_DELAY_MS = 60 * 1000;
 const MAX_REFRESH_DELAY_MS = 12 * 60 * 60 * 1000;
+const AUTH_CHANNEL = 'luna-auth';
+
+function lockNativeDesktopControl() {
+  import('@tauri-apps/api/core')
+    .then(({ invoke }) => invoke('control_lock_all').catch(() => {}))
+    .catch(() => {});
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const refreshTimerRef = useRef(null);
+  const authChannelRef = useRef(null);
+
+  const notifyAuthChange = useCallback((type) => {
+    try {
+      authChannelRef.current?.postMessage({ type });
+    } catch {}
+  }, []);
 
   const logout = useCallback(() => {
     if (refreshTimerRef.current) {
@@ -36,8 +50,10 @@ export function AuthProvider({ children }) {
       refreshTimerRef.current = null;
     }
     localStorage.removeItem('luna_token');
+    lockNativeDesktopControl();
     setUser(null);
-  }, []);
+    notifyAuthChange('logout');
+  }, [notifyAuthChange]);
 
   // Schedule a proactive refresh REFRESH_LEAD_MS before token expiry. On
   // success, store the new token and reschedule. On failure, log out.
@@ -68,25 +84,69 @@ export function AuthProvider({ children }) {
     }, delay);
   }, [logout]);
 
-  useEffect(() => {
+  const syncFromStorage = useCallback(async () => {
     const token = localStorage.getItem('luna_token');
-    if (!token) { setLoading(false); return; }
-    apiJson('/api/v1/users/me')
-      .then((me) => {
-        setUser(me);
-        scheduleRefresh(token);
-      })
-      .catch(() => logout())
-      .finally(() => setLoading(false));
+    if (!token) {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+    try {
+      const me = await apiJson('/api/v1/users/me');
+      setUser(me);
+      scheduleRefresh(token);
+    } catch {
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      localStorage.removeItem('luna_token');
+      lockNativeDesktopControl();
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [scheduleRefresh]);
+
+  useEffect(() => {
+    syncFromStorage();
     return () => {
       if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     };
-  }, [logout, scheduleRefresh]);
+  }, [syncFromStorage]);
 
   useEffect(() => {
     window.addEventListener('luna:logout', logout);
     return () => window.removeEventListener('luna:logout', logout);
   }, [logout]);
+
+  useEffect(() => {
+    let channel = null;
+    try {
+      channel = new BroadcastChannel(AUTH_CHANNEL);
+      authChannelRef.current = channel;
+      channel.onmessage = syncFromStorage;
+    } catch {}
+
+    const handleStorage = (event) => {
+      if (event.key === 'luna_token') syncFromStorage();
+    };
+    const handleFocus = () => syncFromStorage();
+
+    window.addEventListener('storage', handleStorage);
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('focus', handleFocus);
+      if (authChannelRef.current === channel) authChannelRef.current = null;
+      channel?.close();
+    };
+  }, [syncFromStorage]);
 
   const login = async (email, password) => {
     const body = new URLSearchParams({ username: email, password });
@@ -104,6 +164,7 @@ export function AuthProvider({ children }) {
     const me = await apiJson('/api/v1/users/me');
     setUser(me);
     scheduleRefresh(data.access_token);
+    notifyAuthChange('login');
     return me;
   };
 

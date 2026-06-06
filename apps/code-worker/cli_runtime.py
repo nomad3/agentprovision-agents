@@ -21,12 +21,68 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from temporalio import activity
 
 logger = logging.getLogger(__name__)
+
+
+def apply_git_ssh(env: dict, ssh_key: str | None) -> Callable[[], None]:
+    """Wire the tenant's GitHub SSH key into ``env`` for ``git@github.com`` clones
+    (OAuth-blocked orgs), and return a cleanup callable. CLI-agnostic — every
+    executor calls this around its run (2026-05-31).
+
+    Design (Codex + Luna review of the plan):
+    - **Ephemeral 0600 keyfile** in a fresh ``mkdtemp`` (0700) dir — NOT the
+      persistent per-tenant session dir; deleted by the returned cleanup (call it
+      in a ``finally``). The key is never written to a HOME/known config.
+    - ``GIT_SSH_COMMAND`` is set in the PER-TURN subprocess ``env`` only, and
+      STRIPPED when there's no key — never via ``os.environ`` (cross-tenant bleed,
+      the #746 lesson). ``BatchMode=yes`` → no passphrase/prompt → fail fast, never
+      hangs. ``IdentitiesOnly=yes`` → only this key. ``StrictHostKeyChecking=yes``
+      with ``UserKnownHostsFile=/dev/null`` + the image's pre-baked
+      ``/etc/ssh/ssh_known_hosts`` → only trusted github host keys, no tenant HOME
+      known_hosts. The keyfile path is never logged.
+    """
+    if not ssh_key:
+        env.pop("GIT_SSH_COMMAND", None)
+        return lambda: None
+    key_dir = tempfile.mkdtemp(prefix="ghssh_")  # 0700, owner-only
+
+    def _cleanup() -> None:
+        try:
+            shutil.rmtree(key_dir, ignore_errors=True)
+        except OSError:
+            pass
+
+    # Setup is exception-safe (Codex review): if ANYTHING between mkdtemp and the
+    # return raises, remove the dir before propagating so a 0600 keyfile never
+    # leaks. The caller still gets a cleanup() for the normal path.
+    try:
+        keyfile = os.path.join(key_dir, "id")
+        fd = os.open(keyfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as fh:
+                fh.write(ssh_key if ssh_key.endswith("\n") else ssh_key + "\n")
+        finally:
+            try:
+                os.chmod(keyfile, 0o600)
+            except OSError:
+                pass
+        env["GIT_SSH_COMMAND"] = (
+            f"ssh -i {keyfile} -o IdentitiesOnly=yes -o BatchMode=yes "
+            "-o StrictHostKeyChecking=yes -o UserKnownHostsFile=/dev/null "
+            "-o GlobalKnownHostsFile=/etc/ssh/ssh_known_hosts -o ConnectTimeout=10"
+        )
+    except BaseException:
+        _cleanup()
+        raise
+
+    return _cleanup
 
 
 # ── tenant workspace resolution (task #259) ──────────────────────────────
@@ -255,8 +311,20 @@ def resolve_cli_cwd(
         return fallback
 
 
+# An ephemeral SSH keyfile path (``apply_git_ssh``) can appear in raw SSH stderr
+# (e.g. ``ssh -i /tmp/ghssh_ab12/id: invalid format``). It is not the key, but a
+# tmp path shouldn't surface to the user — scrub it from any error snippet.
+_GHSSH_PATH_RE = re.compile(r"/tmp/ghssh_[^\s'\"]*")
+
+
 def safe_cli_error_snippet(stderr: str, stdout: str, max_len: int = 800) -> str:
     """Build a useful error snippet from a CLI subprocess that exited non-zero.
+    The ephemeral SSH keyfile path is scrubbed from the result (Codex review)."""
+    return _GHSSH_PATH_RE.sub("<ssh-key>", _safe_cli_error_snippet_raw(stderr, stdout, max_len))
+
+
+def _safe_cli_error_snippet_raw(stderr: str, stdout: str, max_len: int = 800) -> str:
+    """Original snippet builder (see ``safe_cli_error_snippet`` for the scrub).
 
     Why this exists: several CLIs (GitHub Copilot CLI, OpenCode, Codex,
     Gemini) emit *streaming JSON* on stdout. When the CLI exits 1 with

@@ -13,8 +13,13 @@ import pytest
 
 from app.schemas.reflection import (
     MAX_CONTENT_LEN,
+    REFLECTION_ACTION_KINDS,
+    REFLECTION_AFFORDANCES,
+    REFLECTION_RISK_LEVELS,
+    REFLECTION_UNCERTAINTY_LEVELS,
     REFLECTION_KINDS,
     NightlyReflection,
+    ReflectionStep,
 )
 
 
@@ -36,6 +41,25 @@ def _canonical(**overrides) -> NightlyReflection:
     )
     base.update(overrides)
     return NightlyReflection(**base)
+
+
+def _canonical_step(**overrides) -> ReflectionStep:
+    base = dict(
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        agent_id="00000000-0000-0000-0000-000000000002",
+        session_id="session-1",
+        action_kind="repo_edit_dirty_worktree",
+        user_intent="Implement the trusted teammate reflection contract.",
+        evidence_refs=["docs/plans/2026-06-04-trusted-teammate-engines-implementation-plan.md"],
+        assumptions=["Current dirty worktree changes are unrelated."],
+        uncertainty="medium",
+        risk_level="medium",
+        required_checks=["Inspect git status before editing."],
+        recommended_affordance="verify",
+        created_at=_now(),
+    )
+    base.update(overrides)
+    return ReflectionStep(**base)
 
 
 # ── Canonical shape ───────────────────────────────────────────────────
@@ -151,3 +175,68 @@ def test_reflection_is_frozen():
     r = _canonical()
     with pytest.raises((AttributeError, Exception)):  # FrozenInstanceError
         r.confidence = 0.99  # type: ignore[misc]
+
+
+# ── ReflectionStep contract ───────────────────────────────────────────
+
+
+def test_reflection_step_accepts_canonical_shape():
+    step = _canonical_step()
+    assert step.action_kind in REFLECTION_ACTION_KINDS
+    assert step.uncertainty in REFLECTION_UNCERTAINTY_LEVELS
+    assert step.risk_level in REFLECTION_RISK_LEVELS
+    assert step.recommended_affordance in REFLECTION_AFFORDANCES
+
+
+def test_reflection_step_accepts_all_known_action_kinds():
+    for action_kind in REFLECTION_ACTION_KINDS:
+        assert _canonical_step(action_kind=action_kind).action_kind == action_kind
+
+
+def test_reflection_step_rejects_unknown_action_kind():
+    with pytest.raises(ValueError, match="action_kind must be one of"):
+        _canonical_step(action_kind="invented_action")
+
+
+def test_reflection_step_rejects_empty_user_intent():
+    with pytest.raises(ValueError, match="user_intent must be a non-empty string"):
+        _canonical_step(user_intent=" ")
+
+
+def test_reflection_step_rejects_non_list_evidence_refs():
+    with pytest.raises(ValueError, match="evidence_refs must be a list"):
+        _canonical_step(evidence_refs="doc.md")  # type: ignore[arg-type]
+
+
+def test_reflection_step_rejects_non_list_assumptions():
+    with pytest.raises(ValueError, match="assumptions must be a list"):
+        _canonical_step(assumptions="none")  # type: ignore[arg-type]
+
+
+def test_reflection_step_rejects_bad_uncertainty():
+    with pytest.raises(ValueError, match="uncertainty must be one of"):
+        _canonical_step(uncertainty="certain")
+
+
+def test_reflection_step_rejects_bad_risk_level():
+    with pytest.raises(ValueError, match="risk_level must be one of"):
+        _canonical_step(risk_level="catastrophic")
+
+
+def test_reflection_step_rejects_empty_required_checks():
+    with pytest.raises(ValueError, match="required_checks must be a non-empty list"):
+        _canonical_step(required_checks=[])
+
+
+def test_reflection_step_rejects_bad_affordance():
+    with pytest.raises(ValueError, match="recommended_affordance must be one of"):
+        _canonical_step(recommended_affordance="auto_block")
+
+
+def test_reflection_step_to_dict_roundtrips():
+    step = _canonical_step(
+        action_kind="pr_creation",
+        risk_level="high",
+        recommended_affordance="delegate",
+    )
+    assert ReflectionStep(**step.to_dict()) == step
