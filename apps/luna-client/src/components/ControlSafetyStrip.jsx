@@ -179,6 +179,16 @@ export default function ControlSafetyStrip() {
       >
         Stop
       </button>
+      {state.mode === 'stopped' && (
+        <button
+          className="control-safety-action control-safety-resume"
+          onClick={() => run('control_clear_stop')}
+          disabled={busy}
+          title="Clear the latched Stop and return to the locked (safe) state. Stop now persists across app relaunch, so this is the only way to resume."
+        >
+          Resume
+        </button>
+      )}
       <span className="control-safety-permissions" title={permissionSummary.title}>
         {permissionSummary.label}
       </span>

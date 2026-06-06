@@ -16,6 +16,21 @@ const CONTROL_MODE_STOPPED: u8 = 2;
 static CONTROL_MODE: AtomicU8 = AtomicU8::new(CONTROL_MODE_LOCKED);
 static LAST_STOP_AT_MS: AtomicU64 = AtomicU64::new(0);
 
+/// Serializes every CONTROL_MODE write together with its durable-latch file
+/// side effect, so concurrent control commands from multiple Tauri windows (or
+/// the planned tray / keyboard Stop entrypoints) can't interleave a mode store
+/// with a latch write and leave memory and disk disagreeing about whether the
+/// emergency Stop is latched.
+static STOP_LATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire the latch lock, recovering from poisoning — the guarded data is `()`
+/// so a panicked holder cannot have corrupted anything.
+fn lock_latch() -> std::sync::MutexGuard<'static, ()> {
+    STOP_LATCH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(desktop)]
 use tauri::{
     menu::{Menu, MenuItem},
@@ -95,6 +110,24 @@ fn control_mode_name(mode: u8) -> &'static str {
     }
 }
 
+/// Mode after a Lock request. Preserves STOPPED so that only an explicit
+/// Resume (`control_clear_stop`) can leave a latched emergency Stop — this is
+/// the single most fragile point of durable-Stop (Stop Semantics #5): if a
+/// Lock ever downgraded STOPPED to LOCKED, `AuthContext`'s logout/stale-token
+/// `control_lock_all` would silently un-stop on the next launch.
+fn next_mode_for_lock(current: u8) -> u8 {
+    if current == CONTROL_MODE_STOPPED {
+        CONTROL_MODE_STOPPED
+    } else {
+        CONTROL_MODE_LOCKED
+    }
+}
+
+/// Whether an Observe request may proceed. Never out of a latched Stop.
+fn observe_allowed_in_mode(current: u8) -> bool {
+    current != CONTROL_MODE_STOPPED
+}
+
 fn desktop_control_stopped() -> bool {
     CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED
 }
@@ -165,20 +198,39 @@ async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
 
 #[tauri::command]
 async fn control_observe_status(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
-    if CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED {
-        return Ok(current_control_safety_state().await);
-    }
-    CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+    // Decide + flip the mode under the latch lock so observe can never race past
+    // a concurrent Stop. A latched Stop is preserved (no mode change, no event).
+    let armed = {
+        let _latch = lock_latch();
+        if observe_allowed_in_mode(CONTROL_MODE.load(Ordering::SeqCst)) {
+            CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    };
     let state = current_control_safety_state().await;
-    let _ = app.emit("control-safety-changed", state.clone());
+    if armed {
+        let _ = app.emit("control-safety-changed", state.clone());
+    }
     Ok(state)
 }
 
 #[tauri::command]
 async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
-    CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
-    LAST_STOP_AT_MS.store(now_unix_ms(), Ordering::SeqCst);
-    CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    let at = now_unix_ms();
+    // Hold the latch lock across the mode store + persist so a concurrent Resume
+    // from another window can't interleave and leave memory STOPPED while the
+    // latch file is removed (or vice versa). Persist before the fallible engine
+    // teardown so the latch survives even if teardown errors; the in-memory
+    // store is already authoritative. Guard dropped before the await.
+    {
+        let _latch = lock_latch();
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        LAST_STOP_AT_MS.store(at, Ordering::SeqCst);
+        CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+        persist_stop_latch(&app, true, at);
+    }
     gesture::set_global_mode(false);
     gesture::stop_engine().await?;
     let state = current_control_safety_state().await;
@@ -188,15 +240,83 @@ async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
 
 #[tauri::command]
 async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
-    if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_STOPPED {
-        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    // Read-modify-write under the latch lock so a Lock can't race a concurrent
+    // Stop and overwrite a just-set STOPPED (next_mode_for_lock preserves it).
+    {
+        let _latch = lock_latch();
+        let next = next_mode_for_lock(CONTROL_MODE.load(Ordering::SeqCst));
+        CONTROL_MODE.store(next, Ordering::SeqCst);
+        CAPTURE_RUNNING.store(false, Ordering::SeqCst);
     }
-    CAPTURE_RUNNING.store(false, Ordering::SeqCst);
     gesture::set_global_mode(false);
-    gesture::stop_engine().await?;
+    // A kill switch must never report failure once the latch is set: the Stop is
+    // already authoritative + persisted above. A gesture-teardown error is logged,
+    // not propagated, so the UI always sees the STOPPED state (Luna review nit).
+    if let Err(e) = gesture::stop_engine().await {
+        log::warn!("desktop control: gesture stop errored during Stop (latch already set): {e}");
+    }
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
+}
+
+/// Explicitly clear the durable Stop latch — the user-initiated "resume" out of
+/// emergency Stop. This is the ONLY way out of STOPPED: relaunching no longer
+/// clears it (see `restore_persisted_stop`). Drops to the safe LOCKED posture
+/// (observe off, nothing armed); the user must then opt back into Observe, so a
+/// resume can never silently re-arm observation.
+#[tauri::command]
+async fn control_clear_stop(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    {
+        let _latch = lock_latch();
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        // Clear the stop timestamp too — there is no longer a latched Stop.
+        LAST_STOP_AT_MS.store(0, Ordering::SeqCst);
+        CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+        persist_stop_latch(&app, false, 0);
+    }
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+/// Resolve (and create) Luna's Tauri app-data dir for durable safety state.
+fn luna_app_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve Luna app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create Luna app data dir: {e}"))?;
+    Ok(dir)
+}
+
+/// Best-effort write/clear of the durable Stop latch. Never fails the caller:
+/// the in-memory `CONTROL_MODE` is authoritative for the running session, and a
+/// failed persist only means the latch won't survive relaunch (logged).
+fn persist_stop_latch(app: &tauri::AppHandle, stopped: bool, at_ms: u64) {
+    match luna_app_data_dir(app) {
+        Ok(dir) => {
+            if let Err(e) = computer_use::stop_state::persist_stop(&dir, stopped, at_ms) {
+                log::warn!("desktop control: failed to persist Stop latch (stopped={stopped}): {e}");
+            }
+        }
+        Err(e) => log::warn!("desktop control: cannot resolve app data dir for Stop latch: {e}"),
+    }
+}
+
+/// Restore the durable Stop latch at startup. If the user latched Stop in a
+/// prior run, Luna comes back STOPPED (the safest posture) until the user
+/// explicitly clears it via `control_clear_stop`. Best-effort: a resolve/read
+/// failure leaves the default LOCKED mode, which is itself safe (nothing armed).
+fn restore_persisted_stop(app: &tauri::AppHandle) {
+    let Ok(dir) = luna_app_data_dir(app) else {
+        return;
+    };
+    if let Some(at_ms) = computer_use::stop_state::load_stop(&dir) {
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        LAST_STOP_AT_MS.store(at_ms, Ordering::SeqCst);
+        log::info!("desktop control: restored durable Stop latch from a prior session");
+    }
 }
 
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
@@ -839,6 +959,11 @@ pub fn run() {
                     .build(),
             )?;
 
+            // Restore a durable emergency Stop latched in a prior session so
+            // Luna comes back STOPPED rather than silently re-armable on launch
+            // (control plan Stop Semantics invariant #5).
+            restore_persisted_stop(app.handle());
+
             #[cfg(desktop)]
             {
                 setup_tray(app)?;
@@ -1026,6 +1151,7 @@ pub fn run() {
             control_observe_status,
             control_stop_all,
             control_lock_all,
+            control_clear_stop,
             capture_screenshot,
             get_active_app,
             read_clipboard,
@@ -1100,6 +1226,24 @@ mod tests {
         assert!(stopped.contains("desktop control stopped"), "got: {stopped}");
 
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
+
+    // ── durable-Stop transition guards (Stop Semantics #5) ──────────────
+    #[test]
+    fn lock_request_preserves_stopped() {
+        // A Lock must never silently leave a latched Stop — only an explicit
+        // Resume (control_clear_stop) may. This pins the AuthContext
+        // logout/stale-token control_lock_all path against un-stopping.
+        assert_eq!(next_mode_for_lock(CONTROL_MODE_STOPPED), CONTROL_MODE_STOPPED);
+        assert_eq!(next_mode_for_lock(CONTROL_MODE_OBSERVE), CONTROL_MODE_LOCKED);
+        assert_eq!(next_mode_for_lock(CONTROL_MODE_LOCKED), CONTROL_MODE_LOCKED);
+    }
+
+    #[test]
+    fn observe_request_denied_only_when_stopped() {
+        assert!(!observe_allowed_in_mode(CONTROL_MODE_STOPPED));
+        assert!(observe_allowed_in_mode(CONTROL_MODE_LOCKED));
+        assert!(observe_allowed_in_mode(CONTROL_MODE_OBSERVE));
     }
 
     // ── platform / arch ─────────────────────────────────────────────────
