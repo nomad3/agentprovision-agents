@@ -37,7 +37,8 @@
         "decorations": true,
         "transparent": false,
         "visible": true,
-        "center": true
+        "center": true,
+        "maximized": true
       }
     ],
     "trayIcon": {

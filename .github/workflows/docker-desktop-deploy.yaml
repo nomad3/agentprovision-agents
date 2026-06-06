@@ -32,6 +32,14 @@ jobs:
     # on a wedged process" — actual hangs still surface within a
     # reasonable window.
     timeout-minutes: 120
+    env:
+      # Never bind-mount live Docker services from the GitHub Actions
+      # runner checkout. The runner workspace is cleaned/reset by
+      # actions/checkout and other workflows; when compose runs there,
+      # api/worker/cloudflared containers can lose their source tree or
+      # secrets mid-deploy. Sync each checkout into this stable directory
+      # and run every compose command from there instead.
+      DEPLOY_DIR: /Users/nomade/.agentprovision/deploy/agentprovision-agents
 
     steps:
       # NOTE: previously this step stopped api / orchestration-worker /
@@ -85,6 +93,28 @@ jobs:
             -e cloudflared/credentials.json \
             -e cloudflared/cert.pem
 
+      - name: Sync checkout to stable compose directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPLOY_DIR"
+          rsync -a --delete \
+            --exclude '.git/' \
+            --exclude '**/node_modules/' \
+            --exclude '**/target/' \
+            --exclude '**/dist/' \
+            --exclude '**/build/' \
+            --exclude '**/__pycache__/' \
+            --exclude '**/.pytest_cache/' \
+            --exclude '**/.ruff_cache/' \
+            --exclude '**/.venv/' \
+            --exclude '.env' \
+            --exclude 'PRODUCTION.env' \
+            --exclude 'apps/api/.env' \
+            --exclude 'cloudflared/credentials.json' \
+            --exclude 'cloudflared/cert.pem' \
+            ./ "$DEPLOY_DIR"/
+          echo "Deploy checkout synced to $DEPLOY_DIR"
+
       - name: Load runtime secrets from $HOME
         run: |
           # Secrets live at $HOME/Documents/GitHub/agentprovision-agents/
@@ -109,10 +139,10 @@ jobs:
             dst="${entry%%:*}"
             src_rel="${entry##*:}"
             src="$HOME/Documents/GitHub/agentprovision-agents/$src_rel"
-            mkdir -p "$(dirname "$dst")"
-            cp "$src" "$dst"
-            chmod 600 "$dst"
-            echo "[$dst]  ←  $src"
+            mkdir -p "$DEPLOY_DIR/$(dirname "$dst")"
+            cp "$src" "$DEPLOY_DIR/$dst"
+            chmod 600 "$DEPLOY_DIR/$dst"
+            echo "[$DEPLOY_DIR/$dst]  ←  $src"
           done
 
       - name: Detect changed services
@@ -220,6 +250,7 @@ jobs:
 
       - name: Build and update services
         run: |
+          cd "$DEPLOY_DIR"
           SERVICES="${{ steps.changes.outputs.services }}"
           echo "Updating: $SERVICES"
 
@@ -236,6 +267,7 @@ jobs:
 
       - name: Up
         run: |
+          cd "$DEPLOY_DIR"
           SERVICES="${{ steps.changes.outputs.services }}"
           # Recreate the specific services that were rebuilt above so
           # their containers swap to the fresh images. Plain `compose
@@ -268,6 +300,7 @@ jobs:
           # compose project ever gets renamed.
           DB_CONTAINER: agentprovision-agents-db-1
         run: |
+          cd "$DEPLOY_DIR"
           # The db needs a few seconds after `up -d` even when the
           # container was already running, because compose may have
           # restarted dependent services around it. Wait up to 30s
@@ -382,6 +415,7 @@ jobs:
               if [ "${ACTIVE_CLI_COUNT:-0}" -gt 0 ]; then
                 echo "active CLIs running — skipping code-worker recycle to avoid killing in-flight sessions"
               else
+                cd "$DEPLOY_DIR"
                 docker compose up -d --force-recreate code-worker 2>&1 | tail -5 || true
               fi
             else
