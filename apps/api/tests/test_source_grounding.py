@@ -94,6 +94,19 @@ def test_evidence_refs_must_be_a_list():
         )
 
 
+def test_evidence_refs_must_be_non_empty_strings():
+    with pytest.raises(ValueError):
+        GroundedClaim(
+            label="copied", claim="x", evidence_refs=["   "],
+            confidence=0.9, risk_if_wrong="low",
+        )
+    with pytest.raises(ValueError):
+        GroundedClaim(
+            label="adapted", claim="x", evidence_refs=[None],  # type: ignore[list-item]
+            confidence=0.9, risk_if_wrong="low",
+        )
+
+
 def test_copied_with_evidence_constructs_and_roundtrips():
     c = GroundedClaim(
         label="copied", claim="exact quote", evidence_refs=["docs/plan.md#L4"],

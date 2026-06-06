@@ -65,6 +65,11 @@ class GroundedClaim:
             raise ValueError("claim must be a non-empty string")
         if not isinstance(self.evidence_refs, list):
             raise ValueError("evidence_refs must be a list")
+        if any(
+            not isinstance(ref, str) or not ref.strip()
+            for ref in self.evidence_refs
+        ):
+            raise ValueError("evidence_refs must contain non-empty strings")
         # Evidence-before-interpretation: a claim that asserts it is grounded
         # in a source cannot stand with no source cited.
         if self.label in SOURCE_BACKED_LABELS and len(self.evidence_refs) == 0:
