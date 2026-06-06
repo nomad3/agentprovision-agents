@@ -8,10 +8,11 @@
 Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
-session ownership merged; device-bound shell identity in progress
+session ownership and device-bound shell identity merged; release validation
+follow-up in progress
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
 Branch: `codex/luna-phase1-control-plane`; current follow-up branch:
-`codex/luna-phase2-device-binding`
+`codex/luna-default-maximized`
 
 ---
 
@@ -257,6 +258,28 @@ Additional discovery inputs:
     `device_registry`, shell presence records an authenticated
     `shell_id -> device_registry.id` binding, and desktop-control audit/MCP
     observation paths fail closed when the connected shell is not device-bound.
+28. PR #796 merged the device-bound shell identity prerequisite into `main` on
+    2026-06-06 UTC as merge commit `3d9cc323`. Main broad Tests run
+    `27056826661`, Docker Desktop Deployment run `27056826668`, and Luna
+    Client Tauri Build run `27056826667` all passed. Docker deploy validation
+    returned no output for Luna's exact mount gate:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+    Public API validation used the canonical base
+    `https://agentprovision.com/api/v1/`, which returned `200`; the
+    `api.agentprovision.com` hostname is not the active production API base.
+29. Installed-release validation for unsigned development prerelease
+    `luna-v0.1.93` downloaded `Luna_0.1.93_aarch64.dmg` plus `.sha256`,
+    verified directly with `shasum -c`, installed `/Applications/Luna.app`,
+    and confirmed bundle version `0.1.93`. Computer Use verified the
+    chat/session surface and the locked desktop safety strip, while direct
+    System Events/AppKit measurement exposed that the `maximized` config alone
+    is too soft on macOS: the release could launch at a centered offset instead
+    of pinning to the visible workspace origin. Follow-up branch
+    `codex/luna-default-maximized` adds an explicit native
+    `show -> unminimize -> maximize -> focus` path for startup, tray open,
+    global shortcut open, and emergency Stop surfacing. Local Tauri dev
+    validation measured the branch window at `0,34` with size `1496x933`,
+    exactly matching AppKit's main-screen visible frame.
 
 ---
 
