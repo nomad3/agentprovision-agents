@@ -768,6 +768,14 @@ Additional discovery inputs:
     Code print mode answered a tiny health-check prompt, but both Opus/max and
     Sonnet substantive read-only review prompts hung without output and were
     terminated; do not treat Claude review as completed for this pass.
+79. First signed-mode CI attempt on branch `codex/luna-native-boundary-proof`
+    failed in `cargo tauri build` while importing the PKCS#12 certificate:
+    `SecKeychainItemImport: MAC verification failed during PKCS12 import`. Local
+    reproduction showed OpenSSL could read the file, but macOS `security import`
+    rejected it. The certificate was regenerated from the same Developer ID cert
+    and private key using an Apple-compatible legacy PKCS#12 format, verified
+    locally with a temporary keychain, and `APPLE_CERTIFICATE` plus trimmed
+    `APPLE_CERTIFICATE_PASSWORD` were re-uploaded to GitHub Actions secrets.
 
 ---
 
@@ -1305,6 +1313,10 @@ Current verification finding (2026-06-06):
       `latest.json` contains a non-empty signature, manually install the DMG,
       and verify the installed app reports Developer ID identity plus stable
       TCC permission state.
+- [x] Fix signed-mode certificate import for macOS CI: regenerate the PKCS#12
+      as Apple-compatible after `security import` rejected the OpenSSL-default
+      bundle, verify import locally with a temporary keychain, and refresh
+      `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` secrets.
 - [x] Luna lead review for the release-signing/permission-onboarding slice:
       Alpha Chat ACKed no blocker before PR/CI signed-build gate and preserved
       the manual first-DMG install requirement after updater-key rotation.
