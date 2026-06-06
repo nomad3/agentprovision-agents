@@ -111,6 +111,19 @@ Additional discovery inputs:
     `https://agentprovision.com/api/v1` to `200`; Computer Use then verified
     `/Applications/Luna.app` could log in again and return to the chat/session
     surface.
+13. PR #783 merged the long-term Docker Desktop deploy fix and Luna startup
+    maximization on 2026-06-06 UTC. Main workflows passed for Tests, Docker
+    Desktop Deployment, and Luna Client Tauri Build, producing unsigned
+    development prerelease `luna-v0.1.86`. Local release validation downloaded
+    the DMG plus checksum, verified `shasum -c`, installed
+    `/Applications/Luna.app` version `0.1.86`, and launched the installed app
+    directly into the maximized chat/session window. Computer Use verified
+    `Control Locked`, disabled Assist/Control buttons, no accidental Control
+    enablement, and an Alpha chat response from Luna Supervisor. Host-level
+    Docker inspection verified `api`, `orchestration-worker`, `code-worker`,
+    and `cloudflared` all use
+    `/Users/nomade/.agentprovision/deploy/agentprovision-agents` with zero
+    `actions-runner/_work` bind mounts.
 
 ---
 
@@ -634,6 +647,12 @@ Current verification finding (2026-06-06):
       verification via `codesign`, `stapler`, and `spctl`.
 - [x] Allow unsigned development releases without producing an unsigned updater
       manifest.
+- [x] Verify `luna-v0.1.86` unsigned development release locally: DMG checksum,
+      `/Applications/Luna.app` version `0.1.86`, maximized startup,
+      Control Locked safety strip, disabled Assist/Control, and Alpha chat
+      response.
+- [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
+      `_work` checkout for source-mounted runtime services.
 
 Exit criteria:
 
@@ -645,6 +664,9 @@ Exit criteria:
       artifacts and local unsigned builds for development smoke only.
 - [x] Local install smoke from the unsigned development app bundle confirms
       version, launch, Observe/Lock, and Stop behavior.
+- [x] Local install smoke from GitHub Release `luna-v0.1.86` confirms version,
+      checksum, maximized launch, locked passive control strip, and live Alpha
+      chat response.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -972,7 +994,10 @@ Exit criteria:
 
 ### Manual macOS smoke test
 
-- [ ] Fresh launch: only `Luna` chat visible.
+- [x] Fresh launch: only `Luna` chat visible.
+- [x] Fresh launch: installed `luna-v0.1.86` opens maximized by default.
+- [x] Fresh launch: Control strip starts `Control Locked`, with Assist and
+      Control disabled.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1017,9 +1042,11 @@ Exit criteria:
 
 ## Next Actions
 
-1. Validate and merge the Phase 1 permission-readiness/control-strip slice on
-   branch `codex/luna-phase1-control-plane`.
-2. Re-run local Luna release smoke after the next GitHub Actions prerelease.
+1. Start the next Phase 1 safety branch with Luna leading from Alpha chat and
+   local Codex CLI access.
+2. Prioritize Phase 1 in Luna's reviewed order: durable Stop across relaunch,
+   policy-gated screenshot/active-app/clipboard reads with audit, persistent
+   Observe/Assist indicator, then `Cmd+Shift+Space` command palette on `main`.
 3. Continue Phase 1 by moving screenshot, active-app, and clipboard-read
    primitives fully behind the `computer_use` module and adding audit event
    plumbing.
