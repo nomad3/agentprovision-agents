@@ -1,4 +1,4 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
@@ -89,6 +89,30 @@ fn control_mode_name(mode: u8) -> &'static str {
     }
 }
 
+fn desktop_control_stopped() -> bool {
+    CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED
+}
+
+fn ensure_desktop_control_not_stopped(action: &str) -> Result<(), String> {
+    if desktop_control_stopped() {
+        Err(format!("desktop control stopped; {action} denied"))
+    } else {
+        Ok(())
+    }
+}
+
+pub(crate) fn desktop_control_allows_actuation() -> bool {
+    false
+}
+
+fn ensure_desktop_control_allows_actuation(action: &str) -> Result<(), String> {
+    if desktop_control_allows_actuation() {
+        Ok(())
+    } else {
+        Err(format!("desktop pointer control locked; {action} denied"))
+    }
+}
+
 async fn current_control_safety_state() -> ControlSafetyState {
     let mode = CONTROL_MODE.load(Ordering::SeqCst);
     let last_stop = LAST_STOP_AT_MS.load(Ordering::SeqCst);
@@ -114,28 +138,33 @@ async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
 }
 
 #[tauri::command]
-async fn control_observe_status() -> Result<ControlSafetyState, String> {
+async fn control_observe_status(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
     if CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED {
         return Ok(current_control_safety_state().await);
     }
     CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
-    Ok(current_control_safety_state().await)
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
 }
 
 #[tauri::command]
-async fn control_stop_all() -> Result<ControlSafetyState, String> {
+async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
     CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
     LAST_STOP_AT_MS.store(now_unix_ms(), Ordering::SeqCst);
     CAPTURE_RUNNING.store(false, Ordering::SeqCst);
     gesture::set_global_mode(false);
     gesture::stop_engine().await?;
-    Ok(current_control_safety_state().await)
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
 }
 
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
 /// On iOS returns an error; the frontend should use the native share sheet instead.
 #[tauri::command]
 async fn capture_screenshot() -> Result<String, String> {
+    ensure_desktop_control_not_stopped("capture_screenshot")?;
     #[cfg(desktop)]
     {
         use std::process::Command;
@@ -177,6 +206,7 @@ async fn haptic_feedback(style: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_active_app() -> Result<serde_json::Value, String> {
+    ensure_desktop_control_not_stopped("get_active_app")?;
     use std::process::Command;
 
     let app_output = Command::new("osascript")
@@ -206,6 +236,7 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
 
 #[tauri::command]
 async fn read_clipboard() -> Result<String, String> {
+    ensure_desktop_control_not_stopped("read_clipboard")?;
     use std::process::Command;
     let output = Command::new("pbpaste")
         .output()
@@ -220,6 +251,7 @@ async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
             let _ = window.hide();
             CAPTURE_RUNNING.store(false, Ordering::Relaxed);
         } else {
+            ensure_desktop_control_not_stopped("toggle_spatial_hud")?;
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -236,6 +268,7 @@ struct SpatialFrame {
 
 #[tauri::command]
 async fn start_spatial_capture(_app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_control_not_stopped("start_spatial_capture")?;
     // Real `spatial-frame` events are now emitted by the gesture engine
     // (`gesture::supervisor::run_engine_loop`). This command is kept as a
     // no-op for FFI compatibility with the existing frontend HUD bootstrap.
@@ -253,6 +286,7 @@ async fn stop_spatial_capture() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_start() -> Result<(), String> {
+    ensure_desktop_control_not_stopped("gesture_start")?;
     gesture::start_engine().await
 }
 
@@ -268,6 +302,7 @@ async fn gesture_pause() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_resume() -> Result<(), String> {
+    ensure_desktop_control_not_stopped("gesture_resume")?;
     gesture::resume_engine().await
 }
 
@@ -293,6 +328,10 @@ async fn gesture_check_accessibility() -> Result<bool, String> {
 
 #[tauri::command]
 async fn gesture_set_cursor_global(enabled: bool) -> Result<(), String> {
+    if enabled {
+        ensure_desktop_control_not_stopped("gesture_set_cursor_global")?;
+        ensure_desktop_control_allows_actuation("gesture_set_cursor_global")?;
+    }
     gesture::set_global_mode(enabled);
     Ok(())
 }
@@ -328,6 +367,7 @@ async fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 /// `nav_hud` gesture binding from any window.
 #[tauri::command]
 async fn focus_podium(app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_control_not_stopped("focus_podium")?;
     if let Some(window) = app.get_webview_window("spatial_hud") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -975,6 +1015,24 @@ mod tests {
     //! for default `cargo test` runs.
     use super::*;
     use pretty_assertions::assert_eq;
+
+    // ── desktop control safety ─────────────────────────────────────────────
+    #[test]
+    fn stopped_control_mode_blocks_control_entrypoints() {
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        assert!(ensure_desktop_control_not_stopped("gesture_start").is_ok());
+        assert!(!desktop_control_allows_actuation());
+        assert!(ensure_desktop_control_allows_actuation("gesture_set_cursor_global").is_err());
+
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        let err = ensure_desktop_control_not_stopped("gesture_start")
+            .expect_err("stopped mode should reject control entrypoints");
+        assert!(err.contains("desktop control stopped"), "got: {err}");
+        assert!(err.contains("gesture_start"), "got: {err}");
+        assert!(!desktop_control_allows_actuation());
+
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
 
     // ── platform / arch ─────────────────────────────────────────────────
     #[test]

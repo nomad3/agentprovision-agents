@@ -161,13 +161,13 @@ Release hardening requirements:
    repository's latest release.
 2. The updater endpoint must point at `nomad3/agentprovision-agents`, not the
    pre-rename `servicetsunami-agents` repository.
-3. Release `latest.json` must include a non-empty Tauri updater signature when
-   the app embeds a non-empty updater pubkey.
+3. Release `latest.json` must point at a Tauri updater archive
+   (`Luna.app.tar.gz`), not the manual DMG, and must include the archive's
+   non-empty updater signature when the app embeds a non-empty updater pubkey.
 4. The release workflow must fail rather than publish an unsigned updater
    manifest.
-5. Before broad macOS control ships, the DMG should be Developer ID signed and
-   notarized, or the release must explicitly document that Gatekeeper will treat
-   it as an unsigned build.
+5. Before broad macOS control ships, the app must be Developer ID signed,
+   notarized, stapled, and verified in CI before publishing the release.
 6. Local installation is allowed only as smoke verification of a GitHub Release
    artifact.
 
@@ -557,11 +557,12 @@ desktop-control capabilities.
       stable Luna updater manifest that cannot be shadowed by CLI releases.
 - [x] Fail the release workflow if `TAURI_SIGNING_PRIVATE_KEY` is missing when
       producing `latest.json`.
+- [x] Enable Tauri updater artifacts and publish `Luna.app.tar.gz` plus its
+      generated `.sig` instead of using the DMG as the updater payload.
 - [ ] Add release smoke checks for `latest.json` non-empty signature, current
       repo URL, downloadable DMG, and DMG SHA256.
-- [ ] Add Developer ID signing/notarization to the Luna workflow, or add a
-      tracked release-risk note that DMGs remain unsigned/ad-hoc until Apple
-      signing secrets are wired.
+- [x] Add Developer ID signing/notarization to the Luna workflow with CI
+      verification via `codesign`, `stapler`, and `spctl`.
 
 Exit criteria:
 
@@ -589,6 +590,10 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       `control_stop_all` Tauri commands.
 - [x] Ensure `control_stop_all` clears gesture engine, global cursor mode, and
       local capture state.
+- [x] Enforce local Stop in native observation, capture, gesture start/resume,
+      HUD focus, global cursor enablement, and cursor actuator entrypoints.
+- [x] Keep native pointer actuation hard-locked in `control_locked` and
+      `observe`; no pointer/keyboard action is exposed in this slice.
 - [x] Add visible Observe/Stop skeleton in the main chat nav.
 - [ ] Add visible Observe/Assist/Control/Stop control strip in main chat.
 - [ ] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
@@ -598,6 +603,10 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       data, with browser/test fallback.
 - [x] Register conservative shell capabilities through `useShellPresence`
       (`observe`, `stop`, `notify`; no pointer/keyboard/local-action claim).
+- [x] Sync shell presence capabilities from native control safety state so
+      stopped shells do not advertise observation readiness.
+- [x] Add explicit gesture engine start paths in calibration and gesture
+      settings after removing login-time camera auto-start.
 - [ ] Register macOS permission readiness for Screen Recording, Accessibility,
       Automation/System Events, Input Monitoring, camera, and microphone.
 - [ ] Add `desktop_control` tool group in `tool_groups.py`.

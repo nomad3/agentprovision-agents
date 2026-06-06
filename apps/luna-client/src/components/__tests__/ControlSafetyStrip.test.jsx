@@ -82,4 +82,23 @@ describe('ControlSafetyStrip', () => {
     fireEvent.click(observe);
     expect(invokeMock).toHaveBeenCalledTimes(1);
   });
+
+  it('broadcasts native safety state changes for shell presence sync', async () => {
+    const handler = vi.fn();
+    window.addEventListener('luna:control-safety-changed', handler);
+    invokeMock.mockResolvedValueOnce({
+      mode: 'stopped',
+      can_observe: false,
+      gesture_state: 'stopped',
+    });
+
+    render(<ControlSafetyStrip />);
+
+    await waitFor(() => {
+      expect(handler).toHaveBeenCalled();
+    });
+    expect(handler.mock.calls.at(-1)[0].detail.mode).toBe('stopped');
+    expect(handler.mock.calls.at(-1)[0].detail.can_observe).toBe(false);
+    window.removeEventListener('luna:control-safety-changed', handler);
+  });
 });

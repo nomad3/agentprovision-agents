@@ -3,7 +3,7 @@ import { apiFetch } from '../api';
 import { getOrCreateShellId } from '../utils/shellIdentity';
 
 const HEARTBEAT_INTERVAL = 10000; // 10s
-const CAPABILITIES = {
+const BASE_CAPABILITIES = {
   can_listen: true,
   can_notify: true,
   can_observe: true,
@@ -16,6 +16,20 @@ const CAPABILITIES = {
   can_control_keyboard: false,
 };
 
+async function controlAwareCapabilities() {
+  const capabilities = { ...BASE_CAPABILITIES };
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const state = await invoke('control_get_safety_state');
+    capabilities.can_observe = Boolean(state?.can_observe);
+    capabilities.can_control_pointer = Boolean(state?.can_control_pointer);
+    capabilities.can_control_keyboard = Boolean(state?.can_control_keyboard);
+  } catch {
+    // Browser/PWA/test fallback uses conservative defaults.
+  }
+  return capabilities;
+}
+
 export function useShellPresence() {
   const registered = useRef(false);
   const intervalRef = useRef(null);
@@ -25,11 +39,12 @@ export function useShellPresence() {
   const register = useCallback(async () => {
     if (!shellId) return;
     try {
+      const capabilities = await controlAwareCapabilities();
       const res = await apiFetch('/api/v1/presence/shell/register', {
         method: 'POST',
         body: JSON.stringify({
           shell: shellId,
-          capabilities: CAPABILITIES,
+          capabilities,
         }),
       });
       registered.current = true;
@@ -84,11 +99,24 @@ export function useShellPresence() {
     intervalRef.current = setInterval(heartbeat, HEARTBEAT_INTERVAL);
 
     const handleBeforeUnload = () => deregister();
+    const handleSafetyChange = () => register();
+    let unlistenControlSafety;
+    (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        unlistenControlSafety = await listen('control-safety-changed', handleSafetyChange);
+      } catch {
+        // Browser/PWA/test fallback only uses the DOM event bridge.
+      }
+    })();
     window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('luna:control-safety-changed', handleSafetyChange);
 
     return () => {
       clearInterval(intervalRef.current);
       window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('luna:control-safety-changed', handleSafetyChange);
+      unlistenControlSafety?.();
       deregister();
     };
   }, [shellId, register, deregister, heartbeat]);

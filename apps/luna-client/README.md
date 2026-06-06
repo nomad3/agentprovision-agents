@@ -67,7 +67,7 @@ cd src-tauri && cargo check
 
 ## Don't build releases locally
 
-Push to `main` and let GitHub Actions build the macOS ARM64 DMG via [`.github/workflows/luna-client-build.yaml`](../../.github/workflows/luna-client-build.yaml). The workflow publishes a versioned `luna-v*` GitHub Release and updates the stable `luna-latest/latest.json` updater manifest. Local production builds are only for smoke checks and must not be used as release artifacts.
+Push to `main` and let GitHub Actions build the macOS ARM64 DMG and Tauri updater archive via [`.github/workflows/luna-client-build.yaml`](../../.github/workflows/luna-client-build.yaml). The workflow publishes a versioned `luna-v*` GitHub Release, uploads `Luna.app.tar.gz` plus its `.sig`, and updates the stable `luna-latest/latest.json` updater manifest. Local production builds are only for smoke checks and must not be used as release artifacts.
 
 ## Key integrations (in `src-tauri/src/lib.rs`)
 

@@ -54,6 +54,7 @@ export default function GestureCalibration({ onDone }) {
   const [cameras, setCameras] = useState([]);
   const [cameraIndex, setCameraIndex] = useState(0);
   const [accessibilityOk, setAccessibilityOk] = useState(null);
+  const [engineStartError, setEngineStartError] = useState(null);
   const { wakeState, status } = useGesture();
 
   useEffect(() => {
@@ -62,6 +63,9 @@ export default function GestureCalibration({ onDone }) {
       try {
         const tauri = await import('@tauri-apps/api/core').catch(() => null);
         if (!tauri || cancelled) return;
+        await tauri.invoke('gesture_start').catch((e) => {
+          if (!cancelled) setEngineStartError(String(e?.message || e));
+        });
         const cams = await tauri.invoke('gesture_list_cameras');
         if (cancelled) return;
         if (Array.isArray(cams)) setCameras(cams);
@@ -134,6 +138,7 @@ export default function GestureCalibration({ onDone }) {
         {(cur.key === 'pose' || cur.key === 'wake') && (
           <div style={{ margin: '12px 0', padding: 8, background: '#001020', borderRadius: 4, fontSize: 12, fontFamily: 'ui-monospace, Menlo, monospace' }}>
             engine: {status.state} · wake: <b>{wakeState}</b>
+            {engineStartError && <div style={{ marginTop: 6, color: '#fa6' }}>engine start blocked: {engineStartError}</div>}
           </div>
         )}
 

@@ -34,14 +34,20 @@ export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
 
+  const publishState = useCallback((next) => {
+    const merged = { ...FALLBACK_STATE, ...next };
+    setState(merged);
+    window.dispatchEvent(new CustomEvent('luna:control-safety-changed', { detail: merged }));
+  }, []);
+
   const refresh = useCallback(async () => {
     try {
       const next = await invokeControl('control_get_safety_state');
-      setState({ ...FALLBACK_STATE, ...next });
+      publishState(next);
     } catch {
-      setState(FALLBACK_STATE);
+      publishState(FALLBACK_STATE);
     }
-  }, []);
+  }, [publishState]);
 
   useEffect(() => {
     refresh();
@@ -51,7 +57,7 @@ export default function ControlSafetyStrip() {
     setBusy(true);
     try {
       const next = await invokeControl(command);
-      setState({ ...FALLBACK_STATE, ...next });
+      publishState(next);
     } catch {
       await refresh();
     } finally {
