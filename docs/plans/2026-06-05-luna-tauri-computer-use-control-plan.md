@@ -12,11 +12,13 @@ session ownership and device-bound shell identity merged; observation-only
 command down-channel merged in PR #799; PR #800 client completion hardening
 merged and unsigned `luna-v0.1.96` installed locally; PR #801 backend lease
 timezone fix merged and deployed; PR #803 native pointer/keyboard scaffold
-merged and unsigned `luna-v0.1.97` installed locally. Native actuation remains
-disabled; next phase is pre-live-content hardening, device status enforcement,
-signed envelopes, and approval grant consumption.
+merged and unsigned `luna-v0.1.97` installed locally; PR #806 native-control
+policy hardening merged and unsigned `luna-v0.1.98` installed locally. Native
+actuation remains disabled; next phase is signed command-envelope issuance,
+nonce/replay defense, command/session/device binding, audit events, and approval
+grant consumption.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-v0197-validation-plan`
+Current implementation branch: `codex/luna-signed-envelope-gate`
 
 ---
 
@@ -457,6 +459,49 @@ Additional discovery inputs:
     from command payload and event metadata. A mistakenly queued older-session
     observe command was preempted through the authenticated Stop endpoint, and
     final queue validation reported zero pending commands for the live shell.
+47. PR #806 merged native-control safety hardening into `main` on 2026-06-06
+    UTC as merge commit `37c6f18a`. The branch made revoked/disabled desktop
+    devices fail closed during command claim and completion, added a
+    `NativeControlCommandPolicy` envelope/lease/tier gate in Luna Tauri, and
+    kept direct Tauri pointer/keyboard entrypoints denied because they have no
+    claim lease, signed envelope, or tier context. Local validation passed
+    targeted API lifecycle/binding tests, `ruff`, Rust policy tests,
+    `cargo check`, Luna client JS tests, and `git diff --check`. PR CI and
+    post-merge broad Tests/Docker Desktop Deployment workflows passed.
+48. The post-merge Luna Client Tauri Build run `27064562475` produced unsigned
+    development prerelease `luna-v0.1.98`; signing/notarization and stable
+    updater manifest publication were skipped as expected for unsigned
+    development builds. Installed-release validation downloaded
+    `Luna_0.1.98_aarch64.dmg` plus `.sha256`, verified directly with
+    `shasum -c`, installed `/Applications/Luna.app`, and confirmed bundle
+    version `0.1.98`. Computer Use verified the chat/session surface, expanded
+    startup window, durable `Stopped` strip, disabled Observe/Assist/Control/
+    Lock/Stop controls, visible `Resume`, and Luna's Alpha Chat lead response
+    in the active session. The exact Docker mount gate returned no output:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+49. Luna Supervisor accepted lead for the next phase via Alpha Chat on
+    2026-06-06. Her requested implementation order is the trust edge first:
+    server-issued signed command envelopes with tenant/user/session/command/
+    shell/device/policy/risk/issued/expires/nonce/action/decision fields,
+    durable nonce replay denial, strict command/session/device binding,
+    server-side audit events for signed/denied/expired/replayed/revoked/
+    completed/stopped/policy-mismatch outcomes, and UI states that remain
+    locked until a valid envelope, lease, nonce, and audit path exist. She kept
+    live pointer/keyboard actuation explicitly out of scope for the first PR.
+50. Branch `codex/luna-signed-envelope-gate` implements the first trust-edge
+    slice without enabling native actuation: API-issued HMAC command envelopes
+    are attached to claimed commands, envelope nonces are stored in
+    `desktop_command_envelope_nonces`, Luna forwards the claimed envelope nonce
+    on completion, and the API verifies signature, expiry, tenant/user/session/
+    command/shell/device/action/capability/policy binding, and single-use nonce
+    consumption before accepting completion. Missing, mismatched, tampered,
+    expired, or replayed envelopes terminalize as
+    `desktop_command_envelope_denied` with display-safe audit metadata. Luna
+    Alpha Chat review found no blocker and accepted HMAC-only server validation
+    for this fail-closed slice because pointer/keyboard remains disabled.
+    Claude Code review found no blockers; its non-blocking shell-id CHECK
+    watch item was closed by rejecting non-`desktop-` shell ids before command
+    insert/claim nonce issuance.
 
 ---
 
@@ -1002,6 +1047,11 @@ Current verification finding (2026-06-06):
       chat-first startup, durable `Stopped` relaunch, `Resume -> Control
       Locked`, `Observe` with Assist/Control still disabled, and Stop relatch.
       The exact Docker `_work` mount smoke command returned no output.
+- [x] Verify `luna-v0.1.98` unsigned development release locally after PR
+      #806: DMG checksum, `/Applications/Luna.app` version `0.1.98`, expanded
+      chat/session startup, durable `Stopped` posture, disabled native-control
+      affordances, visible `Resume`, Luna Alpha Chat lead response, and an empty
+      exact Docker `_work` mount gate.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -1032,6 +1082,10 @@ Exit criteria:
       checksum, maximized chat-first launch, durable stopped relaunch,
       `Resume -> Control Locked -> Observe`, Assist/Control disabled, Stop
       relatch, and an empty exact Docker `_work` mount gate.
+- [x] Local install smoke from GitHub Release `luna-v0.1.98` confirms version,
+      checksum, expanded chat/session launch, durable stopped posture,
+      disabled native-control controls, Luna Alpha Chat lead response, and an
+      empty exact Docker `_work` mount gate.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -1207,11 +1261,20 @@ Goal: add the missing API-to-Tauri path for action envelopes.
 - [x] Require Tauri claim before execution; down-channel notices alone never
       execute commands.
 - [ ] Add signed action envelope validation in Tauri.
+  - [x] Add first API-side signed command envelope issuance and server-side
+        verification on completion for claimed desktop commands. This uses an
+        HMAC envelope over tenant/user/session/command/shell/device/action/
+        capability/policy/expiry/nonce fields and keeps Tauri native actuation
+        denied by default. Tauri-side public-key verification remains pending.
 - [ ] Add server-time TTL, nonce storage, monotonic per-device sequence numbers,
       and replay-window cleanup.
   - [x] Add server-time lease expiry and pending-command TTL for the
         observation-only queue. Signed envelope expiry, per-device sequence
         numbers, replay cleanup, and grant-bound TTL remain pending.
+  - [x] Add durable `desktop_command_envelope_nonces` storage for issued
+        envelope nonces. Completion requires the matching envelope nonce,
+        consumes it once, and terminalizes missing, tampered, expired, or
+        replayed envelopes with display-safe denial audit events.
 - [x] Add one active claim lease per command, compare-and-swap status
       transitions, retry limits, and duplicate completion handling.
   - [x] Implement one active claim lease with CAS status transitions and
@@ -1497,6 +1560,21 @@ Exit criteria:
       aggregate checks; main runs `27059620727`, `27059620729`, and
       `27059620724` passed Tests, Docker Desktop Deployment, and Luna Client
       Tauri Build on merge commit `40403fcf`.
+- [x] PR #806 native-control safety hardening PR and post-merge CI passed:
+      PR run `27064457928` passed API unit, API integration, Luna client, and
+      aggregate checks; main Tests run `27064562464`, Docker Desktop Deployment
+      run `27064562462`, and Luna Client Tauri Build run `27064562475` passed
+      on merge commit `37c6f18a`.
+- [x] Signed-envelope gate focused validation passed on branch
+      `codex/luna-signed-envelope-gate`: `pytest
+      tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_device_binding.py
+      tests/api/v1/test_desktop_control_events.py -q` (`58 passed`);
+      `ruff check app/services/desktop_control_service.py
+      app/models/desktop_command_envelope_nonce.py
+      tests/api/v1/test_desktop_command_lifecycle.py`; `python -m py_compile`
+      for touched API modules/tests; and `npm test -- --run
+      src/hooks/__tests__/useDesktopCommandClaims.test.jsx` (`15 passed`).
 
 ### Tauri / Rust
 
@@ -1632,6 +1710,12 @@ Exit criteria:
       completed `denied` before lease expiry with marker text absent from
       command payload and event metadata; final queue check returned zero
       pending commands for the live shell.
+- [x] `luna-v0.1.98` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.98`, ad-hoc unsigned development signature confirmed,
+      chat/session expanded startup verified with Computer Use, durable
+      `Stopped` posture verified, Observe/Assist/Control/Lock/Stop disabled,
+      `Resume` visible, Luna's Alpha Chat lead response visible, and Luna's
+      exact Docker `_work` mount gate returned no output.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1676,19 +1760,23 @@ Exit criteria:
 
 ## Next Actions
 
-1. Close pre-live-content hardening gaps: disable or display-safe route ambient
-   clipboard/activity raw emissions, and enforce revoked/offline desktop device
-   status during claim/complete/stop.
-2. Add signed command-envelope validation before any pointer or keyboard
-   execution: nonce, expiry, session, shell, device, command id, policy version,
-   replay protection, revocation, and policy-decision binding.
+1. Finish review and PR for `codex/luna-signed-envelope-gate`: API-side signed
+   command envelopes, durable envelope nonce storage, completion-time signature
+   and binding verification, and replay-denial audit events. Native actuation
+   remains denied.
+2. Add Tauri-side public-key command-envelope validation before any pointer or
+   keyboard execution: nonce, expiry, session, shell, device, command id, policy
+   version, replay protection, revocation, and policy-decision binding.
 3. Add approval grant creation/consumption as a database compare-and-swap gate
    before enabling narrow canary pointer execution.
 4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-5. Treat the post-deploy `No connected desktop shell` observation as a
+5. Close remaining pre-live-content hardening gaps: disable or display-safe route
+   ambient clipboard/activity raw emissions, and add remaining revoked/offline
+   regression coverage around Stop and shell reconnect behavior.
+6. Treat the post-deploy `No connected desktop shell` observation as a
    hardening follow-up: Luna should re-register shell presence after API
    restarts or heartbeat failures, not require an app restart.
-6. Include the PR #797 command-palette maximize follow-up in the next branch or
+7. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.

@@ -130,6 +130,20 @@ function safeObservationMetadata(action, result) {
   return { result_kind: 'unknown' };
 }
 
+function commandEnvelopeNonce(command) {
+  const nonce = command?.payload?.command_envelope?.nonce;
+  return typeof nonce === 'string' && nonce.length > 0 ? nonce : null;
+}
+
+function commandCompletionMetadata(command, metadata = {}) {
+  const nonce = commandEnvelopeNonce(command);
+  if (!nonce) return metadata;
+  return {
+    ...metadata,
+    envelope_nonce: nonce,
+  };
+}
+
 async function completeCommand(
   command,
   shellId,
@@ -155,7 +169,7 @@ async function completeCommand(
             shell_id: shellId,
             status,
             reason,
-            metadata,
+            metadata: commandCompletionMetadata(command, metadata),
           }),
         },
         timeouts.completeTimeoutMs,

@@ -13,6 +13,7 @@ from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.models.chat import ChatSession
 from app.models.desktop_command import DesktopCommand
+from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
 from app.models.tenant import Tenant
@@ -119,6 +120,16 @@ def _enqueue(db: Session, *, nonce: str | None = None):
     )[0]
 
 
+def _completion_metadata(db: Session, command: DesktopCommand, **metadata):
+    db.refresh(command)
+    envelope = (command.payload or {}).get("command_envelope")
+    assert envelope, "claimed command should have a signed envelope"
+    return {
+        **metadata,
+        "envelope_nonce": envelope["nonce"],
+    }
+
+
 def _seed_second_tenant(db_session: Session):
     tenant = Tenant(id=TENANT_ID_2, name="Second Desktop Command Tenant")
     user = User(
@@ -173,6 +184,216 @@ def test_enqueue_and_claim_command_sets_device_bound_lease(db_session, seeded):
     reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
     assert reloaded.status == "claimed"
     assert "must not persist" not in str(reloaded.payload)
+
+
+def test_claim_issues_signed_command_envelope_and_nonce_row(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-envelope-issued")
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    envelope = claimed.payload["command_envelope"]
+    assert envelope["schema"] == "agentprovision.desktop_command_envelope.v1"
+    assert envelope["signed"] is True
+    assert envelope["signature_alg"] == "HMAC-SHA256"
+    assert envelope["policy_version"] == 1
+    assert envelope["tenant_id"] == str(TENANT_ID)
+    assert envelope["user_id"] == str(USER_ID)
+    assert envelope["session_id"] == str(SESSION_ID)
+    assert envelope["desktop_command_id"] == str(command.id)
+    assert envelope["shell_id"] == SHELL_ID
+    assert envelope["device_id"] == str(DEVICE_ID)
+    assert envelope["action"] == "capture_screenshot"
+    assert envelope["capability"] == "screenshot"
+    assert envelope["nonce"]
+    assert envelope["signature"]
+    nonce_row = db_session.query(DesktopCommandEnvelopeNonce).filter(
+        DesktopCommandEnvelopeNonce.tenant_id == TENANT_ID,
+        DesktopCommandEnvelopeNonce.nonce == envelope["nonce"],
+    ).one()
+    assert nonce_row.desktop_command_id == command.id
+    assert nonce_row.session_id == SESSION_ID
+    assert nonce_row.shell_id == SHELL_ID
+    assert nonce_row.device_id == DEVICE_ID
+    assert nonce_row.status == "issued"
+    assert event.event_metadata["envelope_nonce"] == envelope["nonce"]
+    assert event.event_metadata["envelope_policy_version"] == 1
+    assert len(event.event_metadata["envelope_hash"]) == 64
+
+
+def test_enqueue_rejects_non_desktop_active_shell_before_command_insert(db_session, seeded):
+    non_desktop_presence = {
+        "active_shell": "web",
+        "connected_shells": ["web"],
+        "shell_capabilities": {"web": {"can_observe": True}},
+        "shell_devices": {"web": str(DEVICE_ID)},
+    }
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=non_desktop_presence,
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue(db_session, nonce="nonce-non-desktop-shell")
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Desktop shell id is invalid"
+    assert db_session.query(DesktopCommand).count() == 0
+    assert db_session.query(DesktopCommandEnvelopeNonce).count() == 0
+
+
+def test_completion_consumes_signed_envelope_nonce(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-envelope-consumed")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        envelope_nonce = command.payload["command_envelope"]["nonce"]
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="denied",
+                reason="desktop observe locked; capture_screenshot denied",
+                metadata=_completion_metadata(db_session, command, result_kind="error"),
+            ),
+        )
+
+    assert completed.status == "denied"
+    assert event.event_type == "desktop_command_completed"
+    assert event.event_metadata["envelope_nonce"] == envelope_nonce
+    assert len(event.event_metadata["envelope_hash"]) == 64
+    assert idempotent is False
+    nonce_row = db_session.query(DesktopCommandEnvelopeNonce).filter(
+        DesktopCommandEnvelopeNonce.nonce == envelope_nonce,
+    ).one()
+    assert nonce_row.status == "consumed"
+    assert nonce_row.consumed_at is not None
+
+
+def test_completion_without_envelope_nonce_is_denied_and_terminal(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-envelope-missing")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+            ),
+        )
+
+    assert completed.status == "denied"
+    assert event.event_type == "desktop_command_envelope_denied"
+    assert event.reason == "desktop command envelope nonce missing"
+    assert idempotent is False
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.completed_at is not None
+
+
+def test_tampered_command_envelope_signature_is_denied(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-envelope-tampered")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        envelope_nonce = command.payload["command_envelope"]["nonce"]
+        payload = dict(command.payload)
+        payload["command_envelope"] = {
+            **payload["command_envelope"],
+            "action": "read_clipboard",
+        }
+        command.payload = payload
+        db_session.commit()
+
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+                metadata={"envelope_nonce": envelope_nonce},
+            ),
+        )
+
+    assert completed.status == "denied"
+    assert event.event_type == "desktop_command_envelope_denied"
+    assert event.reason == "desktop command envelope signature invalid"
+    assert idempotent is False
+
+
+def test_replayed_envelope_nonce_is_denied_and_audited(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-envelope-replayed")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        envelope_nonce = command.payload["command_envelope"]["nonce"]
+        nonce_row = db_session.query(DesktopCommandEnvelopeNonce).filter(
+            DesktopCommandEnvelopeNonce.nonce == envelope_nonce,
+        ).one()
+        nonce_row.status = "consumed"
+        db_session.commit()
+
+        completed, event, _session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+                metadata=_completion_metadata(db_session, command),
+            ),
+        )
+
+    assert completed.status == "denied"
+    assert event.event_type == "desktop_command_envelope_denied"
+    assert event.reason == "desktop command envelope replay denied"
+    assert event.event_metadata["envelope_nonce"] == envelope_nonce
+    assert idempotent is False
+    db_session.refresh(nonce_row)
+    assert nonce_row.status == "replayed"
 
 
 def test_native_control_command_enqueue_is_denied_before_claim(db_session, seeded):
@@ -281,7 +502,7 @@ def test_duplicate_completion_is_idempotent_and_writes_one_completion_event(db_s
                 shell_id=SHELL_ID,
                 status="succeeded",
                 reason="done",
-                metadata={"summary": "ok"},
+                metadata=_completion_metadata(db_session, command, summary="ok"),
             ),
         )
         again, again_event, _again_session_event, again_idempotent = complete_desktop_command(
@@ -403,7 +624,7 @@ def test_completion_accepts_naive_future_lease_from_database(db_session, seeded)
                 shell_id=SHELL_ID,
                 status="denied",
                 reason="desktop observe locked; get_active_app denied",
-                metadata={"result_kind": "error"},
+                metadata=_completion_metadata(db_session, command, result_kind="error"),
             ),
         )
 
@@ -578,13 +799,15 @@ def test_completion_sanitizes_reason_and_metadata_values(db_session, seeded):
                 shell_id=SHELL_ID,
                 status="failed",
                 reason="raw clipboard text: password token must not persist",
-                metadata={
-                    "lease_expires_at": "sk-raw-token-must-not-persist",
-                    "summary": "OCR token must not persist",
-                    "result_kind": "string",
-                    "result_size_chars": 41,
-                    "result_fields": ["app", "raw_text"],
-                },
+                metadata=_completion_metadata(
+                    db_session,
+                    command,
+                    lease_expires_at="sk-raw-token-must-not-persist",
+                    summary="OCR token must not persist",
+                    result_kind="string",
+                    result_size_chars=41,
+                    result_fields=["app", "raw_text"],
+                ),
             ),
         )
 
@@ -639,6 +862,7 @@ def test_duplicate_terminal_completion_is_idempotent_after_shell_disconnect(db_s
                 command_id=command.id,
                 shell_id=SHELL_ID,
                 status="succeeded",
+                metadata=_completion_metadata(db_session, command),
             ),
         )
 
