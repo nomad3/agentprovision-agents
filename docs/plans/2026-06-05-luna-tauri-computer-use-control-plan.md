@@ -20,11 +20,13 @@ unsigned `luna-v0.1.100` installed locally; PR #810 macOS Alpha-kernel/readiness
 merged and unsigned `luna-v0.1.101` installed locally; PR #811 local claimed
 command-envelope preflight merged and unsigned `luna-v0.1.102` installed
 locally; PR #812 macOS app-monitor event-contract hardening merged and unsigned
-`luna-v0.1.103` installed locally. Native actuation remains disabled; current
-branch adds explicit approval grant creation/claim-time CAS consumption before
-any native invoke path can proceed.
+`luna-v0.1.103` installed locally; PR #813 explicit approval-grant
+creation/claim-time CAS consumption merged and unsigned `luna-v0.1.104`
+installed locally. Native actuation remains disabled; the next gated phase is
+Alpha-kernel/native-boundary proof before any pointer or keyboard invoke can
+ship.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-alpha-kernel-adapter`
+Current implementation branch: `codex/luna-v0104-validation-plan`
 
 ---
 
@@ -696,6 +698,19 @@ Additional discovery inputs:
     `Observe` moved to `Observe Alpha OK Mac Denied` while macOS Screen
     Recording/Accessibility were denied, Assist and Control stayed disabled,
     and `Stop` returned the app to `Stopped Alpha OK Mac Stopped`.
+74. PR #813 merged into `main` on 2026-06-06 UTC as merge commit `a91b9048`.
+    Main broad Tests, Docker Desktop Deployment, and Luna Client Tauri Build
+    all passed. GitHub Actions published unsigned development prerelease
+    `luna-v0.1.104`; the DMG and `.sha256` were downloaded, `shasum -c`
+    verified the checksum, `/Applications/Luna.app` reported bundle version
+    `0.1.104`, and codesign reported the expected ad-hoc signature with no
+    `TeamIdentifier`. Luna's exact Docker `_work` mount gate returned no
+    output. Computer Use verified the installed app opens authenticated on the
+    chat/session surface, starts in `Stopped Alpha OK Mac Stopped`, transitions
+    `Resume -> Control Locked Alpha OK Mac Locked`, transitions `Observe ->
+    Observe Alpha OK Mac Denied` with Screen Recording/Accessibility denied as
+    expected, keeps Assist and Control disabled, and `Stop` relatches to
+    `Stopped Alpha OK Mac Stopped`.
 
 ---
 
@@ -2076,6 +2091,14 @@ Exit criteria:
       remained responsive; `Resume -> Control Locked`, `Observe -> Mac Denied`,
       and `Stop -> Stopped` transitions worked; Assist and Control stayed
       disabled throughout; pointer/keyboard actuation remained unavailable.
+- [x] `luna-v0.1.104` release/install smoke after PR #813: main Tests, Docker
+      Desktop Deployment, and Luna Client Tauri Build passed; DMG checksum
+      verified directly with `shasum -c`; installed bundle version `0.1.104`;
+      ad-hoc unsigned development signature confirmed with no `TeamIdentifier`;
+      Docker `_work` mount gate returned no output; Computer Use verified
+      authenticated chat/session startup, `Stopped -> Control Locked ->
+      Observe Mac Denied -> Stopped` transitions, Assist/Control disabled, and
+      no pointer/keyboard actuation.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -2120,12 +2143,11 @@ Exit criteria:
 
 ## Next Actions
 
-1. Review and merge the approval trust-boundary slice after Luna/council review:
-   explicit approval grants, claim-time CAS consumption, signed-envelope
-   approval binding, client preflight denial for missing/mismatched approvals,
-   and display-safe denial audit. Keep native pointer/keyboard actuation
-   disabled.
-2. Extend the Alpha-kernel adapter beyond readiness after the approval gate:
+1. Continue the next gated phase after the merged approval trust-boundary
+   slice: prove the native boundary rejects every missing, malformed, expired,
+   replayed, revoked, wrong-device, wrong-session, or wrong-command approval
+   envelope immediately before macOS invoke. Keep pointer/keyboard disabled.
+2. Extend the Alpha-kernel adapter beyond readiness:
    auth/session handoff, chat-job streaming from `alpha`, cancellation, error
    display, offline behavior, release packaging, and app-monitor event mapping
    into Luna UI.
