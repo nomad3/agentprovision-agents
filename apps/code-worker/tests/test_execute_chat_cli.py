@@ -176,6 +176,37 @@ class TestGithubTokenIntegration:
         assert os.environ.get("GITHUB_TOKEN") == "ghp_abc"
 
 
+# ── git credential wiring (2026-05-31) ──────────────────────────────────
+
+class TestGitCredentialEnv:
+    """`_apply_git_credential_env` — puts the tenant's GitHub OAuth token in the
+    turn env so the image's SYSTEM `!gh auth git-credential` helper authenticates
+    github.com clones (unified across every CLI), and STRIPS any inherited token
+    when this tenant has none (cross-tenant bleed guard)."""
+
+    def test_no_token_strips_inherited_token(self):
+        # CROSS-TENANT BLEED GUARD (Codex BLOCKER): a tenant with no token must
+        # have any inherited process-global token removed, so the system gh helper
+        # can't authenticate with a PRIOR tenant's credential.
+        env = {"GH_TOKEN": "stale_A", "GITHUB_TOKEN": "stale_A", "PATH": "/x"}
+        claude_executor._apply_git_credential_env(env, None)
+        assert "GH_TOKEN" not in env
+        assert "GITHUB_TOKEN" not in env
+        assert env["PATH"] == "/x"  # unrelated keys untouched
+        env2 = {"GITHUB_TOKEN": "stale_A"}
+        claude_executor._apply_git_credential_env(env2, "")  # empty also strips
+        assert "GITHUB_TOKEN" not in env2
+
+    def test_token_overwrites_stale_and_sets_both_names(self):
+        env = {"GITHUB_TOKEN": "stale_A"}
+        claude_executor._apply_git_credential_env(env, "gho_fresh_B")
+        # Fresh token OVERWRITES the stale one (no bleed), under both names gh reads.
+        assert env["GH_TOKEN"] == "gho_fresh_B"
+        assert env["GITHUB_TOKEN"] == "gho_fresh_B"
+        # No bespoke per-turn GIT_CONFIG_* helper — auth is wired system-wide.
+        assert not any(k.startswith("GIT_CONFIG") for k in env)
+
+
 # ── _execute_claude_chat smoke (covers JSON parse path) ─────────────────
 
 class TestExecuteClaudeChat:
@@ -245,6 +276,8 @@ class TestExecuteClaudeChat:
 
         assert out.success is True
         assert captured["cmd"][:3] == ["claude", "-p", "hello"]
+        # acceptEdits is interactive-only; print mode is already headless.
+        assert "--permission-mode" not in captured["cmd"]
 
     def test_interactive_mode_avoids_print_flag(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
@@ -258,6 +291,8 @@ class TestExecuteClaudeChat:
             captured["cmd"] = cmd
             captured["env"] = kw["env"]
             captured["prompt"] = kw["prompt"]
+            captured["answer_dir"] = kw.get("answer_dir")
+            captured["kwargs"] = kw
             return sp.CompletedProcess(
                 args=cmd,
                 returncode=0,
@@ -290,10 +325,177 @@ class TestExecuteClaudeChat:
         assert "-p" not in captured["cmd"]
         assert "--output-format" not in captured["cmd"]
         assert captured["cmd"][0] == "claude"
-        assert captured["cmd"][-1] == "hello"
-        assert captured["prompt"] == "hello"
+        # Approach C (plan 2026-05-30): the turn message is NOT appended
+        # positionally — the REPL ignores it. The runner receives a single-line
+        # trigger to TYPE, and the blob is written to turn_prompt.md instead.
+        assert captured["cmd"][-1] != "hello"
+        assert "hello" not in captured["cmd"]
+        assert captured["prompt"] != "hello"
+        # Permission fix (2026-05-30): interactive mode auto-accepts edits so
+        # Claude's Write(answer.md) isn't blocked by a tool-permission menu the
+        # PTY runner can't answer (would SIGTERM the turn → exit 143).
+        assert "--permission-mode" in captured["cmd"]
+        assert captured["cmd"][captured["cmd"].index("--permission-mode") + 1] == "acceptEdits"
+        assert "\n" not in captured["prompt"]
+        # Mangle-robust redesign (2026-05-30): the turn blob + answer both live
+        # in a UNIQUE per-turn scratch DIR (turn_<hex>/) under session_dir, and
+        # the runner is handed that dir (``answer_dir``) — not a single answer
+        # file path. Claude drops chars from a long hex FILENAME when re-typing
+        # it; a short fixed name (answer.md) in a fresh dir the runner GLOBS
+        # survives that. ``answer_file`` is gone.
+        import os as _os
+        answer_dir = captured.get("answer_dir")
+        assert "answer_file" not in captured["kwargs"]
+        assert answer_dir is not None
+        assert _os.path.basename(answer_dir).startswith("turn_")
+        assert _os.path.dirname(answer_dir) == str(tmp_path)
+        # Turn blob lives in the scratch dir, not directly under session_dir.
+        turn_file = _os.path.join(answer_dir, "turn_prompt.md")
+        assert _os.path.isfile(turn_file)
+        assert open(turn_file).read() == "hello"
+        assert turn_file in captured["prompt"]
+        assert not (tmp_path / "turn_prompt.md").exists()
+        # Defect 2 (plan 2026-05-30): the trigger also instructs Claude to write
+        # its answer out-of-band into the scratch dir under a SHORT, FIXED name
+        # (answer.md) the runner globs back (the TUI transcript can't be reliably
+        # cleaned). Because the dir is unique + fresh per turn, any answer file
+        # in it is THIS turn's reply — never a leftover from a prior turn.
+        answer_file = _os.path.join(answer_dir, "answer.md")
+        assert _os.path.basename(answer_file) == "answer.md"
+        assert answer_file in captured["prompt"]
+        # FINDING 3 (Luna): the trigger asks for the COMPLETE final response.
+        assert "COMPLETE" in captured["prompt"]
         assert "ANTHROPIC_API_KEY" not in captured["env"]
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in captured["env"]
+
+    def test_interactive_chrome_only_freeze_relaunches_fresh_process(self, monkeypatch, tmp_path):
+        # Recovery hardening (2026-05-30): a startup-frozen launch returns a
+        # non-zero exit whose only output is prompt chrome (a bare "❯"). The
+        # caller must treat that as a freeze (NO alphanumeric content) and
+        # RELAUNCH a fresh process — not mistake the "❯" residue for an answer.
+        # First attempt frozen (rc=-9, stdout="❯"); second attempt real reply.
+        monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setenv("CLAUDE_CODE_INTERACTIVE_MAX_ATTEMPTS", "2")
+        monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
+        monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
+        import subprocess as sp
+
+        calls = {"n": 0, "dirs": []}
+
+        def fake_interactive(cmd, **kw):
+            calls["n"] += 1
+            calls["dirs"].append(kw.get("answer_dir"))
+            if calls["n"] == 1:
+                return sp.CompletedProcess(args=cmd, returncode=-9, stdout="❯", stderr="raw")
+            return sp.CompletedProcess(args=cmd, returncode=0, stdout="the real answer", stderr="")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_interactive
+        )
+
+        out = wf._execute_claude_chat(
+            _make_input(
+                platform="claude_code",
+                message="hello",
+                tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a",
+            ),
+            session_dir=str(tmp_path),
+        )
+
+        assert calls["n"] == 2, "a chrome-only frozen result must trigger exactly one relaunch"
+        assert calls["dirs"][0] != calls["dirs"][1], "each attempt gets a FRESH per-turn scratch dir"
+        assert out.success is True
+        assert out.response_text == "the real answer"
+
+    def test_interactive_terse_real_answer_is_not_retried(self, monkeypatch, tmp_path):
+        # Over-retry guard: a non-zero exit that DID carry real (if terse) text
+        # has alphanumerics → it is a real reply, NOT a freeze, so it must NOT
+        # relaunch (no double-billing). One attempt only.
+        monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setenv("CLAUDE_CODE_INTERACTIVE_MAX_ATTEMPTS", "2")
+        monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
+        monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
+        import subprocess as sp
+
+        calls = {"n": 0}
+
+        def fake_interactive(cmd, **kw):
+            calls["n"] += 1
+            return sp.CompletedProcess(args=cmd, returncode=1, stdout="Done.", stderr="raw")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_interactive
+        )
+
+        wf._execute_claude_chat(
+            _make_input(
+                platform="claude_code",
+                message="hello",
+                tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a",
+            ),
+            session_dir=str(tmp_path),
+        )
+
+        assert calls["n"] == 1, "a terse but real scraped answer (has alnum) must NOT relaunch"
+
+    def test_interactive_wires_github_oauth_token_into_subprocess_git_env(self, monkeypatch, tmp_path):
+        # The per-tenant GitHub OAuth token must reach the CLI subprocess's env as
+        # a git credential helper, so Claude's `git clone https://github.com/…`
+        # authenticates instead of prompting + hanging.
+        monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
+        monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: "gho_work_repo_token")
+        captured = {}
+        import subprocess as sp
+
+        def fake_interactive(cmd, **kw):
+            captured["env"] = kw["env"]
+            return sp.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_interactive
+        )
+        wf._execute_claude_chat(
+            _make_input(platform="claude_code", message="hi",
+                        tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a"),
+            session_dir=str(tmp_path),
+        )
+        env = captured["env"]
+        # The token reaches the subprocess as GH_TOKEN/GITHUB_TOKEN; the image's
+        # system `!gh auth git-credential` helper resolves it for github.com.
+        assert env.get("GH_TOKEN") == "gho_work_repo_token"
+        assert env.get("GITHUB_TOKEN") == "gho_work_repo_token"
+
+    def test_interactive_no_token_strips_inherited_token_no_bleed(self, monkeypatch, tmp_path):
+        # CROSS-TENANT BLEED (Codex BLOCKER): a STALE process-global GITHUB_TOKEN
+        # (left by a prior tenant's turn, workflows.py:1188) must NOT reach this
+        # tenant's subprocess env when this tenant has no token — else the system
+        # gh helper would authenticate with the wrong tenant's credential.
+        monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
+        monkeypatch.setenv("GITHUB_TOKEN", "gho_STALE_other_tenant")  # the leak
+        monkeypatch.setattr(claude_executor, "_feature_enabled", lambda *a, **k: True)
+        monkeypatch.setattr(wf, "_fetch_claude_token", lambda tid: "tok")
+        monkeypatch.setattr(wf, "_fetch_github_token", lambda tid: None)
+        captured = {}
+        import subprocess as sp
+
+        def fake_interactive(cmd, **kw):
+            captured["env"] = kw["env"]
+            return sp.CompletedProcess(args=cmd, returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(
+            claude_interactive, "run_claude_interactive_with_heartbeat", fake_interactive
+        )
+        wf._execute_claude_chat(
+            _make_input(platform="claude_code", message="hi",
+                        tenant_id="752626d9-8b2c-4aa2-87ef-c458d48bd38a"),
+            session_dir=str(tmp_path),
+        )
+        # The stale token must be STRIPPED from the subprocess env (no bleed).
+        assert "GH_TOKEN" not in captured["env"]
+        assert captured["env"].get("GITHUB_TOKEN") != "gho_STALE_other_tenant"
+        assert "GITHUB_TOKEN" not in captured["env"]
 
     def test_interactive_mode_can_use_worker_home_for_native_auth(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CLAUDE_CODE_EXECUTION_MODE", "interactive")
@@ -368,6 +570,10 @@ class TestExecuteClaudeChat:
         assert cleaned == "Useful answer"
 
     def test_interactive_runner_sends_exit_after_idle(self, tmp_path):
+        # Approach C (plan 2026-05-30): the runner now TYPES the trigger into
+        # the REPL after the settle window, waits for a post-submit response,
+        # then `/exit`s on idle. The fake REPL echoes the typed line as its
+        # "answer" so the response gate fires.
         script = """
 import sys
 print("Ready")
@@ -377,43 +583,51 @@ for line in sys.stdin:
         print("Goodbye")
         sys.stdout.flush()
         break
+    print("Answer: " + line.strip())
+    sys.stdout.flush()
 """
         result = claude_interactive.run_claude_interactive_with_heartbeat(
             [sys.executable, "-c", script],
-            prompt="hello",
+            prompt="please answer",
             label="Claude Code",
             timeout=5,
             env=os.environ.copy(),
             cwd=str(tmp_path),
+            submit_settle_seconds=0.1,
             idle_exit_seconds=0.1,
             exit_grace_seconds=1,
         )
 
         assert result.returncode == 0
         assert "Ready" in result.stdout
+        # The trigger was typed and the REPL answered it.
+        assert "Answer: please answer" in result.stdout
         assert "Goodbye" in result.stdout
 
     def test_interactive_runner_waits_for_slow_first_output(self, tmp_path):
-        # First output arrives AFTER idle_exit_seconds (simulating MCP load /
-        # model warm-up). The runner must NOT `/exit` mid-startup — it waits,
-        # captures the output, and completes. (Under the old logic the idle
-        # timer fired from spawn and killed the launch with an empty transcript.)
+        # First output (banner) arrives AFTER idle_exit_seconds (simulating MCP
+        # load / model warm-up). The runner must NOT `/exit` mid-startup — it
+        # waits, then submits the trigger and captures the answer. (Under the
+        # old logic the idle timer fired from spawn and killed the launch.)
         script = """
 import sys, time
 time.sleep(0.6)
-print("Useful answer")
+print("Ready")
 sys.stdout.flush()
 for line in sys.stdin:
     if line.strip() == "/exit":
         break
+    print("Useful answer")
+    sys.stdout.flush()
 """
         result = claude_interactive.run_claude_interactive_with_heartbeat(
             [sys.executable, "-c", script],
-            prompt="hello",
+            prompt="please answer",
             label="Claude Code",
             timeout=10,
             env=os.environ.copy(),
             cwd=str(tmp_path),
+            submit_settle_seconds=0.1,
             idle_exit_seconds=0.1,
             exit_grace_seconds=1,
             first_output_seconds=5,

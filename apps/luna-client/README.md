@@ -49,7 +49,7 @@ vite.config.js
 ```bash
 cd apps/luna-client
 npm install
-npm run tauri dev                       # desktop hot reload
+npm run tauri:dev                       # desktop hot reload
 ```
 
 PWA-only:
@@ -65,17 +65,26 @@ Type-check Rust:
 cd src-tauri && cargo check
 ```
 
-## Don't build releases locally
+## Release and local smoke builds
 
-Push to `main` and let GitHub Actions build the signed macOS ARM64 DMG via [`.github/workflows/luna-client-build.yaml`](../../.github/workflows/luna-client-build.yaml). Release artifact powers the auto-updater. Local production builds aren't signed and won't ingest the auto-updater feed.
+Push to `main` and let GitHub Actions build the macOS ARM64 DMG via [`.github/workflows/luna-client-build.yaml`](../../.github/workflows/luna-client-build.yaml). During active development, the workflow intentionally supports unsigned `--no-sign` DMGs when Apple/Tauri signing secrets are absent. Signed updater artifacts (`Luna.app.tar.gz`, `.sig`, and `luna-latest/latest.json`) are published only when signing is configured.
+
+Local unsigned builds are allowed for smoke checks:
+
+```bash
+cd apps/luna-client
+cargo tauri build --debug --bundles app --no-sign
+```
+
+Do not use local builds as production release artifacts.
 
 ## Key integrations (in `src-tauri/src/lib.rs`)
 
 - **Global shortcuts** (`setup_global_shortcut`, line 392)
   - `Cmd+Shift+Space` — emits `toggle-palette`; React opens the `CommandPalette`. Also un-hides the main window if needed.
-  - `Cmd+Shift+L` — toggles the `spatial_hud` window's visibility.
-- **System tray** (`setup_tray`, line 356) — `TrayIconBuilder` with click-to-show/focus the main window.
-- **Spatial HUD** — separate Tauri window labeled `spatial_hud`. Toggled by the shortcut above; `App.jsx` routes by window label with a 1s safety fallback to `main`. The Rust `project_embeddings` command does a 3-PC projection for the Three.js scene.
+  - `Cmd+Shift+L` — toggles the main chat/session window.
+- **System tray** (`setup_tray`, line 356) — `TrayIconBuilder` with click-to-show/focus the main window; Luna OS / Labs is an explicit tray menu item.
+- **Spatial HUD / Labs** — separate Tauri window labeled `spatial_hud`. Hidden on startup; `App.jsx` routes by window label with a 1s safety fallback to `main`. The Rust `project_embeddings` command does a 3-PC projection for the Three.js scene.
 - **Native handlers** exposed to React via `invoke()`: `capture_screenshot`, `haptic_feedback`, `get_active_app`, `read_clipboard`, `toggle_spatial_hud`, `start_spatial_capture`, `project_embeddings`.
 - **Activity context** — `resolve_app_context`, `get_subprocess_context`, `extract_project_from_args` resolve the user's current tool/project from the active window title (Claude Code, Docker CLI, editors, etc.) for the activity tracker.
 - **Auto-updater** — `tauri-plugin-updater`. Checks on startup and periodically. Emits `update-available` for the React banner.

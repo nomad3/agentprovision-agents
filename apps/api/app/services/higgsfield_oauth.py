@@ -50,7 +50,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.integration_config import IntegrationConfig
-from app.services.integration_secrets import retrieve_credentials_for_skill
+from app.services.orchestration.credential_vault import retrieve_credentials_for_skill
 
 logger = logging.getLogger(__name__)
 

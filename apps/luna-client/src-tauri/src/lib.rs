@@ -1,11 +1,34 @@
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 mod gesture;
+mod computer_use;
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+}
+
+const CONTROL_MODE_LOCKED: u8 = 0;
+const CONTROL_MODE_OBSERVE: u8 = 1;
+const CONTROL_MODE_STOPPED: u8 = 2;
+
+static CONTROL_MODE: AtomicU8 = AtomicU8::new(CONTROL_MODE_LOCKED);
+static LAST_STOP_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Serializes every CONTROL_MODE write together with its durable-latch file
+/// side effect, so concurrent control commands from multiple Tauri windows (or
+/// the planned tray / keyboard Stop entrypoints) can't interleave a mode store
+/// with a latch write and leave memory and disk disagreeing about whether the
+/// emergency Stop is latched.
+static STOP_LATCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire the latch lock, recovering from poisoning — the guarded data is `()`
+/// so a panicked holder cannot have corrupted anything.
+fn lock_latch() -> std::sync::MutexGuard<'static, ()> {
+    STOP_LATCH_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(desktop)]
@@ -13,6 +36,36 @@ use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
+
+#[cfg(desktop)]
+fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("main window not registered".into());
+    };
+
+    window.show().map_err(|e| format!("show main window: {e}"))?;
+    let _ = window.unminimize();
+    if let Err(err) = window.maximize() {
+        log::warn!("main window maximize failed: {err}");
+    }
+    window
+        .set_focus()
+        .map_err(|e| format!("focus main window: {e}"))?;
+    Ok(())
+}
+
+#[cfg(not(desktop))]
+fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("main") else {
+        return Err("main window not registered".into());
+    };
+
+    window.show().map_err(|e| format!("show main window: {e}"))?;
+    window
+        .set_focus()
+        .map_err(|e| format!("focus main window: {e}"))?;
+    Ok(())
+}
 
 #[tauri::command]
 fn get_platform() -> String {
@@ -24,10 +77,450 @@ fn get_arch() -> String {
     std::env::consts::ARCH.to_string()
 }
 
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn valid_desktop_shell_id(id: &str) -> bool {
+    id.strip_prefix("desktop-")
+        .is_some_and(|rest| uuid::Uuid::parse_str(rest).is_ok())
+}
+
+#[tauri::command]
+fn get_or_create_shell_id(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve Luna app data dir: {}", e))?;
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create Luna app data dir: {}", e))?;
+
+    let path = app_data_dir.join("desktop-shell-id");
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        let shell_id = raw.trim();
+        if valid_desktop_shell_id(shell_id) {
+            return Ok(shell_id.to_string());
+        }
+    }
+
+    let shell_id = format!("desktop-{}", uuid::Uuid::new_v4());
+    std::fs::write(&path, format!("{}\n", shell_id))
+        .map_err(|e| format!("Failed to persist Luna desktop shell id: {}", e))?;
+    Ok(shell_id)
+}
+
+#[derive(Clone, serde::Serialize)]
+struct ControlSafetyState {
+    mode: String,
+    observe_enabled: bool,
+    assist_enabled: bool,
+    control_enabled: bool,
+    stopped: bool,
+    control_locked: bool,
+    capture_running: bool,
+    gesture_state: String,
+    cursor_global: bool,
+    can_observe: bool,
+    can_assist: bool,
+    can_control: bool,
+    can_control_pointer: bool,
+    can_control_keyboard: bool,
+    permissions: computer_use::DesktopPermissionReadiness,
+    last_stop_at_ms: Option<u64>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct DesktopObservationAuditEvent {
+    event_id: String,
+    event_type: String,
+    source: String,
+    action: String,
+    capability: String,
+    outcome: String,
+    reason: Option<String>,
+    mode: String,
+    shell_id: Option<String>,
+    created_at_ms: u64,
+    screen_recording_status: String,
+    accessibility_status: String,
+    automation_system_events_status: String,
+}
+
+#[derive(Clone)]
+struct ObservationAuditContext {
+    event_id: String,
+    action: &'static str,
+    capability: computer_use::ObservationCapability,
+    mode: computer_use::DesktopControlMode,
+    permissions: computer_use::DesktopPermissionReadiness,
+    shell_id: Option<String>,
+}
+
+fn control_mode_name(mode: u8) -> &'static str {
+    match mode {
+        CONTROL_MODE_OBSERVE => "observe",
+        CONTROL_MODE_STOPPED => "stopped",
+        _ => "control_locked",
+    }
+}
+
+fn current_desktop_control_mode() -> computer_use::DesktopControlMode {
+    match CONTROL_MODE.load(Ordering::SeqCst) {
+        CONTROL_MODE_OBSERVE => computer_use::DesktopControlMode::Observe,
+        CONTROL_MODE_STOPPED => computer_use::DesktopControlMode::Stopped,
+        _ => computer_use::DesktopControlMode::ControlLocked,
+    }
+}
+
+/// Mode after a Lock request. Preserves STOPPED so that only an explicit
+/// Resume (`control_clear_stop`) can leave a latched emergency Stop — this is
+/// the single most fragile point of durable-Stop (Stop Semantics #5): if a
+/// Lock ever downgraded STOPPED to LOCKED, `AuthContext`'s logout/stale-token
+/// `control_lock_all` would silently un-stop on the next launch.
+fn next_mode_for_lock(current: u8) -> u8 {
+    if current == CONTROL_MODE_STOPPED {
+        CONTROL_MODE_STOPPED
+    } else {
+        CONTROL_MODE_LOCKED
+    }
+}
+
+/// Whether an Observe request may proceed. Never out of a latched Stop.
+fn observe_allowed_in_mode(current: u8) -> bool {
+    current != CONTROL_MODE_STOPPED
+}
+
+fn desktop_control_stopped() -> bool {
+    CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_STOPPED
+}
+
+fn desktop_control_observe_enabled() -> bool {
+    CONTROL_MODE.load(Ordering::SeqCst) == CONTROL_MODE_OBSERVE
+}
+
+fn ensure_desktop_control_not_stopped(action: &str) -> Result<(), String> {
+    if desktop_control_stopped() {
+        Err(format!("desktop control stopped; {action} denied"))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_desktop_control_allows_observation(action: &str) -> Result<(), String> {
+    let mode = CONTROL_MODE.load(Ordering::SeqCst);
+    if mode == CONTROL_MODE_STOPPED {
+        Err(format!("desktop control stopped; {action} denied"))
+    } else if mode == CONTROL_MODE_OBSERVE {
+        Ok(())
+    } else {
+        Err(format!("desktop observe locked; {action} denied"))
+    }
+}
+
+fn existing_shell_id_for_audit(app: &tauri::AppHandle) -> Option<String> {
+    let dir = app.path().app_data_dir().ok()?;
+    let raw = std::fs::read_to_string(dir.join("desktop-shell-id")).ok()?;
+    let shell_id = raw.trim();
+    if valid_desktop_shell_id(shell_id) {
+        Some(shell_id.to_string())
+    } else {
+        None
+    }
+}
+
+fn emit_observation_audit(
+    app: &tauri::AppHandle,
+    ctx: &ObservationAuditContext,
+    event_type: &str,
+    outcome: &str,
+    reason: Option<String>,
+) {
+    let event = DesktopObservationAuditEvent {
+        event_id: ctx.event_id.clone(),
+        event_type: event_type.to_string(),
+        source: "tauri_local".to_string(),
+        action: ctx.action.to_string(),
+        capability: ctx.capability.as_str().to_string(),
+        outcome: outcome.to_string(),
+        reason,
+        mode: ctx.mode.as_str().to_string(),
+        shell_id: ctx.shell_id.clone(),
+        created_at_ms: now_unix_ms(),
+        screen_recording_status: ctx.permissions.screen_recording.status.clone(),
+        accessibility_status: ctx.permissions.accessibility.status.clone(),
+        automation_system_events_status: ctx.permissions.automation_system_events.status.clone(),
+    };
+    if let Err(e) = app.emit("desktop-control-audit", &event) {
+        log::warn!("desktop control audit emit failed for {}: {e}", ctx.action);
+    }
+    match event.outcome.as_str() {
+        "denied" | "failed" => log::warn!(
+            "desktop observation audit: action={} capability={} outcome={} reason={}",
+            event.action,
+            event.capability,
+            event.outcome,
+            event.reason.as_deref().unwrap_or("")
+        ),
+        _ => log::info!(
+            "desktop observation audit: action={} capability={} outcome={}",
+            event.action,
+            event.capability,
+            event.outcome
+        ),
+    }
+}
+
+fn begin_observation_audit(
+    app: &tauri::AppHandle,
+    action: &'static str,
+    capability: computer_use::ObservationCapability,
+) -> Result<ObservationAuditContext, String> {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    let ctx = ObservationAuditContext {
+        event_id: uuid::Uuid::new_v4().to_string(),
+        action,
+        capability,
+        mode,
+        permissions,
+        shell_id: existing_shell_id_for_audit(app),
+    };
+
+    if let Err(denial) =
+        computer_use::evaluate_observation_policy(ctx.mode, &ctx.permissions, capability, action)
+    {
+        let reason = denial.reason;
+        emit_observation_audit(
+            app,
+            &ctx,
+            "desktop_observation_denied",
+            "denied",
+            Some(reason.clone()),
+        );
+        return Err(reason);
+    }
+
+    emit_observation_audit(app, &ctx, "desktop_observation_started", "started", None);
+    Ok(ctx)
+}
+
+fn observation_policy_currently_allows(
+    action: &str,
+    capability: computer_use::ObservationCapability,
+) -> bool {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    computer_use::evaluate_observation_policy(mode, &permissions, capability, action).is_ok()
+}
+
+fn complete_observation_audit(app: &tauri::AppHandle, ctx: &ObservationAuditContext) {
+    emit_observation_audit(app, ctx, "desktop_observation_completed", "succeeded", None);
+}
+
+fn fail_observation_audit(app: &tauri::AppHandle, ctx: &ObservationAuditContext, reason: &str) {
+    emit_observation_audit(
+        app,
+        ctx,
+        "desktop_observation_failed",
+        "failed",
+        Some(reason.to_string()),
+    );
+}
+
+pub(crate) fn desktop_control_allows_actuation() -> bool {
+    false
+}
+
+fn ensure_desktop_control_allows_native_control(
+    action: &str,
+    capability: computer_use::NativeControlCapability,
+) -> Result<(), String> {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    computer_use::evaluate_native_control_policy(mode, &permissions, capability, action)
+        .map_err(|denial| denial.reason)
+}
+
+fn ensure_desktop_control_allows_pointer_actuation(action: &str) -> Result<(), String> {
+    ensure_desktop_control_allows_native_control(
+        action,
+        computer_use::NativeControlCapability::Pointer,
+    )
+}
+
+fn ensure_desktop_control_allows_keyboard_actuation(action: &str) -> Result<(), String> {
+    ensure_desktop_control_allows_native_control(
+        action,
+        computer_use::NativeControlCapability::Keyboard,
+    )
+}
+
+async fn current_control_safety_state() -> ControlSafetyState {
+    let mode = CONTROL_MODE.load(Ordering::SeqCst);
+    let last_stop = LAST_STOP_AT_MS.load(Ordering::SeqCst);
+    let gesture = gesture::engine_status().await;
+    ControlSafetyState {
+        mode: control_mode_name(mode).to_string(),
+        observe_enabled: mode == CONTROL_MODE_OBSERVE,
+        assist_enabled: false,
+        control_enabled: false,
+        stopped: mode == CONTROL_MODE_STOPPED,
+        control_locked: mode != CONTROL_MODE_OBSERVE,
+        capture_running: CAPTURE_RUNNING.load(Ordering::SeqCst),
+        gesture_state: gesture.state,
+        cursor_global: gesture::global_mode(),
+        can_observe: mode != CONTROL_MODE_STOPPED,
+        can_assist: false,
+        can_control: false,
+        can_control_pointer: false,
+        can_control_keyboard: false,
+        permissions: computer_use::current_permission_readiness(),
+        last_stop_at_ms: if last_stop == 0 { None } else { Some(last_stop) },
+    }
+}
+
+#[tauri::command]
+async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
+    Ok(current_control_safety_state().await)
+}
+
+#[tauri::command]
+async fn control_observe_status(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    // Decide + flip the mode under the latch lock so observe can never race past
+    // a concurrent Stop. A latched Stop is preserved (no mode change, no event).
+    let armed = {
+        let _latch = lock_latch();
+        if observe_allowed_in_mode(CONTROL_MODE.load(Ordering::SeqCst)) {
+            CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    };
+    let state = current_control_safety_state().await;
+    if armed {
+        let _ = app.emit("control-safety-changed", state.clone());
+    }
+    Ok(state)
+}
+
+#[tauri::command]
+async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    let at = now_unix_ms();
+    // Hold the latch lock across the mode store + persist so a concurrent Resume
+    // from another window can't interleave and leave memory STOPPED while the
+    // latch file is removed (or vice versa). Persist before the fallible engine
+    // teardown so the latch survives even if teardown errors; the in-memory
+    // store is already authoritative. Guard dropped before the await.
+    {
+        let _latch = lock_latch();
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        LAST_STOP_AT_MS.store(at, Ordering::SeqCst);
+        CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+        persist_stop_latch(&app, true, at);
+    }
+    gesture::set_global_mode(false);
+    // Stop is already authoritative + persisted above. A gesture-teardown error
+    // must not make the UI believe the safety latch failed.
+    if let Err(e) = gesture::stop_engine().await {
+        log::warn!("desktop control: gesture stop errored during Stop (latch already set): {e}");
+    }
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+#[tauri::command]
+async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    // Read-modify-write under the latch lock so a Lock can't race a concurrent
+    // Stop and overwrite a just-set STOPPED (next_mode_for_lock preserves it).
+    {
+        let _latch = lock_latch();
+        let next = next_mode_for_lock(CONTROL_MODE.load(Ordering::SeqCst));
+        CONTROL_MODE.store(next, Ordering::SeqCst);
+        CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+    }
+    gesture::set_global_mode(false);
+    // Lock should not fail just because a gesture teardown is already stopped.
+    if let Err(e) = gesture::stop_engine().await {
+        log::warn!("desktop control: gesture stop errored during Lock: {e}");
+    }
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+/// Explicitly clear the durable Stop latch — the user-initiated "resume" out of
+/// emergency Stop. This is the ONLY way out of STOPPED: relaunching no longer
+/// clears it (see `restore_persisted_stop`). Drops to the safe LOCKED posture
+/// (observe off, nothing armed); the user must then opt back into Observe, so a
+/// resume can never silently re-arm observation.
+#[tauri::command]
+async fn control_clear_stop(app: tauri::AppHandle) -> Result<ControlSafetyState, String> {
+    {
+        let _latch = lock_latch();
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        // Clear the stop timestamp too — there is no longer a latched Stop.
+        LAST_STOP_AT_MS.store(0, Ordering::SeqCst);
+        CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+        persist_stop_latch(&app, false, 0);
+    }
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+/// Resolve (and create) Luna's Tauri app-data dir for durable safety state.
+fn luna_app_data_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("resolve Luna app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create Luna app data dir: {e}"))?;
+    Ok(dir)
+}
+
+/// Best-effort write/clear of the durable Stop latch. Never fails the caller:
+/// the in-memory `CONTROL_MODE` is authoritative for the running session, and a
+/// failed persist only means the latch won't survive relaunch (logged).
+fn persist_stop_latch(app: &tauri::AppHandle, stopped: bool, at_ms: u64) {
+    match luna_app_data_dir(app) {
+        Ok(dir) => {
+            if let Err(e) = computer_use::stop_state::persist_stop(&dir, stopped, at_ms) {
+                log::warn!("desktop control: failed to persist Stop latch (stopped={stopped}): {e}");
+            }
+        }
+        Err(e) => log::warn!("desktop control: cannot resolve app data dir for Stop latch: {e}"),
+    }
+}
+
+/// Restore the durable Stop latch at startup. If the user latched Stop in a
+/// prior run, Luna comes back STOPPED (the safest posture) until the user
+/// explicitly clears it via `control_clear_stop`. Best-effort: a resolve/read
+/// failure leaves the default LOCKED mode, which is itself safe (nothing armed).
+fn restore_persisted_stop(app: &tauri::AppHandle) {
+    let Ok(dir) = luna_app_data_dir(app) else {
+        return;
+    };
+    if let Some(at_ms) = computer_use::stop_state::load_stop(&dir) {
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        LAST_STOP_AT_MS.store(at_ms, Ordering::SeqCst);
+        log::info!("desktop control: restored durable Stop latch from a prior session");
+    }
+}
+
 /// Screenshot capture — desktop only (uses macOS screencapture binary).
 /// On iOS returns an error; the frontend should use the native share sheet instead.
 #[tauri::command]
-async fn capture_screenshot() -> Result<String, String> {
+async fn capture_screenshot(app: tauri::AppHandle) -> Result<String, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "capture_screenshot",
+        computer_use::ObservationCapability::Screenshot,
+    )?;
     #[cfg(desktop)]
     {
         use std::process::Command;
@@ -41,21 +534,36 @@ async fn capture_screenshot() -> Result<String, String> {
         let output = Command::new("screencapture")
             .args(["-x", "-C", &path])
             .output()
-            .map_err(|e| format!("Screenshot failed: {}", e))?;
+            .map_err(|e| {
+                let reason = format!("Screenshot failed: {}", e);
+                fail_observation_audit(&app, &audit, &reason);
+                reason
+            })?;
 
         if !output.status.success() {
-            return Err("Screenshot capture failed".to_string());
+            let reason = "Screenshot capture failed".to_string();
+            fail_observation_audit(&app, &audit, &reason);
+            return Err(reason);
         }
 
         let bytes = std::fs::read(&path)
-            .map_err(|e| format!("Failed to read screenshot: {}", e))?;
+            .map_err(|e| {
+                let reason = format!("Failed to read screenshot: {}", e);
+                fail_observation_audit(&app, &audit, &reason);
+                reason
+            })?;
         let _ = std::fs::remove_file(&path);
 
+        complete_observation_audit(&app, &audit);
         return Ok(base64_encode(&bytes));
     }
 
     #[cfg(mobile)]
-    Err("Screenshot not available on mobile — use the system share sheet".to_string())
+    {
+        let reason = "Screenshot not available on mobile — use the system share sheet".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        Err(reason)
+    }
 }
 
 /// Haptic feedback trigger — mobile only, no-op on desktop.
@@ -68,13 +576,27 @@ async fn haptic_feedback(style: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_active_app() -> Result<serde_json::Value, String> {
+async fn get_active_app(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "get_active_app",
+        computer_use::ObservationCapability::ActiveApp,
+    )?;
     use std::process::Command;
 
     let app_output = Command::new("osascript")
         .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
         .output()
-        .map_err(|e| format!("Failed: {}", e))?;
+        .map_err(|e| {
+            let reason = format!("Failed: {}", e);
+            fail_observation_audit(&app, &audit, &reason);
+            reason
+        })?;
+    if !app_output.status.success() {
+        let reason = "Active app lookup failed".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        return Err(reason);
+    }
     let app_name = String::from_utf8_lossy(&app_output.stdout).trim().to_string();
 
     let safe_name = app_name.replace('\\', "\\\\").replace('"', "\\\"");
@@ -90,6 +612,7 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
         _ => String::new(),
     };
 
+    complete_observation_audit(&app, &audit);
     Ok(serde_json::json!({
         "app": app_name,
         "title": window_title,
@@ -97,12 +620,47 @@ async fn get_active_app() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn read_clipboard() -> Result<String, String> {
+async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "read_clipboard",
+        computer_use::ObservationCapability::ClipboardRead,
+    )?;
     use std::process::Command;
     let output = Command::new("pbpaste")
         .output()
-        .map_err(|e| format!("Clipboard read failed: {}", e))?;
+        .map_err(|e| {
+            let reason = format!("Clipboard read failed: {}", e);
+            fail_observation_audit(&app, &audit, &reason);
+            reason
+        })?;
+    if !output.status.success() {
+        let reason = "Clipboard read failed".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        return Err(reason);
+    }
+    complete_observation_audit(&app, &audit);
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+async fn control_pointer_move(_x: f64, _y: f64) -> Result<(), String> {
+    ensure_desktop_control_allows_pointer_actuation("control_pointer_move")
+}
+
+#[tauri::command]
+async fn control_pointer_click(_x: f64, _y: f64, _button: Option<String>) -> Result<(), String> {
+    ensure_desktop_control_allows_pointer_actuation("control_pointer_click")
+}
+
+#[tauri::command]
+async fn control_keyboard_type(_text: String) -> Result<(), String> {
+    ensure_desktop_control_allows_keyboard_actuation("control_keyboard_type")
+}
+
+#[tauri::command]
+async fn control_keyboard_key_chord(_keys: Vec<String>) -> Result<(), String> {
+    ensure_desktop_control_allows_keyboard_actuation("control_keyboard_key_chord")
 }
 
 #[tauri::command]
@@ -112,6 +670,7 @@ async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
             let _ = window.hide();
             CAPTURE_RUNNING.store(false, Ordering::Relaxed);
         } else {
+            ensure_desktop_control_allows_observation("toggle_spatial_hud")?;
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -128,6 +687,7 @@ struct SpatialFrame {
 
 #[tauri::command]
 async fn start_spatial_capture(_app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_control_allows_observation("start_spatial_capture")?;
     // Real `spatial-frame` events are now emitted by the gesture engine
     // (`gesture::supervisor::run_engine_loop`). This command is kept as a
     // no-op for FFI compatibility with the existing frontend HUD bootstrap.
@@ -145,6 +705,7 @@ async fn stop_spatial_capture() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_start() -> Result<(), String> {
+    ensure_desktop_control_allows_observation("gesture_start")?;
     gesture::start_engine().await
 }
 
@@ -160,6 +721,7 @@ async fn gesture_pause() -> Result<(), String> {
 
 #[tauri::command]
 async fn gesture_resume() -> Result<(), String> {
+    ensure_desktop_control_allows_observation("gesture_resume")?;
     gesture::resume_engine().await
 }
 
@@ -185,6 +747,10 @@ async fn gesture_check_accessibility() -> Result<bool, String> {
 
 #[tauri::command]
 async fn gesture_set_cursor_global(enabled: bool) -> Result<(), String> {
+    if enabled {
+        ensure_desktop_control_not_stopped("gesture_set_cursor_global")?;
+        ensure_desktop_control_allows_pointer_actuation("gesture_set_cursor_global")?;
+    }
     gesture::set_global_mode(enabled);
     Ok(())
 }
@@ -198,13 +764,7 @@ async fn gesture_get_cursor_global() -> Result<bool, String> {
 /// OS — the conductor's score sheet for typed dialogue).
 #[tauri::command]
 async fn open_main_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        Ok(())
-    } else {
-        Err("main window not registered".into())
-    }
+    show_main_window_maximized(&app)
 }
 
 /// Hide the secondary `main` chat window without quitting it.
@@ -220,6 +780,7 @@ async fn hide_main_window(app: tauri::AppHandle) -> Result<(), String> {
 /// `nav_hud` gesture binding from any window.
 #[tauri::command]
 async fn focus_podium(app: tauri::AppHandle) -> Result<(), String> {
+    ensure_desktop_control_not_stopped("focus_podium")?;
     if let Some(window) = app.get_webview_window("spatial_hud") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -498,30 +1059,38 @@ fn base64_encode(data: &[u8]) -> String {
 
 #[cfg(desktop)]
 fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    // The tray "Open" verbs target the spatial_hud (Luna OS primary
-    // surface). The chat panel (`main`) is summonable separately so users
-    // who closed it can get it back without losing the podium.
-    let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS", true, None::<&str>)?;
-    let open_chat = MenuItem::with_id(app, "open_chat", "Open Chat Panel", true, None::<&str>)?;
+    // Chat/sessions are the primary product surface. The spatial HUD remains
+    // available as an explicit Labs surface, but it should not open from the
+    // default tray click.
+    let open_chat = MenuItem::with_id(app, "open_chat", "Open Luna", true, None::<&str>)?;
+    let open_os = MenuItem::with_id(app, "open_os", "Open Luna OS / Labs", true, None::<&str>)?;
+    // Emergency Stop reachable even when the main window is hidden/unfocused.
+    let stop_all = MenuItem::with_id(app, "stop_all", "Stop All Desktop Control", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Luna", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_os, &open_chat, &quit_item])?;
+    let menu = Menu::with_items(app, &[&open_chat, &open_os, &stop_all, &quit_item])?;
 
     let _tray = TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("Luna OS — Conductor's Podium")
+        .tooltip("Luna")
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
+            "open_chat" => {
+                let _ = show_main_window_maximized(app);
+            }
             "open_os" => {
                 if let Some(window) = app.get_webview_window("spatial_hud") {
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
             }
-            "open_chat" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+            "stop_all" => {
+                // Latch the emergency Stop (now durable across relaunch) and
+                // surface the main window so the operator sees the stopped state.
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = control_stop_all(handle.clone()).await;
+                    let _ = show_main_window_maximized(&handle);
+                });
             }
             "quit" => {
                 app.exit(0);
@@ -531,12 +1100,7 @@ fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .on_tray_icon_event(|tray, event| {
             if let tauri::tray::TrayIconEvent::Click { .. } = event {
                 let app = tray.app_handle();
-                // Tray icon click goes to the OS surface; right-click
-                // opens the menu so users can pick the chat panel instead.
-                if let Some(window) = app.get_webview_window("spatial_hud") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                let _ = show_main_window_maximized(app);
             }
         })
         .build(app)?;
@@ -551,33 +1115,30 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     let palette_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
     let hud_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyL);
     let gesture_killswitch = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyG);
+    // Cmd+Shift+Period — global emergency Stop for all desktop control.
+    let desktop_stop = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Period);
 
     app.global_shortcut().on_shortcut(palette_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-            // Emit to frontend — React handles showing the command palette
+            // Restore/maximize/focus even when the window is already visible:
+            // macOS can report a minimized or manually resized window as
+            // visible, and the palette should always open on the full chat
+            // surface.
+            let _ = show_main_window_maximized(app);
+            // Emit to frontend — React handles showing the command palette.
             let _ = tauri::Emitter::emit(app, "toggle-palette", ());
-            // Also ensure window is visible
-            if let Some(window) = app.get_webview_window("main") {
-                if !window.is_visible().unwrap_or(true) {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
         }
     })?;
 
-    // Cmd+Shift+L now toggles the secondary `main` chat window (the comms
-    // panel of Luna OS). The spatial_hud is the primary surface and stays
-    // visible; pre-Luna-OS this shortcut toggled the HUD which no longer
-    // makes sense as a "show / hide" verb when the HUD IS the OS.
+    // Cmd+Shift+L toggles the primary `main` chat/session window.
+    // Spatial HUD is an explicit Labs surface opened from the tray/menu.
     app.global_shortcut().on_shortcut(hud_shortcut, move |app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             if let Some(window) = app.get_webview_window("main") {
                 if window.is_visible().unwrap_or(false) {
                     let _ = window.hide();
                 } else {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    let _ = show_main_window_maximized(app);
                 }
             }
         }
@@ -587,12 +1148,29 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
     app.global_shortcut().on_shortcut(gesture_killswitch, move |_app, _shortcut, event| {
         if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
             tauri::async_runtime::spawn(async move {
+                if !crate::desktop_control_observe_enabled() {
+                    let _ = crate::gesture::stop_engine().await;
+                    return;
+                }
                 let status = crate::gesture::engine_status().await;
                 if status.state == "paused" {
                     let _ = crate::gesture::resume_engine().await;
                 } else {
                     let _ = crate::gesture::pause_engine().await;
                 }
+            });
+        }
+    })?;
+
+    // Cmd+Shift+Period — global emergency Stop. Latches the durable desktop
+    // control Stop from anywhere (even when Luna is hidden/unfocused) and
+    // surfaces the main window so the operator sees the stopped state.
+    app.global_shortcut().on_shortcut(desktop_stop, move |app, _shortcut, event| {
+        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::control_stop_all(handle.clone()).await;
+                let _ = show_main_window_maximized(&handle);
             });
         }
     })?;
@@ -604,7 +1182,6 @@ fn setup_global_shortcut(app: &tauri::App) -> Result<(), Box<dyn std::error::Err
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init());
 
     // Desktop-only plugins
@@ -653,6 +1230,11 @@ pub fn run() {
                     .build(),
             )?;
 
+            // Restore a durable emergency Stop latched in a prior session so
+            // Luna comes back STOPPED rather than silently re-armable on launch
+            // (control plan Stop Semantics invariant #5).
+            restore_persisted_stop(app.handle());
+
             #[cfg(desktop)]
             {
                 setup_tray(app)?;
@@ -666,6 +1248,16 @@ pub fn run() {
                 // Engine itself is NOT started here — the frontend calls
                 // `gesture_start` after a successful login so we don't burn
                 // camera + Apple Vision cycles on the login screen.
+
+                // Tauri's `maximized` window config is not enough on macOS:
+                // first launch can still restore or settle into the compact
+                // configured size. Make the chat/sessions surface explicitly
+                // fill the workspace once the native window exists.
+                let startup_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let _ = show_main_window_maximized(&startup_handle);
+                });
 
                 // Auto-updater: check on startup + every 30 min, emit
                 // `update-available` so the React banner shows. The actual
@@ -703,11 +1295,29 @@ pub fn run() {
                 let mut last_content = String::new();
                 while clip_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(2));
+                    if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_OBSERVE {
+                        continue;
+                    }
+                    if !observation_policy_currently_allows(
+                        "watch_clipboard",
+                        computer_use::ObservationCapability::ClipboardRead,
+                    ) {
+                        continue;
+                    }
                     if let Ok(output) = std::process::Command::new("pbpaste").output() {
                         let current = String::from_utf8_lossy(&output.stdout).to_string();
                         if current != last_content && !current.is_empty() {
+                            let audit = match begin_observation_audit(
+                                &clip_handle,
+                                "watch_clipboard",
+                                computer_use::ObservationCapability::ClipboardRead,
+                            ) {
+                                Ok(audit) => audit,
+                                Err(_) => continue,
+                            };
                             last_content = current.clone();
                             let _ = tauri::Emitter::emit(&clip_handle, "clipboard-changed", &current);
+                            complete_observation_audit(&clip_handle, &audit);
                         }
                     }
                 }
@@ -724,6 +1334,15 @@ pub fn run() {
                 let mut last_switch = std::time::Instant::now();
                 while activity_flag.load(std::sync::atomic::Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_secs(5));
+                    if CONTROL_MODE.load(Ordering::SeqCst) != CONTROL_MODE_OBSERVE {
+                        continue;
+                    }
+                    if !observation_policy_currently_allows(
+                        "track_active_app",
+                        computer_use::ObservationCapability::ActiveApp,
+                    ) {
+                        continue;
+                    }
 
                     // Get frontmost app
                     let app_name = match std::process::Command::new("osascript")
@@ -754,6 +1373,14 @@ pub fn run() {
                     // Only emit on context change (app + title)
                     let context_key = format!("{}:{}", resolved_app, window_title);
                     if context_key != last_context {
+                        let audit = match begin_observation_audit(
+                            &activity_handle,
+                            "track_active_app",
+                            computer_use::ObservationCapability::ActiveApp,
+                        ) {
+                            Ok(audit) => audit,
+                            Err(_) => continue,
+                        };
                         let duration_secs = last_switch.elapsed().as_secs();
                         let timestamp = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -808,6 +1435,7 @@ pub fn run() {
                             }
                         }
 
+                        complete_observation_audit(&activity_handle, &audit);
                         last_context = context_key;
                         last_switch = std::time::Instant::now();
                     }
@@ -829,9 +1457,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_platform,
             get_arch,
+            get_or_create_shell_id,
+            control_get_safety_state,
+            control_observe_status,
+            control_stop_all,
+            control_lock_all,
+            control_clear_stop,
             capture_screenshot,
             get_active_app,
             read_clipboard,
+            control_pointer_move,
+            control_pointer_click,
+            control_keyboard_type,
+            control_keyboard_key_chord,
             haptic_feedback,
             toggle_spatial_hud,
             start_spatial_capture,
@@ -867,6 +1505,67 @@ mod tests {
     //! for default `cargo test` runs.
     use super::*;
     use pretty_assertions::assert_eq;
+
+    // ── desktop control safety ─────────────────────────────────────────────
+    #[test]
+    fn stopped_control_mode_blocks_control_entrypoints() {
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        assert!(ensure_desktop_control_not_stopped("gesture_start").is_ok());
+        assert!(!desktop_control_allows_actuation());
+        assert!(
+            ensure_desktop_control_allows_pointer_actuation("gesture_set_cursor_global").is_err()
+        );
+        assert!(ensure_desktop_control_allows_keyboard_actuation("control_keyboard_type").is_err());
+
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        let err = ensure_desktop_control_not_stopped("gesture_start")
+            .expect_err("stopped mode should reject control entrypoints");
+        assert!(err.contains("desktop control stopped"), "got: {err}");
+        assert!(err.contains("gesture_start"), "got: {err}");
+        assert!(!desktop_control_allows_actuation());
+        let pointer = ensure_desktop_control_allows_pointer_actuation("control_pointer_click")
+            .expect_err("stopped mode should reject pointer actuation");
+        assert!(pointer.contains("desktop control stopped"), "got: {pointer}");
+
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn locked_control_mode_blocks_observation_entrypoints() {
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+        let locked = ensure_desktop_control_allows_observation("capture_screenshot")
+            .expect_err("locked mode should reject observation");
+        assert!(locked.contains("desktop observe locked"), "got: {locked}");
+        assert!(locked.contains("capture_screenshot"), "got: {locked}");
+
+        CONTROL_MODE.store(CONTROL_MODE_OBSERVE, Ordering::SeqCst);
+        assert!(ensure_desktop_control_allows_observation("capture_screenshot").is_ok());
+
+        CONTROL_MODE.store(CONTROL_MODE_STOPPED, Ordering::SeqCst);
+        let stopped = ensure_desktop_control_allows_observation("capture_screenshot")
+            .expect_err("stopped mode should reject observation");
+        assert!(stopped.contains("desktop control stopped"), "got: {stopped}");
+
+        CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
+
+    // ── durable-Stop transition guards (Stop Semantics #5) ──────────────
+    #[test]
+    fn lock_request_preserves_stopped() {
+        // A Lock must never silently leave a latched Stop — only an explicit
+        // Resume (control_clear_stop) may. This pins the AuthContext
+        // logout/stale-token control_lock_all path against un-stopping.
+        assert_eq!(next_mode_for_lock(CONTROL_MODE_STOPPED), CONTROL_MODE_STOPPED);
+        assert_eq!(next_mode_for_lock(CONTROL_MODE_OBSERVE), CONTROL_MODE_LOCKED);
+        assert_eq!(next_mode_for_lock(CONTROL_MODE_LOCKED), CONTROL_MODE_LOCKED);
+    }
+
+    #[test]
+    fn observe_request_denied_only_when_stopped() {
+        assert!(!observe_allowed_in_mode(CONTROL_MODE_STOPPED));
+        assert!(observe_allowed_in_mode(CONTROL_MODE_LOCKED));
+        assert!(observe_allowed_in_mode(CONTROL_MODE_OBSERVE));
+    }
 
     // ── platform / arch ─────────────────────────────────────────────────
     #[test]

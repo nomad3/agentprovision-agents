@@ -29,11 +29,20 @@ agentprovision-agents-redis-1
 
    **Deploy grace check.** If `state.deploy_grace_until` is in the future, treat any failure of a key in `state.deploy_grace_keys` (default if unset: `["api_down","orchestration_worker_missing","code_worker_missing"]`) as `info` not `critical`: log it, do NOT auto-recover that key, do NOT count it toward escalation, do NOT push. Other keys still get full treatment. When `deploy_grace_until` passes, clear it and resume normal handling.
 
-2. **Resolve compose workdir** (once, then cache in state):
+2. **Resolve compose workdir** (validate every tick, then cache in state):
+   Prefer the stable deploy checkout created by `.github/workflows/docker-desktop-deploy.yaml`:
+   ```
+   /Users/nomade/.agentprovision/deploy/agentprovision-agents
+   ```
+   If that directory exists and contains `docker-compose.yml`, save it to `state.compose_workdir`.
+
+   If the cached path is missing `docker-compose.yml`, or contains `/actions-runner/_work/`, invalidate it and resolve again. The GitHub Actions `_work` tree is disposable and must never be used for recovery `docker compose` commands.
+
+   Fallback only when the stable deploy checkout is absent:
    ```
    docker inspect agentprovision-agents-db-1 --format '{{ index .Config.Labels "com.docker.compose.project.working_dir" }}'
    ```
-   Save to `state.compose_workdir`. All `docker compose` commands run with `cd <workdir> && docker compose ...`.
+   Reject any inspected path under `/Users/nomade/actions-runner/_work`; if that is the only value available, push critical (`compose workdir points at runner checkout`) and stop without mutating containers. All `docker compose` commands run with `cd <workdir> && docker compose ...`.
 
 3. **Docker engine reachable?** `docker info >/dev/null 2>&1`. If it fails → push critical (`docker engine unreachable`), log, **stop**.
 

@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.models.user import User
-from app.schemas.reflection import REFLECTION_KINDS
+from app.schemas.reflection import REFLECTION_ACTION_KINDS, REFLECTION_KINDS
 from app.services import reflection_io
 
 
@@ -120,3 +120,51 @@ def get_reflections_count(
         day=day,
     )
     return {"count": n}
+
+
+@router.get("/luna/reflection-steps")
+def list_reflection_steps(
+    session_id: Optional[str] = Query(
+        default=None,
+        description="Scope to one chat/session trace id.",
+    ),
+    action_kind: Optional[str] = Query(
+        default=None,
+        description="One of the trusted-teammate high-friction action kinds.",
+    ),
+    agent_id: Optional[uuid.UUID] = Query(
+        default=None,
+        description="Scope to a single agent. Omit for all agents in tenant.",
+    ),
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return pre-action reflection traces for the caller's tenant.
+
+    PR 1 is trace-only: this endpoint exposes what the agent recorded
+    before high-friction actions. It does not enforce behavior.
+    """
+    if action_kind is not None and action_kind not in REFLECTION_ACTION_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "action_kind must be one of "
+                f"{sorted(REFLECTION_ACTION_KINDS)}, got {action_kind!r}"
+            ),
+        )
+
+    rows = reflection_io.list_reflection_steps(
+        db,
+        tenant_id=current_user.tenant_id,
+        session_id=session_id,
+        action_kind=action_kind,
+        agent_id=agent_id,
+    )
+    rows = rows[:limit]
+
+    return {
+        "tenant_id": str(current_user.tenant_id),
+        "count": len(rows),
+        "reflection_steps": [step.to_dict() for step in rows],
+    }

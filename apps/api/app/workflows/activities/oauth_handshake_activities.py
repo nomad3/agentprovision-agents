@@ -29,6 +29,7 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
+import httpx
 from temporalio import activity
 
 log = logging.getLogger(__name__)
@@ -66,8 +67,6 @@ def _exchange_higgsfield(
     Same shape as ``app/services/higgsfield_oauth.refresh_higgsfield_access_token``
     but uses ``authorization_code`` instead of ``refresh_token``.
     """
-    import httpx
-
     payload = {
         "grant_type": "authorization_code",
         "code": code,
@@ -146,7 +145,7 @@ def run_oauth_handshake(
 
         from app.db.session import SessionLocal
         from app.models.integration_config import IntegrationConfig
-        from app.services.integration_secrets import store_credential
+        from app.services.orchestration.credential_vault import store_credential
 
         tid = _uuid.UUID(tenant_id)
         db = SessionLocal()
@@ -176,7 +175,7 @@ def run_oauth_handshake(
 
             store_credential(
                 db,
-                config_id=cfg.id,
+                integration_config_id=cfg.id,
                 tenant_id=tid,
                 credential_key="access_token",
                 plaintext_value=access_token,
@@ -184,7 +183,7 @@ def run_oauth_handshake(
             if refresh_token:
                 store_credential(
                     db,
-                    config_id=cfg.id,
+                    integration_config_id=cfg.id,
                     tenant_id=tid,
                     credential_key="refresh_token",
                     plaintext_value=refresh_token,

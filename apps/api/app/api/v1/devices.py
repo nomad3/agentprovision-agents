@@ -1,12 +1,13 @@
 """Device registry and robot interaction API."""
 import hashlib
 import logging
+import re
 import secrets
 from datetime import datetime
-from typing import List, Literal
+from typing import Dict, List, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user, get_db
@@ -15,6 +16,11 @@ from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/devices", tags=["devices"])
+
+_DESKTOP_SHELL_ID_RE = re.compile(
+    r"^desktop-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 def get_device_by_token(
@@ -36,6 +42,16 @@ class DeviceRegisterRequest(BaseModel):
     device_type: Literal["camera", "robot", "necklace", "glasses", "sensor"]
     capabilities: List[str] = []
     config: dict = {}
+
+
+class DesktopDeviceEnrollRequest(BaseModel):
+    shell_id: str = Field(..., max_length=96)
+    capabilities: Dict[str, bool] = Field(default_factory=dict)
+    app_version: str | None = Field(default=None, max_length=64)
+
+
+def _desktop_device_id(tenant_id, shell_id: str) -> str:
+    return f"{tenant_id}-desktop-{shell_id.removeprefix('desktop-')}"
 
 
 @router.get("")
@@ -90,6 +106,62 @@ def register_device(
         "device_id": device.device_id,
         "device_token": token,  # Only returned once!
         "message": "Save this token — it won't be shown again.",
+    }
+
+
+@router.post("/desktop/enroll")
+def enroll_desktop_device(
+    body: DesktopDeviceEnrollRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user),
+):
+    if not _DESKTOP_SHELL_ID_RE.fullmatch(body.shell_id):
+        raise HTTPException(status_code=422, detail="shell_id must be a desktop UUID shell")
+
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    device_id = _desktop_device_id(current_user.tenant_id, body.shell_id)
+    enabled_capabilities = sorted(
+        key for key, enabled in body.capabilities.items()
+        if key.startswith("can_") and enabled is True
+    )
+
+    device = db.query(DeviceRegistry).filter(
+        DeviceRegistry.tenant_id == current_user.tenant_id,
+        DeviceRegistry.device_id == device_id,
+    ).first()
+    if device is None:
+        device = DeviceRegistry(
+            tenant_id=current_user.tenant_id,
+            device_id=device_id,
+            device_name="Luna Desktop",
+            device_type="desktop",
+            status="online",
+        )
+        db.add(device)
+
+    device.device_name = "Luna Desktop"
+    device.device_type = "desktop"
+    device.status = "online"
+    device.device_token_hash = token_hash
+    device.last_heartbeat = datetime.utcnow()
+    device.capabilities = enabled_capabilities
+    device.config = {
+        **(device.config or {}),
+        "shell_id": body.shell_id,
+        "capability_manifest": body.capabilities,
+        "app_version": body.app_version,
+        "enrolled_by_user_id": str(current_user.id),
+    }
+    device.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(device)
+
+    return {
+        "id": str(device.id),
+        "device_id": device.device_id,
+        "device_token": token,
+        "shell_id": body.shell_id,
     }
 
 

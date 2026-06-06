@@ -17,6 +17,7 @@ class ChatSession(Base):
     dataset_group_id = Column(UUID(as_uuid=True), ForeignKey("dataset_groups.id"), nullable=True)
     agent_id = Column(UUID(as_uuid=True), ForeignKey("agents.id", ondelete="SET NULL"), nullable=True, index=True)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"))
+    owner_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Orchestration integration
@@ -32,6 +33,7 @@ class ChatSession(Base):
     dataset_group = relationship("DatasetGroup")
     agent = relationship("Agent", foreign_keys=[agent_id])
     tenant = relationship("Tenant")
+    owner = relationship("User", foreign_keys=[owner_user_id])
     agent_group = relationship("AgentGroup", foreign_keys=[agent_group_id])
     messages = relationship(
         "ChatMessage",
