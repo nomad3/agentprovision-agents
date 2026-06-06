@@ -9,7 +9,7 @@ Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Implementation in progress
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-phase1-control-plane`
+Branch: `codex/luna-start-maximized` (merged via PR #783)
 
 ---
 
@@ -77,7 +77,9 @@ Additional discovery inputs:
    manual DMG plus checksum, and skipped signed updater artifacts as expected.
    Local install from the release DMG reported app version `0.1.82`; Computer
    Use verified chat-first startup, no Orchestra/Luna OS auto-open, Observe ->
-   Lock -> Observe, hard Stop latching, and locked startup after relaunch.
+   Lock -> Observe, hard Stop latching during the running app session, and
+   locked default startup after relaunch. Durable STOPPED restore remained a
+   Phase 1 follow-up.
 9. Release smoke also found that the `luna-v0.1.82` `.sha256` file recorded
    the CI build path instead of the DMG basename. The digest was correct, but
    `shasum -c` failed after downloading the assets into a normal folder. Future
@@ -88,10 +90,10 @@ Additional discovery inputs:
     the downloaded `.sha256` verified directly with `shasum -c`, and the DMG
     installed locally as `/Applications/Luna.app` version `0.1.83`. Computer
     Use again verified chat-first startup, no Orchestra/Luna OS auto-open,
-    Observe -> Lock -> Observe, and hard Stop latching. The run still spent
-    about nine minutes in `actions/checkout` and emitted `fetch-pack` early EOF
-    annotations despite succeeding; release checkout/versioning must stop
-    requiring full repository history.
+    Observe -> Lock -> Observe, and hard Stop latching during the running app
+    session. The run still spent about nine minutes in `actions/checkout` and
+    emitted `fetch-pack` early EOF annotations despite succeeding; release
+    checkout/versioning must stop requiring full repository history.
 11. PR #781 replaced full-history release checkout with shallow checkout,
     tag/release-based Luna patch allocation, per-ref release concurrency, and
     remote-tag ownership verification before publishing. Main run
@@ -99,8 +101,8 @@ Additional discovery inputs:
     `0.1.83`; checkout used `fetch-depth: 1` and completed in seconds. The
     `0.1.84` DMG checksum verified directly with `shasum -c`, installed into
     `/Applications/Luna.app`, and Computer Use verified chat-first startup,
-    Observe -> Lock -> Observe, hard Stop latching, and locked startup after
-    relaunch.
+    Observe -> Lock -> Observe, hard Stop latching during the running app
+    session, and locked default startup after relaunch.
 12. Local validation on 2026-06-06 found Luna's "not responsive" symptom was
     caused by the local production API/tunnel/worker stack, not the Tauri UI.
     Docker had recreated `api`, `cloudflared`, `orchestration-worker`, and
@@ -120,12 +122,10 @@ Additional discovery inputs:
     directly into the maximized chat/session window. Computer Use verified
     `Control Locked`, disabled Assist/Control buttons, no accidental Control
     enablement, and an Alpha chat response from Luna Supervisor. Host-level
-    Docker inspection found no `/actions-runner/_work` bind mounts, but Luna's
-    exact release-gate command,
-    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`,
-    still prints the named `agentprovision-agents_workspaces` Docker volume.
-    Treat the installed-release gate as open until that exact smoke command is
-    empty or the gate is narrowed to `/actions-runner/_work`.
+    Docker inspection found no `/actions-runner/_work` bind mounts. The release
+    and runbook sentinels now reject the real runner checkout label instead of
+    broad `_work` substrings, so the named `agentprovision-agents_workspaces`
+    Docker volume is not a false failure.
 
 ---
 
@@ -502,7 +502,9 @@ Stop is a hard local safety control, not only UI state:
 2. Stop revokes current Observe, Assist, Control, and Global Control grants.
 3. Stop disables actuator threads locally before network calls.
 4. Subsequent claim and completion calls return or record `stopped`.
-5. Stop state survives reconnect and app relaunch until the user clears it.
+5. Stop state must survive reconnect and app relaunch until the user clears it;
+   this is delivered by the durable Stop follow-up rather than the pre-#785
+   in-memory latch.
 6. Stop emits `desktop_control_stopped` into authoritative audit and the
    display-safe timeline.
 
@@ -581,6 +583,8 @@ Goal: make the working chat/session UI the product surface and stop the broken
 orchestra hub from opening by default.
 
 - [x] Set `main` visible on startup in `tauri.conf.json`.
+- [x] Start `main` and `spatial_hud` maximized so the installed app opens into a
+      full working surface.
 - [x] Set `spatial_hud` hidden on startup, or gate it behind a feature flag.
 - [x] Update tray click and "Open" menu to focus `main`, not `spatial_hud`.
 - [x] Keep "Open Luna OS / Labs" as an explicit menu item if needed.
@@ -632,6 +636,10 @@ Current verification finding (2026-06-06):
       `cargo tauri build --debug --bundles app --no-sign`, installed into
       `/Applications/Luna.app`, launched with Computer Use, and verified
       `Control Locked -> Observe -> Lock -> Control Locked` plus Stop latch.
+- [x] PR #783 moved Docker Desktop deploys to stable `DEPLOY_DIR` rsync rather
+      than the transient Actions runner checkout. The host-validated rsync keeps
+      secret-protection ordering, preserves named-volume continuity through the
+      matching project basename, uses excludes plus `--delete`, and is idempotent.
 
 - [x] Change Luna updater endpoint to a Luna-specific manifest URL, for example
       a stable `luna-latest` release asset.
@@ -649,15 +657,14 @@ Current verification finding (2026-06-06):
       verification via `codesign`, `stapler`, and `spctl`.
 - [x] Allow unsigned development releases without producing an unsigned updater
       manifest.
-- [ ] Verify `luna-v0.1.86` unsigned development release locally: DMG checksum,
+- [x] Verify `luna-v0.1.86` unsigned development release locally: DMG checksum,
       `/Applications/Luna.app` version `0.1.86`, maximized startup,
       Control Locked safety strip, disabled Assist/Control, and Alpha chat
-      response. App-side validation passed, but the installed-release gate
-      remains open pending the exact mount smoke command returning empty.
-- [ ] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
-      `_work` checkout for source-mounted runtime services. Precise inspection
-      found zero `/actions-runner/_work` paths, but Luna's broader `grep _work`
-      smoke still prints `agentprovision-agents_workspaces` volume names.
+      response.
+- [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
+      `_work` checkout for source-mounted runtime services. Local and public API
+      smoke both returned `200`, the stable `DEPLOY_DIR` stack is live, and both
+      sentinel guards match the real `/actions-runner/_work` label.
 
 Exit criteria:
 
@@ -669,10 +676,9 @@ Exit criteria:
       artifacts and local unsigned builds for development smoke only.
 - [x] Local install smoke from the unsigned development app bundle confirms
       version, launch, Observe/Lock, and Stop behavior.
-- [ ] Local install smoke from GitHub Release `luna-v0.1.86` confirms version,
+- [x] Local install smoke from GitHub Release `luna-v0.1.86` confirms version,
       checksum, maximized launch, locked passive control strip, and live Alpha
-      chat response. App-side checks passed; release gate remains open until
-      the mount smoke gate returns empty.
+      chat response.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -1050,7 +1056,8 @@ Exit criteria:
 
 1. Start the next Phase 1 safety branch with Luna leading from Alpha chat and
    local Codex CLI access.
-2. Prioritize Phase 1 in Luna's reviewed order: durable Stop across relaunch,
+2. Prioritize Phase 1 in Luna's reviewed order: durable Stop across relaunch
+   via PR #785,
    policy-gated screenshot/active-app/clipboard reads with audit, persistent
    Observe/Assist indicator, then `Cmd+Shift+Space` command palette on `main`.
 3. Continue Phase 1 by moving screenshot, active-app, and clipboard-read
