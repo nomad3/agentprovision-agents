@@ -4,7 +4,7 @@
  * or resets the binding set. Also exposes the global-cursor-mode opt-in
  * (gated on Accessibility being granted) and a "Re-run calibration" button.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useGestureBindings } from '../../hooks/useGestureBindings';
 import { useGesture } from '../../hooks/useGesture';
 import GestureBindingRow from './GestureBindingRow';
@@ -19,6 +19,11 @@ async function tauriInvoke(cmd, args) {
   }
 }
 
+async function tauriInvokeStrict(cmd, args) {
+  const tauri = await import('@tauri-apps/api/core');
+  return tauri.invoke(cmd, args);
+}
+
 export default function GestureBindingsPage() {
   const { bindings, loaded, error, detectConflict, upsert, remove, resetToDefaults } =
     useGestureBindings();
@@ -27,17 +32,42 @@ export default function GestureBindingsPage() {
   const [accessibilityOk, setAccessibilityOk] = useState(false);
   const [globalCursor, setGlobalCursor] = useState(false);
   const [globalCursorWarn, setGlobalCursorWarn] = useState(false);
+  const [engineStartError, setEngineStartError] = useState(null);
+  const [cursorError, setCursorError] = useState(null);
+
+  const startGestureEngine = useCallback(async () => {
+    try {
+      await tauriInvokeStrict('gesture_start');
+      setEngineStartError(null);
+    } catch (e) {
+      setEngineStartError(String(e?.message || e));
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      await startGestureEngine();
       const ok = await tauriInvoke('gesture_check_accessibility');
       if (!cancelled) setAccessibilityOk(!!ok);
       const cur = await tauriInvoke('gesture_get_cursor_global');
       if (!cancelled) setGlobalCursor(!!cur);
     })();
-    return () => { cancelled = true; };
-  }, []);
+    return () => {
+      cancelled = true;
+      tauriInvoke('gesture_stop');
+    };
+  }, [startGestureEngine]);
+
+  useEffect(() => {
+    const handleSafetyChanged = (event) => {
+      if (event.detail?.mode === 'observe') {
+        startGestureEngine();
+      }
+    };
+    window.addEventListener('luna:control-safety-changed', handleSafetyChanged);
+    return () => window.removeEventListener('luna:control-safety-changed', handleSafetyChanged);
+  }, [startGestureEngine]);
 
   const toggleGlobalCursor = async () => {
     if (!globalCursor && !localStorage.getItem('luna_global_cursor_warned')) {
@@ -45,15 +75,29 @@ export default function GestureBindingsPage() {
       return;
     }
     const next = !globalCursor;
-    await tauriInvoke('gesture_set_cursor_global', { enabled: next });
-    setGlobalCursor(next);
+    try {
+      await tauriInvokeStrict('gesture_set_cursor_global', { enabled: next });
+      setCursorError(null);
+      setGlobalCursor(next);
+    } catch (e) {
+      setCursorError(String(e?.message || e));
+      const cur = await tauriInvoke('gesture_get_cursor_global');
+      setGlobalCursor(!!cur);
+    }
   };
 
   const confirmGlobalCursor = async () => {
     localStorage.setItem('luna_global_cursor_warned', '1');
     setGlobalCursorWarn(false);
-    await tauriInvoke('gesture_set_cursor_global', { enabled: true });
-    setGlobalCursor(true);
+    try {
+      await tauriInvokeStrict('gesture_set_cursor_global', { enabled: true });
+      setCursorError(null);
+      setGlobalCursor(true);
+    } catch (e) {
+      setCursorError(String(e?.message || e));
+      const cur = await tauriInvoke('gesture_get_cursor_global');
+      setGlobalCursor(!!cur);
+    }
   };
 
   const rerunCalibration = () => {
@@ -82,6 +126,11 @@ export default function GestureBindingsPage() {
         Engine state: <b>{status.state}</b>. Wake state: <b>{wakeState}</b>.
         {wakeState === 'sleeping' && ' Hold an open palm in front of the camera for 500 ms to wake.'}
       </p>
+      {engineStartError && (
+        <div style={{ color: '#fa6', fontSize: 12, marginBottom: 12 }}>
+          Gesture engine blocked: {engineStartError}
+        </div>
+      )}
       {error && (
         <div style={{ color: '#f88', fontSize: 12, marginBottom: 12 }}>
           Save failed: {String(error.message || error)}
@@ -112,6 +161,11 @@ export default function GestureBindingsPage() {
             {!accessibilityOk && <span style={{ color: '#fa6', marginLeft: 8 }}>requires Accessibility permission</span>}
           </span>
         </label>
+        {cursorError && (
+          <div style={{ color: '#fa6', fontSize: 12, marginTop: 8 }}>
+            Global cursor blocked: {cursorError}
+          </div>
+        )}
       </div>
 
       {globalCursorWarn && (

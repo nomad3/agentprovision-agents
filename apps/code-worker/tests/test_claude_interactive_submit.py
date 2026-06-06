@@ -832,6 +832,77 @@ class TestDecidePtyAction:
         )
         assert action == "terminate"
 
+    def test_long_task_keeps_waiting_while_painting_past_legacy_cap(self):
+        # THE FIX (2026-06-01): a multi-repo "pull my work repos" runs past the old
+        # 90s answer-file cap while Claude is STILL painting output (tool spinner).
+        # With the long-task knobs supplied, the turn keeps WAITING instead of the
+        # legacy idle-/exit that killed it at ~98s (exit 143). last_output 2s ago
+        # (< 180s window), 200s since submit (< 480s ceiling).
+        action = decide_pty_action(
+            now=202.0,
+            start=0.0,
+            last_output=200.0,
+            seen_output=True,
+            submitted=True,
+            response_seen=True,
+            exit_sent_at=None,
+            submitted_at=2.0,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            awaiting_answer_file=True,
+            long_task_idle_seconds=180.0,
+            answer_file_max_seconds=480.0,
+        )
+        assert action == "wait"
+
+    def test_long_task_absolute_ceiling_exits_even_while_painting(self):
+        # A wedged-but-trickling turn that paints chrome forever but never writes
+        # the answer file is bounded by the absolute ceiling: 500s since submit
+        # (> 480s) → exit, even though output is fresh (1s quiet).
+        action = decide_pty_action(
+            now=502.0,
+            start=0.0,
+            last_output=501.0,
+            seen_output=True,
+            submitted=True,
+            response_seen=True,
+            exit_sent_at=None,
+            submitted_at=2.0,
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            awaiting_answer_file=True,
+            long_task_idle_seconds=180.0,
+            answer_file_max_seconds=480.0,
+        )
+        assert action == "exit"
+
+    def test_long_task_truly_idle_past_window_exits(self):
+        # Output stopped longer than the activity window (200s > 180s), under the
+        # ceiling → falls through to the legacy idle /exit (a genuine hang or a
+        # done-without-file turn). Not left hanging to the outer timeout.
+        action = decide_pty_action(
+            now=300.0,
+            start=0.0,
+            last_output=100.0,  # 200s of silence > 180s window
+            seen_output=True,
+            submitted=True,
+            response_seen=True,
+            exit_sent_at=None,
+            submitted_at=2.0,  # 298s since submit, under 480s ceiling
+            first_output_seconds=90.0,
+            submit_settle_seconds=1.0,
+            idle_exit_seconds=8.0,
+            exit_grace_seconds=10.0,
+            awaiting_answer_file=True,
+            long_task_idle_seconds=180.0,
+            answer_file_max_seconds=480.0,
+        )
+        assert action == "exit"
+
     # ── Chrome-flood: input-box path must fire under SUSTAINED output ─────
     # Root cause of intermittent exit-143 (2026-05-30): on a cold/perturbed
     # HOME, Claude Code floods the PTY with continuous chrome (auto-updater,

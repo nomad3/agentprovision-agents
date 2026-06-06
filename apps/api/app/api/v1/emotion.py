@@ -30,7 +30,6 @@ from app.schemas.emotion import PADVector
 from app.services.emotion_engine_io import (
     get_affect_baseline,
     get_affect_trace,
-    get_latest_session_affect,
     session_belongs_to_tenant,
 )
 
@@ -232,6 +231,16 @@ def _latest_affect_for_agent_tenant(
             .order_by(ConversationEpisode.created_at.desc())
             .first()
         )
+        if episode is None:
+            episode = (
+                db.query(ConversationEpisode)
+                .filter(
+                    ConversationEpisode.tenant_id == tenant_id,
+                    ConversationEpisode.affect_vector.isnot(None),
+                )
+                .order_by(ConversationEpisode.created_at.desc())
+                .first()
+            )
     except Exception:  # noqa: BLE001
         return None
     if episode is None or episode.affect_vector is None:

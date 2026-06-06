@@ -28,6 +28,7 @@ EpisodeWorkflow pattern shipped earlier.
 from datetime import timedelta
 from typing import List, Tuple
 
+from temporalio.common import RetryPolicy
 from temporalio import workflow
 
 with workflow.unsafe.imports_passed_through():
@@ -41,6 +42,7 @@ with workflow.unsafe.imports_passed_through():
 # the parent restarts free thanks to Temporal history.
 _PERSIST_TIMEOUT = timedelta(minutes=3)
 _AGGREGATE_TIMEOUT = timedelta(minutes=5)
+_NO_ACTIVITY_RETRY = RetryPolicy(maximum_attempts=1)
 # Each child ChatCliWorkflow gets its own timeout via its workflow
 # definition; the parent just observes completion.
 
@@ -83,6 +85,7 @@ class SkillEvalIterationWorkflow:
                     persist_run_artifacts,
                     args=[iteration_run_id, eval_id, with_skill],
                     start_to_close_timeout=_PERSIST_TIMEOUT,
+                    retry_policy=_NO_ACTIVITY_RETRY,
                 )
                 succeeded += 1
             except Exception:
@@ -94,6 +97,7 @@ class SkillEvalIterationWorkflow:
                 aggregate_iteration,
                 args=[iteration_run_id, skill_id, iteration],
                 start_to_close_timeout=_AGGREGATE_TIMEOUT,
+                retry_policy=_NO_ACTIVITY_RETRY,
             )
             aggregated = True
         except Exception:

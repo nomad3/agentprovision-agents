@@ -103,7 +103,8 @@ async def import_chatgpt_history(
             title=session_data["title"],
             tenant_id=current_user.tenant_id,
             source="chatgpt_import",
-            external_id=session_data["external_id"]
+            external_id=session_data["external_id"],
+            owner_user_id=current_user.id,
         )
         db.add(db_session)
         db.flush() # Get ID
@@ -175,7 +176,8 @@ async def import_claude_history(
             title=session_data["title"],
             tenant_id=current_user.tenant_id,
             source="claude_import",
-            external_id=session_data["external_id"]
+            external_id=session_data["external_id"],
+            owner_user_id=current_user.id,
         )
         db.add(db_session)
         db.flush()

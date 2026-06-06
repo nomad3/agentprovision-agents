@@ -8,7 +8,7 @@ import re
 import subprocess
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import List, Optional
 
@@ -1479,7 +1479,7 @@ def _fetch_claude_credential(tenant_id: str) -> Optional[tuple]:
     return None
 
 
-def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: str) -> str:
+def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: str, model: str | None = None) -> str:
     """Materialize tenant-scoped CODEX_HOME with auth.json and MCP config.toml.
 
     2026-05-16 incident: Codex still couldn't discover MCP tools after the
@@ -1503,6 +1503,17 @@ def _prepare_codex_home(session_dir: str, auth_payload: dict, mcp_config_json: s
     # ── top-level Codex config keys (must precede any [section]) ──────
     use_rmcp_client = os.environ.get("CODEX_USE_RMCP_CLIENT", "true").lower() == "true"
     config_lines: list[str] = []
+    # Pin the Codex model (top-level key; must precede any [section]). Codex's
+    # built-in default (gpt-5.3-codex) is an API-tier model that ChatGPT-account
+    # (subscription) auth REJECTS — "model not supported when using Codex with a
+    # ChatGPT account" -> every turn exits 1 (the 2026-06-02 outage). gpt-5.5 IS
+    # supported on ChatGPT-account auth. Precedence: per-tenant selection (set on
+    # the /integrations Codex connect flow, threaded in via `model`) -> CODEX_MODEL
+    # env -> gpt-5.5 default.
+    _codex_model = (model or os.environ.get("CODEX_MODEL") or "gpt-5.5").strip()
+    if _codex_model:
+        config_lines.append(f'model = "{_codex_model}"')
+        config_lines.append("")
     if mcp_config_json and use_rmcp_client:
         # Opt in to the Rust MCP client so SSE / streamable_http
         # ``[mcp_servers.*]`` entries below are actually honoured.
@@ -1942,11 +1953,19 @@ async def finalize_provider_council(tenant_id: str, experience_id: str, result_j
 
 @dataclass
 class ProviderCouncilInput:
-    tenant_id: str
-    user_message: str
-    providers: List[str]
-    agent_slug: str
-    channel: str
+    # Every field is optional with a default so a version-skewed dispatch can
+    # NEVER fail to decode. The api dispatcher (auto_quality_scorer) starts this
+    # workflow with a dict that omits `providers`; a required field there made
+    # Temporal raise `TypeError: missing 1 required positional argument` during
+    # workflow-input decode, and a workflow-task decode failure retries FOREVER
+    # (poison pill — it silently loads the orchestration/code queue). Defaulting
+    # every field keeps the input decode-tolerant; the review activities pick the
+    # provider set themselves, so `providers` is advisory only.
+    tenant_id: str = ""
+    user_message: str = ""
+    providers: List[str] = field(default_factory=list)
+    agent_slug: str = ""
+    channel: str = ""
     original_experience_id: Optional[str] = None
 
 

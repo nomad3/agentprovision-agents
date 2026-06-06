@@ -212,6 +212,11 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "submit_learning_feedback",
         "get_simulation_summary",
     ],
+    "desktop_control": [
+        "desktop_observe_screen",
+        "desktop_get_active_app",
+        "desktop_read_clipboard",
+    ],
     # Platform introspection — answers "what's on this tenant?" questions like
     # "list my agents", "what workflows do I have", "which MCP servers are
     # connected?". Without this group Luna falls back to "I couldn't access

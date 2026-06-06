@@ -13,15 +13,36 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: luna-client-build-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-macos:
     runs-on: self-hosted
     timeout-minutes: 30
+    env:
+      LUNA_CHECKOUT_DIR: luna-build-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+          # Use a per-run checkout path so actions/checkout never has to delete
+          # the self-hosted runner's stale root workspace before cloning.
+          path: ${{ env.LUNA_CHECKOUT_DIR }}
+          # The self-hosted macOS runner can retain permission-owned cache
+          # folders from other jobs. Avoid checkout's destructive clean path;
+          # tracked files are still updated to the requested ref.
+          clean: false
+
+      - name: Clean Luna build outputs
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}
+        run: |
+          rm -rf apps/luna-client/dist
+          rm -rf apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle
+          rm -rf apps/luna-client/src-tauri/target/debug/bundle
+          rm -f apps/luna-client/latest.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -29,15 +50,15 @@ jobs:
           node-version: '20'
 
       - name: Install frontend dependencies
-        working-directory: apps/luna-client
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: npm ci
 
       - name: Install Rust (if needed)
         run: |
           source "$HOME/.cargo/env" 2>/dev/null || true
-          if ! command -v cargo &> /dev/null; then
+          if ! command -v cargo >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           fi
           rustc --version
           cargo --version
@@ -49,54 +70,154 @@ jobs:
 
       - name: Determine version
         id: version
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+          GITHUB_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/luna-v* ]]; then
-            VERSION=$(echo "${{ github.ref_name }}" | sed 's/luna-v//')
+          if [[ "$REF" == refs/tags/luna-v* ]]; then
+            VERSION="${REF_NAME#luna-v}"
           else
-            # Auto-increment: MAJOR.MINOR from tauri.conf.json, PATCH = commits since start
             BASE=$(python3 -c "import json; print(json.load(open('apps/luna-client/src-tauri/tauri.conf.json'))['version'])")
             MAJOR=$(echo "$BASE" | cut -d. -f1)
             MINOR=$(echo "$BASE" | cut -d. -f2)
-            PATCH=$(git rev-list HEAD --count -- apps/luna-client/)
-            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            REMOTE_TAGS=$(git ls-remote --tags origin "refs/tags/luna-v${MAJOR}.${MINOR}.*" || true)
+            EXISTING_FOR_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v sha="$GITHUB_SHA" '$1 == sha { sub("refs/tags/luna-v", "", $2); print $2; exit }')
+            if [ -n "$EXISTING_FOR_SHA" ]; then
+              VERSION="$EXISTING_FOR_SHA"
+            else
+              LATEST_TAGS=$(gh release list --limit 200 --json tagName,publishedAt \
+                --jq ".[] | select(.tagName | test(\"^luna-v${MAJOR}\\\\.${MINOR}\\\\.[0-9]+$\")) | .tagName" \
+              )
+              LATEST_TAG=$(printf '%s\n' "$LATEST_TAGS" | head -1)
+              LATEST_PATCH=$(printf '%s\n' "$LATEST_TAG" \
+                | sed -E "s/^luna-v${MAJOR}\\.${MINOR}\\.([0-9]+)$/\\1/")
+              PATCH=$(( ${LATEST_PATCH:-0} + 1 ))
+              VERSION="${MAJOR}.${MINOR}.${PATCH}"
+              while true; do
+                TAG_SHA=$(printf '%s\n' "$REMOTE_TAGS" | awk -v tag="refs/tags/luna-v${VERSION}" '$2 == tag { print $1; exit }')
+                if [ -z "$TAG_SHA" ] || [ "$TAG_SHA" = "$GITHUB_SHA" ]; then
+                  break
+                fi
+                PATCH=$(( PATCH + 1 ))
+                VERSION="${MAJOR}.${MINOR}.${PATCH}"
+              done
+            fi
           fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Version: $VERSION"
-          
+
           # Patch tauri.conf.json so the built DMG has the correct version name
           python3 -c "import json; d=json.load(open('apps/luna-client/src-tauri/tauri.conf.json')); d['version']='$VERSION'; json.dump(d, open('apps/luna-client/src-tauri/tauri.conf.json', 'w'), indent=2)"
 
+      - name: Determine signing mode
+        id: signing
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in \
+            APPLE_CERTIFICATE \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_ID \
+            APPLE_PASSWORD \
+            APPLE_TEAM_ID \
+            TAURI_SIGNING_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required for signed Luna releases"
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -eq 0 ]; then
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            echo "Building signed/notarized Luna release."
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Signing secrets are incomplete; building unsigned Luna development DMG."
+          fi
+
       - name: Build Tauri (macOS ARM64)
-        working-directory: apps/luna-client
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         env:
           VITE_API_BASE_URL: ${{ secrets.LUNA_API_URL || 'https://agentprovision.com' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           source "$HOME/.cargo/env" 2>/dev/null || true
-          cargo tauri build --target aarch64-apple-darwin
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            cargo tauri build --target aarch64-apple-darwin
+          else
+            cargo tauri build --target aarch64-apple-darwin --no-sign
+          fi
+
+      - name: Verify macOS signing and notarization
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
+        run: |
+          APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app"
+          test -d "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign -dv --verbose=4 "$APP_PATH" 2> codesign.txt
+          cat codesign.txt
+          grep -q "Authority=Developer ID Application" codesign.txt
+          xcrun stapler validate "$APP_PATH"
+          spctl -a -vv -t exec "$APP_PATH"
+
+      - name: Generate DMG checksum
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
+        run: |
+          DMG_PATH=$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg)
+          DMG_DIR=$(dirname "$DMG_PATH")
+          DMG_NAME=$(basename "$DMG_PATH")
+          (cd "$DMG_DIR" && shasum -a 256 "$DMG_NAME") > "${DMG_PATH}.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: luna-macos-arm64
           path: |
-            apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app
-            apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg
+            ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app
+            ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg
+            ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg.sha256
+            ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz
+            ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz.sig
           retention-days: 30
 
       - name: Generate updater manifest
-        if: startsWith(github.ref, 'refs/tags/luna-v') || github.ref == 'refs/heads/main'
-        working-directory: apps/luna-client
+        if: steps.signing.outputs.signed == 'true'
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           DMG_PATH=$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg)
-          DMG_NAME=$(basename "$DMG_PATH")
+          DMG_SHA_PATH="${DMG_PATH}.sha256"
+          UPDATER_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz"
+          UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
+          UPDATER_NAME=$(basename "$UPDATER_PATH")
           TAG="luna-v${VERSION}"
 
-          SIG=""
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
-            source "$HOME/.cargo/env" 2>/dev/null || true
-            SIG=$(cargo tauri signer sign "$DMG_PATH" --private-key "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" 2>/dev/null | tail -1 || echo "")
+          test -f "$DMG_PATH"
+          test -f "$UPDATER_PATH"
+          test -f "$UPDATER_SIG_PATH"
+          SIG=$(cat "$UPDATER_SIG_PATH" | tr -d '\n')
+          if [ -z "$SIG" ]; then
+            echo "::error::Tauri updater signature artifact is empty"
+            exit 1
           fi
+          test -f "$DMG_SHA_PATH"
 
           cat > latest.json <<EOF
           {
@@ -106,33 +227,87 @@ jobs:
             "platforms": {
               "darwin-aarch64": {
                 "signature": "$SIG",
-                "url": "https://github.com/${{ github.repository }}/releases/download/${TAG}/${DMG_NAME}"
+                "url": "https://github.com/${{ github.repository }}/releases/download/${TAG}/${UPDATER_NAME}"
               }
             }
           }
           EOF
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("latest.json").read_text())
+          platform = manifest["platforms"]["darwin-aarch64"]
+          assert platform["signature"], "missing updater signature"
+          assert "nomad3/agentprovision-agents" in platform["url"], platform["url"]
+          assert platform["url"].endswith("/Luna.app.tar.gz"), platform["url"]
+          PY
 
       - name: Create or update GitHub Release
         if: startsWith(github.ref, 'refs/tags/luna-v') || github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
-        working-directory: apps/luna-client
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="luna-v${VERSION}"
           DMG_PATH=$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Luna_*.dmg)
+          DMG_SHA_PATH="${DMG_PATH}.sha256"
+          UPDATER_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Luna.app.tar.gz"
+          UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
+          ASSETS=("$DMG_PATH" "$DMG_SHA_PATH")
+          RELEASE_NOTES="Luna $VERSION unsigned development build."
+          RELEASE_FLAGS=(--prerelease --latest=false)
+          if [ "${{ steps.signing.outputs.signed }}" = "true" ]; then
+            test -f "$UPDATER_PATH"
+            test -f "$UPDATER_SIG_PATH"
+            test -f latest.json
+            ASSETS+=("$UPDATER_PATH" "$UPDATER_SIG_PATH" latest.json)
+            RELEASE_NOTES="Luna $VERSION signed and notarized release."
+            RELEASE_FLAGS=(--latest)
+          fi
 
           # Create tag if it doesn't exist
           git tag "$TAG" 2>/dev/null || true
           git push origin "$TAG" 2>/dev/null || true
+          REMOTE_TAG_SHA=$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1; exit}')
+          BUILD_SHA=$(git rev-parse HEAD)
+          if [ "$REMOTE_TAG_SHA" != "$BUILD_SHA" ]; then
+            echo "::error::${TAG} points at ${REMOTE_TAG_SHA:-missing}, expected ${BUILD_SHA}"
+            exit 1
+          fi
 
           # Create or Update release with ALL assets in one shot
           # This is more reliable than separate create and upload calls
           gh release create "$TAG" \
-            "$DMG_PATH" \
-            latest.json \
+            "${ASSETS[@]}" \
             --title "Luna $VERSION" \
-            --generate-notes \
-            --latest \
+            --notes "$RELEASE_NOTES" \
             --verify-tag \
-            || gh release upload "$TAG" "$DMG_PATH" latest.json --clobber
+            "${RELEASE_FLAGS[@]}" \
+            || gh release upload "$TAG" "${ASSETS[@]}" --clobber
+
+      - name: Publish stable Luna updater manifest
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ env.LUNA_CHECKOUT_DIR }}/apps/luna-client
+        run: |
+          STABLE_TAG="luna-latest"
+          git tag -f "$STABLE_TAG"
+          git push origin "refs/tags/$STABLE_TAG" --force
+
+          if gh release view "$STABLE_TAG" >/dev/null 2>&1; then
+            gh release upload "$STABLE_TAG" latest.json --clobber
+          else
+            gh release create "$STABLE_TAG" \
+              latest.json \
+              --title "Luna latest updater manifest" \
+              --notes "Stable updater manifest for the latest Luna desktop release." \
+              --latest=false \
+              --verify-tag
+          fi
+
+      - name: Remove isolated checkout
+        if: always()
+        run: rm -rf "${LUNA_CHECKOUT_DIR}" || true
