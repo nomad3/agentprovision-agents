@@ -17,6 +17,54 @@ pytest-xdist and any wrapper that mutates argv before pytest sees it.
 from __future__ import annotations
 
 import os
+import sys
+
+import pytest
+from sqlalchemy import ARRAY as SqlArray
+from sqlalchemy.dialects.postgresql import ARRAY as PgArray
+from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.ext.compiler import compiles
+
+try:
+    from pgvector.sqlalchemy import Vector
+except Exception:  # pragma: no cover - optional dependency in local shells
+    Vector = None
+
+
+@compiles(UUID, "sqlite")
+def _compile_postgres_uuid_for_sqlite(_type, _compiler, **_kw):
+    return "CHAR(36)"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_postgres_jsonb_for_sqlite(_type, _compiler, **_kw):
+    return "JSON"
+
+
+@compiles(INET, "sqlite")
+def _compile_postgres_inet_for_sqlite(_type, _compiler, **_kw):
+    return "VARCHAR"
+
+
+@compiles(PgArray, "sqlite")
+@compiles(SqlArray, "sqlite")
+def _compile_array_for_sqlite(_type, _compiler, **_kw):
+    return "JSON"
+
+
+if Vector is not None:
+
+    @compiles(Vector, "sqlite")
+    def _compile_pgvector_for_sqlite(_type, _compiler, **_kw):
+        return "BLOB"
+
+# Make the local `tests.fixtures` package importable as a top-level
+# `fixtures` module from inside tests (the api project doesn't auto-add
+# `tests/` to sys.path — pytest only adds the package root). Tests do
+# `from fixtures.code_reviewer_stub import reviewer_stub`.
+_TESTS_DIR = os.path.dirname(__file__)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
 
 # Files that will fail to import without a live Postgres + pgvector backend.
 # Listed by basename; we use `collect_ignore` to skip them at the collection
@@ -74,3 +122,32 @@ def pytest_configure(config):
     # Skip integration-only files unless the active marker filter wants them.
     if not _marker_expr_wants_integration(config):
         collect_ignore.extend(sorted(_INTEGRATION_ONLY_FILES))
+
+
+# ── Luna Learn Code Reviewer stub (T6.1) ────────────────────────────────
+# Deterministic stand-in for the Code Reviewer agent dispatched by the
+# learn-from-media pipeline (spec §0.3). Tests can request the fixture
+# in two flavours:
+#   * ``reviewer_stub`` — the plain sync callable (matches the helper
+#     in `tests/fixtures/code_reviewer_stub.py`).
+#   * ``code_reviewer_stub`` — an alias commonly requested by name in
+#     learning-pipeline tests; behaviour is identical.
+# Exposing both names avoids a bikeshed over which name wins and keeps
+# the import-path import (``from fixtures.code_reviewer_stub import …``)
+# valid for tests that don't want to take a fixture dependency.
+
+
+@pytest.fixture
+def reviewer_stub():
+    """Return the deterministic Code Reviewer stub callable."""
+    from fixtures.code_reviewer_stub import reviewer_stub as _stub
+
+    return _stub
+
+
+@pytest.fixture
+def code_reviewer_stub():
+    """Alias for :pyfunc:`reviewer_stub` (same callable, different name)."""
+    from fixtures.code_reviewer_stub import reviewer_stub as _stub
+
+    return _stub

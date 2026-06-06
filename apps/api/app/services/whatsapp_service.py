@@ -7,9 +7,11 @@ import base64
 import io
 import inspect
 import logging
+import os
 import socket
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -53,7 +55,9 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.channel_account import ChannelAccount
 from app.models.channel_event import ChannelEvent
+from app.models.whatsapp_session_backup import WhatsappSessionBackup
 from app.models.chat import ChatSession
+from app.services.url_intent_router import extract_learning_url
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +68,47 @@ WHATSAPP_AUDIO_TRANSCRIPTION_FALLBACK = (
     "transcribed. Apologize briefly and ask them to resend the voice note "
     "or type the message.]"
 )
+
+# ── Fire-and-forget chat dispatch (thread-pool wedge fix, 2026-06-04) ──
+# WhatsApp turns run on a DEDICATED bounded executor (never the shared event-
+# loop default pool) so a slow/hung turn can't starve the rest of the api. An
+# explicit capacity gate (global + per-sender) bounds the in-memory queue so a
+# burst can't pile up. Delivery is fire-and-forget: the inbound handler
+# enqueues and returns; a per-sender single-consumer task runs the turn,
+# keeps "typing…" alive, and sends the reply in order.
+# WHATSAPP_JOB_WATCH_TIMEOUT is a backstop ABOVE the CLI dispatch bound
+# (CHAT_CLI_DISPATCH_TIMEOUT, default 600s) — the dispatch self-terminates
+# first, so the watch rarely fires.
+WHATSAPP_CHAT_WORKERS = int(os.environ.get("WHATSAPP_CHAT_WORKERS", "4"))
+WHATSAPP_CHAT_GLOBAL_CAP = int(os.environ.get("WHATSAPP_CHAT_GLOBAL_CAP", "16"))
+WHATSAPP_CHAT_PER_SENDER_CAP = int(os.environ.get("WHATSAPP_CHAT_PER_SENDER_CAP", "4"))
+WHATSAPP_JOB_WATCH_TIMEOUT = float(os.environ.get("WHATSAPP_JOB_WATCH_TIMEOUT", "660"))
+WHATSAPP_TURN_FAILED_FALLBACK = (
+    "Sorry — I hit an error processing that. Please try again in a moment."
+)
+WHATSAPP_OVERLOADED_FALLBACK = (
+    "I'm a bit overloaded right now — please resend that in a moment."
+)
+WHATSAPP_RESTART_FALLBACK = (
+    "I'm restarting briefly — please resend your last message in a moment."
+)
+
+
+@dataclass
+class _WaChatTurn:
+    """One queued WhatsApp chat turn (the fire-and-forget unit)."""
+    queue_key: str          # ordering key: f"{account_key}::{sender_id}"
+    account_key: str        # client-lookup key: f"{tenant_id}:{account_id}"
+    tenant_id: uuid.UUID
+    tenant_id_str: str
+    account_id: str
+    sender_phone: str
+    reply_jid: object       # neonize JID from build_jid
+    job_uuid: uuid.UUID
+    session_id: uuid.UUID
+    user_id: uuid.UUID
+    content: str
+    media_parts: Optional[list] = None
 
 
 def _detect_inbound_media(msg, text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -99,6 +144,15 @@ def _detect_inbound_media(msg, text: str) -> tuple[Optional[str], Optional[str],
     if document and getattr(document, "mimetype", None):
         caption = getattr(document, "title", None) or getattr(document, "fileName", None) or text
         return "document", document.mimetype, caption
+
+    # T4.2 — text-only message may contain a learning URL (YouTube / IG).
+    # When matched, surface as a new ``learning_url`` tuple variant so the
+    # caller can route to LearningService.dispatch instead of the normal
+    # chat/agent pipeline. mime slot carries the URL itself; caption keeps
+    # the original message text so Luna's ack can quote / contextualize it.
+    learning_url = extract_learning_url(text)
+    if learning_url:
+        return "learning_url", learning_url, text
 
     return None, None, text
 
@@ -230,6 +284,31 @@ class WhatsAppService:
         self._sent_message_ids: Dict[str, set] = {}  # Track bot-sent msg IDs to avoid echo loops
         self._lid_phone_cache: Dict[str, str] = {}  # LID→phone cache for resolved numbers
         self._db_url = db_url
+        # ── Graceful-drain coordination (session-durability design §1/§5) ──
+        # `_draining` gates new inbound chat turns once shutdown begins;
+        # `_inflight_turns` counts turns running in the thread pool so the
+        # drain can bounded-wait for them instead of a blind stop grace
+        # that truncates the 30–90s turns the 180s grace existed to protect.
+        self._draining: bool = False
+        self._inflight_turns: int = 0
+        # Rolling known-good session backups kept per account in Postgres
+        # (whatsapp_session_backups). Restore falls back through these so a
+        # corrupt/mid-write current blob never forces a QR re-pair.
+        self.SESSION_BACKUP_KEEP: int = int(
+            os.environ.get("WHATSAPP_SESSION_BACKUP_KEEP", "3")
+        )
+        # ── Fire-and-forget chat dispatch state (2026-06-04 wedge fix) ──
+        # Dedicated bounded pool so a slow/hung WhatsApp turn can never starve
+        # the shared event-loop default executor the rest of the api uses.
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        self._chat_executor = _TPE(
+            max_workers=WHATSAPP_CHAT_WORKERS, thread_name_prefix="wa-chat",
+        )
+        self._chat_queues: Dict[str, asyncio.Queue] = {}   # ordering key -> pending turns
+        self._chat_consumers: Dict[str, asyncio.Task] = {}  # ordering key -> consumer task
+        self._chat_active: Dict[str, _WaChatTurn] = {}      # ordering key -> mid-flight turn
+        self._chat_inflight_global: int = 0                 # capacity gate (enqueued, not done)
+        self._chat_dispatch_lock = asyncio.Lock()           # guards the maps + the gate
 
     def _purge_local_session_file(
         self, tenant_id: str, account_id: str, *, reason: str
@@ -251,7 +330,6 @@ class WhatsAppService:
         created earlier in the session (e.g. .corrupt-backup,
         .pre-repair) are not touched.
         """
-        import os
         try:
             path = self._client_name(tenant_id, account_id)
             if os.path.exists(path):
@@ -282,7 +360,9 @@ class WhatsAppService:
             self._session_locks[key] = lock
         return lock
 
-    async def _save_session_locked(self, tenant_id: str, account_id: str) -> None:
+    async def _save_session_locked(
+        self, tenant_id: str, account_id: str, source_event: str = "runtime"
+    ) -> None:
         """Async lock wrapper around `_save_session_to_db`. All async
         event-handler call sites (on_connected, on_disconnected,
         on_paired) go through this; the lock serializes them against
@@ -298,7 +378,7 @@ class WhatsAppService:
             # SQLAlchemy call; running it directly inside the async
             # handler is fine — it's bounded (≤ a few hundred ms for
             # the 7MB-class blob we've seen in production).
-            self._save_session_to_db(tenant_id, account_id)
+            self._save_session_to_db(tenant_id, account_id, source_event=source_event)
 
     async def _socket_heartbeat(self, tenant_id: str, account_id: str) -> None:
         """Background coroutine that polls `client.IsConnected()` every
@@ -426,7 +506,6 @@ class WhatsAppService:
             return False
 
     def _client_name(self, tenant_id: str, account_id: str = "default") -> str:
-        import os
         # Use persistent storage so sessions survive pod restarts
         base = settings.DATA_STORAGE_PATH or "/app/storage"
         session_dir = os.environ.get("NEONIZE_SESSION_DIR", f"{base}/neonize_sessions")
@@ -520,78 +599,360 @@ class WhatsAppService:
 
     # ── Session blob persistence ────────────────────────────────────
 
-    def _save_session_to_db(self, tenant_id: str, account_id: str):
-        """Compress the neonize SQLite file and store in channel_accounts.session_blob."""
+    # ── Session validation (the recover-never-QR contract, design §2) ──
+    _SQLITE_MAGIC = b"SQLite format 3\x00"
+
+    def _validate_sqlite_bytes(self, raw: bytes) -> tuple:
+        """Validate that `raw` is a healthy neonize device session.
+
+        Returns (ok: bool, reason: str). `ok` is True only when:
+          * the bytes carry the SQLite file magic header,
+          * `PRAGMA integrity_check` returns 'ok',
+          * the device-key assertion holds — a whatsmeow device table
+            exists with >= 1 row (a structurally-valid but keyless DB is
+            useless and would still force a QR; Codex-5.5 review #3/#answer-2).
+
+        A blob with NO recognised device table is a HARD FAIL (review
+        C2-VALIDATE-FALSE-POSITIVE): a keyless / partially-initialised /
+        unrecognised-schema blob must never be promoted to the validated
+        current or an 'ok' backup. Keeping the last known-good is always
+        safer than persisting a session we cannot prove carries auth keys.
+        """
+        import sqlite3
+        import tempfile
+        if not raw or not raw.startswith(self._SQLITE_MAGIC):
+            return False, "not a sqlite file (bad magic header)"
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=".db", prefix="wa_validate_")
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            conn = sqlite3.connect(tmp, timeout=5)
+            try:
+                row = conn.execute("PRAGMA integrity_check").fetchone()
+                result = str(row[0]).lower() if row else "no result"
+                if result != "ok":
+                    return False, f"integrity_check failed: {result}"
+                tables = [
+                    r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                ]
+                # Broad match: a real neonize session carries a `whatsmeow_device`
+                # table. Match any table whose name contains "device" to be
+                # robust to store-layout naming, then require >= 1 row.
+                device_tables = [t for t in tables if "device" in t.lower()]
+                if not device_tables:
+                    return False, "no device table found (keyless or unrecognised schema)"
+                total = 0
+                for t in device_tables:
+                    try:
+                        c = conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()
+                        total += int(c[0]) if c else 0
+                    except Exception:  # noqa: BLE001
+                        pass
+                if total < 1:
+                    return False, f"device table(s) {device_tables} empty (no auth keys)"
+                return True, "ok"
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            return False, f"validation error: {e}"
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _prune_session_backups(self, db, tenant_uuid, account_id: str, keep: int) -> int:
+        """Keep only the newest `keep` validated ('ok') backups per account.
+        Assumes the just-added row has been flushed so it's included in the
+        ordering. Returns the number of rows deleted.
+
+        Intentionally prunes only validation_status=='ok' rows — the writer
+        only ever inserts 'ok' (review FG-3); 'pending'/'corrupt' are reserved
+        for future diagnostics and, if ever written, would need their own
+        cap/expiry here so they can't accumulate unbounded."""
+        rows = (
+            db.query(WhatsappSessionBackup)
+            .filter(
+                WhatsappSessionBackup.tenant_id == tenant_uuid,
+                WhatsappSessionBackup.account_id == account_id,
+                WhatsappSessionBackup.validation_status == "ok",
+            )
+            .order_by(WhatsappSessionBackup.created_at.desc(), WhatsappSessionBackup.id.desc())
+            .all()
+        )
+        deleted = 0
+        for old in rows[max(keep, 0):]:
+            db.delete(old)
+            deleted += 1
+        return deleted
+
+    def _save_session_to_db(self, tenant_id: str, account_id: str, source_event: str = "runtime") -> bool:
+        """Persist the neonize SQLite session as the VALIDATED current blob,
+        push a rolling known-good backup, and prune.
+
+        This is the inverse of the old "corruption amplifier" (design §2):
+        it NEVER overwrites a known-good current/backup with an unvalidated
+        blob. Returns True iff a validated blob was persisted. On checkpoint
+        failure (DB locked / mid-write) or validation failure it ABORTS the
+        write, preserving the last known-good copy, and logs loudly.
+        """
         import gzip
-        import os
+        import hashlib
         import sqlite3
         path = self._client_name(tenant_id, account_id)
         if not os.path.exists(path):
-            return
-            
-        # Try to checkpoint the DB before saving to merge WAL changes into the main .db file.
-        # This ensures we don't lose the latest auth keys that might be stuck in the WAL.
-        try:
-            # Connect with a short timeout to avoid blocking if neonize has it locked
-            conn = sqlite3.connect(path, timeout=2)
-            conn.execute("PRAGMA wal_checkpoint(FULL)")
-            conn.close()
-            logger.info(f"Checkpointed neonize DB for {tenant_id[:8]}")
-        except Exception as e:
-            logger.debug(f"Failed to checkpoint neonize DB (likely locked): {e}")
+            return False
 
+        # 1. Checkpoint MUST actually COMPLETE — not merely return. A
+        #    locked/mid-write DB means the file may be inconsistent; abort
+        #    rather than persist a torn snapshot.
+        try:
+            conn = sqlite3.connect(path, timeout=5)
+            try:
+                ckpt = conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
+            finally:
+                conn.close()
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "WhatsApp save ABORTED for %s:%s — checkpoint raised (DB locked / mid-write): %s. "
+                "Keeping last known-good session, no overwrite.",
+                tenant_id[:8], account_id, e,
+            )
+            return False
+        # PRAGMA wal_checkpoint(FULL) returns (busy, log_frames, checkpointed).
+        # busy != 0 means it could NOT merge all WAL frames into the main .db
+        # (another connection held it) — so the .db we're about to read is
+        # missing the latest writes. "Returned" is not "completed" (review):
+        # abort and keep the last known-good rather than persist a stale/torn
+        # snapshot. busy == 0 with log == -1 (no WAL in use) is success.
+        busy = ckpt[0] if ckpt else 1
+        if busy != 0:
+            logger.warning(
+                "WhatsApp save ABORTED for %s:%s — WAL checkpoint incomplete "
+                "(busy=%s, result=%s); keeping last known-good, no overwrite.",
+                tenant_id[:8], account_id, busy, ckpt,
+            )
+            return False
+
+        # 2. Read + validate. Only a healthy SQLite becomes the new current.
         try:
             with open(path, "rb") as f:
                 raw = f.read()
-            compressed = gzip.compress(raw)
-            db = self._get_db()
-            try:
-                acct = self._get_or_create_account(db, tenant_id, account_id)
-                acct.session_blob = compressed
-                db.commit()
-                logger.info(f"Saved neonize session to DB for {tenant_id[:8]}:{account_id} ({len(raw)}→{len(compressed)} bytes)")
-            except Exception:
-                logger.exception("Failed to save session blob")
-                db.rollback()
-            finally:
-                db.close()
         except Exception:
-            logger.exception(f"Failed to read neonize session file {path}")
+            logger.exception(
+                "WhatsApp save ABORTED for %s:%s — could not read session file (no overwrite)",
+                tenant_id[:8], account_id,
+            )
+            return False
 
-    def _restore_session_from_db(self, tenant_id: str, account_id: str) -> bool:
-        """Decompress session_blob and write neonize SQLite file to disk. Returns True if restored."""
-        import gzip
-        import os
+        ok, reason = self._validate_sqlite_bytes(raw)
+        if not ok:
+            logger.warning(
+                "WhatsApp save ABORTED for %s:%s — session failed validation (%s). "
+                "Keeping last known-good, no overwrite.",
+                tenant_id[:8], account_id, reason,
+            )
+            return False
+
+        sha = hashlib.sha256(raw).hexdigest()
+        compressed = gzip.compress(raw)
+
         db = self._get_db()
         try:
             acct = self._get_or_create_account(db, tenant_id, account_id)
-            if not acct.session_blob:
-                logger.info(f"No session blob for {tenant_id[:8]}:{account_id}")
+            latest = (
+                db.query(WhatsappSessionBackup)
+                .filter(
+                    WhatsappSessionBackup.tenant_id == acct.tenant_id,
+                    WhatsappSessionBackup.account_id == account_id,
+                    WhatsappSessionBackup.validation_status == "ok",
+                )
+                .order_by(
+                    WhatsappSessionBackup.created_at.desc(),
+                    WhatsappSessionBackup.id.desc(),  # stable tiebreaker (MTR-5)
+                )
+                .first()
+            )
+            # Validated current pointer.
+            acct.session_blob = compressed
+            pruned = 0
+            if latest is None or latest.sha256 != sha:
+                db.add(WhatsappSessionBackup(
+                    tenant_id=acct.tenant_id,
+                    account_id=account_id,
+                    blob=compressed,
+                    sha256=sha,
+                    size_bytes=len(raw),
+                    validation_status="ok",
+                    source_event=source_event,
+                ))
+                db.flush()  # so the new row is included in the prune ordering
+                pruned = self._prune_session_backups(
+                    db, acct.tenant_id, account_id, keep=self.SESSION_BACKUP_KEEP
+                )
+            db.commit()
+            logger.info(
+                "Saved validated WhatsApp session for %s:%s (%s, %d→%d bytes, sha=%s, pruned=%d)",
+                tenant_id[:8], account_id, source_event, len(raw), len(compressed), sha[:8], pruned,
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "Failed to persist validated WhatsApp session for %s:%s", tenant_id[:8], account_id
+            )
+            db.rollback()
+            return False
+        finally:
+            db.close()
+
+    def _restore_session_from_db(self, tenant_id: str, account_id: str) -> bool:
+        """Restore the neonize SQLite session from the durable Postgres copy,
+        preferring the validated CURRENT blob and falling back through the
+        rolling known-good backups (design §3).
+
+        Contract: NEVER write an invalid blob to disk, and NEVER force a QR
+        for a recoverable corruption — a QR is reached only when every copy
+        is unusable (the device was genuinely revoked). Returns True iff a
+        validated session was written to disk.
+        """
+        import gzip
+        try:
+            # Phase 1 — read candidate blobs into memory, then CLOSE the db
+            # session so the slow per-candidate SQLite validation + multi-MB
+            # disk write below don't hold a Postgres connection idle-in-
+            # transaction (review MTR-6).
+            db = self._get_db()
+            try:
+                acct = self._get_or_create_account(db, tenant_id, account_id)
+                tenant_uuid = acct.tenant_id
+                candidates = []  # list of (label, is_current, compressed_blob)
+                if acct.session_blob:
+                    candidates.append(("current", True, acct.session_blob))
+                backups = (
+                    db.query(WhatsappSessionBackup)
+                    .filter(
+                        WhatsappSessionBackup.tenant_id == tenant_uuid,
+                        WhatsappSessionBackup.account_id == account_id,
+                        WhatsappSessionBackup.validation_status == "ok",
+                    )
+                    # id.desc() is a stable tiebreaker for same-tick created_at
+                    # (matches _prune_session_backups; review MTR-5). It does
+                    # not encode recency (id is a random uuid) but all tied rows
+                    # are equally known-good, so any is safe to restore.
+                    .order_by(
+                        WhatsappSessionBackup.created_at.desc(),
+                        WhatsappSessionBackup.id.desc(),
+                    )
+                    .all()
+                )
+                for i, b in enumerate(backups):
+                    candidates.append((f"backup#{i}", False, b.blob))
+            finally:
+                db.close()
+
+            if not candidates:
+                logger.info("No WhatsApp session to restore for %s:%s", tenant_id[:8], account_id)
                 return False
-            raw = gzip.decompress(acct.session_blob)
+
             path = self._client_name(tenant_id, account_id)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            
-            # CRITICAL: Delete any stale WAL/SHM files before writing the restored .db file.
-            # SQLite will fail to open the database if it finds a WAL file that is
-            # inconsistent with the main .db file (which happens if we only restore the .db).
-            for suffix in ("-wal", "-shm"):
+            # Phase 2 — validate best-first; write the first good copy to disk.
+            for label, is_current, comp in candidates:
+                try:
+                    raw = gzip.decompress(comp)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "WhatsApp restore: %s blob for %s:%s failed to decompress (%s) — trying next",
+                        label, tenant_id[:8], account_id, e,
+                    )
+                    continue
+                ok, reason = self._validate_sqlite_bytes(raw)
+                if not ok:
+                    logger.warning(
+                        "WhatsApp restore: %s blob for %s:%s failed validation (%s) — trying next",
+                        label, tenant_id[:8], account_id, reason,
+                    )
+                    continue
+                # Write the validated copy. Delete any stale WAL/SHM first
+                # (SQLite refuses to open a .db with an inconsistent WAL).
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                for suffix in ("-wal", "-shm"):
+                    try:
+                        os.remove(path + suffix)
+                    except FileNotFoundError:
+                        pass
+                    except Exception:  # noqa: BLE001
+                        logger.warning("Failed to delete stale %s file %s", suffix, path + suffix)
+                with open(path, "wb") as f:
+                    f.write(raw)
+                if is_current:
+                    logger.info(
+                        "Restored WhatsApp session for %s:%s from current (%d bytes)",
+                        tenant_id[:8], account_id, len(raw),
+                    )
+                else:
+                    # Self-heal: promote the recovered backup to current so the
+                    # next restore is fast and the corrupt current is replaced.
+                    # Intentionally lockless: this runs at startup / readonly
+                    # auto-restore, and the per-account session lock is NOT a
+                    # global save barrier anyway (the pairing-status and active-
+                    # probe save paths also persist unlocked); worst case is a
+                    # last-writer-wins refresh that self-corrects on the next
+                    # event-driven save (review MTR-2). The disk is already
+                    # healed (write above), so reconnect succeeds with NO QR
+                    # regardless of whether this promote commits.
+                    logger.warning(
+                        "WhatsApp restore: recovered %s:%s from %s (current was unusable) "
+                        "— self-healed from backup, NO QR",
+                        tenant_id[:8], account_id, label,
+                    )
+                    hdb = self._get_db()
+                    try:
+                        hacct = self._get_or_create_account(hdb, tenant_id, account_id)
+                        hacct.session_blob = comp
+                        hdb.commit()
+                    except Exception:  # noqa: BLE001
+                        hdb.rollback()
+                        logger.warning(
+                            "WhatsApp self-heal promote failed for %s:%s — disk healed from %s "
+                            "but corrupt current persists in DB; will re-heal next boot",
+                            tenant_id[:8], account_id, label,
+                        )
+                    finally:
+                        hdb.close()
+                return True
+
+            # Every durable copy is unusable → the device is effectively gone
+            # (a QR re-pair is the only honest outcome). Normalise on-disk state
+            # so neonize starts from a deterministic clean slate — a pre-existing
+            # torn .db from a prior SIGKILL-mid-write would otherwise be opened
+            # by neonize. Safe here because every Postgres copy was already
+            # proven unusable, so there is no good session to lose (review MTR-3).
+            try:
+                if os.path.exists(path):
+                    os.replace(path, path + ".corrupt-backup")
+            except Exception:  # noqa: BLE001
+                logger.warning("WhatsApp restore: could not stash on-disk .corrupt-backup for %s", path)
+            for suffix in ("", "-wal", "-shm"):
                 try:
                     os.remove(path + suffix)
                 except FileNotFoundError:
                     pass
-                except Exception:
-                    logger.warning(f"Failed to delete stale {suffix} file {path + suffix}")
-            
-            with open(path, "wb") as f:
-                f.write(raw)
-            logger.info(f"Restored neonize session from DB for {tenant_id[:8]}:{account_id} ({len(raw)} bytes)")
-            return True
-        except Exception:
-            logger.exception(f"Failed to restore session blob for {tenant_id[:8]}:{account_id}")
+                except Exception:  # noqa: BLE001
+                    pass
+            logger.error(
+                "WhatsApp restore FAILED for %s:%s — all %d copies unusable; on-disk session "
+                "cleared, device likely revoked, re-pair (QR) required",
+                tenant_id[:8], account_id, len(candidates),
+            )
             return False
-        finally:
-            db.close()
+        except Exception:
+            logger.exception("Failed to restore WhatsApp session for %s:%s", tenant_id[:8], account_id)
+            return False
 
     # ── Client lifecycle ─────────────────────────────────────────────
 
@@ -638,6 +999,10 @@ class WhatsAppService:
         @client.event(PairStatusEv)
         async def on_pair_status(c: NewAClient, event: PairStatusEv):
             logger.info(f"Pair status event for {key}: {event}")
+            # During a graceful drain the shutdown handler owns the teardown —
+            # don't update status, save, or otherwise re-arm a writer (review C1).
+            if self._draining:
+                return
             self._statuses[key] = "connected"
             self._qr_codes.pop(key, None)
             phone = None
@@ -649,12 +1014,17 @@ class WhatsAppService:
                 pass
             self._update_account_status(tenant_id, account_id, "connected", phone=phone)
             self._log_event(tenant_id, account_id, "paired")
-            self._save_session_to_db(tenant_id, account_id)
+            self._save_session_to_db(tenant_id, account_id, source_event="pair")
 
         # Connected
         @client.event(ConnectedEv)
         async def on_connected(c: NewAClient, event: ConnectedEv):
             logger.info(f"ConnectedEv fired for {key}")
+            # During a graceful drain, refuse to re-arm: no status flip, no
+            # save, no heartbeat start (review C1). The drain set status to
+            # logged_out and is tearing this client down.
+            if self._draining:
+                return
             self._statuses[key] = "connected"
             # 2026-05-20 fix: do NOT reset reconnect_counts here. The
             # previous version reset on every ConnectedEv, which let a
@@ -678,7 +1048,7 @@ class WhatsAppService:
                 pass
             self._update_account_status(tenant_id, account_id, "connected", phone=phone)
             self._log_event(tenant_id, account_id, "connection_opened")
-            await self._save_session_locked(tenant_id, account_id)
+            await self._save_session_locked(tenant_id, account_id, source_event="connected")
             self._start_heartbeat(tenant_id, account_id)
             # Register whatsapp shell in presence
             try:
@@ -700,7 +1070,16 @@ class WhatsAppService:
             hb = self._heartbeat_tasks.pop(key, None)
             if hb and not hb.done():
                 hb.cancel()
-            await self._save_session_locked(tenant_id, account_id)
+            await self._save_session_locked(tenant_id, account_id, source_event="disconnected")
+            # During a graceful drain the shutdown handler owns the teardown
+            # and has already set status=logged_out. Do NOT clobber it back to
+            # "disconnected" or schedule an auto-reconnect — that would race the
+            # drain's validated save and resurrect a live client mid-shutdown
+            # (review C1-1). _draining short-circuits keep already-scheduled
+            # reconnects inert too.
+            if self._draining:
+                self._log_event(tenant_id, account_id, "connection_closed")
+                return
             self._statuses[key] = "disconnected"
             self._update_account_status(tenant_id, account_id, "disconnected")
             self._log_event(tenant_id, account_id, "connection_closed")
@@ -746,6 +1125,11 @@ class WhatsAppService:
 
     async def _auto_reconnect(self, tenant_id: str, account_id: str):
         """Auto-reconnect after disconnect with exponential backoff."""
+        # Hard short-circuit during a graceful drain — a heartbeat/disconnect
+        # callback may have scheduled us via a bare ensure_future the drain
+        # can't cancel; refuse to re-arm a client mid-shutdown (review C1-1/C1-2).
+        if self._draining:
+            return
         key = self._key(tenant_id, account_id)
         attempt = self._reconnect_counts.get(key, 0) + 1
         self._reconnect_counts[key] = attempt
@@ -808,6 +1192,13 @@ class WhatsAppService:
         client: NewAClient, event: MessageEv,
     ):
         """Process an inbound WhatsApp message through agent pipeline."""
+        # Drain gate at the true inbound entrypoint (review C1-4): refuse new
+        # work BEFORE the up-to-90s media download / transcription, not just at
+        # the chat-turn boundary, so a draining instance doesn't start expensive
+        # ingest it will then drop.
+        if self._draining:
+            logger.info("WhatsApp draining — dropping inbound message for %s", key)
+            return
         info = event.Info
         msg = event.Message
 
@@ -974,42 +1365,13 @@ class WhatsAppService:
             extra_data={"chat_jid": chat_jid, "is_group": is_group},
         )
 
-        # Show "typing..." indicator while processing.
-        # WhatsApp auto-dismisses composing presence after ~5s, so we refresh
-        # it every 4s in a background task until the response is ready.
+        # Typing ("composing") presence + the reply send are now owned by the
+        # per-sender chat consumer (_run_turn). This handler only does media
+        # prep, builds the turn, and enqueues it — it never blocks on the CLI
+        # run, so a slow/hung turn can't starve other WhatsApp messages (the
+        # thread-pool wedge of 2026-06-04). reply_jid is captured here and
+        # carried on the turn.
         reply_jid = build_jid(sender_phone)
-
-        # Helper to send a message and track its ID for echo suppression
-        async def _send_and_track(msg: str):
-            try:
-                resp = await client.send_message(reply_jid, msg)
-                if resp and hasattr(resp, 'ID') and resp.ID:
-                    _ids = self._sent_message_ids.setdefault(key, set())
-                    _ids.add(resp.ID)
-                    if len(_ids) > 100:
-                        _ids.pop()
-            except Exception:
-                pass
-
-        typing_done = asyncio.Event()
-
-        async def _keep_typing():
-            while not typing_done.is_set():
-                try:
-                    await client.send_chat_presence(
-                        reply_jid,
-                        ChatPresence.CHAT_PRESENCE_COMPOSING,
-                        ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT,
-                    )
-                except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(typing_done.wait(), timeout=4.0)
-                    break
-                except asyncio.TimeoutError:
-                    continue
-
-        typing_task = asyncio.create_task(_keep_typing())
 
         # Process through agent — use phone number (not LID) as session key
         try:
@@ -1137,49 +1499,29 @@ class WhatsAppService:
             else:
                 agent_text = media_caption or text or f"[Sent {media_type}]"
 
-            response_text = await self._process_through_agent(
-                tenant_id, sender_phone, agent_text, media_parts=media_parts,
+            # Fire-and-forget: build the turn (resolve session + create a
+            # chat_job) and enqueue it on its per-sender ordered queue. The
+            # consumer runs the CLI turn on the dedicated WhatsApp executor,
+            # keeps "typing…" alive, and sends the reply (or a fallback) when
+            # it finishes — this handler returns now and never blocks on the
+            # multi-minute run.
+            turn = await self._build_turn(
+                tenant_id, account_id, sender_phone, reply_jid,
+                agent_text, media_parts, key,
             )
-        finally:
-            # Stop the typing indicator loop
-            typing_done.set()
-            await typing_task
-
-        if not response_text:
-            logger.warning(f"Empty response from agent for {sender_phone}, not sending reply")
-        if response_text:
-            try:
-                # Split long messages — WhatsApp limits to ~4096 chars
-                chunks = [response_text] if len(response_text) <= 4000 else [
-                    response_text[i:i + 4000] for i in range(0, len(response_text), 4000)
-                ]
-
-                for chunk in chunks:
-                    resp = await client.send_message(reply_jid, chunk)
-                    # Track sent message ID to avoid echo loop on self-messages
-                    if resp and hasattr(resp, 'ID') and resp.ID:
-                        sent_ids = self._sent_message_ids.setdefault(key, set())
-                        sent_ids.add(resp.ID)
-                        # Cap the set size to prevent memory leak
-                        if len(sent_ids) > 100:
-                            sent_ids.pop()
-
-                self._log_event(
-                    tenant_id, account_id, "message_outbound",
-                    direction="outbound", remote_id=sender_phone,
-                    message_content=response_text,
-                )
-                # Stop typing indicator
-                try:
-                    await client.send_chat_presence(
-                        reply_jid,
-                        ChatPresence.CHAT_PRESENCE_PAUSED,
-                        ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT,
-                    )
-                except Exception:
-                    pass
-            except Exception:
-                logger.exception(f"Failed to send reply to {sender_phone} (jid={sender_jid})")
+            if turn is not None:
+                await self._enqueue_turn(turn)
+            elif not self._draining:
+                # Build failed for a non-draining reason (no user/agent, or a
+                # DB error during session resolution / create_job). Don't leave
+                # the sender in dead air — a fallback beats silence. (Plan
+                # Step 7 / superpowers code-review IMPORTANT-2.) When draining,
+                # stay silent: _drain_chat_consumers owns the restart notice.
+                await self._send_text(key, reply_jid, WHATSAPP_TURN_FAILED_FALLBACK)
+        except Exception:
+            logger.exception(
+                "Failed to enqueue WhatsApp turn for %s (jid=%s)", sender_phone, sender_jid,
+            )
 
     async def _extract_and_embed_document(
         self, tenant_id: str, media_bytes: bytes, mime_type: str, filename: str,
@@ -1246,31 +1588,39 @@ class WhatsAppService:
             logger.warning(f"Document extraction failed for {filename}", exc_info=True)
             return None
 
-    async def _process_through_agent(
-        self, tenant_id: str, sender_id: str, message: str,
-        media_parts: list | None = None,
-    ) -> Optional[str]:
-        """Route inbound message through the same agent pipeline as the chat UI.
+    async def _build_turn(
+        self, tenant_id: str, account_id: str, sender_id: str, reply_jid,
+        message: str, media_parts: list | None, account_key: str,
+    ) -> "Optional[_WaChatTurn]":
+        """Resolve the WhatsApp chat session + agent and create a queued
+        chat_job, returning a ready-to-enqueue turn. Fast synchronous DB work
+        only — NO CLI run here (that happens later on the dedicated executor).
 
-        This ensures WhatsApp conversations share the same agent kits,
-        LLM provider, conversation history, and Temporal workflow audit trail.
+        Returns None when draining or when the tenant has no user/agent. This
+        replaces the old blocking ``_process_through_agent``: the multi-minute
+        CLI run no longer holds the inbound handler's thread (the thread-pool
+        wedge of 2026-06-04).
         """
+        # Drain gate: once shutdown has begun, do not start a new chat turn.
+        if self._draining:
+            logger.info("WhatsApp draining — refusing new chat turn for %s", sender_id)
+            return None
         db = self._get_db()
         try:
-            from app.services import chat as chat_service
+            from app.services import chat_jobs as chat_jobs_service
             from app.models.agent import Agent
             from app.services._agent_ordering import agent_status_rank
             from app.models.user import User
 
             tid = uuid.UUID(tenant_id)
+            created_job_id = None   # set once create_job commits (NIT-2 guard)
 
-            # Find the tenant's admin user (needed for session context)
             user = db.query(User).filter(User.tenant_id == tid).first()
             if not user:
                 logger.error(f"No user found for tenant {tenant_id}")
                 return None
 
-            # Find the tenant's primary agent — prefer Luna, then production > staging > draft
+            # Primary agent — prefer Luna, then production > staging > draft.
             agent = (
                 db.query(Agent)
                 .filter(Agent.tenant_id == tid)
@@ -1285,7 +1635,6 @@ class WhatsAppService:
                 logger.warning(f"No agent found for tenant {tenant_id}")
                 return None
 
-            # Find or create a WhatsApp chat session keyed by sender
             session_key = f"whatsapp:{sender_id}"
             session = (
                 db.query(ChatSession)
@@ -1303,61 +1652,392 @@ class WhatsAppService:
                     agent_id=agent.id,
                     source="whatsapp",
                     external_id=session_key,
+                    owner_user_id=user.id,
                 )
                 db.add(session)
                 db.commit()
                 db.refresh(session)
             elif not session.agent_id:
-                # Backfill agent on existing sessions
                 session.agent_id = agent.id
                 db.commit()
                 db.refresh(session)
 
-            # Route through the same chat service as the web UI
-            # This calls agent selection → LLM → tools → audit
-            # Wrapper captures content string eagerly in the thread (avoids
-            # SQLAlchemy lazy-loading issues when crossing the thread boundary)
-            # [chat-trace] anchor the WhatsApp → API thread-pool boundary. The
-            # 21:12→23:09 silent hang from 2026-04-28 lost ~2h between the
-            # `Inbound DM` log and the next visible log line; without these
-            # bookends a hang inside `to_thread` (or pre-handler DB session
-            # setup) is opaque from the api logs alone.
-            _trace_t0 = time.perf_counter()
-            logger.info(
-                "[chat-trace] handoff: to_thread session=%s sender=%s",
-                str(session.id)[:8], sender_id,
+            job = chat_jobs_service.create_job(
+                db,
+                session_id=session.id,
+                tenant_id=tid,
+                user_id=user.id,
+                content=message,
             )
-
-            def _run_chat():
-                logger.info(
-                    "[chat-trace] enter _run_chat: session=%s elapsed=%.0fms",
-                    str(session.id)[:8], (time.perf_counter() - _trace_t0) * 1000,
-                )
-                _user_msg, assistant_msg = chat_service.post_user_message(
-                    db,
-                    session=session,
-                    user_id=user.id,
-                    content=message,
-                    sender_phone=sender_id,
-                    media_parts=media_parts,
-                )
-                # Eagerly capture content before leaving the thread
-                return assistant_msg.content if assistant_msg else None
-
-            response = await asyncio.to_thread(_run_chat)
+            created_job_id = uuid.UUID(job["id"])
             logger.info(
-                "[chat-trace] handoff: returned session=%s elapsed=%.0fms response=%s",
-                str(session.id)[:8], (time.perf_counter() - _trace_t0) * 1000,
-                "ok" if response else "none",
+                "[chat-trace] enqueue: job=%s session=%s sender=%s",
+                job["id"][:8], str(session.id)[:8], sender_id,
             )
-            logger.info(f"Agent response for {sender_id}: len={len(response) if response else 0}")
-            return response
+            return _WaChatTurn(
+                queue_key=f"{account_key}::{sender_id}",
+                account_key=account_key,
+                tenant_id=tid,
+                tenant_id_str=tenant_id,
+                account_id=account_id,
+                sender_phone=sender_id,
+                reply_jid=reply_jid,
+                job_uuid=created_job_id,
+                session_id=session.id,
+                user_id=user.id,
+                content=message,
+                media_parts=media_parts,
+            )
         except Exception:
-            logger.exception("Failed to process through agent pipeline")
+            logger.exception("Failed to build WhatsApp chat turn")
             db.rollback()
+            # NIT-2: if create_job already committed, terminalize it so a build
+            # failure after that point can't orphan a 'queued' row.
+            if created_job_id is not None:
+                try:
+                    from app.services import chat_jobs as _cj
+                    _cj.fail_job(db, job_id=created_job_id, error="build failed")
+                except Exception:
+                    logger.exception("Failed to terminalize orphaned job %s", created_job_id)
             return None
         finally:
             db.close()
+
+    async def _enqueue_turn(self, turn: "_WaChatTurn") -> None:
+        """Capacity-gated enqueue onto the per-sender ordered queue; spawns the
+        consumer if needed. Over-cap (global OR per-sender) → terminalize the
+        job + overloaded fallback, never an unbounded in-memory pile-up."""
+        accepted = False
+        snapshot_global = 0
+        async with self._chat_dispatch_lock:
+            q = self._chat_queues.get(turn.queue_key)
+            pending = q.qsize() if q is not None else 0
+            snapshot_global = self._chat_inflight_global   # exact under the lock (NIT-3)
+            if (self._chat_inflight_global < WHATSAPP_CHAT_GLOBAL_CAP
+                    and pending < WHATSAPP_CHAT_PER_SENDER_CAP):
+                if q is None:
+                    q = asyncio.Queue()
+                    self._chat_queues[turn.queue_key] = q
+                q.put_nowait(turn)
+                self._chat_inflight_global += 1
+                consumer = self._chat_consumers.get(turn.queue_key)
+                if consumer is None or consumer.done():
+                    self._chat_consumers[turn.queue_key] = asyncio.create_task(
+                        self._chat_consumer(turn.queue_key)
+                    )
+                accepted = True
+        if not accepted:
+            logger.warning(
+                "WhatsApp chat over capacity (global=%d, sender=%s) — rejecting turn",
+                snapshot_global, turn.sender_phone,
+            )
+            self._fail_job_safe(turn, "over capacity")
+            await self._send_text(turn.account_key, turn.reply_jid, WHATSAPP_OVERLOADED_FALLBACK)
+
+    async def _chat_consumer(self, queue_key: str) -> None:
+        """One consumer per ordering key — drains its queue strictly
+        sequentially so a sender's turns (and replies) stay ordered, then GCs
+        itself when the queue empties (respawning if a turn raced teardown)."""
+        q = self._chat_queues.get(queue_key)
+        if q is None:
+            return
+        try:
+            while True:
+                try:
+                    turn = q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                try:
+                    await self._run_turn(turn)
+                finally:
+                    async with self._chat_dispatch_lock:
+                        self._chat_inflight_global = max(0, self._chat_inflight_global - 1)
+                    q.task_done()
+        finally:
+            # GC under the lock; respawn if a turn arrived during teardown so
+            # no enqueue is silently dropped — but never during drain (the loop
+            # may be closing) and never crash if create_task can't run.
+            async with self._chat_dispatch_lock:
+                if self._chat_queues.get(queue_key) is q and (q.empty() or self._draining):
+                    self._chat_queues.pop(queue_key, None)
+                    self._chat_consumers.pop(queue_key, None)
+                elif self._chat_queues.get(queue_key) is q and not self._draining:
+                    try:
+                        self._chat_consumers[queue_key] = asyncio.create_task(
+                            self._chat_consumer(queue_key)
+                        )
+                    except RuntimeError:
+                        self._chat_consumers.pop(queue_key, None)
+
+    async def _run_turn(self, turn: "_WaChatTurn") -> None:
+        """Run ONE turn: keep typing alive, execute run_job_blocking on the
+        dedicated executor (backstop-bounded by WHATSAPP_JOB_WATCH_TIMEOUT),
+        then send the reply or a fallback. Brackets _inflight_turns + records
+        the active turn so drain can wait for / notify it."""
+        import functools
+        from app.services import chat_jobs as chat_jobs_service
+
+        typing_done = asyncio.Event()
+        typing_task = asyncio.create_task(
+            self._keep_typing(turn.account_key, turn.reply_jid, typing_done)
+        )
+        self._inflight_turns += 1
+        self._chat_active[turn.queue_key] = turn
+        try:
+            loop = asyncio.get_running_loop()
+            try:
+                fut = loop.run_in_executor(
+                    self._chat_executor,
+                    functools.partial(
+                        chat_jobs_service.run_job_blocking,
+                        turn.job_uuid,
+                        session_id=turn.session_id,
+                        tenant_id=turn.tenant_id,
+                        user_id=turn.user_id,
+                        content=turn.content,
+                        media_parts=turn.media_parts,
+                        sender_phone=turn.sender_phone,
+                    ),
+                )
+            except RuntimeError:
+                # Executor already shut down (drain in progress) — terminalize
+                # + fallback rather than leaving the job 'queued' (Luna R5).
+                logger.warning("WhatsApp executor unavailable — failing job=%s", turn.job_uuid)
+                self._fail_job_safe(turn, "executor unavailable")
+                await self._send_reply_or_fallback(turn, None, False)
+                return
+            watch_fired = False
+            try:
+                await asyncio.wait_for(fut, timeout=WHATSAPP_JOB_WATCH_TIMEOUT)
+            except asyncio.TimeoutError:
+                watch_fired = True
+                # error-level: the watch should NEVER fire if Part A's bound is
+                # airtight (watch 660s > dispatch 600s). Firing means a turn
+                # escaped the dispatch bound and is leaking one of only N
+                # executor workers — observable signal, not just a warning.
+                # (superpowers code-review IMPORTANT-4.)
+                logger.error(
+                    "WhatsApp turn watch timed out (%.0fs) for job=%s — Part-A "
+                    "dispatch bound may have escaped; sending fallback",
+                    WHATSAPP_JOB_WATCH_TIMEOUT, turn.job_uuid,
+                )
+            reply, ok = self._read_job_reply(turn)
+            if not ok:
+                # Terminalize a stuck/queued job (watch-timeout, or a future
+                # cancelled before run_job_blocking started) so it can't orphan
+                # as 'queued'/'running'. Idempotent — a job that actually
+                # finished 'done' is read as ok=True above and never reaches
+                # here. (Luna + superpowers code-review.)
+                self._fail_job_safe(
+                    turn, "watch timeout" if watch_fired else "non-done terminal",
+                )
+            await self._send_reply_or_fallback(turn, reply, ok)
+        except Exception:
+            logger.exception("WhatsApp turn failed for job=%s", turn.job_uuid)
+            try:
+                await self._send_reply_or_fallback(turn, None, False)
+            except Exception:
+                logger.exception("WhatsApp fallback send failed for job=%s", turn.job_uuid)
+        finally:
+            self._chat_active.pop(turn.queue_key, None)
+            typing_done.set()
+            try:
+                await typing_task
+            except Exception:
+                pass
+            self._inflight_turns -= 1
+
+    async def _keep_typing(self, account_key: str, reply_jid, typing_done: asyncio.Event) -> None:
+        """Refresh COMPOSING presence every 4s until ``typing_done``. Re-reads
+        the client each loop so a mid-turn reconnect doesn't strand it."""
+        while not typing_done.is_set():
+            client = self._clients.get(account_key)
+            if client is not None:
+                try:
+                    await client.send_chat_presence(
+                        reply_jid,
+                        ChatPresence.CHAT_PRESENCE_COMPOSING,
+                        ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT,
+                    )
+                except Exception:
+                    pass
+            try:
+                await asyncio.wait_for(typing_done.wait(), timeout=4.0)
+                break
+            except asyncio.TimeoutError:
+                continue
+
+    def _read_job_reply(self, turn: "_WaChatTurn") -> "tuple[Optional[str], bool]":
+        """Read the terminal job → (reply_text, ok). ok=True only on status
+        'done' with non-empty concatenated chunk text.
+
+        NIT-1 (deliberate trade-off): this and _build_turn/_fail_job_safe do
+        synchronous indexed-PK reads (~1-5ms) on the event loop, matching the
+        pre-existing chat pattern. The load-bearing fix removed the *multi-
+        minute* CLI hold from the loop; offloading every fast PK read to the
+        executor would add overhead/complexity for negligible benefit. If
+        Postgres degrades, revisit by wrapping these in run_in_executor.
+        """
+        from app.services import chat_jobs as chat_jobs_service
+        db = self._get_db()
+        try:
+            job = chat_jobs_service.get_job(db, job_id=turn.job_uuid, tenant_id=turn.tenant_id)
+            if not job:
+                return None, False
+            if job["status"] != "done":
+                logger.info(
+                    "WhatsApp job=%s terminal status=%s — fallback",
+                    str(turn.job_uuid)[:8], job["status"],
+                )
+                return None, False
+            txt = chat_jobs_service.reply_text_from_events(db, job_id=turn.job_uuid)
+            return (txt or None), bool(txt)
+        except Exception:
+            logger.exception("WhatsApp read_job_reply failed for job=%s", turn.job_uuid)
+            return None, False
+        finally:
+            db.close()
+
+    async def _send_reply_or_fallback(
+        self, turn: "_WaChatTurn", reply: Optional[str], ok: bool
+    ) -> None:
+        """Send the reply (chunked at 4000) on success, else a fallback.
+        Re-reads the client at send time (reconnect-safe), tracks sent IDs for
+        echo suppression, logs the outbound event, and sets PAUSED presence."""
+        client = self._clients.get(turn.account_key)
+        if client is None:
+            logger.warning(
+                "WhatsApp send: no client for %s — dropping reply for job=%s",
+                turn.account_key, turn.job_uuid,
+            )
+            return
+        if ok and reply:
+            try:
+                chunks = [reply] if len(reply) <= 4000 else [
+                    reply[i:i + 4000] for i in range(0, len(reply), 4000)
+                ]
+                for chunk in chunks:
+                    resp = await client.send_message(turn.reply_jid, chunk)
+                    if resp and getattr(resp, "ID", None):
+                        sent_ids = self._sent_message_ids.setdefault(turn.account_key, set())
+                        sent_ids.add(resp.ID)
+                        if len(sent_ids) > 100:
+                            sent_ids.pop()
+                self._log_event(
+                    turn.tenant_id_str, turn.account_id, "message_outbound",
+                    direction="outbound", remote_id=turn.sender_phone,
+                    message_content=reply,
+                )
+                try:
+                    await client.send_chat_presence(
+                        turn.reply_jid,
+                        ChatPresence.CHAT_PRESENCE_PAUSED,
+                        ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT,
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception(
+                    "WhatsApp send failed for %s (job=%s)", turn.sender_phone, turn.job_uuid,
+                )
+        else:
+            try:
+                await client.send_message(turn.reply_jid, WHATSAPP_TURN_FAILED_FALLBACK)
+                # Symmetric with the success path: explicitly PAUSE typing on
+                # the fallback too (the refresher is stopped separately, but a
+                # PAUSED presence dismisses "typing…" immediately). (NIT.)
+                try:
+                    await client.send_chat_presence(
+                        turn.reply_jid,
+                        ChatPresence.CHAT_PRESENCE_PAUSED,
+                        ChatPresenceMedia.CHAT_PRESENCE_MEDIA_TEXT,
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                logger.exception(
+                    "WhatsApp fallback send failed for %s (job=%s)",
+                    turn.sender_phone, turn.job_uuid,
+                )
+
+    async def _send_text(self, account_key: str, reply_jid, text: str) -> None:
+        """Best-effort single text send (capacity / restart notices)."""
+        client = self._clients.get(account_key)
+        if client is None:
+            return
+        try:
+            await client.send_message(reply_jid, text)
+        except Exception:
+            logger.exception("WhatsApp _send_text failed for %s", account_key)
+
+    def _fail_job_safe(self, turn: "_WaChatTurn", error: str) -> None:
+        """Terminalize a created-but-not-run job (over-cap / submit failure) so
+        it can't linger as 'queued'. fail_job's NOT-IN-terminal guard covers
+        the queued→failed flip directly."""
+        from app.services import chat_jobs as chat_jobs_service
+        db = self._get_db()
+        try:
+            chat_jobs_service.fail_job(db, job_id=turn.job_uuid, error=error)
+        except Exception:
+            logger.exception("WhatsApp _fail_job_safe failed for job=%s", turn.job_uuid)
+        finally:
+            db.close()
+
+    async def _drain_chat_consumers(self) -> None:
+        """Shutdown: terminalize queued (never-started) jobs so they can't
+        orphan as 'queued', best-effort 'restarting' notice (concurrent +
+        per-send bounded so a dead socket can't eat the drain budget and
+        starve the validated session save), cancel consumers, stop the
+        executor. (Luna + superpowers code-review.)"""
+        async with self._chat_dispatch_lock:
+            queues = list(self._chat_queues.items())
+            consumers = list(self._chat_consumers.values())
+            active = list(self._chat_active.values())
+            self._chat_queues.clear()
+            self._chat_consumers.clear()
+            self._chat_inflight_global = 0   # reset accounting under the lock
+
+        pending: list[_WaChatTurn] = []
+        for _qk, q in queues:
+            while True:
+                try:
+                    pending.append(q.get_nowait())
+                except Exception:
+                    break
+        # Queued turns never ran — terminalize their chat_jobs. Active turns'
+        # jobs self-terminalize via the still-running run_job_blocking thread
+        # (bounded by Part A), so we must NOT fail those.
+        for turn in pending:
+            self._fail_job_safe(turn, "service draining")
+
+        # Notify each distinct sender once — concurrent + per-send bounded.
+        seen: set = set()
+        targets: list[_WaChatTurn] = []
+        for turn in list(active) + pending:
+            if turn.queue_key in seen:
+                continue
+            seen.add(turn.queue_key)
+            targets.append(turn)
+
+        async def _notify(turn: _WaChatTurn) -> None:
+            try:
+                await asyncio.wait_for(
+                    self._send_text(turn.account_key, turn.reply_jid, WHATSAPP_RESTART_FALLBACK),
+                    timeout=3,
+                )
+            except Exception:
+                pass
+
+        if targets:
+            await asyncio.gather(*[_notify(t) for t in targets], return_exceptions=True)
+
+        for task in consumers:
+            if task and not task.done():
+                task.cancel()
+        try:
+            self._chat_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
     # ── Public API ───────────────────────────────────────────────────
 
@@ -1441,8 +2121,19 @@ class WhatsAppService:
     ) -> dict:
         key = self._key(tenant_id, account_id)
 
-        # If force, disconnect existing client and delete session file
+        # force=True is the ONLY legitimate destructive path: it tears down
+        # the device session so neonize mints a FRESH QR. It is reserved for
+        # an explicit OPERATOR unlink / re-pair — recovery code (reconnect /
+        # restore_connections / heartbeat / _auto_reconnect) must NEVER reach
+        # here (design §6, Codex-5.5 review #5).
         if force:
+            # Disconnect OUTSIDE the session lock: client.disconnect() dispatches
+            # the on_disconnected handler, which acquires this same lock via
+            # _save_session_locked — holding the lock across disconnect could
+            # self-deadlock (review FG-1, the same hazard the drain handler
+            # avoids). A late on_disconnected save can't resurrect the device:
+            # we delete the on-disk file under the lock below, and
+            # _save_session_to_db no-ops when the file is gone.
             if key in self._clients:
                 try:
                     await self._clients[key].disconnect()
@@ -1452,26 +2143,49 @@ class WhatsAppService:
             task = self._tasks.pop(key, None)
             if task and not task.done():
                 task.cancel()
-            self._qr_codes.pop(key, None)
-            # Delete session DB so neonize requests a fresh QR instead of reusing stale auth
-            import os
-            session_path = self._client_name(tenant_id, account_id)
-            for suffix in ("", "-wal", "-shm"):
+            # The destructive file + DB teardown is serialized under the session
+            # lock so it can't race a concurrent _save_session_to_db that would
+            # re-persist stale auth right after we cleared it (CRITICAL RACE #1).
+            async with self._get_session_lock(key):
+                self._qr_codes.pop(key, None)
+                session_path = self._client_name(tenant_id, account_id)
+                # Keep a single rolling forensic copy of the .db before
+                # deleting (overwrites any prior .corrupt-backup).
                 try:
-                    os.remove(session_path + suffix)
-                except FileNotFoundError:
-                    pass
-            # Also clear the session blob in the database
-            db = self._get_db()
-            try:
-                acct = self._get_or_create_account(db, tenant_id, account_id)
-                acct.session_blob = None
-                acct.status = "pairing"
-                db.commit()
-            except Exception:
-                db.rollback()
-            finally:
-                db.close()
+                    if os.path.exists(session_path):
+                        os.replace(session_path, session_path + ".corrupt-backup")
+                except Exception:  # noqa: BLE001
+                    logger.warning("force re-pair: could not stash .corrupt-backup for %s", session_path)
+                for suffix in ("", "-wal", "-shm"):
+                    try:
+                        os.remove(session_path + suffix)
+                    except FileNotFoundError:
+                        pass
+                # Clear the current blob AND the rolling backups — a real
+                # re-pair must not let restore_connections resurrect the old
+                # device from a backup tier on the next boot.
+                db = self._get_db()
+                try:
+                    acct = self._get_or_create_account(db, tenant_id, account_id)
+                    acct.session_blob = None
+                    acct.status = "pairing"
+                    deleted = (
+                        db.query(WhatsappSessionBackup)
+                        .filter(
+                            WhatsappSessionBackup.tenant_id == acct.tenant_id,
+                            WhatsappSessionBackup.account_id == account_id,
+                        )
+                        .delete()
+                    )
+                    db.commit()
+                    logger.warning(
+                        "Operator force re-pair for %s:%s — cleared current session + %d backup(s); minting fresh QR",
+                        tenant_id[:8], account_id, deleted,
+                    )
+                except Exception:
+                    db.rollback()
+                finally:
+                    db.close()
 
         # Pre-flight: verify WhatsApp is reachable before connect() —
         # neonize Go code panics (kills process) on TLS handshake timeout.
@@ -1551,7 +2265,7 @@ class WhatsAppService:
                         self._statuses[key] = "connected"
                         self._qr_codes.pop(key, None)
                         self._update_account_status(tenant_id, account_id, "connected", phone=phone)
-                        self._save_session_to_db(tenant_id, account_id)
+                        self._save_session_to_db(tenant_id, account_id, source_event="connected")
                         return {
                             "qr_data_url": None,
                             "message": "Already connected (existing session restored)",
@@ -1614,7 +2328,7 @@ class WhatsAppService:
                     self._statuses[key] = "connected"
                     self._qr_codes.pop(key, None)
                     self._update_account_status(tenant_id, account_id, "connected", phone=phone)
-                    self._save_session_to_db(tenant_id, account_id)
+                    self._save_session_to_db(tenant_id, account_id, source_event="connected")
                 elif logged_in:
                     # Authenticated but not fully connected yet
                     if status != "pairing":
@@ -1728,6 +2442,9 @@ class WhatsAppService:
         return {"status": "logged_out"}
 
     async def reconnect(self, tenant_id: str, account_id: str = "default") -> dict:
+        # Refuse to re-arm a client during a graceful drain (review C1-1/C1-2).
+        if self._draining:
+            return {"status": "draining"}
         key = self._key(tenant_id, account_id)
         # Cancel existing watchdog
         old_watchdog = self._watchdog_tasks.pop(key, None)
@@ -1768,6 +2485,120 @@ class WhatsAppService:
         self._update_account_status(tenant_id, account_id, "connecting")
         return {"status": "reconnecting"}
 
+    async def drain_and_shutdown(
+        self, *, drain_deadline: float = None, disconnect_timeout: float = None
+    ):
+        """Clean shutdown drain (design §1) — the fix for the SIGKILL-mid-write
+        corruption AND the restart hang:
+
+          1. mark draining — refuse NEW inbound chat turns,
+          2. bounded-wait for in-flight turns to finish (protects the 30–90s
+             turns the stop grace existed for, but bounded so a stuck turn
+             can't hang the process),
+          3. per account: disconnect (bounded), then validated-save under the
+             session lock — C1: validate AFTER disconnect; a disconnect
+             timeout or failed validation ABORTS the save and keeps the last
+             known-good (never overwrites),
+          4. final dict cleanup via shutdown().
+
+        Bounded throughout so it always returns well within the container
+        stop grace; main.py also wraps it in an overall asyncio.wait_for.
+        """
+        drain_deadline = (
+            drain_deadline if drain_deadline is not None
+            else float(os.environ.get("WHATSAPP_DRAIN_DEADLINE_SECONDS", "90"))
+        )
+        disconnect_timeout = (
+            disconnect_timeout if disconnect_timeout is not None
+            else float(os.environ.get("WHATSAPP_DISCONNECT_TIMEOUT_SECONDS", "8"))
+        )
+
+        self._draining = True
+
+        # 1. Cancel ALL recovery tasks up front so nothing re-arms a client
+        #    during the drain window (review C1-2). _auto_reconnect/reconnect
+        #    also hard short-circuit on _draining to neutralise any bare
+        #    ensure_future callback the drain can't directly cancel.
+        for taskmap in (self._heartbeat_tasks, self._stable_reset_tasks,
+                        self._watchdog_tasks, self._tasks):
+            for t in list(taskmap.values()):
+                if t and not t.done():
+                    t.cancel()
+            taskmap.clear()
+
+        logger.info(
+            "WhatsApp drain: starting (inflight=%d, deadline=%.0fs, clients=%d)",
+            self._inflight_turns, drain_deadline, len(self._clients),
+        )
+
+        # 2. bounded-wait for in-flight chat turns
+        waited = 0.0
+        step = 1.0
+        while self._inflight_turns > 0 and waited < drain_deadline:
+            if int(waited) % 5 == 0:
+                logger.info(
+                    "WhatsApp drain: waiting on %d in-flight turn(s) (%.0fs/%.0fs)",
+                    self._inflight_turns, waited, drain_deadline,
+                )
+            await asyncio.sleep(step)
+            waited += step
+        if self._inflight_turns > 0:
+            logger.warning(
+                "WhatsApp drain: %d turn(s) still in-flight at deadline — proceeding to save",
+                self._inflight_turns,
+            )
+
+        # 2b. Cancel per-sender chat consumers + best-effort "restarting"
+        #     notice so a deploy shutdown doesn't strand a mid-turn sender
+        #     silently, and stop the dedicated chat executor (Luna review R6).
+        try:
+            await self._drain_chat_consumers()
+        except Exception:
+            logger.exception("WhatsApp drain: chat-consumer drain failed")
+
+        # 3. per-account disconnect + validated save, CONCURRENTLY so total
+        #    wall-clock is ~one disconnect_timeout window regardless of account
+        #    count — a serial N*timeout loop could blow the 165s outer budget
+        #    (review C1-3). C1: validate AFTER disconnect; a disconnect timeout
+        #    or failed validation aborts the save and keeps the last known-good.
+        async def _drain_one(key):
+            tenant_id, _, account_id = key.partition(":")
+            client = self._clients.get(key)
+            # Prevent auto-reconnect racing the teardown.
+            self._statuses[key] = "logged_out"
+            # Disconnect OUTSIDE the session lock: neonize dispatches the
+            # on_disconnected handler, which itself acquires this same lock
+            # via _save_session_locked — holding the lock across disconnect
+            # could self-deadlock. The lock is only needed for the save.
+            if client is not None:
+                try:
+                    await asyncio.wait_for(client.disconnect(), timeout=disconnect_timeout)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "WhatsApp drain: disconnect timed out for %s after %.0fs — "
+                        "validation will gate any mid-write save", key, disconnect_timeout,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("WhatsApp drain: disconnect error for %s", key)
+            try:
+                async with self._get_session_lock(key):
+                    saved = self._save_session_to_db(tenant_id, account_id, source_event="shutdown")
+                    if not saved:
+                        logger.warning(
+                            "WhatsApp drain: no validated save for %s — last known-good preserved", key
+                        )
+            except Exception:
+                logger.exception("WhatsApp drain: error draining %s", key)
+
+        await asyncio.gather(
+            *[_drain_one(key) for key in list(self._clients.keys())],
+            return_exceptions=True,
+        )
+
+        # 4. final cleanup
+        await self.shutdown()
+        logger.info("WhatsApp drain: complete")
+
     async def shutdown(self):
         """Gracefully disconnect all clients."""
         for key, task in list(self._watchdog_tasks.items()):
@@ -1788,6 +2619,12 @@ class WhatsAppService:
         self._qr_codes.clear()
         self._statuses.clear()
         self._reconnect_counts.clear()
+        # Stop the dedicated chat executor if drain_and_shutdown didn't already
+        # (e.g. shutdown() called directly). Idempotent — safe to double-call.
+        try:
+            self._chat_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         logger.info("WhatsApp service shut down")
 
     async def restore_connections(self):

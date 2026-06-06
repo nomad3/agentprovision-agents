@@ -44,6 +44,8 @@ def _default_presence() -> dict:
         "active_shell": None,
         "connected_shells": [],
         "shell_capabilities": {},  # {shell_name: {cap: bool, ...}}
+        "shell_devices": {},  # {shell_name: device_registry UUID string}
+        "shell_device_ids": {},  # {shell_name: stable external device_id}
         "shell_heartbeats": {},  # {shell_name: iso_timestamp}
         "tool_status": "idle",
         "attention_target": None,
@@ -69,10 +71,14 @@ def _prune_dead_shells(p: dict) -> None:
 
     shells = p["connected_shells"]
     caps = p.get("shell_capabilities", {})
+    devices = p.get("shell_devices", {})
+    device_ids = p.get("shell_device_ids", {})
     for name in dead:
         if name in shells:
             shells.remove(name)
         caps.pop(name, None)
+        devices.pop(name, None)
+        device_ids.pop(name, None)
         heartbeats.pop(name, None)
         if p.get("active_shell") == name:
             p["active_shell"] = shells[0] if shells else None
@@ -89,6 +95,9 @@ def get_presence(tenant_id) -> dict:
         snap = dict(_presence_store[tid])
         # Copy mutable fields to avoid shared references
         snap["connected_shells"] = list(snap.get("connected_shells", []))
+        snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
+        snap["shell_devices"] = dict(snap.get("shell_devices", {}))
+        snap["shell_device_ids"] = dict(snap.get("shell_device_ids", {}))
 
     # Staleness: if last real update is old and state is active, force idle
     # Handoff clears after 30s. After 30 min of idle, transition to sleep.
@@ -165,7 +174,13 @@ def update_state(tenant_id, state: Optional[str] = None, mood: Optional[str] = N
         return dict(p)
 
 
-def register_shell(tenant_id, shell_name: str, capabilities: Optional[dict] = None) -> dict:
+def register_shell(
+    tenant_id,
+    shell_name: str,
+    capabilities: Optional[dict] = None,
+    device_registry_id: Optional[str] = None,
+    device_id: Optional[str] = None,
+) -> dict:
     tid = str(tenant_id)
     now = datetime.now(timezone.utc).isoformat()
     with _lock:
@@ -189,9 +204,15 @@ def register_shell(tenant_id, shell_name: str, capabilities: Optional[dict] = No
         if capabilities:
             caps = p.setdefault("shell_capabilities", {})
             caps[shell_name] = capabilities
+        if device_registry_id:
+            p.setdefault("shell_devices", {})[shell_name] = device_registry_id
+        if device_id:
+            p.setdefault("shell_device_ids", {})[shell_name] = device_id
         snap = dict(p)
         snap["connected_shells"] = list(shells)
         snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
+        snap["shell_devices"] = dict(snap.get("shell_devices", {}))
+        snap["shell_device_ids"] = dict(snap.get("shell_device_ids", {}))
         snap.pop("shell_heartbeats", None)
         return snap
 
@@ -210,10 +231,14 @@ def deregister_shell(tenant_id, shell_name: str) -> dict:
             p["active_shell"] = shells[0] if shells else None
         # Remove capabilities and heartbeat for this shell
         p.get("shell_capabilities", {}).pop(shell_name, None)
+        p.get("shell_devices", {}).pop(shell_name, None)
+        p.get("shell_device_ids", {}).pop(shell_name, None)
         p.get("shell_heartbeats", {}).pop(shell_name, None)
         p["updated_at"] = now
         snap = dict(p)
         snap["connected_shells"] = list(shells)
         snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
+        snap["shell_devices"] = dict(snap.get("shell_devices", {}))
+        snap["shell_device_ids"] = dict(snap.get("shell_device_ids", {}))
         snap.pop("shell_heartbeats", None)
         return snap

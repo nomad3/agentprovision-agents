@@ -61,8 +61,9 @@ describe('ChatInterface', () => {
     apiJsonMock.mockResolvedValueOnce([]);
     render(<ChatInterface />);
     await waitFor(() => expect(apiJsonMock).toHaveBeenCalledWith('/api/v1/chat/sessions'));
-    expect(screen.getByText(/Luna OS Spatial Workstation/i)).toBeInTheDocument();
+    expect(screen.getByText(/Luna Chat/i)).toBeInTheDocument();
     expect(screen.getByText(/Cmd\+Shift\+L/)).toBeInTheDocument();
+    expect(screen.getByText(/Cmd\+Shift\+Space/)).toBeInTheDocument();
   });
 
   it('renders messages from the active session', async () => {
@@ -172,7 +173,7 @@ describe('ChatInterface', () => {
         method: 'POST',
       }));
     });
-    await waitFor(() => expect(screen.getByText('Luna Chat')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Luna Chat', { selector: '.session-item' })).toBeInTheDocument());
   });
 
   it('opens the memory panel stub when the brain button is clicked', async () => {
@@ -223,7 +224,7 @@ describe('ChatInterface', () => {
     render(<ChatInterface />);
     await waitFor(() => expect(errSpy).toHaveBeenCalled());
     // Welcome screen should still render
-    expect(screen.getByText(/Luna OS Spatial Workstation/i)).toBeInTheDocument();
+    expect(screen.getByText(/Luna Chat/i)).toBeInTheDocument();
     errSpy.mockRestore();
   });
 });

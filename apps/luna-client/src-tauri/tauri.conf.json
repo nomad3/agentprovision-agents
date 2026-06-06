@@ -19,7 +19,7 @@
         "decorations": true,
         "transparent": false,
         "alwaysOnTop": false,
-        "visible": true,
+        "visible": false,
         "maximized": true,
         "shadow": true,
         "center": true,
@@ -36,8 +36,9 @@
         "resizable": true,
         "decorations": true,
         "transparent": false,
-        "visible": false,
-        "center": true
+        "visible": true,
+        "center": true,
+        "maximized": true
       }
     ],
     "trayIcon": {
@@ -52,6 +53,7 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "app"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -73,7 +75,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/nomad3/servicetsunami-agents/releases/latest/download/latest.json"
+        "https://github.com/nomad3/agentprovision-agents/releases/download/luna-latest/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZBRUUwNDNCOEE5NEU1NTMKUldSVDVaU0tPd1R1YXZwdFlxd1NrekVJL1REcktVVW14Y0M3Z09XMnNueS9kaG42aXlGSUx0T2MK",
       "windows": {

@@ -228,6 +228,7 @@ def create_user_with_tenant(db: Session, *, user_in: UserCreate, tenant_in: Tena
         title="Chat with Luna",
         tenant_id=tenant.id,
         agent_id=luna_agent.id,
+        owner_user_id=db_user.id,
     )
     db.add(welcome_session)
 

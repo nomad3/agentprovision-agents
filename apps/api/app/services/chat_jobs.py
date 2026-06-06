@@ -399,6 +399,138 @@ def read_events(
     return out
 
 
+# ─────────────────────────────── worker body ────────────────────────────────
+
+
+def run_job_blocking(
+    job_uuid: uuid.UUID,
+    *,
+    session_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    content: str,
+    media_parts: Optional[list] = None,
+    sender_phone: Optional[str] = None,
+) -> None:
+    """Run one queued chat_job to terminal state in the CALLING thread.
+
+    Extracted from the web ``post_message_start`` worker so BOTH the web
+    daemon-thread dispatch and the WhatsApp dedicated-executor dispatch
+    share one lifecycle (ownership guard → cancel-bail → started → chunk →
+    done → finish/fail). Opens its OWN ``SessionLocal()`` — never share a
+    request- or caller-scoped ``Session`` across threads (it commits mid-
+    function; see ``append_event``).
+
+    Ownership (Luna review R4): only proceeds if ``start_job`` wins the
+    queued→running transition (returns True). A second caller for the same
+    ``job_id`` is a no-op — keeps double-dispatch / retry safe.
+
+    ``media_parts`` / ``sender_phone`` are threaded into
+    ``post_user_message`` so the WhatsApp media + voice path is preserved
+    (the web call passes neither).
+    """
+    import time as _time
+
+    from app.db.session import SessionLocal
+    from app.services import chat as chat_service
+
+    wdb = SessionLocal()
+
+    # Cancel-propagation contract (mirrors the web worker): cancel_job()
+    # only flips ``cancel_requested``; we poll between phases and self-flip
+    # via observe_cancel().
+    def _bail_if_cancelled() -> bool:
+        if is_cancel_requested(wdb, job_id=job_uuid):
+            append_event(wdb, job_id=job_uuid, kind="lifecycle", payload={"event": "cancelled"})
+            observe_cancel(wdb, job_id=job_uuid)
+            return True
+        return False
+
+    try:
+        # Ownership guard — only the caller that flips queued→running runs
+        # the body; a duplicate dispatch is a safe no-op.
+        if not start_job(wdb, job_id=job_uuid):
+            logger.info("[chat-job %s] not owned (already running/terminal) — skipping", job_uuid)
+            return
+        if _bail_if_cancelled():
+            return
+        append_event(wdb, job_id=job_uuid, kind="lifecycle", payload={"event": "started"})
+
+        wsession = chat_service.get_session(wdb, session_id=session_id, tenant_id=tenant_id)
+        if not wsession:
+            append_event(
+                wdb, job_id=job_uuid, kind="lifecycle",
+                payload={"event": "error", "detail": "session vanished"},
+            )
+            fail_job(wdb, job_id=job_uuid, error="Chat session not found")
+            return
+
+        if _bail_if_cancelled():
+            return
+
+        t0 = _time.perf_counter()
+        user_msg, assistant_msg = chat_service.post_user_message(
+            wdb,
+            session=wsession,
+            user_id=user_id,
+            content=content,
+            sender_phone=sender_phone,
+            media_parts=media_parts,
+        )
+
+        if _bail_if_cancelled():
+            return
+
+        text_out = (assistant_msg.content if assistant_msg else "") or ""
+        append_event(wdb, job_id=job_uuid, kind="chunk", payload={"text": text_out})
+        append_event(
+            wdb, job_id=job_uuid, kind="lifecycle",
+            payload={
+                "event": "done",
+                "user_message_id": str(user_msg.id) if user_msg else None,
+                "assistant_message_id": str(assistant_msg.id) if assistant_msg else None,
+                "elapsed_s": _time.perf_counter() - t0,
+            },
+        )
+        if _bail_if_cancelled():
+            return
+        finish_job(
+            wdb, job_id=job_uuid,
+            result_message_id=assistant_msg.id if assistant_msg else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[chat-job %s] worker crashed", job_uuid)
+        try:
+            append_event(
+                wdb, job_id=job_uuid, kind="lifecycle",
+                payload={"event": "error", "detail": str(exc)[:512]},
+            )
+        except Exception:
+            pass
+        try:
+            fail_job(wdb, job_id=job_uuid, error=str(exc))
+        except Exception:
+            pass
+    finally:
+        wdb.close()
+
+
+def reply_text_from_events(db: Session, *, job_id: uuid.UUID) -> str:
+    """Concatenate all ``chunk`` events (seq order) into the reply text.
+
+    Luna review R4/R6: don't assume a single chunk forever. Today the
+    worker emits exactly one chunk, but progressive CLI streaming will
+    emit many — concatenating future-proofs the WhatsApp deferred-reply
+    read without a behaviour change for the one-chunk case.
+    """
+    parts = [
+        ev["payload"].get("text", "")
+        for ev in read_events(db, job_id=job_id, from_seq=0)
+        if ev["kind"] == "chunk"
+    ]
+    return "".join(p for p in parts if p)
+
+
 # ────────────────────────── janitor (housekeeping) ──────────────────────────
 
 

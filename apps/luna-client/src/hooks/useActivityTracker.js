@@ -1,11 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { apiFetch } from '../api';
+import { getCachedShellId, getOrCreateShellId } from '../utils/shellIdentity';
 
 export function useActivityTracker() {
-  const shellId = useRef(sessionStorage.getItem('luna_shell_id') || 'desktop');
+  const shellId = useRef(getCachedShellId() || 'desktop-pending');
 
   useEffect(() => {
     let unlisten;
+    getOrCreateShellId().then((id) => { shellId.current = id; });
     (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event');
