@@ -8,11 +8,11 @@
 Date: 2026-06-05
 Operator: Simon Aguilera
 Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
-session ownership and device-bound shell identity merged; release validation
-follow-up in progress
+session ownership and device-bound shell identity merged; `luna-v0.1.94`
+installed-release validation complete; command down-channel planning active
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-phase1-control-plane`; current follow-up branch:
-`codex/luna-default-maximized`
+Branch: `codex/luna-phase1-control-plane`; current validation-doc branch:
+`codex/luna-v0194-validation-doc`
 
 ---
 
@@ -280,6 +280,33 @@ Additional discovery inputs:
     global shortcut open, and emergency Stop surfacing. Local Tauri dev
     validation measured the branch window at `0,34` with size `1496x933`,
     exactly matching AppKit's main-screen visible frame.
+30. PR #797 merged the explicit native maximize path into `main` on
+    2026-06-06 UTC as merge commit `80b642d7`. Post-merge broad Tests run
+    `27057233801`, Docker Desktop Deployment run `27057233796`, and Luna
+    Client Tauri Build run `27057233812` all passed. The release workflow
+    intentionally skipped signing/notarization and stable updater publication
+    because development builds remain unsigned for now.
+31. Installed-release validation for unsigned development prerelease
+    `luna-v0.1.94` downloaded `Luna_0.1.94_aarch64.dmg` plus `.sha256`,
+    verified directly with `shasum -c`, installed `/Applications/Luna.app`,
+    and confirmed bundle version `0.1.94` with id `com.agentprovision.luna`.
+    Codesign verification reported an ad-hoc signature. System Events/AppKit
+    measured the installed app window at `0,34` with size `1496x933`, matching
+    the primary screen visible frame. Computer Use verified chat/session
+    rendering, session creation, the locked `Stopped` safety strip, disabled
+    Observe/Assist/Control controls, visible `Resume`, TCC readiness details,
+    and a live Alpha Chat response from Luna after the lead handoff. Public API
+    validation returned `200`, the live Docker stack stayed healthy, and Luna's
+    exact mount gate returned no output:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+32. Post-merge sidecar review found one follow-up gap: the command-palette
+    shortcut path still only forces the native
+    `show -> unminimize -> maximize -> focus` helper when the main window is
+    not visible. If the window is visible but minimized, user-resized, or
+    off-position, `Cmd+Shift+Space` may only emit the palette event. Keep the
+    Phase 0 command-palette verification item open until that path either
+    restores/maximizes/focuses consistently or is explicitly scoped out of the
+    next command down-channel branch.
 
 ---
 
@@ -741,6 +768,9 @@ orchestra hub from opening by default.
 - [x] Update `Cmd+Shift+L` semantics to focus/toggle chat, not spatial HUD.
 - [ ] Verify `Cmd+Shift+Space` opens the command palette on `main`, not
       `spatial_hud`.
+  - [ ] Follow-up after PR #797: when `main` is already visible but minimized,
+        user-resized, or off-position, the command-palette shortcut should
+        restore/maximize/focus consistently before opening the palette.
 - [x] Update `CLAUDE.md` and `apps/luna-client/README.md` shortcut docs.
 - [x] Remove "Luna OS Spatial Workstation" empty-state copy from the main chat.
 - [x] Ensure login state is app-wide across Tauri windows.
@@ -1316,12 +1346,20 @@ Exit criteria:
 - [x] Fresh launch: only `Luna` chat visible.
 - [x] Fresh launch: installed `luna-v0.1.86` opens maximized by default.
 - [x] Fresh launch: installed `luna-v0.1.92` opens maximized by default.
+- [x] Fresh launch: installed `luna-v0.1.94` opens expanded by default; System
+      Events/AppKit measured `0,34` and `1496x933`, matching the primary
+      screen visible frame.
 - [x] Fresh launch: Control strip starts `Control Locked`, with Assist and
       Control disabled.
+- [x] Fresh launch: installed `luna-v0.1.94` renders chat/session navigation,
+      the stopped/locked desktop safety strip, `Resume`, and TCC readiness
+      details under Computer Use.
 - [x] Fresh relaunch: installed `luna-v0.1.92` starts in durable `Stopped` with
       `Resume` visible.
 - [x] `luna-v0.1.92` Computer Use smoke: `Resume -> Control Locked -> Observe`
       keeps Assist/Control disabled, and `Stop` relatches the safe state.
+- [x] `luna-v0.1.94` Computer Use smoke: new chat/session creation works and
+      Luna responded in Alpha Chat after the computer-use lead handoff.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1366,16 +1404,18 @@ Exit criteria:
 
 ## Next Actions
 
-1. Push `codex/luna-release-validation-phase2`, open a PR, and run the API unit,
-   MCP, and broad CI gates for the MCP request/audit slice.
-2. Ask Luna, Claude Code, and Codex council to review the next pushed diff for
-   privacy, tenant/session/shell binding, and release-readiness before merge.
-3. Implement the Phase 2 API-to-Tauri command down-channel only after this
-   request/audit slice is merged. Observation result delivery must require a
-   connected shell claim/lease before returning screenshots, active-app
-   summaries, or clipboard metadata.
-4. Keep validating every merged Luna release by installing the GitHub Actions
+1. Open the next implementation branch for the Phase 2 API-to-Tauri command
+   down-channel. First gate: lease/CAS command claim, stale lease expiry,
+   duplicate-completion idempotency, and Stop preemption for queued, claimed,
+   and in-flight commands.
+2. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+   disabled until signed envelopes, replay defense, approval grant consumption,
+   device trust checks, and privacy/TCC boundaries are implemented and reviewed.
+3. Include the PR #797 command-palette maximize follow-up in the next branch or
+   explicitly keep it as a separate UX hardening item.
+4. Ask Luna, Claude Code, and Codex council to review the next pushed diff for
+   privacy, tenant/session/shell binding, command-state correctness, and
+   release-readiness before merge.
+5. Keep validating every merged Luna release by installing the GitHub Actions
    DMG locally, smoking it with Computer Use, and rerunning the exact Docker
    `_work` mount gate. The pass condition is zero output.
-5. Do not implement pointer, keyboard, clipboard-write, or global control until
-   Phase 1 audit and Phase 2 command-governance exit criteria are satisfied.
