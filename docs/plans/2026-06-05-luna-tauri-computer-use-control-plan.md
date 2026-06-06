@@ -71,6 +71,18 @@ Additional discovery inputs:
    atomic approval-consumption mechanism, make migration-number lookup explicit,
    include Ed25519 key lifecycle, and move Helm/env sync into the phase that
    introduces signing/device secrets.
+8. PR #779 merged Phase 0 release/safety hardening on 2026-06-06 UTC. The
+   `luna-v0.1.82` GitHub Actions release succeeded as an unsigned development
+   prerelease, did not become the repository latest release, published only the
+   manual DMG plus checksum, and skipped signed updater artifacts as expected.
+   Local install from the release DMG reported app version `0.1.82`; Computer
+   Use verified chat-first startup, no Orchestra/Luna OS auto-open, Observe ->
+   Lock -> Observe, hard Stop latching, and locked startup after relaunch.
+9. Release smoke also found that the `luna-v0.1.82` `.sha256` file recorded
+   the CI build path instead of the DMG basename. The digest was correct, but
+   `shasum -c` failed after downloading the assets into a normal folder. Future
+   release checksums must use the DMG basename so operators can verify them
+   directly after download.
 
 ---
 
@@ -170,6 +182,9 @@ Release hardening requirements:
    notarized, stapled, and verified in CI before publishing the release.
 6. Local installation is allowed only as smoke verification of a GitHub Release
    artifact.
+7. Published `.sha256` assets must contain the DMG basename, not the CI build
+   path, so `shasum -c Luna_<version>_aarch64.dmg.sha256` works after a normal
+   release download.
 
 ### Alpha Control Reuse
 
