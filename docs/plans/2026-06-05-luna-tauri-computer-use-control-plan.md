@@ -15,10 +15,11 @@ timezone fix merged and deployed; PR #803 native pointer/keyboard scaffold
 merged and unsigned `luna-v0.1.97` installed locally; PR #806 native-control
 policy hardening merged and unsigned `luna-v0.1.98` installed locally; PR #807
 signed desktop command envelope gate merged and unsigned `luna-v0.1.99`
-installed locally. Native actuation remains disabled; next phase is Tauri-side
-public-key/Ed25519 command-envelope verification after release-gate validation.
+installed locally; PR #808 Alpha CLI async chat-kernel transport merged. Native
+actuation remains disabled; next phase is macOS-only Alpha-kernel adapter design
+plus Tauri-side public-key/Ed25519 command-envelope verification.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/alpha-chat-async-send`
+Current implementation branch: `codex/luna-macos-alpha-kernel`
 
 ---
 
@@ -49,6 +50,10 @@ Architecture constraint: Luna Tauri uses `alpha` CLI as its local kernel for
 AgentProvision chat/task execution, session continuity, and CLI-runtime
 delegation. Tauri remains the native macOS shell, UI, and governed actuator; it
 must not grow a separate ad hoc agent loop that bypasses Alpha CLI.
+API/CLI parity constraint: every API capability added for Luna must ship with
+matching Alpha CLI/core types or commands in the same implementation slice so
+the Tauri app can consume the platform through `alpha` rather than a bespoke
+HTTP client path.
 
 Luna-facing review was gathered with `alpha chat send`. The strongest guidance:
 fix chat-first UX and auth first; make computer-use a visible governed mode
@@ -546,6 +551,21 @@ Additional discovery inputs:
     bridge auth/session context, stream chat-job output into Luna UI, surface
     cancel/stop semantics, and keep desktop command execution governed through
     signed API envelopes rather than direct CLI-side actuation.
+56. Operator scope update on 2026-06-06: native app/window monitoring should
+    focus on macOS only for now. Do not implement Windows native monitoring or
+    actuation in the next phase. Keep API field names neutral enough to avoid
+    future rewrites, but gate implementation, tests, release smoke, and Tauri
+    UX around macOS app/window state first.
+57. PR #808 merged into `main` on 2026-06-06 UTC as merge commit `92f056bc`.
+    PR checks passed for Alpha CLI Build Matrix and Tests. The branch delivered
+    durable async Alpha Chat transport, stream-open recovery, idempotent Luna
+    release create/upload retries, and the explicit Alpha CLI kernel constraint
+    for Luna Tauri.
+58. Luna Supervisor acknowledged the macOS-only Alpha-kernel direction through
+    Alpha Chat on 2026-06-06 with no blocker. Her guardrail: keep capability
+    advertising conservative until Alpha CLI/core, Tauri, audit, and approval
+    behavior are present together. Do not make API-only promises ahead of local
+    kernel support.
 
 ---
 
@@ -557,7 +577,7 @@ Additional discovery inputs:
    that requires it.
 4. Add a governed local computer-use actuator in Tauri:
    - screenshot
-   - active app/window context
+   - macOS active app/window context and native app monitor state
    - clipboard read/write
    - pointer move/click
    - keyboard typing / key chords
@@ -566,9 +586,13 @@ Additional discovery inputs:
    - Luna Tauri -> `alpha` CLI -> AgentProvision chat/task/router -> MCP/API
      authorization and audit -> desktop command envelope
    - Tauri executes only approved, scoped action envelopes as the native actuator
-6. Persist an authoritative replayable audit trail in desktop-control tables and
+6. Extend Alpha CLI/core alongside any API extension Luna depends on:
+   - typed request/response models
+   - commands or library calls usable by the Tauri shell
+   - streaming/cancel/error semantics compatible with Luna UI
+7. Persist an authoritative replayable audit trail in desktop-control tables and
    mirror display-safe rows into `session_events`.
-7. Enforce tenant, user, session, shell/device, and capability scoping on every
+8. Enforce tenant, user, session, shell/device, and capability scoping on every
    command and result.
 
 ## Non-Goals
@@ -581,6 +605,9 @@ Additional discovery inputs:
 5. Do not treat screenshots, clipboard content, OCR text, or page content as
    trusted instructions.
 6. Do not use the camera/gesture stack as the policy layer for computer use.
+7. Do not implement Windows native app monitoring or Windows actuation in the
+   next phase; macOS is the only native platform target until this plan is
+   explicitly reopened for Windows.
 
 ---
 
@@ -1832,24 +1859,31 @@ Exit criteria:
 
 ## Next Actions
 
-1. Open and merge `codex/alpha-chat-async-send`: durable Alpha CLI chat
-   transport for Luna handoffs plus idempotent Luna release publication retries.
-2. Add the Luna Tauri Alpha-kernel adapter design before expanding actuation:
+1. Validate post-merge `92f056bc`: GitHub Actions Tests, CLI Build Matrix,
+   Docker Desktop Deployment, and Luna Client Tauri Build. If a new Luna
+   prerelease is published, install it locally, verify checksum, launch
+   `/Applications/Luna.app`, and keep the exact Docker `_work` mount gate empty.
+2. Add the Luna Tauri Alpha-kernel adapter design before expanding actuation,
+   scoped to macOS native app/window monitoring:
    `alpha` binary discovery/pinning, auth/session handoff, chat/job streaming,
-   cancellation, error display, offline behavior, and release packaging.
-3. Add Tauri-side public-key command-envelope validation before any pointer or
+   cancellation, error display, offline behavior, release packaging, and
+   app-monitor event mapping into Luna UI.
+3. Add an API/Alpha CLI parity checklist for every Luna-facing platform
+   capability: if API endpoints, schemas, or event types change, add matching
+   Alpha CLI/core support and tests in the same PR.
+4. Add Tauri-side public-key command-envelope validation before any pointer or
    keyboard execution: nonce, expiry, session, shell, device, command id, policy
    version, replay protection, revocation, and policy-decision binding.
-4. Add approval grant creation/consumption as a database compare-and-swap gate
+5. Add approval grant creation/consumption as a database compare-and-swap gate
    before enabling narrow canary pointer execution.
-5. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+6. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-6. Close remaining pre-live-content hardening gaps: disable or display-safe route
+7. Close remaining pre-live-content hardening gaps: disable or display-safe route
    ambient clipboard/activity raw emissions, and add remaining revoked/offline
    regression coverage around Stop and shell reconnect behavior.
-7. Treat the post-deploy `No connected desktop shell` observation as a
+8. Treat the post-deploy `No connected desktop shell` observation as a
    hardening follow-up: Luna should re-register shell presence after API
    restarts or heartbeat failures, not require an app restart.
-8. Include the PR #797 command-palette maximize follow-up in the next branch or
+9. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.
