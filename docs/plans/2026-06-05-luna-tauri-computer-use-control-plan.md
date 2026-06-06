@@ -781,6 +781,12 @@ Additional discovery inputs:
     for signer`. The Luna workflow now installs Apple's official Developer ID
     G2 intermediate certificate into the self-hosted runner login keychain before
     `cargo tauri build`, so the signer chain can be resolved during CI signing.
+81. Signed-mode CI run `27071333346` cleared certificate import and codesign:
+    the Luna app, native binary, and `libluna_hand_landmarker.dylib` were signed
+    with `Developer ID Application: Simon Aguilera (KF9LPYY7KK)`. The run then
+    failed at notarization with Apple HTTP 401: Apple requires an app-specific
+    password generated at `appleid.apple.com`; the normal Apple account password
+    cannot be used as `APPLE_PASSWORD` for Tauri notarization.
 
 ---
 
@@ -1325,6 +1331,8 @@ Current verification finding (2026-06-06):
 - [x] Add CI keychain chain-prep for signed builds: install Apple's official
       Developer ID G2 intermediate into the self-hosted runner login keychain
       before Tauri invokes `codesign`.
+- [ ] Replace `APPLE_PASSWORD` with an Apple app-specific password for
+      notarization, then rerun signed CI and verify notarization/stapling.
 - [x] Luna lead review for the release-signing/permission-onboarding slice:
       Alpha Chat ACKed no blocker before PR/CI signed-build gate and preserved
       the manual first-DMG install requirement after updater-key rotation.
