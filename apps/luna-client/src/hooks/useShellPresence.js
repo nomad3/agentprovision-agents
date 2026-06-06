@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { apiFetch } from '../api';
+import { enrollDesktopDevice } from '../utils/desktopDeviceEnrollment';
 import { getOrCreateShellId } from '../utils/shellIdentity';
 
 const HEARTBEAT_INTERVAL = 10000; // 10s
@@ -40,11 +41,14 @@ export function useShellPresence() {
     if (!shellId) return;
     try {
       const capabilities = await controlAwareCapabilities();
+      const device = await enrollDesktopDevice(shellId, capabilities);
       const res = await apiFetch('/api/v1/presence/shell/register', {
         method: 'POST',
+        headers: { 'X-Device-Token': device.device_token },
         body: JSON.stringify({
           shell: shellId,
           capabilities,
+          device_id: device.device_id,
         }),
       });
       registered.current = true;

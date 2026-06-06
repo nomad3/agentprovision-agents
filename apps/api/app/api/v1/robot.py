@@ -122,6 +122,7 @@ def robot_interact(
             tenant_id=tenant_id,
             agent_id=agent.id if agent else None,
             source="robot",
+            owner_user_id=user_id,
         )
         db.add(session)
         db.commit()

@@ -12,6 +12,14 @@ vi.mock('../../utils/shellIdentity', () => ({
   getOrCreateShellId: () => Promise.resolve('desktop-test-shell'),
 }));
 
+vi.mock('../../utils/desktopDeviceEnrollment', () => ({
+  enrollDesktopDevice: () => Promise.resolve({
+    device_id: 'tenant-desktop-test',
+    device_token: 'device-token-test',
+    shell_id: 'desktop-test-shell',
+  }),
+}));
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args) => invokeMock(...args),
 }));
@@ -29,6 +37,10 @@ function registerCalls() {
 function lastRegisteredCapabilities() {
   const call = registerCalls().at(-1);
   return JSON.parse(call[1].body).capabilities;
+}
+
+function lastRegisterCall() {
+  return registerCalls().at(-1);
 }
 
 beforeEach(() => {
@@ -57,6 +69,8 @@ describe('useShellPresence', () => {
       can_control_pointer: false,
       can_control_keyboard: false,
     });
+    expect(JSON.parse(lastRegisterCall()[1].body).device_id).toBe('tenant-desktop-test');
+    expect(lastRegisterCall()[1].headers['X-Device-Token']).toBe('device-token-test');
   });
 
   it('re-registers when local safety state changes', async () => {

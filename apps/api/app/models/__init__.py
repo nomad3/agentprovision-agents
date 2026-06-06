@@ -18,6 +18,8 @@ from .channel_event import ChannelEvent
 from .whatsapp_session_backup import WhatsappSessionBackup
 from .chat import ChatSession, ChatMessage
 from .session_event import SessionEvent
+from .desktop_command import DesktopCommand
+from .desktop_command_event import DesktopCommandEvent
 from .connector import Connector
 from .data_pipeline import DataPipeline
 from .data_source import DataSource
@@ -102,6 +104,7 @@ __all__ = [
     "AgentRelationship", "AgentSkill", "AgentTask",
     "ChannelAccount", "ChannelEvent", "WhatsappSessionBackup",
     "ChatSession", "ChatMessage",
+    "DesktopCommand", "DesktopCommandEvent",
     "Connector",
     "DataPipeline", "DataSource", "Dataset", "DatasetGroup",
     "Deployment", "ExecutionTrace",

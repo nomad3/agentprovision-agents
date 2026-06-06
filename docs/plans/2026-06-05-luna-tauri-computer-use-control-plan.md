@@ -7,9 +7,16 @@
 
 Date: 2026-06-05
 Operator: Simon Aguilera
-Status: Implementation in progress
+Status: Phase 1 audit spine + read-only MCP observation tools merged; Phase 2
+session ownership and device-bound shell identity merged; observation-only
+command down-channel merged in PR #799; PR #800 client completion hardening
+merged and unsigned `luna-v0.1.96` installed locally; PR #801 backend lease
+timezone fix merged and deployed; PR #803 native pointer/keyboard scaffold
+merged and unsigned `luna-v0.1.97` installed locally. Native actuation remains
+disabled; next phase is pre-live-content hardening, device status enforcement,
+signed envelopes, and approval grant consumption.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Branch: `codex/luna-phase1-control-plane`
+Current implementation branch: `codex/luna-v0197-validation-plan`
 
 ---
 
@@ -152,6 +159,304 @@ Additional discovery inputs:
     correctly reported denied/not-yet-granted Screen Recording and
     Accessibility (`TCC 1/3`). Pressing Stop latched the app into `Stopped`, and
     relaunch preserved the stopped posture with `Resume` visible.
+16. PR #788 merged the local observation policy/audit gate and PRs #790/#791
+    then landed global emergency Stop plus expanded TCC readiness details.
+    GitHub Actions published unsigned development prerelease `luna-v0.1.90`
+    on 2026-06-06 UTC. Local release validation downloaded the DMG and checksum,
+    verified `shasum -c`, installed `/Applications/Luna.app` version `0.1.90`,
+    and used Computer Use to confirm chat-first maximized startup, `Stopped`
+    relaunch persistence, TCC readiness details, `Resume -> Observe`, denied
+    screenshot metadata-only audit, and `Stop` relatch. The exact Docker mount
+    gate,
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`,
+    returned no output.
+17. Luna Supervisor reviewed the next branch scope on 2026-06-06 and confirmed
+    no product blocker for `codex/luna-desktop-command-events` as long as the PR
+    stays limited to authoritative `desktop_command_events` schema/API, active
+    session + shell binding, metadata-only local audit forwarding, display-safe
+    `session_events` mirror, and tests. She explicitly kept pointer/keyboard,
+    Assist, and Control actuation out of scope until signed envelopes,
+    approvals, replay protection, and policy enforcement are reviewed.
+18. PR #793 added the first API-backed local observation audit spine. The branch
+    creates `desktop_commands` and `desktop_command_events`, adds authenticated
+    local-observation ingestion, mirrors only display-safe summaries into
+    `session_events`, registers the `desktop_control` tool group, and forwards
+    Luna Tauri metadata-only audit events with active `chat_session_id` plus a
+    durable `desktop-<uuid>` shell id. The first GitHub Actions API unit gate
+    exposed stale unit expectations and SQLite-only test fragility rather than
+    a desktop-control schema defect: the test suite still expected the old
+    Claude setup-token flow, English canned greetings, non-fatal P0a token mint
+    failures, and raw PostgreSQL-only SQLAlchemy types under SQLite metadata
+    creation. The follow-up patch aligned those tests with current behavior,
+    added test-only SQLite compilers for PostgreSQL `UUID`, `JSONB`, `ARRAY`,
+    `INET`, and optional pgvector types, restored tenant-wide affect fallback
+    for agent emotion reads, made session affect reads ignore SQLite JSON-null
+    rows in Python, tightened the reflection safety block for "rate limiting",
+    and isolated reset-password limiter state in the security tests. Focused
+    validation passed locally with 105 API tests plus targeted `ruff`; full PR
+    CI remains the merge gate.
+19. Cross-CLI review on PR #793 completed with Codex findings; the Claude leaf
+    failed on the Alpha backend with `Unsupported platform: claude`, and Luna's
+    Alpha chat handoff hit a Cloudflare 524 timeout. Codex found two merge
+    blockers: client-controlled `event_id` could smuggle arbitrary display text
+    into the mirrored payload, and the Tauri bridge trusted native
+    `payload.shell_id` over the active app shell id while the API accepted
+    non-connected shell ids. The follow-up patch makes `event_id` a canonical
+    UUID at the API boundary, serializes only that UUID into
+    `local_event_id`, makes the bridge always use the active `shellId`, and
+    rejects audit rows for shells that are not currently connected in Luna
+    presence. Durable device-token/session binding remains a Phase 2
+    `device_registry` requirement.
+20. GitHub API unit CI on PR #793 exposed a long-standing Temporal test hang in
+    `SkillEvalIterationWorkflow`: the scaffold intends a failed leg to be
+    counted and skipped, but `workflow.execute_activity` used Temporal's default
+    retry policy, so the intentionally failing mocked activity retried instead
+    of reaching the workflow `except` block. The fix sets
+    `maximum_attempts=1` for the scaffold persist and aggregate activities.
+    Local validation of `tests/test_skill_eval_iteration_workflow.py` now exits
+    cleanly with 3 passing tests.
+21. PR #793 validation on head `945ccabf` passed GitHub Actions run
+    `27055003884`: API unit in 2m38s, API integration with PostgreSQL/pgvector
+    in 4m18s, Luna client jest+cargo in 1m10s, and aggregate status in 7s.
+22. PR #793 final head `a5d2891f` passed the required PR gates and merged into
+    `main` on 2026-06-06 UTC as merge commit `8c6449cf`. Post-merge GitHub
+    Actions passed the broad Tests run `27055213272`, Docker Desktop Deployment
+    run `27055213275`, and Luna Client Tauri Build run `27055213274`. The Luna
+    build produced unsigned development prerelease `luna-v0.1.92`; signing,
+    notarization, and stable updater manifest publication were skipped as
+    expected for the current unsigned development release posture.
+23. Installed-release validation for `luna-v0.1.92` downloaded
+    `Luna_0.1.92_aarch64.dmg` plus `.sha256`, verified directly with
+    `shasum -c`, installed `/Applications/Luna.app`, and confirmed bundle
+    version `0.1.92` with id `com.agentprovision.luna`. The exact Luna mount
+    gate,
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`,
+    returned no output. Computer Use verified chat-first maximized startup,
+    durable `Stopped` relaunch, `Resume -> Control Locked`, `Observe` without
+    unlocking Assist/Control, and `Stop` relatch. TCC readiness remained
+    passive: Screen Recording and Accessibility were denied/not-yet-granted,
+    System Events was unknown, and no macOS privacy-setting changes were made.
+24. Branch `codex/luna-release-validation-phase2` started the next Phase 1
+    slice after release validation: MCP desktop observation tools are now
+    registered and call an internal-key API request endpoint. The endpoint
+    requires auth-bound `X-Tenant-Id` and `X-User-Id`, validates session scope,
+    selects only a connected `desktop-<uuid>` shell from Luna presence, derives
+    capability from the requested tool/action, and writes display-safe
+    `desktop_observation_denied` events while no API-to-Tauri command
+    down-channel exists. This intentionally returns no screenshot pixels,
+    clipboard text, active-window title, OCR text, bundle id, path, or raw
+    desktop content.
+25. PR #794 merged the read-only MCP observation request/audit path into
+    `main` on 2026-06-06 UTC as merge commit `84d3011b`. Post-merge Tests run
+    `27055885443` and Docker Desktop Deployment run `27055885437` passed, and
+    Luna's exact Docker mount gate returned no output.
+26. PR #795 merged the `chat_sessions.owner_user_id` ownership foundation into
+    `main` on 2026-06-06 UTC as merge commit `3065defb`. PR and post-merge CI
+    applied migration `159`, API unit/integration coverage passed, broad main
+    tests passed, Docker Desktop Deployment run `27056251358` passed, and
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`
+    returned no output. Desktop-control now rejects ownerless and same-tenant
+    cross-user sessions before selecting a desktop shell.
+27. Branch `codex/luna-phase2-device-binding` started the next Phase 2
+    prerequisite: Luna desktop enrolls as a `desktop` device through
+    `device_registry`, shell presence records an authenticated
+    `shell_id -> device_registry.id` binding, and desktop-control audit/MCP
+    observation paths fail closed when the connected shell is not device-bound.
+28. PR #796 merged the device-bound shell identity prerequisite into `main` on
+    2026-06-06 UTC as merge commit `3d9cc323`. Main broad Tests run
+    `27056826661`, Docker Desktop Deployment run `27056826668`, and Luna
+    Client Tauri Build run `27056826667` all passed. Docker deploy validation
+    returned no output for Luna's exact mount gate:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+    Public API validation used the canonical base
+    `https://agentprovision.com/api/v1/`, which returned `200`; the
+    `api.agentprovision.com` hostname is not the active production API base.
+29. Installed-release validation for unsigned development prerelease
+    `luna-v0.1.93` downloaded `Luna_0.1.93_aarch64.dmg` plus `.sha256`,
+    verified directly with `shasum -c`, installed `/Applications/Luna.app`,
+    and confirmed bundle version `0.1.93`. Computer Use verified the
+    chat/session surface and the locked desktop safety strip, while direct
+    System Events/AppKit measurement exposed that the `maximized` config alone
+    is too soft on macOS: the release could launch at a centered offset instead
+    of pinning to the visible workspace origin. Follow-up branch
+    `codex/luna-default-maximized` adds an explicit native
+    `show -> unminimize -> maximize -> focus` path for startup, tray open,
+    global shortcut open, and emergency Stop surfacing. Local Tauri dev
+    validation measured the branch window at `0,34` with size `1496x933`,
+    exactly matching AppKit's main-screen visible frame.
+30. PR #797 merged the explicit native maximize path into `main` on
+    2026-06-06 UTC as merge commit `80b642d7`. Post-merge broad Tests run
+    `27057233801`, Docker Desktop Deployment run `27057233796`, and Luna
+    Client Tauri Build run `27057233812` all passed. The release workflow
+    intentionally skipped signing/notarization and stable updater publication
+    because development builds remain unsigned for now.
+31. Installed-release validation for unsigned development prerelease
+    `luna-v0.1.94` downloaded `Luna_0.1.94_aarch64.dmg` plus `.sha256`,
+    verified directly with `shasum -c`, installed `/Applications/Luna.app`,
+    and confirmed bundle version `0.1.94` with id `com.agentprovision.luna`.
+    Codesign verification reported an ad-hoc signature. System Events/AppKit
+    measured the installed app window at `0,34` with size `1496x933`, matching
+    the primary screen visible frame. Computer Use verified chat/session
+    rendering, session creation, the locked `Stopped` safety strip, disabled
+    Observe/Assist/Control controls, visible `Resume`, TCC readiness details,
+    and a live Alpha Chat response from Luna after the lead handoff. Public API
+    validation returned `200`, the live Docker stack stayed healthy, and Luna's
+    exact mount gate returned no output:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+32. Post-merge sidecar review found one follow-up gap: the command-palette
+    shortcut path still only forces the native
+    `show -> unminimize -> maximize -> focus` helper when the main window is
+    not visible. If the window is visible but minimized, user-resized, or
+    off-position, `Cmd+Shift+Space` may only emit the palette event. Keep the
+    Phase 0 command-palette verification item open until that path either
+    restores/maximizes/focuses consistently or is explicitly scoped out of the
+    next command down-channel branch.
+33. Branch `codex/luna-command-downchannel-gate` implements the first
+    API-to-Tauri command down-channel gate without pointer/keyboard actuation:
+    internal command enqueue, device-token-authenticated claim leases,
+    completion, Stop preemption, stale-lease expiry, duplicate-completion
+    idempotency, and a Luna client polling hook mounted only on the
+    authenticated chat/session surface. The hook claims observation commands,
+    re-checks local `control_get_safety_state`, executes only existing
+    read-only native observation commands in Observe mode, and completes with
+    metadata-only result summaries. It never forwards screenshot pixels,
+    clipboard text, OCR text, active-window text, tokens, or raw desktop
+    content through completion metadata. Sidecar review found four safety gaps
+    in the initial implementation; the branch now sanitizes completion and Stop
+    reasons, allow-lists completion metadata keys, returns terminal duplicate
+    completions idempotently even after shell presence drift, emits
+    `desktop_command_expired` audit/session events during stale lease sweeps,
+    and migrates command nonces from a global unique index to tenant-scoped
+    idempotency. Luna lead review in the installed app cleared the branch for
+    PR update while keeping real actuation locked. Claude Opus code review
+    found no high/medium issues; the two low items were closed by aligning the
+    SQLAlchemy nonce index with migration `160` and adding a pending-command
+    TTL so stale queued observe commands expire before a later reconnect can
+    claim them.
+34. PR #799 merged the observation-only command down-channel into `main` on
+    2026-06-06 UTC as merge commit `d6405f86`. PR checks passed for API unit,
+    API integration, Luna client, and aggregate status; post-merge broad
+    Tests, Docker Desktop Deployment, and Luna Client Tauri Build all passed.
+    The release workflow published unsigned development prerelease
+    `luna-v0.1.95`, intentionally ad-hoc signed with no Developer ID
+    notarization. Local install verified `Luna_0.1.95_aarch64.dmg` with its
+    `.sha256`, replaced `/Applications/Luna.app`, and confirmed bundle version
+    `0.1.95` with id `com.agentprovision.luna`.
+35. Installed-release smoke for `luna-v0.1.95` passed the non-command gates:
+    Luna launched chat-first, opened expanded across the visible desktop,
+    reported the expected unsigned development signature, served the public and
+    local API bases, kept the Docker stack healthy, and returned no output for
+    Luna's exact mount gate:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+    Computer Use verified `Stopped -> Resume -> Control Locked -> Stop`
+    behavior with Observe/Assist/Control still governed by TCC and local mode.
+36. Installed command down-channel smoke for `luna-v0.1.95` exposed a client
+    hardening gap: an internal `get_active_app` observation command was queued
+    and claimed by the installed app, but the Luna client never posted terminal
+    completion, so the backend lease expired it. The API correctly recorded
+    queued, claimed, and expired audit events, did not persist raw payload text,
+    and failed closed, but the installed smoke is not release-complete until a
+    claimed command always completes or explicitly fails from the client before
+    lease expiry. Follow-up branch `codex/luna-command-completion-smoke-fix`
+    adds client-side timeouts around safety checks, native observation invokes,
+    and completion POSTs so a stalled Tauri call records `failed` instead of
+    waiting for backend expiry.
+37. PR #800 merged the client-side claimed-command terminalization hardening
+    into `main` on 2026-06-06 UTC as merge commit `49726b06`. Luna lead review
+    via Alpha Chat returned merge-ready with one non-blocking caveat:
+    cancellation during an already-running safety/native invoke still resolves
+    through timeout/success/failure instead of immediate `preempted`. PR checks
+    and post-merge broad Tests, Docker Desktop Deployment, and Luna Client
+    Tauri Build passed. GitHub Actions published unsigned development
+    prerelease `luna-v0.1.96`, installed locally with checksum verification,
+    bundle version `0.1.96`, and expected ad-hoc signature.
+38. Installed command down-channel smoke for `luna-v0.1.96` proved the client
+    now attempts completion, but the API rejected `/complete` with a 500:
+    `complete_desktop_command` compared a database-loaded lease timestamp with
+    a different timezone awareness than `now`. The command therefore expired
+    after lease timeout even though raw request markers were not persisted.
+    Follow-up branch `codex/luna-v0196-validation` normalizes lease timestamps
+    before Python comparisons and adds a regression test for naive future
+    leases loaded from the database.
+39. PR #801 merged the API-only backend lease-time normalization into `main`
+    on 2026-06-06 UTC as merge commit `e6990445`. Post-merge broad Tests run
+    `27059025321` passed, Docker Desktop Deployment run `27059025330` passed,
+    and the live API returned `200` at both `https://agentprovision.com/api/v1`
+    and `http://localhost:8000/api/v1`. Luna's exact Docker mount gate returned
+    no output:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+40. No new Luna desktop release was expected from PR #801 because it changed
+    only the API. The installed `/Applications/Luna.app` remained unsigned
+    development prerelease `luna-v0.1.96` with ad-hoc signature and no
+    `TeamIdentifier`. Computer Use verified the app opens expanded by default,
+    remains logged in, and shows `Control Locked` with Assist/Control disabled.
+    The first smoke immediately after API deploy returned `409 No connected
+    desktop shell` because the deployment restarted the API's in-memory
+    presence store while the already-running client still believed it was
+    registered. After a clean Luna restart, the shell re-registered and the
+    governed `get_active_app` smoke command
+    `0dd3bb2a-d119-4e77-8580-96a356c7b529` was enqueued, claimed, and completed
+    before lease expiry with status `denied`, outcomes
+    `requested/started/denied`, reason
+    `desktop observe locked; get_active_app denied`, and
+    `marker_persisted=false`. API logs showed `/complete` returning `200` with
+    no recurrence of the mixed-timezone `TypeError` or HTTP 500.
+41. Luna lead release-gate review approved the PR #801 API-only gate. She
+    treated the post-deploy shell re-registration issue as non-blocking and
+    recommended the next phase start with native control scaffolding plus
+    denial-only tests, then signed-envelope validation, then approval grant
+    consumption, and only then narrow pointer/keyboard execution.
+42. Branch `codex/luna-native-control-scaffold` starts that next phase without
+    enabling actuation. The API command taxonomy now accepts pointer and
+    keyboard scaffold actions, but enqueue records an immediate display-safe
+    denied command instead of creating claimable work. Luna's client command
+    executor explicitly completes any claimed native-control action as denied,
+    and Tauri exposes pointer/keyboard native command stubs that all return the
+    same fail-closed policy denial while `can_control_pointer` and
+    `can_control_keyboard` remain false. The client also re-checks local Stop
+    after native observation returns and before posting success, so an in-flight
+    claimed observation cannot win a success completion after Stop latches.
+43. Alpha council review for this branch could not complete as requested:
+    Claude returned `Unsupported platform: claude`, and the Codex leg reviewed
+    an older command-control ref because `codex/luna-native-control-scaffold`
+    was not pushed yet. The stale-ref review still surfaced two real follow-up
+    gates to track before live native control expands: ambient clipboard and
+    activity emissions in Tauri must be disabled or routed through display-safe
+    governed audit, and device-token command authority should explicitly reject
+    revoked/offline `device_registry` rows instead of relying only on presence.
+44. PR #803 merged the native-control scaffold into `main` on 2026-06-06 UTC
+    as merge commit `40403fcf`. Alpha pushed-branch council review found no
+    blocking findings in the Codex leg; Claude remained unavailable with
+    `Unsupported platform: claude`. PR checks passed for API unit, API
+    integration, Luna client, and aggregate status. Post-merge broad Tests run
+    `27059620727`, Docker Desktop Deployment run `27059620729`, and Luna Client
+    Tauri Build run `27059620724` all passed. GitHub Actions published
+    unsigned development prerelease `luna-v0.1.97`; signing/notarization and
+    stable updater publication were skipped as expected while development
+    builds remain unsigned.
+45. Installed-release validation for `luna-v0.1.97` downloaded
+    `Luna_0.1.97_aarch64.dmg` plus `.sha256`, verified directly with
+    `shasum -c`, installed `/Applications/Luna.app`, and confirmed bundle
+    version `0.1.97`. Codesign reported an ad-hoc signature with no
+    `TeamIdentifier`; `spctl` rejected the app as expected for the current
+    unsigned development posture. Computer Use verified chat/session startup in
+    the expanded default window, `Control Locked`, disabled Assist/Control,
+    TCC Screen Recording and Accessibility denied/not-yet-granted, and then a
+    local `Stop` latch with `Resume` visible. Public and local API health checks
+    returned `200`; Luna's exact Docker mount gate returned no output:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+46. Installed command-channel smoke for `luna-v0.1.97` passed the scaffold
+    invariants. An internal `pointer_click` command returned immediate terminal
+    `denied` with capability `pointer_control`, null lease, display-safe
+    `desktop_command_completed` event, and no claimable native-control work.
+    Raw request marker text was absent from `desktop_commands`,
+    `desktop_command_events.metadata`, and mirrored `session_events.payload`.
+    An active-session `get_active_app` observation command was queued, claimed
+    by the installed app, and completed `denied` with reason
+    `desktop observe locked; get_active_app denied`; marker text was absent
+    from command payload and event metadata. A mistakenly queued older-session
+    observe command was preempted through the authenticated Stop endpoint, and
+    final queue validation reported zero pending commands for the live shell.
 
 ---
 
@@ -613,6 +918,9 @@ orchestra hub from opening by default.
 - [x] Update `Cmd+Shift+L` semantics to focus/toggle chat, not spatial HUD.
 - [ ] Verify `Cmd+Shift+Space` opens the command palette on `main`, not
       `spatial_hud`.
+  - [ ] Follow-up after PR #797: when `main` is already visible but minimized,
+        user-resized, or off-position, the command-palette shortcut should
+        restore/maximize/focus consistently before opening the palette.
 - [x] Update `CLAUDE.md` and `apps/luna-client/README.md` shortcut docs.
 - [x] Remove "Luna OS Spatial Workstation" empty-state copy from the main chat.
 - [x] Ensure login state is app-wide across Tauri windows.
@@ -684,6 +992,16 @@ Current verification finding (2026-06-06):
       `/Applications/Luna.app` version `0.1.87`, maximized chat-first startup,
       Control Locked safety strip, disabled Assist/Control, native TCC readiness
       display, and durable Stop posture after relaunch.
+- [x] Verify `luna-v0.1.90` unsigned development release locally after PRs
+      #788/#790/#791: DMG checksum, `/Applications/Luna.app` version `0.1.90`,
+      maximized chat-first startup, durable `Stopped` relaunch, expanded TCC
+      details, `Resume -> Observe`, metadata-only denied screenshot audit, and
+      Stop relatch.
+- [x] Verify `luna-v0.1.92` unsigned development release locally after PR
+      #793: DMG checksum, `/Applications/Luna.app` version `0.1.92`, maximized
+      chat-first startup, durable `Stopped` relaunch, `Resume -> Control
+      Locked`, `Observe` with Assist/Control still disabled, and Stop relatch.
+      The exact Docker `_work` mount smoke command returned no output.
 - [x] Verify Docker Desktop deployment no longer bind-mounts the GitHub Actions
       `_work` checkout for source-mounted runtime services. Precise inspection
       found zero `/actions-runner/_work` paths, and Luna's broader `grep _work`
@@ -706,6 +1024,14 @@ Exit criteria:
 - [x] Local install smoke from GitHub Release `luna-v0.1.87` confirms version,
       checksum, maximized launch, locked passive control strip, TCC readiness
       reporting, and durable Stop after relaunch.
+- [x] Local install smoke from GitHub Release `luna-v0.1.90` confirms version,
+      checksum, maximized launch, TCC readiness detail, `Resume -> Observe`,
+      denied screenshot metadata-only audit, Stop relatch, and durable stopped
+      relaunch.
+- [x] Local install smoke from GitHub Release `luna-v0.1.92` confirms version,
+      checksum, maximized chat-first launch, durable stopped relaunch,
+      `Resume -> Control Locked -> Observe`, Assist/Control disabled, Stop
+      relatch, and an empty exact Docker `_work` mount gate.
 
 ### Phase 1 -- Governed observation, Stop, and privacy baseline
 
@@ -734,8 +1060,25 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
         granted.
   - [ ] Bind local observation requests to the active chat session before
         MCP/API-governed observations ship.
-  - [ ] Promote local audit events into authoritative API
+    - [x] Add branch `codex/luna-desktop-command-events` bridge that forwards
+          existing local `desktop-control-audit` events with active
+          `chat_session_id` and durable `desktop-<uuid>` shell id.
+  - [x] Promote local audit events into authoritative API
         `desktop_command_events` and display-safe `session_events`.
+    - [x] Add authenticated `/api/v1/desktop-control/events/local-observation`
+          endpoint that persists metadata-only local observation events into
+          `desktop_command_events` and mirrors display-safe payloads into
+          `session_events`.
+    - [x] Redact unrecognized client-supplied audit `reason` text before
+          persistence/mirroring so the reason field cannot smuggle raw
+          clipboard, screenshot, window-title, path, or prompt content.
+    - [x] Add focused API tests for authenticated ingestion, tenant/session
+          binding, allowed metadata keys, display-safe mirroring, and reason
+          redaction.
+    - [x] Constrain local observation `event_id` to UUID syntax before it can be
+          stored as `local_event_id` or mirrored into `session_events`.
+    - [x] Reject local observation audit rows for shell ids that are not
+          currently connected in Luna presence.
 - [x] Remove or narrow broad Tauri `shell:default` capability before adding
       desktop control.
 - [ ] Add local permission state for Observe and Assist tiers.
@@ -751,7 +1094,7 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       `observe`; no pointer/keyboard action is exposed in this slice.
 - [x] Add visible Observe/Stop skeleton in the main chat nav.
 - [x] Add visible Observe/Assist/Control/Stop control strip in main chat.
-- [ ] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
+- [x] Add local Stop state, Stop button, tray Stop item, and keyboard Stop
       shortcut before down-channel work.
 - [ ] Add persistent Observe/Assist indicator while either tier is active.
 - [x] Add durable random `desktop-<uuid>` shell identity persisted in Tauri app
@@ -760,6 +1103,8 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
       (`observe`, `stop`, `notify`; no pointer/keyboard/local-action claim).
 - [x] Sync shell presence capabilities from native control safety state so
       stopped shells do not advertise observation readiness.
+- [x] Ensure the local audit bridge uses the active app shell id instead of
+      trusting a native event payload shell override.
 - [x] Add explicit gesture engine start paths in calibration and gesture
       settings after removing login-time camera auto-start.
 - [x] Require Observe, not merely non-Stopped, for screenshot, active-app,
@@ -779,15 +1124,31 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
         Events/Automation remains `unknown` until an explicit setup flow so
         Luna does not trigger TCC prompts by merely opening the chat window.
 - [x] Add unit coverage for the Phase 1 permission-readiness status contract.
-- [ ] Add `desktop_control` tool group in `tool_groups.py`.
-- [ ] Add MCP tools:
-  - [ ] `desktop_observe_screen`
-  - [ ] `desktop_get_active_app`
-  - [ ] `desktop_read_clipboard`
+- [x] Add `desktop_control` tool group in `tool_groups.py`.
+  - [x] Add `desktop_control` group key for the planned read-only observation
+        MCP tools; no agent grants or actuation tools are added in this slice.
+  - [x] Add CI recovery coverage so existing unit jobs can compile
+        PostgreSQL-typed models under SQLite without weakening the real
+        PostgreSQL integration gate.
+- [x] Add MCP tools:
+  - [x] `desktop_observe_screen`
+  - [x] `desktop_get_active_app`
+  - [x] `desktop_read_clipboard`
+  - [x] Current Phase 1 behavior records a governed request/denial through the
+        API and returns the audit envelope. Live content delivery remains
+        blocked until the Tauri command down-channel ships.
 - [ ] Ensure agent-initiated observations go through MCP/API governance, not
       direct frontend invokes.
+  - [x] The registered MCP tools call
+        `/api/v1/desktop-control/internal/observations/request` with internal-key,
+        tenant, and user headers; they do not call native Tauri commands or
+        return raw desktop content.
 - [ ] Emit authoritative observation events into `desktop_command_events` and
       display-safe summaries into `session_events`.
+  - [x] Add Phase 1 local-observation ingestion for `started`, `succeeded`,
+        `failed`, and `denied` metadata-only events.
+  - [x] Reject unknown/raw payload keys at the API schema boundary and redact
+        unrecognized reason text before writing audit rows.
 - [ ] Set screenshot retention default to ephemeral or short-lived object
       storage with TTL.
 - [ ] Store clipboard observations as metadata, hashes, and redacted summaries by
@@ -815,24 +1176,46 @@ Exit criteria:
 
 Goal: add the missing API-to-Tauri path for action envelopes.
 
-- [ ] Add `desktop_commands` table with tenant/user/session/shell scoping.
-- [ ] Add append-only `desktop_command_events` table for authoritative audit.
-- [ ] Add API service for enqueue, claim, complete, deny, expire.
+- [x] Add `desktop_commands` table with tenant/user/session/shell scoping.
+- [x] Add append-only `desktop_command_events` table for authoritative audit.
+- [x] Add `chat_sessions.owner_user_id` so desktop-control can reject ownerless
+      and cross-user session requests before live content is enabled.
+- [x] Add API service for enqueue, claim, complete, deny, expire.
+  - [x] Add API service for local metadata-only observation-event ingestion.
+  - [x] Add first command queue service for observation-only commands:
+        enqueue, device-bound claim lease, complete, deny, stale expiry,
+        duplicate terminal idempotency, and Stop preemption.
 - [ ] Add desktop device enrollment, claim token hashing, rotation, and
       revocation through `device_registry`.
+  - [x] Add authenticated Luna desktop enrollment endpoint that creates or
+        updates a `desktop` `device_registry` row for the durable
+        `desktop-<uuid>` shell id, stores only the hashed claim token, rotates
+        the token on enrollment, and returns the raw token once to the client.
+        Operator revocation and claim-time token validation remain pending.
 - [ ] Add Ed25519 key lifecycle: key generation during enrollment, public key
       storage in `device_registry`, private key storage in Tauri secure storage,
       and rotation/revocation.
 - [ ] Bind shell presence to `device_id`, `shell_id`, app version, hostname hash,
       OS username hash, and current capability manifest.
-- [ ] Add authenticated Tauri polling/SSE hook for claimable-command notices.
-- [ ] Require Tauri claim before execution; down-channel notices alone never
+  - [x] Bind Luna shell presence to authenticated `device_id`, `shell_id`, and
+        current capability manifest, then persist the internal
+        `device_registry.id` in presence for desktop-control authorization.
+        App version/host hash/OS-user hash are still pending.
+- [x] Add authenticated Tauri polling/SSE hook for claimable-command notices.
+  - [x] Add Luna client polling hook that claims commands with the enrolled
+        desktop device token and active chat session id.
+- [x] Require Tauri claim before execution; down-channel notices alone never
       execute commands.
 - [ ] Add signed action envelope validation in Tauri.
 - [ ] Add server-time TTL, nonce storage, monotonic per-device sequence numbers,
       and replay-window cleanup.
-- [ ] Add one active claim lease per command, compare-and-swap status
+  - [x] Add server-time lease expiry and pending-command TTL for the
+        observation-only queue. Signed envelope expiry, per-device sequence
+        numbers, replay cleanup, and grant-bound TTL remain pending.
+- [x] Add one active claim lease per command, compare-and-swap status
       transitions, retry limits, and duplicate completion handling.
+  - [x] Implement one active claim lease with CAS status transitions and
+        duplicate terminal completion idempotency. Retry limits remain pending.
 - [ ] Add atomic approval consumption/decrement during command claim or
       execution.
 - [ ] Implement approval consumption as a database compare-and-swap update inside
@@ -843,21 +1226,39 @@ Goal: add the missing API-to-Tauri path for action envelopes.
       device-token secret.
 - [ ] Emit `desktop_action_requested`, `started`, `completed`, `denied`, and
       `stopped`.
+  - [x] Emit command queued, claimed, completed, preempted, and expired events
+        for the observation-only down-channel. Final event names for full
+        action envelopes remain pending.
 - [ ] Add stale-shell rejection.
 - [ ] Enforce MCP `desktop_control` tools through scoped agent-token auth; derive
       tenant/user/session/device from auth-bound context, not LLM-supplied
       arguments.
+  - [x] Bind desktop observation requests to an authenticated user header and
+        reject sessions not owned by that user.
+  - [x] Bind shell/device identity to authenticated Luna desktop enrollment
+        before even recording MCP observation requests. Screenshots,
+        active-app data, clipboard text, and pointer/keyboard command results
+        remain blocked until device-token-authenticated command claim and
+        signed action envelopes ship.
 - [ ] Add API tests for tenant isolation and command ownership.
+  - [x] Add focused observation-path tests for ownerless sessions, same-tenant
+        cross-user sessions, and user validation before shell selection.
+  - [x] Add focused desktop-device enrollment and shell-device binding tests,
+        including unbound shell rejection for local and MCP observation paths.
+  - [x] Add command lifecycle tests for device-bound claim, completion
+        idempotency, Stop preemption, stale lease expiry, metadata sanitization,
+        stale pending-command expiry, tenant-scoped nonce idempotency, and route
+        header plumbing.
 
 Exit criteria:
 
-- [ ] A no-op test action can be queued by API, claimed by Tauri, and completed
+- [x] A no-op test action can be queued by API, claimed by Tauri, and completed
       into `desktop_command_events` and mirrored into `session_events`.
-- [ ] Commands for another tenant/user/session/shell are rejected.
-- [ ] Expired commands are not executed.
+- [x] Commands for another tenant/user/session/shell are rejected.
+- [x] Expired commands are not executed.
 - [ ] Revoked desktop devices cannot claim commands even if shell presence is
       fresh.
-- [ ] Stop rejects queued and claimed no-op commands before pointer control
+- [x] Stop rejects queued and claimed no-op commands before pointer control
       begins.
 
 ### Phase 3 -- Local pointer control
@@ -1002,31 +1403,105 @@ Exit criteria:
 
 - [ ] `desktop_commands` migration applies and records in `_migrations`.
 - [ ] `desktop_command_events` migration applies and records in `_migrations`.
-- [ ] Command enqueue requires authenticated user and valid session.
-- [ ] Command claim requires matching tenant and shell/device.
-- [ ] Cross-tenant command claim returns 404 or denial without leaking existence.
-- [ ] Expired commands cannot be claimed.
+- [ ] `chat_sessions.owner_user_id` migration applies, backfills single-user
+      tenants only, and records in `_migrations`.
+- [x] PR #793 includes migration files for `desktop_commands` and
+      `desktop_command_events`; applied-migration validation remains part of
+      the PostgreSQL CI/release gate.
+- [x] PR #795 migration `159_chat_sessions_owner_user_id.sql` applies in PR and
+      post-merge PostgreSQL CI, backfills single-user tenants only, and records
+      in `_migrations`.
+- [x] Command enqueue requires authenticated user and valid session.
+- [x] Command claim requires matching tenant and shell/device.
+- [x] Cross-tenant command claim returns 404 or denial without leaking existence.
+- [x] Expired commands cannot be claimed.
 - [ ] Revoked desktop device cannot claim commands.
-- [ ] Duplicate command completion is idempotent and does not create multiple
+- [x] Duplicate command completion is idempotent and does not create multiple
       success events.
-- [ ] Command state machine rejects invalid transitions and cannot double-actuate
+- [x] Command state machine rejects invalid transitions and cannot double-actuate
       one command.
-- [ ] Stop changes queued or claimed commands to `preempted`, not `succeeded`.
-- [ ] Completion writes `desktop_command_events` and a display-safe
+- [x] Stop changes queued or claimed commands to `preempted`, not `succeeded`.
+- [x] Completion writes `desktop_command_events` and a display-safe
       `session_events` row.
 - [ ] MCP tools require `tenant_id`, scoped agent-token auth, and declared
       `desktop_control` tool group.
 - [ ] MCP desktop tools derive tenant/user/session/device from auth-bound
       context, not from LLM-supplied tool arguments.
+  - [x] PR #794 and the Phase 2 ownership follow-up keep MCP observation tools
+        denial-only and require authenticated user/session ownership.
+  - [x] Device-bound shell identity is now enforced before local/MCP desktop
+        observation audit rows are accepted; live content return remains
+        blocked until command claim, signatures, approvals, and Tauri execution
+        ship.
 - [ ] Rate limits are enforced per tenant/user/session/shell/capability.
-- [ ] Raw screenshot and clipboard values are not written to logs or
+- [x] Raw screenshot and clipboard values are not written to logs or
       `session_events`.
+- [x] Focused API validation for PR #793 passed locally:
+      `tests/api/v1/test_desktop_control_events.py`,
+      `tests/api/v1/test_claude_auth_setup_token.py`,
+      `tests/test_cli_dispatch_rollback_safety.py`,
+      `tests/test_emotion_engine_agent_affect_endpoint.py`,
+      `tests/test_emotion_engine_prompt_injection.py`,
+      `tests/test_greeting_template.py`,
+      `tests/test_reflection_validators.py`, and
+      `tests/test_security_fixes.py` all passed in one run.
+- [x] Targeted `ruff check` passed for the desktop-control API/model files and
+      touched API test/support files.
+- [x] Council-blocker regression checks passed locally after the review fix:
+      desktop-control API event tests, Luna audit bridge tests, and targeted
+      `ruff`.
+- [x] `SkillEvalIterationWorkflow` unit tests pass after disabling activity
+      retries for the scaffold failure-counting path.
+- [x] Fresh GitHub Actions API unit, API integration, and Luna client gates pass
+      on PR #793 after the CI recovery patch.
+- [x] Final PR #793 gate passed on head `a5d2891f`; post-merge broad Tests run
+      `27055213272` passed on merge commit `8c6449cf`.
+- [x] Phase 1 MCP request/audit slice local API validation passed:
+      `pytest tests/api/v1/test_desktop_control_events.py -q` (`14 passed`).
+- [x] Phase 2 session ownership local API validation passed:
+      `pytest tests/api/v1/test_desktop_control_events.py
+      tests/test_chat_session_default_agent_and_title.py
+      tests/test_api.py::test_create_user_and_tenant
+      tests/test_api.py::test_login_for_access_token -q` (`28 passed`).
+- [x] Phase 2 device-binding focused local validation passed:
+      `pytest tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py -q` (`28 passed`) and
+      `npm test -- --run src/hooks/__tests__/useShellPresence.test.jsx
+      src/utils/__tests__/desktopDeviceEnrollment.test.js` (`3 passed`).
+- [x] Phase 2 command down-channel focused local validation passed on branch
+      `codex/luna-command-downchannel-gate`:
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py -q` (`46 passed`);
+      `ruff check app/api/v1/desktop_control.py
+      app/services/desktop_control_service.py app/models/desktop_command.py
+      tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py`; `python -m py_compile`
+      for touched API/router/model modules.
+- [x] Native-control scaffold API validation passed on branch
+      `codex/luna-native-control-scaffold`: native pointer/keyboard command
+      enqueue records immediate denied audit rows, remains non-claimable, and
+      sanitizes raw payload data. `python -m py_compile` passed for touched
+      API/router/test modules; targeted `ruff check` passed; and
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py -q` passed (`44 passed`).
+- [x] PR #803 native-control scaffold PR and post-merge CI passed:
+      PR run `27059502069` passed API unit, API integration, Luna client, and
+      aggregate checks; main runs `27059620727`, `27059620729`, and
+      `27059620724` passed Tests, Docker Desktop Deployment, and Luna Client
+      Tauri Build on merge commit `40403fcf`.
 
 ### Tauri / Rust
 
-- [ ] `cargo check` in `apps/luna-client/src-tauri`.
+- [x] `cargo check` in `apps/luna-client/src-tauri` passed for
+      `codex/luna-command-downchannel-gate`; only existing Rust warnings and
+      the local Cargo cache cleanup permission warning were observed.
 - [ ] Unit tests for local permission decisions.
 - [ ] Actuator denies when Observe/Assist/Control tier is disabled.
+  - [x] Native-control scaffold policy tests prove pointer/keyboard control
+        remains disabled and Stop preempts native control before any actuation
+        path. Tauri command stubs are registered but return denial-only.
 - [ ] Actuator denies expired and replayed envelopes.
 - [ ] Actuator denies unsigned envelopes and unsupported policy versions.
 - [ ] Actuator denies when device claim token is revoked or missing.
@@ -1037,6 +1512,42 @@ Exit criteria:
 - [ ] Existing direct screenshot, active-app, clipboard, and shell paths cannot
       bypass the policy gate.
 - [ ] macOS permission probes disable unavailable tiers and emit denial events.
+- [x] GitHub Luna client `jest + cargo` gate passed on PR #793 and again in
+      post-merge main Tests run `27055213272`.
+- [x] Phase 1 MCP tool validation passed:
+      `pytest tests/test_desktop_control_tool.py -q` in `apps/mcp-server`
+      (`6 passed`), plus targeted `ruff` for touched API and MCP files.
+- [x] Phase 2 Luna client command-claim validation passed:
+      `npm test -- --run` in `apps/luna-client` (`136 passed`) and
+      `npm run build` succeeded. The new tests cover device-token claim
+      polling, local Stop preemption, Observe-mode gating, and metadata-only
+      completion summaries.
+- [x] Phase 2 claimed-command timeout regression validation passed on branch
+      `codex/luna-command-completion-smoke-fix`:
+      `npm test -- --run src/hooks/__tests__/useDesktopCommandClaims.test.jsx`
+      (`11 passed`). The added tests cover hung post-claim safety checks,
+      hung native observation invokes, locked hook-level denial, cancellation
+      after claim, and completion retry before backend lease expiry.
+- [x] Full Luna client validation for
+      `codex/luna-command-completion-smoke-fix` passed:
+      `npm test -- --run` (`142 passed`) and `npm run build` succeeded with
+      only the existing Vite dynamic/static import and chunk-size warnings.
+- [x] API timezone regression validation for `codex/luna-v0196-validation`
+      passed:
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py -q`
+      (`15 passed`);
+      `pytest tests/api/v1/test_desktop_command_lifecycle.py
+      tests/api/v1/test_desktop_control_events.py
+      tests/api/v1/test_desktop_device_binding.py -q` (`47 passed`);
+      targeted `ruff check` and `python -m py_compile` for the touched API
+      service/test modules.
+- [x] Native-control scaffold Luna client validation passed:
+      `npm test -- --run src/hooks/__tests__/useDesktopCommandClaims.test.jsx`
+      (`14 passed`), full `npm test -- --run` (`145 passed`),
+      `npm run build`, focused Rust policy/control tests, and full
+      `cargo test` in `apps/luna-client/src-tauri` (`69 passed`). Existing
+      Cargo cache cleanup permission warning and pre-existing Rust warnings
+      were observed.
 
 ### React / UX
 
@@ -1058,8 +1569,55 @@ Exit criteria:
 
 - [x] Fresh launch: only `Luna` chat visible.
 - [x] Fresh launch: installed `luna-v0.1.86` opens maximized by default.
+- [x] Fresh launch: installed `luna-v0.1.92` opens maximized by default.
+- [x] Fresh launch: installed `luna-v0.1.94` opens expanded by default; System
+      Events/AppKit measured `0,34` and `1496x933`, matching the primary
+      screen visible frame.
 - [x] Fresh launch: Control strip starts `Control Locked`, with Assist and
       Control disabled.
+- [x] Fresh launch: installed `luna-v0.1.94` renders chat/session navigation,
+      the stopped/locked desktop safety strip, `Resume`, and TCC readiness
+      details under Computer Use.
+- [x] Fresh relaunch: installed `luna-v0.1.92` starts in durable `Stopped` with
+      `Resume` visible.
+- [x] `luna-v0.1.92` Computer Use smoke: `Resume -> Control Locked -> Observe`
+      keeps Assist/Control disabled, and `Stop` relatches the safe state.
+- [x] `luna-v0.1.94` Computer Use smoke: new chat/session creation works and
+      Luna responded in Alpha Chat after the computer-use lead handoff.
+- [x] `luna-v0.1.95` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.95`, ad-hoc unsigned development signature confirmed,
+      chat-first expanded startup verified with Computer Use, API/tunnel stack
+      healthy, and Luna's exact Docker `_work` mount gate returned no output.
+- [x] `luna-v0.1.95` command down-channel smoke follow-up: installed app
+      claimed an internal `get_active_app` command, but did not post terminal
+      completion; backend expired the lease. Closed by PR #800 client
+      hardening plus PR #801 API lease-time fix, validated with the installed
+      `luna-v0.1.96` command smoke.
+- [x] `luna-v0.1.96` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.96`, ad-hoc unsigned development signature confirmed,
+      chat-first expanded startup verified with Computer Use, durable
+      `Stopped` relaunch verified, and Luna lead review response visible.
+- [x] `luna-v0.1.96` command down-channel smoke: installed app claimed
+      `get_active_app` and attempted `/complete`, but API completion raised a
+      mixed-timezone lease comparison error and the command expired before PR
+      #801. After PR #801 deployed, the same installed app was restarted to
+      re-register shell presence; command
+      `0dd3bb2a-d119-4e77-8580-96a356c7b529` was queued, claimed, and completed
+      before lease expiry with status `denied`, `/complete` HTTP 200, no raw
+      marker persistence, and no `TypeError`/500 recurrence.
+- [x] `luna-v0.1.97` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.97`, ad-hoc unsigned development signature confirmed,
+      `spctl` rejection accepted as expected for unsigned development,
+      chat-first expanded startup verified with Computer Use, public/local API
+      bases healthy, and Luna's exact Docker `_work` mount gate returned no
+      output.
+- [x] `luna-v0.1.97` native scaffold command smoke: internal `pointer_click`
+      returned immediate terminal `denied`, remained non-claimable, persisted
+      no raw marker text, and mirrored only display-safe session payload.
+      Active-session `get_active_app` was claimed by the installed app and
+      completed `denied` before lease expiry with marker text absent from
+      command payload and event metadata; final queue check returned zero
+      pending commands for the live shell.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1104,15 +1662,19 @@ Exit criteria:
 
 ## Next Actions
 
-1. Start the next Phase 1 safety branch with Luna leading from Alpha chat and
-   local Codex CLI access.
-2. Prioritize Phase 1 in Luna's reviewed order: durable Stop across relaunch,
-   policy-gated screenshot/active-app/clipboard reads with audit, persistent
-   Observe/Assist indicator, then `Cmd+Shift+Space` command palette on `main`.
-3. Continue Phase 1 by moving screenshot, active-app, and clipboard-read
-   primitives fully behind the `computer_use` module and adding audit event
-   plumbing.
-4. Add the `desktop_control` tool group and read-only MCP/API observation tools
-   only after the local policy/audit boundary is in place.
-5. Do not implement pointer, keyboard, clipboard-write, or global control until
-   Phase 1 audit and Phase 2 command-governance exit criteria are satisfied.
+1. Close pre-live-content hardening gaps: disable or display-safe route ambient
+   clipboard/activity raw emissions, and enforce revoked/offline desktop device
+   status during claim/complete/stop.
+2. Add signed command-envelope validation before any pointer or keyboard
+   execution: nonce, expiry, session, shell, device, command id, policy version,
+   replay protection, revocation, and policy-decision binding.
+3. Add approval grant creation/consumption as a database compare-and-swap gate
+   before enabling narrow canary pointer execution.
+4. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+   disabled until signed envelopes, replay defense, approval grant consumption,
+   device trust checks, and privacy/TCC boundaries are implemented and reviewed.
+5. Treat the post-deploy `No connected desktop shell` observation as a
+   hardening follow-up: Luna should re-register shell presence after API
+   restarts or heartbeat failures, not require an app restart.
+6. Include the PR #797 command-palette maximize follow-up in the next branch or
+   explicitly keep it as a separate UX hardening item.

@@ -20,6 +20,43 @@ import os
 import sys
 
 import pytest
+from sqlalchemy import ARRAY as SqlArray
+from sqlalchemy.dialects.postgresql import ARRAY as PgArray
+from sqlalchemy.dialects.postgresql import INET, JSONB, UUID
+from sqlalchemy.ext.compiler import compiles
+
+try:
+    from pgvector.sqlalchemy import Vector
+except Exception:  # pragma: no cover - optional dependency in local shells
+    Vector = None
+
+
+@compiles(UUID, "sqlite")
+def _compile_postgres_uuid_for_sqlite(_type, _compiler, **_kw):
+    return "CHAR(36)"
+
+
+@compiles(JSONB, "sqlite")
+def _compile_postgres_jsonb_for_sqlite(_type, _compiler, **_kw):
+    return "JSON"
+
+
+@compiles(INET, "sqlite")
+def _compile_postgres_inet_for_sqlite(_type, _compiler, **_kw):
+    return "VARCHAR"
+
+
+@compiles(PgArray, "sqlite")
+@compiles(SqlArray, "sqlite")
+def _compile_array_for_sqlite(_type, _compiler, **_kw):
+    return "JSON"
+
+
+if Vector is not None:
+
+    @compiles(Vector, "sqlite")
+    def _compile_pgvector_for_sqlite(_type, _compiler, **_kw):
+        return "BLOB"
 
 # Make the local `tests.fixtures` package importable as a top-level
 # `fixtures` module from inside tests (the api project doesn't auto-add
