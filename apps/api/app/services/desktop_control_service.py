@@ -66,6 +66,8 @@ _CLAIMABLE_COMMAND_STATUSES = {
     "running",
 }
 
+_REVOKED_DESKTOP_DEVICE_STATUSES = {"revoked", "disabled"}
+
 _COMMAND_ACTION_CAPABILITIES = {
     **_OBSERVATION_CAPABILITIES,
     **_NATIVE_CONTROL_CAPABILITIES,
@@ -582,6 +584,8 @@ def _device_for_user_shell(
     ).first()
     if not device:
         raise HTTPException(status_code=401, detail="Invalid desktop device token")
+    if str(device.status or "").lower() in _REVOKED_DESKTOP_DEVICE_STATUSES:
+        raise HTTPException(status_code=403, detail="Desktop device is revoked")
     if (device.config or {}).get("shell_id") != shell_id:
         raise HTTPException(status_code=403, detail="Device is not bound to shell")
     return device.id

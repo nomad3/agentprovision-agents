@@ -497,6 +497,66 @@ def test_claim_requires_matching_device_token(db_session, seeded):
     assert exc.value.status_code == 401
 
 
+def test_revoked_desktop_device_cannot_claim_even_with_fresh_presence(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-revoked-device")
+        device = db_session.query(DeviceRegistry).filter(DeviceRegistry.id == DEVICE_ID).one()
+        device.status = "revoked"
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            claim_next_desktop_command(
+                db_session,
+                user=seeded,
+                device_token=DEVICE_TOKEN,
+                claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+            )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop device is revoked"
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "pending"
+    assert reloaded.lease_owner_shell_id is None
+
+
+def test_revoked_desktop_device_cannot_complete_claimed_command(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-revoked-complete")
+        claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        device = db_session.query(DeviceRegistry).filter(DeviceRegistry.id == DEVICE_ID).one()
+        device.status = "disabled"
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            complete_desktop_command(
+                db_session,
+                user=seeded,
+                device_token=DEVICE_TOKEN,
+                completion=DesktopCommandCompletion(
+                    command_id=command.id,
+                    shell_id=SHELL_ID,
+                    status="succeeded",
+                ),
+            )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Desktop device is revoked"
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "claimed"
+    assert reloaded.completed_at is None
+
+
 def test_completion_sanitizes_reason_and_metadata_values(db_session, seeded):
     with patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",

@@ -1256,8 +1256,12 @@ Exit criteria:
       into `desktop_command_events` and mirrored into `session_events`.
 - [x] Commands for another tenant/user/session/shell are rejected.
 - [x] Expired commands are not executed.
-- [ ] Revoked desktop devices cannot claim commands even if shell presence is
+- [x] Revoked desktop devices cannot claim commands even if shell presence is
       fresh.
+  - [x] Branch `codex/luna-control-policy-tests` adds the command-claim
+        regression: a `revoked` desktop `DeviceRegistry` row returns 403 even
+        with a valid device token and fresh shell presence, leaving the command
+        pending and unleased.
 - [x] Stop rejects queued and claimed no-op commands before pointer control
       begins.
 
@@ -1415,7 +1419,9 @@ Exit criteria:
 - [x] Command claim requires matching tenant and shell/device.
 - [x] Cross-tenant command claim returns 404 or denial without leaking existence.
 - [x] Expired commands cannot be claimed.
-- [ ] Revoked desktop device cannot claim commands.
+- [x] Revoked desktop device cannot claim commands.
+  - [x] `test_revoked_desktop_device_cannot_claim_even_with_fresh_presence`
+        covers the claim-time registry status gate.
 - [x] Duplicate command completion is idempotent and does not create multiple
       success events.
 - [x] Command state machine rejects invalid transitions and cannot double-actuate
@@ -1497,15 +1503,23 @@ Exit criteria:
 - [x] `cargo check` in `apps/luna-client/src-tauri` passed for
       `codex/luna-command-downchannel-gate`; only existing Rust warnings and
       the local Cargo cache cleanup permission warning were observed.
-- [ ] Unit tests for local permission decisions.
-- [ ] Actuator denies when Observe/Assist/Control tier is disabled.
+- [x] Unit tests for local permission decisions.
+- [x] Actuator denies when Observe/Assist/Control tier is disabled.
   - [x] Native-control scaffold policy tests prove pointer/keyboard control
         remains disabled and Stop preempts native control before any actuation
         path. Tauri command stubs are registered but return denial-only.
+  - [x] Branch `codex/luna-control-policy-tests` adds
+        `NativeControlCommandPolicy` coverage for Stop, claim lease, envelope,
+        tier, and final deny-by-default behavior.
 - [ ] Actuator denies expired and replayed envelopes.
-- [ ] Actuator denies unsigned envelopes and unsupported policy versions.
-- [ ] Actuator denies when device claim token is revoked or missing.
-- [ ] Actuator requires command claim lease before execution.
+  - [x] Expired-envelope denial is covered. Replay/nonce storage remains a
+        future signed-envelope implementation item.
+- [x] Actuator denies unsigned envelopes and unsupported policy versions.
+- [x] Actuator denies when device claim token is revoked or missing.
+  - [x] Missing/invalid token was already covered; branch
+        `codex/luna-control-policy-tests` adds revoked/disabled token-device
+        status rejection before command claim.
+- [x] Actuator requires command claim lease before execution.
 - [ ] Pointer action denies on active-app drift.
 - [ ] Stop switch blocks pending commands.
 - [ ] Stop switch cancels queued, claimed, and in-flight commands.
