@@ -1,11 +1,12 @@
 """User activity tracking for workflow pattern detection."""
 import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional, Literal
 from collections import Counter
 
-from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import func, text
 
@@ -16,9 +17,21 @@ from app.models.user_activity import UserActivity
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/activities", tags=["activities"])
 
+MACOS_APP_MONITOR_EVENT_SCHEMA = "agentprovision.macos_app_monitor_event.v1"
+MACOS_APP_MONITOR_SOURCE = "tauri_activity_tracker"
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_CONTEXT_ID_RE = re.compile(r"^[^:\n\r]{1,80}:[0-9a-f]+$", re.IGNORECASE)
+
 # ── Schemas ──
 
 class ActivityTrackRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    event_schema: Optional[str] = Field(None, alias="schema", max_length=96)
+    event_id: Optional[str] = Field(None, max_length=96)
     type: Literal["app_switch", "clipboard_copy", "file_open", "url_visit", "screenshot"] = Field(...)
     source_shell: Optional[str] = Field(None, max_length=100)
     from_app: Optional[str] = Field(None, max_length=255)
@@ -28,6 +41,62 @@ class ActivityTrackRequest(BaseModel):
     subprocess: Optional[dict] = None  # {active_processes, terminal_cwd} from native client
     duration_secs: Optional[float] = None
     timestamp: Optional[int] = None
+    observed_at_ms: Optional[int] = Field(None, ge=0)
+    active_context_id: Optional[str] = Field(None, max_length=120)
+    detail_level: Optional[str] = Field(None, max_length=80)
+    monitor_source: Optional[str] = Field(None, max_length=80)
+    window_title_present: Optional[bool] = None
+    window_title_chars: Optional[int] = Field(None, ge=0)
+
+
+def _is_uuid(value: str | None) -> bool:
+    return bool(value and _UUID_RE.match(value))
+
+
+def _is_context_id(value: str | None, app_name: str | None) -> bool:
+    if not value or not app_name or not _CONTEXT_ID_RE.match(value):
+        return False
+    prefix, _hash = value.rsplit(":", 1)
+    return prefix == app_name
+
+
+def _activity_detail(body: ActivityTrackRequest) -> dict:
+    """Return display-safe activity detail; raw local content is never stored."""
+    base = body.model_dump(
+        exclude_none=True,
+        exclude={"window_title", "subprocess", "app_name"},
+        by_alias=True,
+    )
+
+    if body.type != "app_switch":
+        return base
+
+    app_name = body.to_app or body.app_name
+    detail = {
+        "type": body.type,
+        "detail_level": "metadata_only",
+    }
+    for key in ("source_shell", "from_app", "to_app", "duration_secs", "timestamp"):
+        value = getattr(body, key)
+        if value is not None:
+            detail[key] = value
+
+    if body.event_schema == MACOS_APP_MONITOR_EVENT_SCHEMA:
+        detail["schema"] = MACOS_APP_MONITOR_EVENT_SCHEMA
+        detail["monitor_source"] = MACOS_APP_MONITOR_SOURCE
+        if _is_uuid(body.event_id):
+            detail["event_id"] = body.event_id.lower()
+        if body.observed_at_ms is not None:
+            detail["observed_at_ms"] = body.observed_at_ms
+        if _is_context_id(body.active_context_id, app_name):
+            prefix, context_hash = body.active_context_id.rsplit(":", 1)
+            detail["active_context_id"] = f"{prefix}:{context_hash.lower()}"
+        if body.window_title_present is not None:
+            detail["window_title_present"] = body.window_title_present
+        if body.window_title_chars is not None:
+            detail["window_title_chars"] = body.window_title_chars
+
+    return detail
 
 
 # ── App-to-MCP tool mapping for workflow generation ──
@@ -88,14 +157,17 @@ def track_activity(
     current_user: User = Depends(deps.get_current_active_user),
 ):
     """Log a user activity event from the native client."""
+    if body.event_schema == MACOS_APP_MONITOR_EVENT_SCHEMA and not _is_uuid(body.event_id):
+        raise HTTPException(status_code=422, detail="Valid monitor event_id is required")
+
     activity = UserActivity(
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         event_type=body.type,
         source_shell=body.source_shell,
         app_name=body.to_app or body.app_name,
-        window_title=body.window_title,
-        detail=body.model_dump(exclude_none=True),
+        window_title=None,
+        detail=_activity_detail(body),
         duration_secs=body.duration_secs,
     )
     db.add(activity)

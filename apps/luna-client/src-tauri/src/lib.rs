@@ -1195,15 +1195,20 @@ fn build_metadata_app_switch_event(
     duration_secs: u64,
     timestamp: u64,
 ) -> serde_json::Value {
+    let active_context_id = active_app_context_key(to_app, window_title);
     serde_json::json!({
+        "schema": "agentprovision.macos_app_monitor_event.v1",
+        "event_id": uuid::Uuid::new_v4().to_string(),
         "type": "app_switch",
         "from_app": from_app,
         "to_app": to_app,
         "duration_secs": duration_secs,
         "timestamp": timestamp,
+        "observed_at_ms": timestamp.saturating_mul(1000),
         "platform": "macos",
         "monitor_source": "tauri_activity_tracker",
         "detail_level": "metadata_only",
+        "active_context_id": active_context_id,
         "window_title_present": !window_title.is_empty(),
         "window_title_chars": window_title.chars().count(),
     })
@@ -1967,10 +1972,21 @@ mod tests {
         assert_eq!(event["from_app"], "Terminal");
         assert_eq!(event["to_app"], "Luna");
         assert_eq!(event["detail_level"], "metadata_only");
+        assert_eq!(
+            event["schema"],
+            "agentprovision.macos_app_monitor_event.v1"
+        );
+        assert!(uuid::Uuid::parse_str(event["event_id"].as_str().unwrap()).is_ok());
+        assert_eq!(event["observed_at_ms"], 12345000);
+        assert!(event["active_context_id"].as_str().unwrap().starts_with("Luna:"));
         assert_eq!(event["window_title_present"], true);
         assert_eq!(event["window_title_chars"], 24);
         assert!(event.get("window_title").is_none());
         assert!(event.get("subprocess").is_none());
+        assert!(!event["active_context_id"]
+            .as_str()
+            .unwrap()
+            .contains("secret repo"));
     }
 
     #[test]

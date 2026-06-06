@@ -17,11 +17,12 @@ policy hardening merged and unsigned `luna-v0.1.98` installed locally; PR #807
 signed desktop command envelope gate merged and unsigned `luna-v0.1.99`
 installed locally; PR #808 Alpha CLI async chat-kernel transport merged and
 unsigned `luna-v0.1.100` installed locally; PR #810 macOS Alpha-kernel/readiness
-merged and unsigned `luna-v0.1.101` installed locally. Native actuation remains
-disabled; current branch adds local claimed command-envelope preflight before
-Luna invokes any native observation/control stub.
+merged and unsigned `luna-v0.1.101` installed locally; PR #811 local claimed
+command-envelope preflight merged and unsigned `luna-v0.1.102` installed
+locally. Native actuation remains disabled; current branch hardens the
+macOS-only app-monitor event contract and UI/API forwarding path.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-v0101-approval-trust`
+Current implementation branch: `codex/luna-v0102-validation-next`
 
 ---
 
@@ -627,6 +628,33 @@ Additional discovery inputs:
     closed on missing/expired/replayed/revoked claims, bind to tenant/user/
     session/shell/device/command, and produce audit-only outcomes until
     approval trust is proven.
+67. PR #811 merged into `main` on 2026-06-06 UTC as merge commit `de169085`.
+    Post-merge broad Tests, Docker Desktop Deployment, and Luna Client Tauri
+    Build all passed. GitHub Actions published unsigned development prerelease
+    `luna-v0.1.102`; the DMG and `.sha256` were downloaded, `shasum -c`
+    verified the checksum, `/Applications/Luna.app` reported bundle version
+    `0.1.102`, and codesign reported the expected ad-hoc signature with no
+    `TeamIdentifier`. Computer Use verified `Stopped Alpha OK Mac Stopped`,
+    disabled Observe/Assist/Control/Lock/Stop controls, visible `Resume`, no
+    native actuation, and expanded window geometry `0,34 1496x933`. Luna's
+    exact Docker `_work` mount gate returned no output.
+68. Luna Supervisor ACKed the `v0.1.102` installed-release gate through the
+    installed Luna app's Alpha Chat. She approved continuing macOS-only from
+    the next gated slice while keeping pointer/keyboard actuation disabled,
+    watching for Alpha CLI/core versus API mismatches, claim validation that
+    does not fail closed, and UI states that imply control before native invoke
+    is gated.
+69. Branch `codex/luna-v0102-validation-next` adds the macOS app-monitor
+    event-contract hardening slice: Rust emits versioned
+    `agentprovision.macos_app_monitor_event.v1` metadata-only app-switch
+    envelopes with event id, observed timestamp, context hash, app labels, and
+    coarse title presence/count; React sanitizes those events before API
+    forwarding or local UI dispatch; the API `/activities/track` endpoint also
+    requires a UUID `event_id` for v1 monitor events and strips raw
+    `window_title` and `subprocess` values before writing `user_activities`.
+    Raw window titles, subprocess args, clipboard values, paths, and screenshot
+    pixels remain out of the monitor payload, and native pointer/keyboard
+    actuation remains disabled.
 
 ---
 
@@ -1856,6 +1884,19 @@ Exit criteria:
       `npm test -- --run` (`158 passed`), `npm run build`, and
       `git diff --check`. The build kept the existing Vite dynamic/static
       import and chunk-size warnings.
+- [x] macOS app-monitor event-contract validation passed on branch
+      `codex/luna-v0102-validation-next`: focused `npm test -- --run
+      src/utils/__tests__/macosAppMonitor.test.js
+      src/hooks/__tests__/useActivityTracker.test.jsx
+      src/components/__tests__/ControlSafetyStrip.test.jsx` (`21 passed`);
+      Rust metadata tests
+      `metadata_app_switch_event_omits_raw_window_and_subprocess_context` and
+      `active_app_metadata_omits_raw_window_title`; full `npm test -- --run`
+      (`164 passed`); `npm run build`; full `cargo test --quiet` (`76 passed`);
+      API `pytest tests/api/v1/test_activities.py -q` (`3 passed`);
+      targeted `ruff check` and `python -m py_compile` for the activity API;
+      and `git diff --check`. Existing Vite chunk/import warnings and the
+      local Cargo cache cleanup permission warning remain non-blocking.
 
 ### React / UX
 
@@ -1950,6 +1991,14 @@ Exit criteria:
       visible, `Stopped Alpha OK Mac Stopped` safety strip verified, Observe/
       Assist/Control/Lock/Stop disabled, `Resume` visible, no native actuation,
       and Luna's exact Docker `_work` mount gate returned no output.
+- [x] `luna-v0.1.102` release/install smoke: DMG checksum verified, installed
+      bundle version `0.1.102`, ad-hoc unsigned development signature confirmed,
+      no `TeamIdentifier`, installed Tauri app verified with Computer Use,
+      expanded chat/session UI visible, `Stopped Alpha OK Mac Stopped` safety
+      strip verified, Observe/Assist/Control/Lock/Stop disabled, `Resume`
+      visible, window geometry measured `0,34 1496x933`, Luna ACKed the gate in
+      Alpha Chat, and Luna's exact Docker `_work` mount gate returned no
+      output.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -1994,10 +2043,11 @@ Exit criteria:
 
 ## Next Actions
 
-1. Review and merge the macOS Alpha-kernel/readiness slice after Luna/council
-   review: Alpha CLI discovery status, macOS app-monitor readiness,
-   Accessibility-only active-app policy, and metadata-only ambient activity
-   events. Keep native pointer/keyboard actuation disabled.
+1. Review and merge the macOS app-monitor event-contract slice after
+   Luna/council review: versioned metadata-only app-switch envelopes, UI/API
+   sanitizer allowlist, server-side raw field stripping, context hash, and no
+   raw title/subprocess/clipboard forwarding. Keep native pointer/keyboard
+   actuation disabled.
 2. Extend the Alpha-kernel adapter beyond readiness in the next slice:
    auth/session handoff, chat-job streaming from `alpha`, cancellation, error
    display, offline behavior, release packaging, and app-monitor event mapping
