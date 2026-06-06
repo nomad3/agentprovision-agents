@@ -878,23 +878,34 @@ Additional discovery inputs:
     list — the login keychain itself holds 0 codesigning identities) SUCCEEDS,
     while Tauri's pattern of importing `APPLE_CERTIFICATE` into a FRESH per-build
     temp keychain (create→unlock→import→`set-key-partition-list`→`codesign
-    --keychain`) FAILS. The identical Tauri flow signed fine at 19:30Z
-    (`27071762194`); the machine has since slept. `errSecInternalComponent` on a
-    previously-working self-hosted macOS runner, where established-key codesign
-    works but newly-created-keychain key access fails, is the classic signature of
-    a degraded securityd / Security session (the runner agent losing its Aqua
-    security session after sleep). Standard remediation: restart the runner agent
-    in a full GUI login session / reboot, which clears securityd state. No code
-    fix is required (and none is sufficient if the build keeps importing into a
-    fresh keychain); the alternative is to sign via an ESTABLISHED keychain
-    identity using `APPLE_SIGNING_IDENTITY` (no per-build import), which works now
-    but couples signing to the runner's persistent keychain setup. NOTE: the
-    redesign committed in 467560f3 is validated to the extent CI can reach today;
-    full notarized-release validation remains blocked on BOTH (a) restoring runner
-    codesign and (b) Apple's notary-queue backlog draining (entry 82). Runner
-    keychain hygiene performed during diagnosis: removed two orphaned 0-identity
-    Tauri temp keychains and restored the user search list to its prior state
-    (`luna-notary-local` + login).
+    --keychain`) FAILS. Initial hypothesis (degraded securityd after sleep) was
+    WRONG — restarting the runner LaunchAgent
+    (`actions.runner.nomad3-servicetsunami-agents.macbook-local`, PID 1569→21709)
+    did NOT fix it.
+85. CONFIRMED root cause + fix for the entry-84 codesign failure (2026-06-06
+    ~21:27Z): a DUPLICATE Developer ID Application identity in the runner's user
+    search list. The debugging session that diagnosed entry 82 created
+    `~/Documents/LunaSigning/luna-notary-local.keychain-db` (to hold the
+    `luna-notary-local` notarytool profile) and added it to the user keychain
+    search list; it holds a second copy of the same Developer ID identity. It did
+    not exist at the last good build (19:30Z), appeared ~20:00Z, and broke every
+    build after. When Tauri runs `codesign --keychain <temp> --sign "Developer ID
+    Application: …"`, the duplicate identity reachable via the search list yields
+    `errSecInternalComponent`. Removing the keychain from the search list
+    (`security list-keychains -d user -s ~/Library/Keychains/login.keychain-db`)
+    immediately fixed signing: run `27074342545` (search list = login only)
+    compiled, **signed successfully**, and proceeded into the explicit Notarize
+    step exactly as designed. The keychain FILE is left in place (the prior
+    session's notarytool profile is still usable by explicit `--keychain <path>`);
+    only the search-list entry was removed. Operational rule: keep ad-hoc
+    Developer-ID-bearing keychains OUT of the runner's user search list — access
+    notary creds by explicit path. The redesign (467560f3) is now validated
+    through signing + the explicit notarize submit/poll on real CI; full
+    notarized-release validation (the `accepted` path: stapled-DMG install +
+    `stapler validate`/`spctl`, first `luna-latest` publish) still awaits Apple's
+    notary-queue backlog draining (entry 82) — re-run `gh workflow run
+    luna-client-build.yaml --ref codex/luna-native-boundary-proof` (default
+    1800s poll) once the queue is healthy.
 
 ---
 
