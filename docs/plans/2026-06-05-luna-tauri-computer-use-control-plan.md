@@ -73,8 +73,8 @@ Primary scope: PR #818/#820 release-gate support.
 
 ### Claudia B: Next-Phase Architecture
 
-Primary scope: read-only next-phase readiness. No patches until Codex opens a
-specific implementation slice.
+Primary scope: Alpha CLI/core and next-phase architecture readiness. No patches
+until Codex opens a specific implementation slice.
 
 1. Produce the next-phase checklist that starts only after PR #818 lands and PR
    #820 is retargeted.
@@ -87,6 +87,68 @@ specific implementation slice.
 5. Define the minimum safe canary-actuation gate while keeping real
    pointer/keyboard disabled until explicit approval.
 6. Identify likely files and test suites for the next implementation PR.
+7. Keep Alpha CLI/core work scoped to Luna's kernel path: durable async chat
+   jobs, reconnect, cancellation, typed models, and parity tests. Do not
+   duplicate Claudia C's macOS UX/TCC/schema lane except to name schema
+   dependencies.
+
+Claudia B 2026-06-07 packet:
+
+1. Confirmed job contract: `POST /api/v1/chat/sessions/{sid}/messages/start`
+   returns `{job_id}` quickly; `GET /api/v1/chat/jobs/{job_id}/events?from_seq=N`
+   replays SSE events with `seq > from_seq` and closes on terminal status;
+   `GET /api/v1/chat/jobs/{job_id}` returns the terminal snapshot; and
+   `POST /api/v1/chat/jobs/{job_id}/cancel` sets cooperative cancellation.
+2. Confirmed state model: `queued -> running -> done|failed|cancelled`,
+   monotonic event `seq`, tenant-scoped job visibility, terminal idempotency,
+   and CLI chat already using the async job path rather than the old blocking
+   stream path.
+3. Open Alpha questions before implementation: verify whether the shared
+   `ApiClient` 180-second timeout still bounds job-events streams; add an
+   idempotency key to `/messages/start` before retrying starts; treat server
+   `timeout{last_seq}` frames and transport drops as reconnect signals; and
+   coordinate with the orphaned-`running` chat-job reclaim fix so reattach does
+   not poll forever after worker death.
+4. Recommended PR sequence: transport hardening and reconnect loop first; chat
+   job cancellation second; idempotent start third; progress/status taxonomy
+   and old blocking-stream retirement fourth; typed desktop-control models only
+   after Claudia C freezes the desktop-control schemas.
+
+### Claudia C: macOS UX And Schema Readiness
+
+Primary scope: macOS-only Luna computer-use UX, TCC/onboarding, observation
+schema, and validation matrix readiness. No patches until Codex opens a
+specific implementation slice.
+
+1. Own the TCC/permission modal UX: running app identity, signed/ad-hoc
+   identity diagnostics, stale old-Luna cleanup guidance, scoped setup actions,
+   `Recheck`, and `Why needed`.
+2. Own display-safe observation schemas for screenshot/active-app/window events
+   and the `session_events` mirror. The CLI/core may surface only display-safe
+   fields and must treat raw screenshots, titles, clipboard, and OCR as opaque
+   or unavailable unless a future reviewed contract explicitly allows them.
+3. Own the Stop/Lock/approval lifecycle UX matrix and the installed-app smoke
+   cells for macOS only. Windows remains out of scope for this phase.
+4. Hand Claudia B the frozen field names, enums, endpoint paths, and safe/raw
+   boundaries for command claims, observations, permission state, audit events,
+   command completion, and errors before Alpha CLI/core typed models begin.
+
+Claudia C 2026-06-07 packet:
+
+1. Verified invariants from code/read-only audit: native pointer/keyboard
+   actuation is still hard-disabled; raw screenshot/title/clipboard/OCR data is
+   not mirrored into audit/activity/args; Stop revokes active grants and
+   preempts success; approval-grant consumption is predicate-bound and
+   fail-closed; HMAC and Ed25519 envelope verification are present; and TCC
+   state remains a readiness gate, not an implicit unlock.
+2. First safe implementation slice: TCC modal UX hardening only. Add explicit
+   `Recheck`, `Why needed`, and stale permission cleanup affordances; preserve
+   scoped `Open`/`Enable` actions; keep all rows read-only unless macOS reports
+   a grant; and do not enable Assist/Control or native actuation.
+3. Confirmed gaps to close: modal refresh is currently focus/visibility driven
+   rather than user-triggered, stale ad-hoc cleanup is not yet guided in-product,
+   and the CI/release gate does not yet assert Luna's exact Docker `_work`
+   mount command as a machine-enforced check.
 
 ### Computer-Use Pending Work
 
@@ -129,6 +191,12 @@ load-bearing for desktop control.
    completion, and errors.
 4. Ensure Luna Tauri consumes AgentProvision through Alpha CLI/core rather than
    inventing a separate ad hoc local agent loop.
+5. Implement the Alpha PR sequence from Claudia B: reconnecting job-events
+   transport, chat-job cancellation, idempotent job start, progress/status
+   taxonomy, then typed desktop-control models after the macOS schema freeze.
+6. Add tests for reconnect-from-`last_seq`, stream-open retry/backoff,
+   timeout-vs-failure classification, cancel-to-terminal behavior, offline
+   reattach, and duplicate-start idempotency once the API contract exists.
 
 ---
 
@@ -2825,3 +2893,16 @@ Exit criteria:
    restarts or heartbeat failures, not require an app restart.
 11. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.
+12. Open the next macOS-only UX slice for Claudia C's first safe slice: add TCC
+    modal `Recheck`, `Why needed`, stale permission cleanup guidance, and
+    high-contrast/readability checks while preserving read-only readiness and
+    disabled native actuation.
+13. Open the next Alpha CLI/core slice for Claudia B's confirmed kernel gaps:
+    reconnecting job-events transport, cancel-to-terminal wiring, timeout
+    classification, and stream-open retry. Keep typed desktop-control models
+    blocked until Claudia C freezes the schema.
+14. Promote the exact Docker `_work` mount command from manual release smoke to
+    a CI/release assertion before marking future installed-release validation
+    complete:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`
+    must return no output.
