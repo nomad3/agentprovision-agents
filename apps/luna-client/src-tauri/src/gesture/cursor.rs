@@ -75,6 +75,40 @@ pub fn accessibility_ok() -> bool {
     ACCESSIBILITY_OK.load(Ordering::SeqCst)
 }
 
+// ---- Pre-native boundary guard (Phase 2.75 gesture-boundary hardening) ----
+//
+// The gesture cursor path is the only place that issues real CGEvent/enigo
+// input. It must not actuate on the strength of `desktop_control_allows_
+// actuation()` alone: if that single kill switch is ever flipped on, a stopped
+// or ungoverned gesture path would bypass the Stop latch the command path
+// enforces. This deny-by-default local Stop latch + pure guard close that gap.
+// Today nothing clears the latch, so gesture actuation stays fully disabled.
+
+/// Local Stop latch for the gesture actuation path. Defaults to `true`
+/// (stopped) so a fresh process cannot drive the cursor even if the global
+/// actuation kill switch is ever enabled.
+static GESTURE_STOPPED: AtomicBool = AtomicBool::new(true);
+
+/// Integration seam for the future Stop-aware control wiring (e.g. the desktop
+/// Stop/Lock path). Currently uncalled in production, so the latch stays
+/// engaged and gesture actuation remains closed.
+#[allow(dead_code)]
+pub(crate) fn set_gesture_stopped(v: bool) {
+    GESTURE_STOPPED.store(v, Ordering::SeqCst);
+}
+
+pub(crate) fn gesture_stopped() -> bool {
+    GESTURE_STOPPED.load(Ordering::SeqCst)
+}
+
+/// Pure pre-native boundary guard. Gesture move/click may proceed toward the
+/// native adapter ONLY when the global actuation kill switch is on AND the
+/// gesture path is not Stopped. Deny-by-default: `desktop_control_allows_
+/// actuation()` alone is no longer sufficient to actuate.
+pub(crate) fn gesture_native_boundary_allows(actuation_enabled: bool, stopped: bool) -> bool {
+    actuation_enabled && !stopped
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -183,7 +217,12 @@ fn ensure_display_size() -> (i32, i32) {
 /// Luna isn't frontmost.
 #[cfg(target_os = "macos")]
 pub async fn move_abs(x: f32, y: f32) {
-    if !crate::desktop_control_allows_actuation() {
+    // Pre-native boundary guard FIRST: deny before any native call unless the
+    // kill switch is on AND the gesture path is not Stopped. Closes the bypass
+    // where actuation depended on the single `desktop_control_allows_actuation`
+    // bool and ignored the Stop latch.
+    if !gesture_native_boundary_allows(crate::desktop_control_allows_actuation(), gesture_stopped())
+    {
         return;
     }
     if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
@@ -208,7 +247,12 @@ pub async fn move_abs(x: f32, y: f32) {
 
 #[cfg(target_os = "macos")]
 pub async fn click() {
-    if !crate::desktop_control_allows_actuation() {
+    // Pre-native boundary guard FIRST: deny before any native call unless the
+    // kill switch is on AND the gesture path is not Stopped. Closes the bypass
+    // where actuation depended on the single `desktop_control_allows_actuation`
+    // bool and ignored the Stop latch.
+    if !gesture_native_boundary_allows(crate::desktop_control_allows_actuation(), gesture_stopped())
+    {
         return;
     }
     if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
@@ -232,3 +276,56 @@ pub async fn move_abs(_x: f32, _y: f32) {}
 
 #[cfg(not(target_os = "macos"))]
 pub async fn click() {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Gap this slice closes: the gesture cursor path must not reach the native
+    // adapter on the strength of desktop_control_allows_actuation() alone. A
+    // deny-by-default pre-native boundary guard (incorporating a local Stop
+    // latch) must pass first, so flipping the single kill switch is not enough.
+
+    #[test]
+    fn kill_switch_off_denies_regardless_of_stop() {
+        assert!(!gesture_native_boundary_allows(false, false));
+        assert!(!gesture_native_boundary_allows(false, true));
+    }
+
+    #[test]
+    fn stop_denies_even_if_kill_switch_flips_on() {
+        // The crux: even if desktop_control_allows_actuation() ever returned
+        // true, a stopped gesture boundary still denies before any native call.
+        assert!(!gesture_native_boundary_allows(true, true));
+    }
+
+    #[test]
+    fn boundary_allows_only_when_enabled_and_not_stopped() {
+        assert!(gesture_native_boundary_allows(true, false));
+    }
+
+    #[test]
+    fn gesture_boundary_defaults_to_stopped() {
+        // Fresh process: local Stop latch engaged, so the live boundary denies
+        // today regardless of the (currently false) global kill switch.
+        assert!(gesture_stopped());
+        assert!(!gesture_native_boundary_allows(
+            crate::desktop_control_allows_actuation(),
+            gesture_stopped(),
+        ));
+    }
+
+    #[test]
+    fn set_gesture_stopped_toggles_the_local_latch() {
+        // Exercise the integration seam without enabling actuation: clearing the
+        // latch alone still cannot actuate because the kill switch stays false.
+        set_gesture_stopped(false);
+        assert!(!gesture_stopped());
+        assert!(!gesture_native_boundary_allows(
+            crate::desktop_control_allows_actuation(), // still false
+            gesture_stopped(),
+        ));
+        set_gesture_stopped(true); // restore safe default for any other test
+        assert!(gesture_stopped());
+    }
+}

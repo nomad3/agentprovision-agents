@@ -52,6 +52,10 @@ fn show_main_window_maximized(app: &tauri::AppHandle) -> Result<(), String> {
         .show()
         .map_err(|e| format!("show main window: {e}"))?;
     let _ = window.unminimize();
+    // Maximize-to-visible-frame, never true fullscreen: leave any fullscreen
+    // state first so `maximize()` zooms to the work area (menu bar + Dock stay
+    // reachable) instead of taking over the whole display.
+    let _ = window.set_fullscreen(false);
     if let Err(err) = window.maximize() {
         log::warn!("main window maximize failed: {err}");
     }

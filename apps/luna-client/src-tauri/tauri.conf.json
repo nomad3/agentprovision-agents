@@ -29,8 +29,9 @@
       {
         "title": "Luna",
         "label": "main",
-        "width": 420,
-        "height": 680,
+        "fullscreen": false,
+        "width": 1280,
+        "height": 832,
         "minWidth": 360,
         "minHeight": 480,
         "resizable": true,

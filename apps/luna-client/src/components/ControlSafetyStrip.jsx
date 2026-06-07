@@ -202,6 +202,38 @@ export function labelForMacosMonitorStatus(status) {
   }
 }
 
+// Plain-language "why is this needed" copy for each TCC permission card. Kept
+// static and display-safe — never echoes raw screen/app content.
+const PERMISSION_WHY = {
+  screen_recording: 'Lets Luna read the screen for observation and screenshots.',
+  accessibility:
+    'Lets Luna read active-app and window state, and (later, behind approval) send synthetic input.',
+  automation_system_events:
+    'Lets Luna resolve the active app and window context through System Events.',
+  input_monitoring:
+    'Only needed to observe physical keyboard input — not required to send approved synthetic input.',
+  camera: 'Optional — only used for gesture control.',
+  microphone: 'Optional — only used for push-to-talk voice.',
+};
+
+export function permissionWhyNeeded(key) {
+  return PERMISSION_WHY[key] || '';
+}
+
+// Camera and microphone are never gates for desktop control — they only power
+// optional gesture/push-to-talk features, so a denied camera/mic must not read
+// as a blocker.
+export function isOptionalPermission(key) {
+  return key === 'camera' || key === 'microphone';
+}
+
+// Automation → System Events being unknown or denied blocks reliable active-app
+// awareness, even when the monitor otherwise reports ready.
+export function activeAppMonitorBlocked(monitor) {
+  const status = monitor?.automation_system_events_status;
+  return status === 'unknown' || status === 'denied';
+}
+
 export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
@@ -364,6 +396,23 @@ export default function ControlSafetyStrip() {
     `AX: ${macosMonitor.accessibility_status || 'unknown'}`,
     `Events: ${macosMonitor.automation_system_events_status || 'unknown'}`,
   ].join('\n');
+  const eventsBlocked = useMemo(
+    () => activeAppMonitorBlocked(macosMonitor),
+    [macosMonitor],
+  );
+  // Stale-identity cleanup hint: a required (non-optional) permission reading
+  // denied/unknown while a running identity is known usually means macOS stored
+  // the grant against a different or older Luna build.
+  const staleHintVisible = useMemo(
+    () =>
+      Boolean(identity)
+      && permissionDetails.some(
+        (entry) =>
+          (entry.status === 'denied' || entry.status === 'unknown')
+          && !isOptionalPermission(entry.key),
+      ),
+    [identity, permissionDetails],
+  );
 
   return (
     <div className="control-safety-wrap">
@@ -384,6 +433,14 @@ export default function ControlSafetyStrip() {
         {activeApp && (
           <span className="control-safety-chip control-safety-chip-active" title={activeApp}>
             {activeApp}
+          </span>
+        )}
+        {eventsBlocked && macosMonitor.status === 'ready' && (
+          <span
+            className="control-safety-chip control-safety-chip-caution"
+            title="Automation / System Events is not granted; active-app awareness is blocked until you enable it."
+          >
+            Active-app blocked
           </span>
         )}
         <button
@@ -461,6 +518,16 @@ export default function ControlSafetyStrip() {
               <span className="control-permissions-title">Mac Permissions</span>
               <span className="control-permissions-summary">{permissionSummary.label}</span>
               <button
+                className="control-permissions-recheck"
+                type="button"
+                aria-label="Recheck permission readiness"
+                title="Re-read macOS permission status now"
+                disabled={busy}
+                onClick={() => refresh()}
+              >
+                Recheck
+              </button>
+              <button
                 className="control-permissions-close"
                 type="button"
                 aria-label="Close permission readiness details"
@@ -484,6 +551,20 @@ export default function ControlSafetyStrip() {
                 {identity.permission_scope_note && (
                   <span className="control-permissions-identity-note">{identity.permission_scope_note}</span>
                 )}
+                {staleHintVisible && (
+                  <span className="control-permissions-stale-hint">
+                    Showing as granted for a different or older Luna build? macOS ties each
+                    grant to a signed app identity. Remove the stale entry in System Settings /
+                    Privacy &amp; Security, then re-add the running identity above and Recheck.
+                  </span>
+                )}
+              </div>
+            )}
+            {eventsBlocked && (
+              <div className="control-permissions-blocker" role="status">
+                Automation / System Events is{' '}
+                {macosMonitor.automation_system_events_status || 'unknown'}. Active-app awareness
+                is blocked until it is granted.
               </div>
             )}
             <div className="control-permissions-list">
@@ -500,33 +581,45 @@ export default function ControlSafetyStrip() {
                 const setupLabel = labelForPermissionSetupAction(permission);
                 return (
                   <div className={`control-permission control-permission-${permission.status}`} key={permission.key}>
-                <span className="control-permission-main">
-                  <span className="control-permission-name">{permission.label}</span>
-                {permission.reason && (
-                  <span className="control-permission-detail">{permission.reason}</span>
-                )}
-                {permission.requiredFor.length > 0 && (
-                  <span className="control-permission-detail">
-                    Required for: {permission.requiredFor.join(', ')}
-                  </span>
-                )}
-                </span>
-                <span className="control-permission-side">
-                  <span className="control-permission-status">{labelForPermissionStatus(permission.status)}</span>
-                  {setupAllowed && (
-                    <button
-                      className="control-permission-action"
-                      type="button"
-                      disabled={busy || permissionBusy === permission.key}
-                      onClick={() => openPermissionSetup(permission)}
-                      aria-label={`${setupLabel} ${permission.label} permission`}
-                      title={`Open macOS settings for ${permission.label}`}
-                    >
-                      {permissionBusy === permission.key ? 'Opening' : setupLabel}
-                    </button>
-                  )}
-                </span>
-              </div>
+                    <span className="control-permission-main">
+                      <span className="control-permission-name">
+                        {permission.label}
+                        {isOptionalPermission(permission.key) && (
+                          <span className="control-permission-optional">Optional</span>
+                        )}
+                      </span>
+                      {permissionWhyNeeded(permission.key) && (
+                        <span className="control-permission-why">{permissionWhyNeeded(permission.key)}</span>
+                      )}
+                      {permission.reason && (
+                        <span className="control-permission-detail">{permission.reason}</span>
+                      )}
+                      {permission.requiredFor.length > 0 && (
+                        <span className="control-permission-detail">
+                          Required for: {permission.requiredFor.join(', ')}
+                        </span>
+                      )}
+                    </span>
+                    <span className="control-permission-side">
+                      <span
+                        className={`control-permission-status control-permission-pill control-permission-pill-${permission.status}`}
+                      >
+                        {labelForPermissionStatus(permission.status)}
+                      </span>
+                      {setupAllowed && (
+                        <button
+                          className="control-permission-action"
+                          type="button"
+                          disabled={busy || permissionBusy === permission.key}
+                          onClick={() => openPermissionSetup(permission)}
+                          aria-label={`${setupLabel} ${permission.label} permission`}
+                          title={`Open macOS settings for ${permission.label}`}
+                        >
+                          {permissionBusy === permission.key ? 'Opening' : setupLabel}
+                        </button>
+                      )}
+                    </span>
+                  </div>
                 );
               })}
             </div>

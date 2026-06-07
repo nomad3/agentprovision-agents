@@ -30,6 +30,8 @@ disabled. Current stacked branch adds configurable Ed25519 key ids and a Luna
 accepted-key registry before production key rotation/revocation work.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
 Current implementation branch: `codex/luna-envelope-key-registry`
+Companion macOS app-control plan:
+`docs/plans/2026-06-07-luna-macos-app-control-plan.md`
 
 ---
 
@@ -40,6 +42,9 @@ The council operating model for Luna computer-use work is:
 1. Luna is Simon's personal assistant and the lead product/operator reviewer.
    Communicate with Luna through the installed Luna Tauri app's Alpha Chat, and
    treat her response as the primary council release-gate signal.
+   Luna also oversees Simon's broader business operations; engineering release
+   gates must not obscure business-operation watch items or operational
+   blockers she is tracking outside this codebase.
 2. Claudia is Simon's Claude Code Desktop / Ultracode instance. Delegate heavy
    coding, log digging, CI triage, and deep code review to Claudia when
    available.
@@ -152,6 +157,24 @@ Claudia C 2026-06-07 packet:
    rather than user-triggered, stale ad-hoc cleanup is not yet guided in-product,
    and the CI/release gate does not yet assert Luna's exact Docker `_work`
    mount command as a machine-enforced check.
+
+2026-06-07 local implementation checkpoint:
+
+1. Claudia B completed API-only PR-C denial-code producer wiring in
+   `apps/api/app/services/desktop_control_service.py` and
+   `apps/api/tests/api/v1/test_desktop_control_events.py`: audit metadata emits
+   `denial_code`, structured denial/result mirrors emit top-level `code`, and
+   local/MCP observation denial producers are covered.
+2. Claudia C completed the focused Luna permission UX and expanded-default
+   window slice in `apps/luna-client`: larger default window, explicit
+   fullscreen-off guard before maximize, modal `Recheck`, status pills,
+   why-needed copy, stale identity hint, Events active-app blocker, and
+   Camera/Mic optional badges.
+3. Codex validation passed locally: API desktop-control trio 102/102,
+   `ControlSafetyStrip` Vitest 24/24, API ruff clean, `git diff --check` clean,
+   and the Docker `_work` live mount gate returned no output. Disk remained 97
+   percent used, so full builds, `cargo check`, and installed-app smoke remain
+   separate gates.
 
 ### Computer-Use Pending Work
 

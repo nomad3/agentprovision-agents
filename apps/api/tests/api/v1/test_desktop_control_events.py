@@ -233,6 +233,8 @@ def test_record_local_observation_persists_metadata_only_and_mirrors_session_eve
             "automation_system_events": "unknown",
         },
         "device_id": str(_DEVICE_REGISTRY_ID),
+        # PR-C: stable display-safe denial code in the audit metadata bag.
+        "denial_code": "observation_permission_denied",
     }
     assert "screenshot" not in persisted.event_metadata
     assert "clipboard" not in persisted.event_metadata
@@ -246,6 +248,8 @@ def test_record_local_observation_persists_metadata_only_and_mirrors_session_eve
     assert payload["permissions"]["screen_recording"] == "denied"
     assert "raw" not in payload
     assert "clipboard_text" not in payload
+    # PR-C: structured denial RESULT mirror carries top-level `code`.
+    assert payload["code"] == "observation_permission_denied"
     assert session_event == {"event_id": "session-event-1", "seq_no": 7}
 
 
@@ -330,6 +334,8 @@ def test_record_mcp_observation_request_records_down_channel_denial_with_active_
     }
     assert "screenshot" not in persisted.event_metadata
     assert "clipboard" not in persisted.event_metadata
+    # PR-C: denial code in audit metadata + on the structured result mirror.
+    assert persisted.event_metadata["denial_code"] == "down_channel_unavailable"
     assert event is persisted
     assert session_event == {"event_id": "session-event-2", "seq_no": 8}
     assert publish.call_args.args[1] == "desktop_observation_denied"
@@ -339,6 +345,7 @@ def test_record_mcp_observation_request_records_down_channel_denial_with_active_
     assert mirrored["device_id"] == str(_DEVICE_REGISTRY_ID)
     assert "raw" not in mirrored
     assert "clipboard_text" not in mirrored
+    assert mirrored["code"] == "down_channel_unavailable"
 
 
 def test_record_mcp_observation_request_records_locked_shell_denial():
@@ -365,6 +372,7 @@ def test_record_mcp_observation_request_records_locked_shell_denial():
     assert persisted.mode == "control_locked"
     assert persisted.reason == "desktop shell cannot observe; read_clipboard request denied"
     assert persisted.event_metadata["down_channel"]["reason"] == "shell_not_observable"
+    assert persisted.event_metadata["denial_code"] == "shell_cannot_observe"
 
 
 def test_record_mcp_observation_request_rejects_no_connected_shell():

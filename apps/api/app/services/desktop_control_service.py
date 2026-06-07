@@ -32,6 +32,7 @@ from app.models.device_registry import DeviceRegistry
 from app.models.user import User
 from app.services.collaboration_events import publish_session_event
 from app.services import luna_presence_service
+from app.services.desktop_control_codes import code_for_reason
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,7 @@ _SAFE_METADATA_KEYS = {
     "approval_id",
     "approval_remaining_actions",
     "approval_risk_tier",
+    "denial_code",
     "payload_key_count",
     "result_fields",
     "result_kind",
@@ -459,6 +461,14 @@ def _display_safe_command_payload(command: DesktopCommand) -> dict[str, Any]:
     }
 
 
+def _denial_result_code_field(event: DesktopCommandEvent) -> dict[str, Any]:
+    """Top-level ``code`` for a structured denial RESULT / session-event mirror
+    (PR-C). Same value as the audit metadata ``denial_code``; empty for events
+    that carry no denial code (success / lifecycle events)."""
+    code = (event.event_metadata or {}).get("denial_code")
+    return {"code": code} if code else {}
+
+
 def _publish_display_safe_session_event(
     session_id: uuid.UUID,
     event_type: str,
@@ -492,6 +502,15 @@ def _record_command_event(
     metadata: dict[str, Any] | None = None,
 ) -> DesktopCommandEvent:
     action = str((command.payload or {}).get("action") or "desktop_command")
+    safe_reason = _safe_command_reason(action, outcome, reason)
+    event_metadata: dict[str, Any] = {
+        "desktop_command_id": str(command.id),
+        "status": command.status,
+        **_safe_metadata(metadata),
+    }
+    if safe_reason:
+        # PR-C: stable, display-safe denial code in the audit metadata bag.
+        event_metadata["denial_code"] = code_for_reason(safe_reason).value
     event = DesktopCommandEvent(
         tenant_id=command.tenant_id,
         user_id=command.user_id,
@@ -504,15 +523,11 @@ def _record_command_event(
         action=action,
         capability=command.capability,
         outcome=outcome,
-        reason=_safe_command_reason(action, outcome, reason),
+        reason=safe_reason,
         mode=(command.payload or {}).get("mode"),
         shell_id=command.shell_id,
         device_id=command.device_id,
-        event_metadata={
-            "desktop_command_id": str(command.id),
-            "status": command.status,
-            **_safe_metadata(metadata),
-        },
+        event_metadata=event_metadata,
     )
     db.add(event)
     return event
@@ -668,6 +683,7 @@ def _enqueue_disabled_native_control_command(
             "desktop_event_id": str(event.id),
             "outcome": event.outcome,
             "reason": event.reason,
+            **_denial_result_code_field(event),
         },
         tenant_id=tenant_id,
     )
@@ -780,6 +796,7 @@ def _deny_pending_command_for_approval_failure(
             "desktop_event_id": str(event.id),
             "outcome": event.outcome,
             "reason": event.reason,
+            **_denial_result_code_field(event),
         },
         tenant_id=command.tenant_id,
     )
@@ -834,6 +851,7 @@ def _deny_pending_command_for_envelope_configuration_failure(
             "desktop_event_id": str(event.id),
             "outcome": event.outcome,
             "reason": event.reason,
+            **_denial_result_code_field(event),
         },
         tenant_id=command.tenant_id,
     )
@@ -1251,6 +1269,7 @@ def _deny_command_for_envelope_failure(
             "desktop_event_id": str(event.id),
             "outcome": event.outcome,
             "reason": event.reason,
+            **_denial_result_code_field(event),
         },
         tenant_id=command.tenant_id,
     )
@@ -1537,6 +1556,7 @@ def _display_safe_payload(event: DesktopCommandEvent) -> dict[str, Any]:
         "reason": event.reason,
         "permissions": event.event_metadata.get("permissions", {}),
         "created_at_ms": event.event_metadata.get("created_at_ms"),
+        **_denial_result_code_field(event),
     }
 
 
@@ -1594,6 +1614,10 @@ def record_local_observation_event(
         },
         "device_id": str(device_id),
     }
+    local_reason = _safe_reason(audit)
+    if local_reason:
+        # PR-C: stable, display-safe denial code in the audit metadata bag.
+        metadata["denial_code"] = code_for_reason(local_reason).value
     event = DesktopCommandEvent(
         tenant_id=user.tenant_id,
         user_id=user.id,
@@ -1603,7 +1627,7 @@ def record_local_observation_event(
         action=audit.action,
         capability=audit.capability,
         outcome=audit.outcome,
-        reason=_safe_reason(audit),
+        reason=local_reason,
         mode=audit.mode,
         shell_id=audit.shell_id,
         device_id=device_id,
@@ -1754,6 +1778,9 @@ def record_mcp_observation_request(
                 "reason": down_channel_reason,
             },
             "shell_capabilities": shell_capabilities,
+            # PR-C: stable display-safe denial code (mirrors metadata.denial_code;
+            # surfaced as top-level `code` on the result via _display_safe_payload).
+            "denial_code": code_for_reason(reason).value,
         },
     )
     db.add(event)
@@ -2212,6 +2239,7 @@ def complete_desktop_command(
             "desktop_event_id": str(event.id),
             "outcome": event.outcome,
             "reason": event.reason,
+            **_denial_result_code_field(event),
         },
         tenant_id=user.tenant_id,
     )

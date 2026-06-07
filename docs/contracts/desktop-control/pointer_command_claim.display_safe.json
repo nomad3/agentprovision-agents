@@ -1,0 +1,52 @@
+{
+  "contract": "agentprovision.desktop_control.v1",
+  "kind": "command_claim",
+  "_note": "Contract skeleton for TYPING/PARITY ONLY. Native actuation remains hard-disabled; this fixture does not authorize execution. Display-safe fields only (hashed title/screenshot, signature_present not raw signature). Ids/hashes are synthetic placeholders.",
+  "desktop_command_id": "00000000-0000-4000-8000-000000000001",
+  "correlation_id": "00000000-0000-4000-8000-0000000000c0",
+  "tenant_id": "00000000-0000-4000-8000-0000000000a0",
+  "user_id": "00000000-0000-4000-8000-0000000000b0",
+  "session_id": "00000000-0000-4000-8000-0000000000d0",
+  "shell_id": "desktop-0a0a0a0a-0b0b-4c0c-8d0d-0e0e0e0e0e0e",
+  "device_id": "00000000-0000-4000-8000-0000000000e0",
+  "source": "api",
+  "capability": "pointer_control",
+  "risk_tier": "native_control",
+  "status": "claimed",
+  "control_mode": "control_locked",
+  "approval_id": "00000000-0000-4000-8000-0000000000f0",
+  "approval_risk_tier": "native_control",
+  "approval_remaining_actions": 1,
+  "lease_expires_at": "2026-06-07T00:00:10Z",
+  "created_at": "2026-06-07T00:00:00Z",
+  "updated_at": "2026-06-07T00:00:00Z",
+  "envelope": {
+    "schema": "agentprovision.desktop_command_envelope.v1",
+    "signature_alg": "Ed25519",
+    "key_id": "agentprovision-desktop-command-ed25519-v1",
+    "policy_version": "desktop-control-v1",
+    "issuer": "agentprovision-api",
+    "nonce": "00000000-0000-4000-8000-000000000abc",
+    "seq_no": 1,
+    "issued_at": "2026-06-07T00:00:00Z",
+    "expires_at": "2026-06-07T00:00:10Z",
+    "envelope_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "signature_present": true
+  },
+  "target": {
+    "bundle_id": "com.apple.Safari",
+    "app": "Safari",
+    "window_title_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "title_present": true,
+    "title_chars": 17,
+    "display_id": 1,
+    "scale_factor": 2.0,
+    "bounds": [0, 0, 1496, 933],
+    "screenshot_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "observed_at": "2026-06-07T00:00:00Z"
+  },
+  "action": {
+    "name": "pointer_click",
+    "args": { "x": 512, "y": 420 }
+  }
+}
