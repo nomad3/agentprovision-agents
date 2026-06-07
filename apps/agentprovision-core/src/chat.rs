@@ -257,6 +257,45 @@ fn parse_chat_job_event(data: &str) -> Result<ChatJobStreamEvent> {
     }
 }
 
+/// Outcome of awaiting the next chat-job event under an idle deadline.
+///
+/// Used by the CLI reconnect loop to implement an idle-stall deadline
+/// (PR-A2 item 5): the caller resets `deadline` on each seq-advancing event,
+/// so a returned [`NextEvent::Stalled`] means no progress arrived within the
+/// idle window; the job is wedged, but the `job_id` is still resumable.
+#[derive(Debug)]
+pub enum NextEvent {
+    /// A frame arrived before the deadline.
+    Event(ChatJobStreamEvent),
+    /// The deadline elapsed before any frame arrived (idle stall).
+    Stalled,
+    /// The stream closed cleanly with no further frames.
+    Ended,
+}
+
+/// Await the next event from a chat-job stream, bounded by an absolute idle
+/// `deadline`. Returns [`NextEvent::Stalled`] if the deadline passes with no
+/// frame, [`NextEvent::Ended`] on clean close, [`NextEvent::Event`] otherwise.
+/// Transport errors surface as `Err` so the caller can classify and reconnect.
+///
+/// The caller owns "idle since last seq": it recomputes `deadline` from the
+/// last progress instant on every seq-advancing event, so heartbeats / unknown
+/// frames (which do not advance `seq`) do not extend the deadline.
+pub async fn next_event_before<S>(
+    stream: &mut S,
+    deadline: tokio::time::Instant,
+) -> Result<NextEvent>
+where
+    S: Stream<Item = Result<ChatJobStreamEvent>> + Unpin,
+{
+    match tokio::time::timeout_at(deadline, stream.next()).await {
+        Err(_elapsed) => Ok(NextEvent::Stalled),
+        Ok(None) => Ok(NextEvent::Ended),
+        Ok(Some(Ok(ev))) => Ok(NextEvent::Event(ev)),
+        Ok(Some(Err(e))) => Err(e),
+    }
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Wire-format parser tests
 // ──────────────────────────────────────────────────────────────────────
