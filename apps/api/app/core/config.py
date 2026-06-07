@@ -1,3 +1,4 @@
+import json
 import os
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
@@ -11,6 +12,24 @@ class Settings(BaseSettings):
         """Strip trailing whitespace from all string env vars (K8s secrets add newlines)."""
         if isinstance(v, str):
             return v.strip()
+        return v
+
+    @field_validator("DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", mode="before")
+    @classmethod
+    def parse_desktop_control_canary_bundle_allowlist(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, str):
+            value = v.strip()
+            if not value:
+                return []
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+            return [item.strip() for item in value.split(",") if item.strip()]
         return v
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
@@ -29,6 +48,9 @@ class Settings(BaseSettings):
     DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: str = "HMAC-SHA256"
     DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: str | None = None
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: str = "agentprovision-desktop-command-ed25519-v1"
+    # Default-empty by design: no native-control target is canary-eligible until
+    # an operator explicitly allow-lists a bundle id in env / Helm / compose.
+    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: list[str] = []
     # 24 hours. Long-running clients (Luna desktop) call /auth/refresh
     # proactively 5 minutes before expiry to avoid mid-session logouts.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440

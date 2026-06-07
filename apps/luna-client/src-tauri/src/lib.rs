@@ -382,6 +382,7 @@ struct NativeControlBoundaryProofRequest {
     action: String,
     capability: Option<String>,
     approval_id: Option<String>,
+    target: Option<NativeControlBoundaryTarget>,
     command_envelope: Option<serde_json::Value>,
     approval: Option<NativeControlBoundaryApproval>,
 }
@@ -407,8 +408,19 @@ struct NativeControlBoundaryEnvelope {
     approval_risk_tier: Option<String>,
     risk_tier: Option<String>,
     policy_decision: Option<String>,
+    target: Option<NativeControlBoundaryTarget>,
     revoked: Option<bool>,
     replayed: Option<bool>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct NativeControlBoundaryTarget {
+    bundle_id: Option<String>,
+    window_title_pattern: Option<String>,
+    window_title_hash: Option<String>,
+    display_id: Option<serde_json::Value>,
+    bounds: Option<serde_json::Value>,
+    observed_at: Option<String>,
 }
 
 #[derive(Clone, serde::Deserialize)]
@@ -958,6 +970,19 @@ fn validate_native_control_boundary_envelope(
     }
     if non_empty_text(&envelope.signature).is_none() {
         return Err("desktop command envelope signature invalid");
+    }
+    let envelope_target = envelope
+        .target
+        .as_ref()
+        .ok_or("desktop command target not allowlisted")?;
+    let envelope_target_bundle = non_empty_text(&envelope_target.bundle_id)
+        .ok_or("desktop command target not allowlisted")?;
+    if let Some(request_target) = request.target.as_ref() {
+        let request_target_bundle = non_empty_text(&request_target.bundle_id)
+            .ok_or("desktop command target not allowlisted")?;
+        if request_target_bundle != envelope_target_bundle {
+            return Err("desktop command envelope binding mismatch");
+        }
     }
     verify_signature(envelope_value)?;
     let expires_at_ms = envelope
@@ -2532,6 +2557,14 @@ mod tests {
             "approval_risk_tier": DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL,
             "risk_tier": DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL,
             "policy_decision": DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED,
+            "target": {
+                "bundle_id": "com.example.LunaCanaryTarget",
+                "window_title_pattern": "Luna Canary",
+                "window_title_hash": null,
+                "display_id": null,
+                "bounds": null,
+                "observed_at": "2026-06-07T00:00:00Z",
+            },
             "revoked": false,
             "replayed": false,
         });
@@ -2543,6 +2576,14 @@ mod tests {
             action: action.to_string(),
             capability: Some(capability.to_string()),
             approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
+            target: Some(NativeControlBoundaryTarget {
+                bundle_id: Some("com.example.LunaCanaryTarget".to_string()),
+                window_title_pattern: Some("Luna Canary".to_string()),
+                window_title_hash: None,
+                display_id: None,
+                bounds: None,
+                observed_at: Some("2026-06-07T00:00:00Z".to_string()),
+            }),
             command_envelope: Some(command_envelope),
             approval: Some(NativeControlBoundaryApproval {
                 approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),

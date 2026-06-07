@@ -25,7 +25,8 @@ const NATIVE_CONTROL_COMMANDS = new Set([
 ]);
 
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA = 'agentprovision.desktop_command_envelope.v1';
-const DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1;
+const DESKTOP_COMMAND_OBSERVATION_ENVELOPE_POLICY_VERSION = 1;
+const DESKTOP_COMMAND_NATIVE_CONTROL_ENVELOPE_POLICY_VERSION = 2;
 const DESKTOP_COMMAND_ENVELOPE_HMAC_SIGNATURE_ALG = 'HMAC-SHA256';
 const DESKTOP_COMMAND_ENVELOPE_ED25519_SIGNATURE_ALG = 'Ed25519';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -176,9 +177,16 @@ function envelopeBindingFields(command, action, shellId, expectedContext = {}) {
 function nativeBoundaryProofRequest(command, action, shellId, expectedContext = {}) {
   return {
     ...envelopeBindingFields(command, action, shellId, expectedContext),
+    target: command?.payload?.target || command?.payload?.command_envelope?.target || null,
     command_envelope: command?.payload?.command_envelope || null,
     approval: command?.payload?.approval || null,
   };
+}
+
+function expectedEnvelopePolicyVersion(action) {
+  return NATIVE_CONTROL_COMMANDS.has(action)
+    ? DESKTOP_COMMAND_NATIVE_CONTROL_ENVELOPE_POLICY_VERSION
+    : DESKTOP_COMMAND_OBSERVATION_ENVELOPE_POLICY_VERSION;
 }
 
 function isSupportedEnvelopeSignatureAlg(signatureAlg, action) {
@@ -229,7 +237,7 @@ function validateClaimedCommandEnvelope(command, action, shellId, expectedContex
     envelope.schema !== DESKTOP_COMMAND_ENVELOPE_SCHEMA
     || envelope.signed !== true
     || !isSupportedEnvelopeSignatureAlg(envelope.signature_alg, action)
-    || envelope.policy_version !== DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION
+    || envelope.policy_version !== expectedEnvelopePolicyVersion(action)
     || envelope.issuer !== 'agentprovision-api'
   ) {
     return {
@@ -237,6 +245,17 @@ function validateClaimedCommandEnvelope(command, action, shellId, expectedContex
       reason: 'desktop command envelope binding mismatch',
       metadata: { result_kind: 'error' },
     };
+  }
+
+  if (NATIVE_CONTROL_COMMANDS.has(action)) {
+    const targetBundleId = envelope?.target?.bundle_id;
+    if (typeof targetBundleId !== 'string' || targetBundleId.trim().length === 0) {
+      return {
+        ok: false,
+        reason: 'desktop command target not allowlisted',
+        metadata: { result_kind: 'error' },
+      };
+    }
   }
 
   if (typeof envelope.signature !== 'string' || envelope.signature.length === 0) {

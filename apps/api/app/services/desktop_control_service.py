@@ -126,6 +126,7 @@ _SAFE_CONTROL_MODES = {"control_locked", "observe", "stopped"}
 DEFAULT_COMMAND_LEASE_SECONDS = 30
 DEFAULT_COMMAND_PENDING_TTL_SECONDS = 300
 CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1
+CURRENT_NATIVE_CONTROL_PROOF_POLICY_VERSION = 2
 DESKTOP_COMMAND_ENVELOPE_SCHEMA = "agentprovision.desktop_command_envelope.v1"
 DESKTOP_COMMAND_ENVELOPE_ALGORITHM = "HMAC-SHA256"
 DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM = "Ed25519"
@@ -416,6 +417,7 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         "desktop command approval grant exhausted",
         "desktop command approval grant binding mismatch",
         "desktop command approval grant replay denied",
+        "desktop command target not allowlisted",
     }:
         return normalized
     for prefix in (
@@ -728,6 +730,119 @@ def _capability_matches_risk_tier(capability: str, risk_tier: str) -> bool:
     return False
 
 
+def _envelope_policy_version_for_action(action: str) -> int:
+    if action in _NATIVE_CONTROL_CAPABILITIES:
+        return CURRENT_NATIVE_CONTROL_PROOF_POLICY_VERSION
+    return CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION
+
+
+def _desktop_control_canary_bundle_allowlist() -> set[str]:
+    raw = settings.DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST or []
+    if isinstance(raw, str):
+        raw = [item.strip() for item in raw.split(",") if item.strip()]
+    return {
+        item.strip()
+        for item in raw
+        if isinstance(item, str) and item.strip()
+    }
+
+
+def _non_empty_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _normalize_native_control_target_binding(
+    raw: dict[str, Any] | None,
+    *,
+    action: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    bundle_id = _non_empty_string(raw.get("bundle_id"))
+    if bundle_id is None:
+        return None
+    target_action = _non_empty_string(raw.get("action")) or action
+    if action and target_action and target_action != action:
+        return None
+
+    normalized: dict[str, Any] = {"bundle_id": bundle_id}
+    if target_action:
+        normalized["action"] = target_action
+
+    window_title_pattern = _non_empty_string(raw.get("window_title_pattern"))
+    if window_title_pattern:
+        normalized["window_title_pattern"] = window_title_pattern[:256]
+
+    display_id = raw.get("display_id")
+    if isinstance(display_id, int):
+        normalized["display_id"] = max(0, display_id)
+
+    bounds = raw.get("bounds")
+    if isinstance(bounds, list) and len(bounds) == 4 and all(
+        isinstance(item, (int, float)) for item in bounds
+    ):
+        normalized["bounds"] = [float(item) for item in bounds]
+
+    return normalized
+
+
+def _native_control_target_is_allowlisted(target: dict[str, Any] | None) -> bool:
+    if not target:
+        return False
+    bundle_id = _non_empty_string(target.get("bundle_id"))
+    if not bundle_id:
+        return False
+    return bundle_id in _desktop_control_canary_bundle_allowlist()
+
+
+def _require_native_control_target_binding(
+    raw: dict[str, Any] | None,
+    *,
+    action: str | None = None,
+) -> dict[str, Any]:
+    target = _normalize_native_control_target_binding(raw, action=action)
+    if not _native_control_target_is_allowlisted(target):
+        raise HTTPException(status_code=422, detail="Desktop command target not allowlisted")
+    if not _non_empty_string(target.get("action")):
+        raise HTTPException(status_code=422, detail="Desktop native-control target action is required")
+    return target
+
+
+def _native_control_target_from_command(command: DesktopCommand) -> dict[str, Any] | None:
+    payload = command.payload or {}
+    action = str(payload.get("action") or "desktop_command")
+    return _normalize_native_control_target_binding(payload.get("target"), action=action)
+
+
+def _native_control_targets_match(
+    command_target: dict[str, Any] | None,
+    grant_target: dict[str, Any] | None,
+) -> bool:
+    if not command_target or not grant_target:
+        return False
+    for key in ("bundle_id", "action", "window_title_pattern", "display_id", "bounds"):
+        if key in grant_target and command_target.get(key) != grant_target.get(key):
+            return False
+    return True
+
+
+def _envelope_target_payload(target: dict[str, Any] | None, *, observed_at: datetime) -> dict[str, Any] | None:
+    if not target:
+        return None
+    payload: dict[str, Any] = {
+        "bundle_id": target["bundle_id"],
+        "window_title_pattern": target.get("window_title_pattern"),
+        "window_title_hash": None,
+        "display_id": target.get("display_id"),
+        "bounds": target.get("bounds"),
+        "observed_at": observed_at.isoformat(),
+    }
+    return payload
+
+
 def _approval_metadata(grant: DesktopCommandApprovalGrant | None) -> dict[str, Any]:
     if grant is None:
         return {}
@@ -900,6 +1015,16 @@ def _matching_approval_grant(
     target_action = (grant.target_binding or {}).get("action")
     if target_action and target_action != action:
         return None
+    if risk_tier == "native_control":
+        command_target = _native_control_target_from_command(command)
+        grant_target = _normalize_native_control_target_binding(
+            grant.target_binding or {},
+            action=action,
+        )
+        if not _native_control_target_is_allowlisted(grant_target):
+            return None
+        if not _native_control_targets_match(command_target, grant_target):
+            return None
     return grant
 
 
@@ -1143,6 +1268,7 @@ def _build_signed_command_envelope(
     command: DesktopCommand,
     *,
     user: User,
+    approval_grant: DesktopCommandApprovalGrant | None = None,
     issued_at: datetime,
     expires_at: datetime,
 ) -> tuple[dict[str, Any], str]:
@@ -1151,12 +1277,18 @@ def _build_signed_command_envelope(
     mode = str((command.payload or {}).get("mode") or "control_locked")
     risk_tier = _risk_tier_for_action(action)
     algorithm = _desktop_command_envelope_algorithm()
+    target = None
+    if risk_tier == "native_control":
+        target = _normalize_native_control_target_binding(
+            (approval_grant.target_binding if approval_grant is not None else None) or {},
+            action=action,
+        )
     envelope = {
         "schema": DESKTOP_COMMAND_ENVELOPE_SCHEMA,
         "signed": True,
         "signature_alg": algorithm,
         "key_id": _desktop_command_envelope_key_id(algorithm),
-        "policy_version": CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION,
+        "policy_version": _envelope_policy_version_for_action(action),
         "issuer": "agentprovision-api",
         "tenant_id": str(command.tenant_id),
         "user_id": str(user.id),
@@ -1178,6 +1310,9 @@ def _build_signed_command_envelope(
         "expires_at": expires_at.isoformat(),
         "expires_at_ms": int(expires_at.timestamp() * 1000),
     }
+    target_payload = _envelope_target_payload(target, observed_at=issued_at)
+    if target_payload is not None:
+        envelope["target"] = target_payload
     envelope["signature"] = _sign_envelope_payload(envelope, algorithm)
     return envelope, _envelope_hash(envelope)
 
@@ -1335,7 +1470,9 @@ def _consume_command_envelope_or_deny(
         "device_id": str(token_device_id),
         "capability": command.capability,
         "action": str((command.payload or {}).get("action") or "desktop_command"),
-        "policy_version": CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION,
+        "policy_version": _envelope_policy_version_for_action(
+            str((command.payload or {}).get("action") or "desktop_command")
+        ),
         "approval_id": str(command.approval_id) if command.approval_id else None,
         "approval_risk_tier": _risk_tier_for_action(str((command.payload or {}).get("action") or "desktop_command")),
     }
@@ -1346,6 +1483,20 @@ def _consume_command_envelope_or_deny(
             reason="desktop command envelope binding mismatch",
             metadata=metadata,
         )
+    if expected["approval_risk_tier"] == "native_control":
+        expected_target = _native_control_target_from_command(command)
+        if (
+            not expected_target
+            or not _native_control_target_is_allowlisted(expected_target)
+            or envelope.get("target") is None
+            or envelope.get("target", {}).get("bundle_id") != expected_target.get("bundle_id")
+        ):
+            return _deny_command_for_envelope_failure(
+                db,
+                command,
+                reason="desktop command envelope binding mismatch",
+                metadata=metadata,
+            )
 
     nonce_row = db.query(DesktopCommandEnvelopeNonce).filter(
         DesktopCommandEnvelopeNonce.tenant_id == command.tenant_id,
@@ -1672,6 +1823,7 @@ def create_desktop_approval_grant(
     now = _utcnow()
 
     command: DesktopCommand | None = None
+    command_action: str | None = None
     if request.desktop_command_id:
         command = db.query(DesktopCommand).filter(
             DesktopCommand.id == request.desktop_command_id,
@@ -1684,8 +1836,8 @@ def create_desktop_approval_grant(
             raise HTTPException(status_code=403, detail="Desktop command is not owned by user")
         if command.status in _TERMINAL_COMMAND_STATUSES:
             raise HTTPException(status_code=409, detail="Desktop command is already terminal")
-        action = str((command.payload or {}).get("action") or "desktop_command")
-        if _risk_tier_for_action(action) != request.risk_tier:
+        command_action = str((command.payload or {}).get("action") or "desktop_command")
+        if _risk_tier_for_action(command_action) != request.risk_tier:
             raise HTTPException(status_code=422, detail="Desktop approval risk tier does not match command")
         if command.capability != request.capability:
             raise HTTPException(status_code=422, detail="Desktop approval capability does not match command")
@@ -1698,6 +1850,16 @@ def create_desktop_approval_grant(
 
     if device_id is None:
         raise HTTPException(status_code=409, detail="Desktop shell device is not bound")
+    target_binding = request.target_binding or {}
+    if request.risk_tier == "native_control":
+        target_binding = _require_native_control_target_binding(
+            target_binding,
+            action=command_action,
+        )
+        if command is not None:
+            command_target = _native_control_target_from_command(command)
+            if not _native_control_targets_match(command_target, target_binding):
+                raise HTTPException(status_code=422, detail="Desktop approval target does not match command")
     grant = DesktopCommandApprovalGrant(
         tenant_id=tenant_id,
         user_id=user_id,
@@ -1708,7 +1870,7 @@ def create_desktop_approval_grant(
         risk_tier=request.risk_tier,
         capability=request.capability,
         status="active",
-        target_binding=request.target_binding or {},
+        target_binding=target_binding,
         max_actions=max_actions,
         remaining_actions=max_actions,
         approved_by_user_id=user_id,
@@ -1976,6 +2138,29 @@ def claim_next_desktop_command(
         )
         return None, None, None
 
+    command_action = str((command.payload or {}).get("action") or "desktop_command")
+    if _risk_tier_for_action(command_action) == "native_control" and (
+        _desktop_command_envelope_algorithm() != DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM
+    ):
+        _denied_command, denied_event, denied_session_event = (
+            _deny_pending_command_for_envelope_configuration_failure(
+                db,
+                command,
+                reason="desktop command envelope signing configuration invalid: native control requires Ed25519",
+                metadata={
+                    "envelope_signing_algorithm": settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM,
+                    "envelope_config_error": "RuntimeError",
+                },
+            )
+        )
+        for expired_event in expired_events:
+            _publish_display_safe_command_event(
+                expired_event,
+                status="expired",
+                tenant_id=user.tenant_id,
+            )
+        return None, denied_event, denied_session_event
+
     try:
         _validate_desktop_command_envelope_signing_config()
     except (RuntimeError, ValueError, binascii.Error) as exc:
@@ -2030,6 +2215,7 @@ def claim_next_desktop_command(
     envelope, envelope_hash = _build_signed_command_envelope(
         command,
         user=user,
+        approval_grant=approval_grant,
         issued_at=now,
         expires_at=lease_expires_at,
     )

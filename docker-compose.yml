@@ -96,6 +96,7 @@ services:
       - EXPLORATION_RATE=${EXPLORATION_RATE:-0.0}
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
+      - DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST=${DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST:-}
       # Kill-switch (2026-06-01): skip the per-tenant monitor auto-launch on API
       # startup (startup_proactive_workflows) — they starved the orchestration
       # queue. =1 while monitors are reworked onto a dedicated queue.
@@ -186,6 +187,7 @@ services:
       - HF_HUB_DISABLE_XET=1
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
+      - DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST=${DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST:-}
       # Kill-switch for the self-perpetuating monitor loops (inbox/competitor/
       # autonomous-learning) — they continue_as_new on the shared orchestration
       # queue and starved PostChatMemory. =1 makes each chain EXIT as it wakes

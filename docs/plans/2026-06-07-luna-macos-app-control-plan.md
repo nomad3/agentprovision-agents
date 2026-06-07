@@ -224,7 +224,10 @@ Exit criteria:
 
 Status: hard prerequisite for Phase 3. Fail-closed; no native actuation is
 enabled in this phase. `desktop_control_allows_actuation()` stays false and
-`tier_enabled` stays false.
+`tier_enabled` stays false. 2026-06-07 local API/client proof-gate slice:
+server-side native target allowlist, grant target binding, v2 native proof
+envelope target block, Luna hook validation, and Rust native-boundary target
+presence checks implemented locally; live native enqueue remains denied.
 
 Goal: make "act only on the approved, currently-frontmost, allow-listed app" an
 enforced, tested, server-plus-client property before any actuation unblock. This
@@ -384,6 +387,40 @@ Tauri (`apps/luna-client/src/hooks/__tests__/useDesktopCommandClaims.test.jsx`,
    CLI typed errors.
 11. Assert `desktop_control_allows_actuation()` and `tier_enabled` are false on
    every path.
+
+2026-06-07 local implementation checkpoint:
+
+1. API config now includes default-empty
+   `DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST`, mirrored through `.env.example`,
+   `apps/api/.env.example`, `docker-compose.yml`, `docker-compose.prod.yml`,
+   and Helm API values. Empty allowlist denies every native-control grant.
+2. Native-control approval grants now require an allowlisted
+   `target_binding.bundle_id` and explicit `target_binding.action`; missing,
+   mismatched, or non-allowlisted targets are rejected or denied before any
+   envelope is issued.
+3. Native-control claim/proof envelopes now use policy version 2 and include a
+   signed display-safe `target` block. Observe envelopes remain policy version 1
+   to preserve current screenshot/app/clipboard behavior.
+4. Luna hook validation now expects native-control policy v2 with a target bundle
+   and still accepts observe policy v1. Rust native-boundary validation rejects
+   native envelopes without a target bundle before the local policy gate; because
+   `tier_enabled=false`, valid native proofs still terminate denied.
+5. Focused verification passed:
+   `pytest tests/api/v1/test_desktop_command_lifecycle.py -q` (37/37),
+   `pytest tests/api/v1/test_desktop_control_contract.py -q` (8/8),
+   `ruff check app/core/config.py app/services/desktop_control_service.py tests/api/v1/test_desktop_command_lifecycle.py`,
+   `npx vitest run src/hooks/__tests__/useDesktopCommandClaims.test.jsx` (31/31),
+   `cargo test native_boundary --lib` (8/8),
+   `cargo test computer_use::policy --lib` (12/12), and
+   `cargo fmt --check`.
+6. Broader local build/check verification also passed:
+   `npm run build` in `apps/luna-client` and `cargo check` in
+   `apps/luna-client/src-tauri`. Rust emitted existing unused/dead-code
+   warnings plus the expected provisional target-subfield warning; no warning
+   flips native actuation or blocks the check.
+7. Publish gate: Luna accepted this as locally validated safety
+   infrastructure only and asked Codex to wait for Claudia B's read-only diff
+   review before commit, push, or draft PR. Native actuation remains closed.
 
 #### Hard gates before Phase 3
 
