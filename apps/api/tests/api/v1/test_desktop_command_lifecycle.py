@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import uuid
 from datetime import timedelta
@@ -19,6 +20,7 @@ from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
 from app.models.tenant import Tenant
 from app.models.user import User
+from app.services import desktop_control_service
 from app.services.desktop_control_service import (
     DEFAULT_COMMAND_PENDING_TTL_SECONDS,
     DesktopCommandClaim,
@@ -27,6 +29,7 @@ from app.services.desktop_control_service import (
     DesktopCommandEnqueue,
     DesktopCommandStop,
     _utcnow,
+    _verify_envelope_signature,
     claim_next_desktop_command,
     complete_desktop_command,
     create_desktop_approval_grant,
@@ -45,6 +48,11 @@ OTHER_SHELL_ID = "desktop-55555555-5555-5555-5555-555555555555"
 DEVICE_ID = uuid.UUID("88888888-8888-8888-8888-888888888888")
 DEVICE_ID_2 = uuid.UUID("88888888-8888-8888-8888-888888888889")
 DEVICE_TOKEN = "device-token-test"
+ED25519_PRIVATE_KEY_BYTES = bytes(range(32))
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
 @pytest.fixture(name="db_session")
@@ -259,6 +267,54 @@ def test_claim_issues_signed_command_envelope_and_nonce_row(db_session, seeded):
     assert event.event_metadata["envelope_nonce"] == envelope["nonce"]
     assert event.event_metadata["envelope_policy_version"] == 1
     assert len(event.event_metadata["envelope_hash"]) == 64
+
+
+def test_claim_can_issue_ed25519_command_envelope_and_complete(db_session, seeded):
+    encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM",
+        "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+        encoded_private_key,
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-envelope-ed25519")
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+        envelope = claimed.payload["command_envelope"]
+        assert envelope["signature_alg"] == "Ed25519"
+        assert envelope["key_id"] == "agentprovision-desktop-command-ed25519-v1"
+        assert envelope["signature"]
+        assert _verify_envelope_signature(envelope)
+        assert not _verify_envelope_signature({**envelope, "action": "read_clipboard"})
+
+        completed, complete_event, _complete_session_event, idempotent = complete_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id,
+                shell_id=SHELL_ID,
+                status="succeeded",
+                metadata={"envelope_nonce": envelope["nonce"]},
+            ),
+        )
+
+    assert claimed.id == command.id
+    assert event.event_metadata["envelope_nonce"] == envelope["nonce"]
+    assert completed.status == "succeeded"
+    assert complete_event.event_type == "desktop_command_completed"
+    assert idempotent is False
 
 
 def test_claim_without_approval_grant_waits_before_lease(db_session, seeded):

@@ -1031,8 +1031,47 @@ Additional discovery inputs:
 93. PR #816 body was updated with the native-boundary proof scope, signed smoke
     artifact validation, explicit non-cryptographic verifier caveat, and the
     pending notarized-release gate. After Luna's entry-92 review result, PR #816
-    was marked ready for review. It is not merged and must not be treated as
-    release-complete until the accepted/stapled release path passes.
+    was marked ready for review and then merged to `main` as
+    `e072f8bfa66d82e27ce3d411e252176e4193fea9` at
+    `2026-06-07T01:11:30Z`. Main Tests run `27078867670` passed, Docker
+    Desktop Deployment `27078867674` passed, and Luna's exact Docker `_work`
+    mount gate returned no output. Main Luna Tauri Build `27078867671` signed
+    version `0.1.105` with Developer ID team `KF9LPYY7KK` and uploaded smoke
+    artifact `7459705203`; Apple notarization submission
+    `4669ea06-7a4c-4399-be3b-b88817e40d3d` stayed `In Progress` for the full
+    1800-second poll, so the workflow intentionally uploaded signed un-stapled
+    smoke artifacts only and did not publish `luna-v0.1.105` or `luna-latest`.
+    Local install from artifact `7459705203` verified `/Applications/Luna.app`
+    version `0.1.105`, CDHash `126962e00065dac4501855330f2505acd463e25d`,
+    TCC `4/4`, expanded bounds `0,34,1496,933`, and safe Computer Use flow
+    `Stopped -> Resume -> Control Locked -> Observe -> Mac Ready -> Stop ->
+    Stopped`, with Assist/Control disabled and no pointer/keyboard actuation.
+    Luna Supervisor acknowledged the merge and held only the release-complete
+    gate open: do not mark `0.1.105` release-complete until Apple accepts
+    notarization, app+DMG stapling passes, `spctl` passes, updater/release
+    publication completes, and local install from the notarized DMG passes.
+94. Branch `codex/luna-native-envelope-crypto` starts the next native-boundary
+    phase from `origin/main`. It adds an opt-in API Ed25519 command-envelope
+    issuer/verifier while preserving the current HMAC default for compatibility.
+    The API uses `DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519` plus a
+    base64url/hex 32-byte `DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY` to
+    issue `signature_alg=Ed25519` / key id
+    `agentprovision-desktop-command-ed25519-v1`; completion verification now
+    accepts both HMAC and Ed25519 and rejects tampered Ed25519 payloads. Luna
+    Tauri now preserves raw envelope JSON, removes only `signature` for
+    canonical verification, requires Ed25519 + the expected key id for native
+    pointer/keyboard proof requests, verifies against
+    `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY` (runtime or compile-time
+    env), and still feeds the verified envelope into the existing policy with
+    `tier_enabled=false`, so successful verification still terminates as
+    `desktop native control tier disabled` and never reaches macOS actuation.
+    React preflight keeps observe commands compatible with HMAC or Ed25519, but
+    routes HMAC native-control claims through the Rust proof denial path. Local
+    validation passed `cargo fmt --check`, `cargo check`, `cargo test`, `npm
+    test -- useDesktopCommandClaims.test.jsx --run`, `npm run build`, `pytest
+    tests/api/v1/test_desktop_command_lifecycle.py -q`, `ruff check
+    app/services/desktop_control_service.py app/core/config.py
+    tests/api/v1/test_desktop_command_lifecycle.py`, and `git diff --check`.
 
 ---
 
@@ -1925,14 +1964,21 @@ Goal: add the missing API-to-Tauri path for action envelopes.
         verification on completion for claimed desktop commands. This uses an
         HMAC envelope over tenant/user/session/command/shell/device/action/
         capability/policy/expiry/nonce fields and keeps Tauri native actuation
-        denied by default. Tauri-side public-key verification remains pending.
+        denied by default.
   - [x] Add Luna client claimed-envelope preflight before any native invoke:
         claimed commands with missing nonce, missing/invalid signature metadata,
         unsupported schema/policy/issuer, stale expiry, or mismatched command/
         session/shell/device/action/capability binding complete as denied before
         Luna calls local observation commands or native-control stubs. This is
-        contract validation only; cryptographic public-key/Ed25519 verification
-        in Tauri remains pending.
+        contract validation only; native-control cryptographic verification is
+        handled by the follow-up Ed25519 proof slice.
+  - [x] Add opt-in API Ed25519 command-envelope issuance and Tauri-side
+        Ed25519 verification for native-control proof requests. HMAC remains
+        the default/API completion-compatible envelope for observe commands, but
+        native pointer/keyboard proof requests now require Ed25519, the expected
+        key id, a configured Luna public key, canonical signature verification,
+        nonce/binding checks, and still terminate with `tier_enabled=false`
+        before any macOS actuation.
 - [ ] Add server-time TTL, nonce storage, monotonic per-device sequence numbers,
       and replay-window cleanup.
   - [x] Add server-time lease expiry and pending-command TTL for the
@@ -2594,9 +2640,8 @@ Exit criteria:
 
 ## Next Actions
 
-1. Keep PR #816 review-ready but unmerged until the remaining release gate is
-   cleared or explicitly waived: Luna accepted the proof slice, but the
-   accepted/stapled release path is still open.
+1. Keep the PR #816 merge recorded as a proof-slice landing only: Luna accepted
+   main at `e072f8bf`, but the accepted/stapled release path is still open.
 2. Re-run the Luna Tauri Build once Apple's notary queue accepts the app, or
    after App Store Connect API-key secrets are added, and do not mark the signed
    release gate complete until the accepted path verifies stapled app+DMG,
@@ -2611,10 +2656,10 @@ Exit criteria:
 5. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
-6. Add Tauri-side cryptographic command-envelope validation before any pointer
-   or keyboard execution: public-key/Ed25519 or equivalent local verifier,
-   nonce expiry, session, shell, device, command id, policy version, replay
-   protection, revocation, and policy-decision binding.
+6. Finish the Ed25519 production key lifecycle before canary actuation:
+   generate/store the API signing key, distribute the pinned Luna public key in
+   release/installer config, rotate/revoke keys, and mirror Helm/GitHub secrets
+   so local proof verification and deployed envelopes use the same trust root.
 7. Re-review approval grant creation/consumption with council and Luna after the
    local verifier lands, then decide whether a narrow canary pointer execution
    gate can be designed without broad macOS actuation.

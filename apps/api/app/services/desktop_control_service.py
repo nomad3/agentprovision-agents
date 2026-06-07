@@ -11,6 +11,11 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 from fastapi import HTTPException
 from sqlalchemy import case, or_, update
 from sqlalchemy.exc import IntegrityError
@@ -118,7 +123,9 @@ DEFAULT_COMMAND_PENDING_TTL_SECONDS = 300
 CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1
 DESKTOP_COMMAND_ENVELOPE_SCHEMA = "agentprovision.desktop_command_envelope.v1"
 DESKTOP_COMMAND_ENVELOPE_ALGORITHM = "HMAC-SHA256"
+DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM = "Ed25519"
 DESKTOP_COMMAND_ENVELOPE_KEY_ID = "agentprovision-desktop-command-hmac-v1"
+DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID = "agentprovision-desktop-command-ed25519-v1"
 
 
 @dataclass(frozen=True)
@@ -933,13 +940,64 @@ def _desktop_command_envelope_secret() -> bytes:
     return secret.encode("utf-8")
 
 
-def _sign_envelope_payload(payload: dict[str, Any]) -> str:
+def _decode_envelope_key_material(value: str) -> bytes:
+    key = value.strip()
+    if key.startswith("base64url:"):
+        key = key.removeprefix("base64url:")
+    elif key.startswith("base64:"):
+        key = key.removeprefix("base64:")
+    elif key.startswith("hex:"):
+        return bytes.fromhex(key.removeprefix("hex:"))
+    padding = "=" * (-len(key) % 4)
+    return base64.urlsafe_b64decode(f"{key}{padding}")
+
+
+def _desktop_command_envelope_algorithm() -> str:
+    algorithm = (settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM or "").strip()
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ALGORITHM:
+        return DESKTOP_COMMAND_ENVELOPE_ALGORITHM
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+        if not settings.DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY:
+            raise RuntimeError("DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY is required for Ed25519 envelopes")
+        return DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM
+    raise RuntimeError(f"unsupported desktop command envelope signing algorithm: {algorithm!r}")
+
+
+def _desktop_command_envelope_key_id(algorithm: str) -> str:
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+        return DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID
+    return DESKTOP_COMMAND_ENVELOPE_KEY_ID
+
+
+def _desktop_command_envelope_ed25519_private_key() -> Ed25519PrivateKey:
+    raw = _decode_envelope_key_material(settings.DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY or "")
+    if len(raw) != 32:
+        raise RuntimeError("DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY must decode to 32 bytes")
+    return Ed25519PrivateKey.from_private_bytes(raw)
+
+
+def _desktop_command_envelope_ed25519_public_key() -> Ed25519PublicKey:
+    return _desktop_command_envelope_ed25519_private_key().public_key()
+
+
+def _sign_hmac_envelope_payload(payload: dict[str, Any]) -> str:
     digest = hmac.new(
         _desktop_command_envelope_secret(),
         _canonical_json(payload),
         hashlib.sha256,
     ).digest()
     return _b64url(digest)
+
+
+def _sign_ed25519_envelope_payload(payload: dict[str, Any]) -> str:
+    signature = _desktop_command_envelope_ed25519_private_key().sign(_canonical_json(payload))
+    return _b64url(signature)
+
+
+def _sign_envelope_payload(payload: dict[str, Any], algorithm: str) -> str:
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+        return _sign_ed25519_envelope_payload(payload)
+    return _sign_hmac_envelope_payload(payload)
 
 
 def _envelope_hash(envelope: dict[str, Any]) -> str:
@@ -958,8 +1016,21 @@ def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
     signature = envelope.get("signature")
     if not isinstance(signature, str) or not signature:
         return False
-    expected = _sign_envelope_payload(_unsigned_envelope_payload(envelope))
-    return hmac.compare_digest(signature, expected)
+    payload = _unsigned_envelope_payload(envelope)
+    algorithm = envelope.get("signature_alg")
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ALGORITHM:
+        expected = _sign_hmac_envelope_payload(payload)
+        return hmac.compare_digest(signature, expected)
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+        try:
+            _desktop_command_envelope_ed25519_public_key().verify(
+                _decode_envelope_key_material(signature),
+                _canonical_json(payload),
+            )
+            return True
+        except (InvalidSignature, RuntimeError, ValueError):
+            return False
+    return False
 
 
 def _build_signed_command_envelope(
@@ -973,11 +1044,12 @@ def _build_signed_command_envelope(
     tool_name = str((command.payload or {}).get("tool_name") or "")
     mode = str((command.payload or {}).get("mode") or "control_locked")
     risk_tier = _risk_tier_for_action(action)
+    algorithm = _desktop_command_envelope_algorithm()
     envelope = {
         "schema": DESKTOP_COMMAND_ENVELOPE_SCHEMA,
         "signed": True,
-        "signature_alg": DESKTOP_COMMAND_ENVELOPE_ALGORITHM,
-        "key_id": DESKTOP_COMMAND_ENVELOPE_KEY_ID,
+        "signature_alg": algorithm,
+        "key_id": _desktop_command_envelope_key_id(algorithm),
         "policy_version": CURRENT_DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION,
         "issuer": "agentprovision-api",
         "tenant_id": str(command.tenant_id),
@@ -1000,7 +1072,7 @@ def _build_signed_command_envelope(
         "expires_at": expires_at.isoformat(),
         "expires_at_ms": int(expires_at.timestamp() * 1000),
     }
-    envelope["signature"] = _sign_envelope_payload(envelope)
+    envelope["signature"] = _sign_envelope_payload(envelope, algorithm)
     return envelope, _envelope_hash(envelope)
 
 

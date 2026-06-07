@@ -49,14 +49,15 @@ const CAPABILITY_BY_ACTION = {
 };
 
 function validEnvelope(action, overrides = {}) {
-  const riskTier = action?.startsWith('pointer') || action?.startsWith('keyboard')
-    ? 'native_control'
-    : 'observe';
+  const isNativeControl = action?.startsWith('pointer') || action?.startsWith('keyboard');
+  const riskTier = isNativeControl ? 'native_control' : 'observe';
   return {
     schema: 'agentprovision.desktop_command_envelope.v1',
     signed: true,
-    signature_alg: 'HMAC-SHA256',
-    key_id: 'agentprovision-desktop-command-hmac-v1',
+    signature_alg: isNativeControl ? 'Ed25519' : 'HMAC-SHA256',
+    key_id: isNativeControl
+      ? 'agentprovision-desktop-command-ed25519-v1'
+      : 'agentprovision-desktop-command-hmac-v1',
     policy_version: 1,
     issuer: 'agentprovision-api',
     tenant_id: '11111111-1111-1111-1111-111111111111',
@@ -270,6 +271,49 @@ describe('executeClaimedDesktopCommand', () => {
       native_boundary_capability: 'pointer_control',
       result_kind: 'native_boundary_denial',
     });
+  });
+
+  it('routes HMAC native-control envelopes through the Rust boundary proof', async () => {
+    invokeMock.mockResolvedValueOnce({
+      allowed: false,
+      outcome: 'denied',
+      reason: 'desktop command envelope signature invalid; pointer_click denied',
+      action: 'pointer_click',
+      capability: 'pointer_control',
+      audit_event_id: 'native-audit-hmac-envelope',
+      mode: 'control_locked',
+    });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_click', {
+        signature_alg: 'HMAC-SHA256',
+        key_id: 'agentprovision-desktop-command-hmac-v1',
+      }),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_prove_native_command_boundary', {
+      request: expect.objectContaining({
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        command_envelope: expect.objectContaining({
+          signature_alg: 'HMAC-SHA256',
+        }),
+      }),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).not.toHaveBeenCalledWith('control_pointer_click');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope signature invalid; pointer_click denied');
+    expect(body.metadata).toEqual(withEnvelope({
+      control_mode: 'control_locked',
+      native_boundary_audit_event_id: 'native-audit-hmac-envelope',
+      native_boundary_capability: 'pointer_control',
+      result_kind: 'native_boundary_denial',
+    }));
   });
 
   it('denies claimed commands without approval metadata before native invocation', async () => {

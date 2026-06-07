@@ -1,3 +1,5 @@
+use base64::Engine;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -375,7 +377,7 @@ struct NativeControlBoundaryProofRequest {
     action: String,
     capability: Option<String>,
     approval_id: Option<String>,
-    command_envelope: Option<NativeControlBoundaryEnvelope>,
+    command_envelope: Option<serde_json::Value>,
     approval: Option<NativeControlBoundaryApproval>,
 }
 
@@ -384,6 +386,7 @@ struct NativeControlBoundaryEnvelope {
     schema: Option<String>,
     signed: Option<bool>,
     signature_alg: Option<String>,
+    key_id: Option<String>,
     signature: Option<String>,
     policy_version: Option<u16>,
     issuer: Option<String>,
@@ -436,7 +439,8 @@ struct ValidNativeControlBoundaryEnvelope {
 }
 
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA: &str = "agentprovision.desktop_command_envelope.v1";
-const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG: &str = "HMAC-SHA256";
+const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG: &str = "Ed25519";
+const DESKTOP_COMMAND_ENVELOPE_KEY_ID: &str = "agentprovision-desktop-command-ed25519-v1";
 const DESKTOP_COMMAND_ENVELOPE_ISSUER: &str = "agentprovision-api";
 const DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL: &str = "native_control";
 const DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED: &str = "lease_claimed";
@@ -636,6 +640,91 @@ fn envelope_field_matches(actual: &Option<String>, expected: &str) -> bool {
     non_empty_text(actual) == Some(expected)
 }
 
+fn decode_envelope_key_material(value: &str) -> Result<Vec<u8>, &'static str> {
+    let trimmed = value.trim();
+    let encoded = trimmed
+        .strip_prefix("base64url:")
+        .or_else(|| trimmed.strip_prefix("base64:"))
+        .unwrap_or(trimmed);
+    if let Some(hex) = trimmed.strip_prefix("hex:") {
+        if hex.len() % 2 != 0 {
+            return Err("desktop command envelope signature invalid");
+        }
+        let mut bytes = Vec::with_capacity(hex.len() / 2);
+        for index in (0..hex.len()).step_by(2) {
+            let byte = u8::from_str_radix(&hex[index..index + 2], 16)
+                .map_err(|_| "desktop command envelope signature invalid")?;
+            bytes.push(byte);
+        }
+        return Ok(bytes);
+    }
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded)
+        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(encoded))
+        .map_err(|_| "desktop command envelope signature invalid")
+}
+
+fn desktop_command_envelope_public_key_config() -> Option<String> {
+    std::env::var("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            option_env!("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY")
+                .map(str::to_string)
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+fn canonical_envelope_payload_json(
+    envelope_value: &serde_json::Value,
+) -> Result<Vec<u8>, &'static str> {
+    let mut payload = envelope_value.clone();
+    let Some(object) = payload.as_object_mut() else {
+        return Err("desktop command envelope binding mismatch");
+    };
+    object.remove("signature");
+    serde_json::to_vec(&payload).map_err(|_| "desktop command envelope binding mismatch")
+}
+
+fn verify_native_control_boundary_envelope_signature(
+    envelope_value: &serde_json::Value,
+) -> Result<(), &'static str> {
+    let public_key = desktop_command_envelope_public_key_config()
+        .ok_or("desktop command envelope public key missing")?;
+    verify_native_control_boundary_envelope_signature_with_public_key(envelope_value, &public_key)
+}
+
+fn verify_native_control_boundary_envelope_signature_with_public_key(
+    envelope_value: &serde_json::Value,
+    public_key_config: &str,
+) -> Result<(), &'static str> {
+    let envelope: NativeControlBoundaryEnvelope = serde_json::from_value(envelope_value.clone())
+        .map_err(|_| "desktop command envelope binding mismatch")?;
+    if envelope.signature_alg.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG)
+        || envelope.key_id.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_KEY_ID)
+    {
+        return Err("desktop command envelope signature invalid");
+    }
+    let signature = non_empty_text(&envelope.signature)
+        .ok_or("desktop command envelope signature invalid")
+        .and_then(decode_envelope_key_material)?;
+    let bytes = decode_envelope_key_material(public_key_config)
+        .map_err(|_| "desktop command envelope public key invalid")?;
+    let key_bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| "desktop command envelope public key invalid")?;
+    let public_key = VerifyingKey::from_bytes(&key_bytes)
+        .map_err(|_| "desktop command envelope public key invalid")?;
+    let signature = Signature::from_slice(&signature)
+        .map_err(|_| "desktop command envelope signature invalid")?;
+    public_key
+        .verify(
+            &canonical_envelope_payload_json(envelope_value)?,
+            &signature,
+        )
+        .map_err(|_| "desktop command envelope signature invalid")
+}
+
 fn native_boundary_denial(
     action: &str,
     capability: computer_use::NativeControlCapability,
@@ -699,12 +788,15 @@ fn validate_native_control_boundary_envelope(
     action: &str,
     expected_capability: computer_use::NativeControlCapability,
     now_ms: u64,
+    mut verify_signature: impl FnMut(&serde_json::Value) -> Result<(), &'static str>,
     mut remember_nonce: impl FnMut(&str, u64, u64) -> bool,
 ) -> Result<ValidNativeControlBoundaryEnvelope, &'static str> {
-    let envelope = request
+    let envelope_value = request
         .command_envelope
         .as_ref()
         .ok_or("desktop command envelope missing")?;
+    let envelope: NativeControlBoundaryEnvelope = serde_json::from_value(envelope_value.clone())
+        .map_err(|_| "desktop command envelope binding mismatch")?;
     let nonce = non_empty_text(&envelope.nonce)
         .ok_or("desktop command envelope nonce missing")?
         .to_string();
@@ -720,6 +812,7 @@ fn validate_native_control_boundary_envelope(
     if envelope.schema.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SCHEMA)
         || envelope.signed != Some(true)
         || envelope.signature_alg.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG)
+        || envelope.key_id.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_KEY_ID)
         || envelope.policy_version
             != Some(computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION)
         || envelope.issuer.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_ISSUER)
@@ -729,6 +822,7 @@ fn validate_native_control_boundary_envelope(
     if non_empty_text(&envelope.signature).is_none() {
         return Err("desktop command envelope signature invalid");
     }
+    verify_signature(envelope_value)?;
     let expires_at_ms = envelope
         .expires_at_ms
         .ok_or("desktop command envelope expired")?;
@@ -812,6 +906,7 @@ fn evaluate_native_control_boundary_request(
     mode: computer_use::DesktopControlMode,
     permissions: &computer_use::DesktopPermissionReadiness,
     now_ms: u64,
+    verify_signature: impl FnMut(&serde_json::Value) -> Result<(), &'static str>,
     remember_nonce: impl FnMut(&str, u64, u64) -> bool,
 ) -> NativeControlBoundaryDecision {
     let action = request.action.trim();
@@ -839,6 +934,7 @@ fn evaluate_native_control_boundary_request(
         action,
         capability,
         now_ms,
+        verify_signature,
         remember_nonce,
     ) {
         Ok(envelope) => envelope,
@@ -997,6 +1093,7 @@ async fn control_prove_native_command_boundary(
         mode,
         &permissions,
         now_unix_ms(),
+        verify_native_control_boundary_envelope_signature,
         remember_native_boundary_nonce,
     );
 
@@ -2191,6 +2288,7 @@ mod tests {
     //! webcam, or external `osascript`/`pbpaste` processes are out of scope
     //! for default `cargo test` runs.
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     use pretty_assertions::assert_eq;
 
     // ── desktop control safety ─────────────────────────────────────────────
@@ -2250,6 +2348,29 @@ mod tests {
             "keyboard_type" | "keyboard_key_chord" => "keyboard_control",
             _ => "unknown",
         };
+        let command_envelope = serde_json::json!({
+            "schema": DESKTOP_COMMAND_ENVELOPE_SCHEMA,
+            "signed": true,
+            "signature_alg": DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG,
+            "key_id": DESKTOP_COMMAND_ENVELOPE_KEY_ID,
+            "signature": "valid-test-signature",
+            "policy_version": computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION,
+            "issuer": DESKTOP_COMMAND_ENVELOPE_ISSUER,
+            "nonce": nonce,
+            "expires_at_ms": 2_000,
+            "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "device_id": "88888888-8888-8888-8888-888888888888",
+            "action": action,
+            "capability": capability,
+            "approval_id": "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa",
+            "approval_risk_tier": DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL,
+            "risk_tier": DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL,
+            "policy_decision": DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED,
+            "revoked": false,
+            "replayed": false,
+        });
         NativeControlBoundaryProofRequest {
             desktop_command_id: Some("99999999-9999-9999-9999-999999999999".to_string()),
             shell_id: Some("desktop-44444444-4444-4444-4444-444444444444".to_string()),
@@ -2258,28 +2379,7 @@ mod tests {
             action: action.to_string(),
             capability: Some(capability.to_string()),
             approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
-            command_envelope: Some(NativeControlBoundaryEnvelope {
-                schema: Some(DESKTOP_COMMAND_ENVELOPE_SCHEMA.to_string()),
-                signed: Some(true),
-                signature_alg: Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG.to_string()),
-                signature: Some("valid-test-signature".to_string()),
-                policy_version: Some(computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION),
-                issuer: Some(DESKTOP_COMMAND_ENVELOPE_ISSUER.to_string()),
-                nonce: Some(nonce.to_string()),
-                expires_at_ms: Some(2_000),
-                desktop_command_id: Some("99999999-9999-9999-9999-999999999999".to_string()),
-                shell_id: Some("desktop-44444444-4444-4444-4444-444444444444".to_string()),
-                session_id: Some("33333333-3333-3333-3333-333333333333".to_string()),
-                device_id: Some("88888888-8888-8888-8888-888888888888".to_string()),
-                action: Some(action.to_string()),
-                capability: Some(capability.to_string()),
-                approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
-                approval_risk_tier: Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL.to_string()),
-                risk_tier: Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL.to_string()),
-                policy_decision: Some(DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED.to_string()),
-                revoked: Some(false),
-                replayed: Some(false),
-            }),
+            command_envelope: Some(command_envelope),
             approval: Some(NativeControlBoundaryApproval {
                 approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
                 risk_tier: Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL.to_string()),
@@ -2288,6 +2388,17 @@ mod tests {
                 revoked: Some(false),
             }),
         }
+    }
+
+    fn native_boundary_envelope_mut(
+        request: &mut NativeControlBoundaryProofRequest,
+    ) -> &mut serde_json::Map<String, serde_json::Value> {
+        request
+            .command_envelope
+            .as_mut()
+            .expect("envelope")
+            .as_object_mut()
+            .expect("envelope object")
     }
 
     fn native_boundary_decision(
@@ -2299,8 +2410,25 @@ mod tests {
             computer_use::DesktopControlMode::ControlLocked,
             &permissions,
             1_000,
+            |_| Ok(()),
             |_, _, _| true,
         )
+    }
+
+    fn sign_native_boundary_envelope_for_test(
+        request: &mut NativeControlBoundaryProofRequest,
+        signing_key: &SigningKey,
+    ) -> String {
+        let envelope = request.command_envelope.as_mut().expect("envelope");
+        let signature = signing_key.sign(&canonical_envelope_payload_json(envelope).unwrap());
+        native_boundary_envelope_mut(request).insert(
+            "signature".to_string(),
+            serde_json::json!(
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+            ),
+        );
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(signing_key.verifying_key().to_bytes())
     }
 
     #[test]
@@ -2312,11 +2440,10 @@ mod tests {
         assert!(decision.reason.contains("desktop command envelope missing"));
 
         let mut malformed = native_boundary_request("pointer_click", "malformed-envelope");
-        malformed
-            .command_envelope
-            .as_mut()
-            .expect("envelope")
-            .signature = Some("".to_string());
+        native_boundary_envelope_mut(&mut malformed).insert(
+            "signature".to_string(),
+            serde_json::Value::String(String::new()),
+        );
         let decision = native_boundary_decision(&malformed);
         assert!(!decision.allowed);
         assert!(decision
@@ -2325,13 +2452,57 @@ mod tests {
     }
 
     #[test]
+    fn native_boundary_verifies_ed25519_signature_before_policy_denial() {
+        let permissions = native_boundary_permissions();
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let mut request = native_boundary_request("pointer_click", "ed25519-valid");
+        let public_key = sign_native_boundary_envelope_for_test(&mut request, &signing_key);
+
+        let decision = evaluate_native_control_boundary_request(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            &permissions,
+            1_000,
+            |envelope| {
+                verify_native_control_boundary_envelope_signature_with_public_key(
+                    envelope,
+                    &public_key,
+                )
+            },
+            |_, _, _| true,
+        );
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop native control tier disabled"));
+
+        let mut tampered = request.clone();
+        native_boundary_envelope_mut(&mut tampered)
+            .insert("action".to_string(), serde_json::json!("pointer_move"));
+        let tampered_decision = evaluate_native_control_boundary_request(
+            &tampered,
+            computer_use::DesktopControlMode::ControlLocked,
+            &permissions,
+            1_000,
+            |envelope| {
+                verify_native_control_boundary_envelope_signature_with_public_key(
+                    envelope,
+                    &public_key,
+                )
+            },
+            |_, _, _| true,
+        );
+        assert!(!tampered_decision.allowed);
+        assert!(tampered_decision
+            .reason
+            .contains("desktop command envelope signature invalid"));
+    }
+
+    #[test]
     fn native_boundary_rejects_expired_and_revoked_approvals() {
         let mut expired = native_boundary_request("keyboard_type", "expired-envelope");
-        expired
-            .command_envelope
-            .as_mut()
-            .expect("envelope")
-            .expires_at_ms = Some(1_000);
+        native_boundary_envelope_mut(&mut expired)
+            .insert("expires_at_ms".to_string(), serde_json::json!(1_000));
         let decision = native_boundary_decision(&expired);
         assert!(!decision.allowed);
         assert!(decision.reason.contains("desktop command envelope expired"));
@@ -2354,43 +2525,37 @@ mod tests {
             (
                 "wrong-command",
                 Box::new(|request| {
-                    request
-                        .command_envelope
-                        .as_mut()
-                        .expect("envelope")
-                        .desktop_command_id =
-                        Some("99999999-9999-9999-9999-999999999998".to_string());
+                    native_boundary_envelope_mut(request).insert(
+                        "desktop_command_id".to_string(),
+                        serde_json::json!("99999999-9999-9999-9999-999999999998"),
+                    );
                 }),
             ),
             (
                 "wrong-shell",
                 Box::new(|request| {
-                    request
-                        .command_envelope
-                        .as_mut()
-                        .expect("envelope")
-                        .shell_id =
-                        Some("desktop-55555555-5555-5555-5555-555555555555".to_string());
+                    native_boundary_envelope_mut(request).insert(
+                        "shell_id".to_string(),
+                        serde_json::json!("desktop-55555555-5555-5555-5555-555555555555"),
+                    );
                 }),
             ),
             (
                 "wrong-session",
                 Box::new(|request| {
-                    request
-                        .command_envelope
-                        .as_mut()
-                        .expect("envelope")
-                        .session_id = Some("33333333-3333-3333-3333-333333333334".to_string());
+                    native_boundary_envelope_mut(request).insert(
+                        "session_id".to_string(),
+                        serde_json::json!("33333333-3333-3333-3333-333333333334"),
+                    );
                 }),
             ),
             (
                 "wrong-device",
                 Box::new(|request| {
-                    request
-                        .command_envelope
-                        .as_mut()
-                        .expect("envelope")
-                        .device_id = Some("88888888-8888-8888-8888-888888888887".to_string());
+                    native_boundary_envelope_mut(request).insert(
+                        "device_id".to_string(),
+                        serde_json::json!("88888888-8888-8888-8888-888888888887"),
+                    );
                 }),
             ),
         ];
@@ -2421,6 +2586,7 @@ mod tests {
             computer_use::DesktopControlMode::ControlLocked,
             &permissions,
             1_000,
+            |_| Ok(()),
             |nonce, _, _| seen.insert(nonce.to_string()),
         );
         assert!(!first.allowed);
@@ -2433,6 +2599,7 @@ mod tests {
             computer_use::DesktopControlMode::ControlLocked,
             &permissions,
             1_000,
+            |_| Ok(()),
             |nonce, _, _| seen.insert(nonce.to_string()),
         );
         assert!(!replayed.allowed);

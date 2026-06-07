@@ -26,7 +26,8 @@ const NATIVE_CONTROL_COMMANDS = new Set([
 
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA = 'agentprovision.desktop_command_envelope.v1';
 const DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION = 1;
-const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG = 'HMAC-SHA256';
+const DESKTOP_COMMAND_ENVELOPE_HMAC_SIGNATURE_ALG = 'HMAC-SHA256';
+const DESKTOP_COMMAND_ENVELOPE_ED25519_SIGNATURE_ALG = 'Ed25519';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const ACTION_CAPABILITIES = {
@@ -180,6 +181,16 @@ function nativeBoundaryProofRequest(command, action, shellId, expectedContext = 
   };
 }
 
+function isSupportedEnvelopeSignatureAlg(signatureAlg, action) {
+  if (NATIVE_CONTROL_COMMANDS.has(action)) {
+    return signatureAlg === DESKTOP_COMMAND_ENVELOPE_ED25519_SIGNATURE_ALG;
+  }
+  return (
+    signatureAlg === DESKTOP_COMMAND_ENVELOPE_HMAC_SIGNATURE_ALG
+    || signatureAlg === DESKTOP_COMMAND_ENVELOPE_ED25519_SIGNATURE_ALG
+  );
+}
+
 function nativeBoundaryCompletion(action, proof, fallbackMode = null) {
   const reason = proof?.allowed
     ? `desktop native control disabled; ${action} denied`
@@ -217,7 +228,7 @@ function validateClaimedCommandEnvelope(command, action, shellId, expectedContex
   if (
     envelope.schema !== DESKTOP_COMMAND_ENVELOPE_SCHEMA
     || envelope.signed !== true
-    || envelope.signature_alg !== DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG
+    || !isSupportedEnvelopeSignatureAlg(envelope.signature_alg, action)
     || envelope.policy_version !== DESKTOP_COMMAND_ENVELOPE_POLICY_VERSION
     || envelope.issuer !== 'agentprovision-api'
   ) {
