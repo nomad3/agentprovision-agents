@@ -10,8 +10,8 @@ Date: 2026-06-07
 Owner: Simon Aguilera
 Lead: Luna Supervisor
 Reviewers: Claudia, Codex
-Status: Council-reviewed; focused readiness/permission UX slice implemented
-locally; native actuation remains closed
+Status: Council-reviewed; PR #823 target-binding slice pushed as draft and CI
+green; native actuation remains closed
 Scope: macOS only; Luna Tauri client; AgentProvision desktop-control API; Alpha
 CLI as Luna's local kernel
 
@@ -145,7 +145,7 @@ dump.
 6. Control and Assist should remain disabled when required permissions are not
    granted or when Stop/Lock/policy state blocks escalation.
 
-2026-06-07 local implementation checkpoint:
+2026-06-07 PR #823 implementation checkpoint:
 
 1. The main Luna window now defaults to a larger visible-frame maximize posture:
    `tauri.conf.json` uses `width=1280`, `height=832`, `fullscreen=false`, and
@@ -418,9 +418,27 @@ Tauri (`apps/luna-client/src/hooks/__tests__/useDesktopCommandClaims.test.jsx`,
    `apps/luna-client/src-tauri`. Rust emitted existing unused/dead-code
    warnings plus the expected provisional target-subfield warning; no warning
    flips native actuation or blocks the check.
-7. Publish gate: Luna accepted this as locally validated safety
-   infrastructure only and asked Codex to wait for Claudia B's read-only diff
-   review before commit, push, or draft PR. Native actuation remains closed.
+7. Publish gate: Codex pushed draft PR #823 at `19b8af65`
+   (`codex/luna-phase25-target-binding` stacked on
+   `codex/luna-computer-use-next-slices`). GitHub Actions passed for changed
+   paths, API pytest, API integration with Postgres/pgvector, Luna client
+   Jest/Cargo, and aggregate test status. The branch remains draft and
+   review-gated.
+8. Claudia B found that pydantic-settings JSON-decodes complex env fields before
+   `mode="before"` validators run. PR #823 now annotates
+   `DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST` with `NoDecode` and adds focused
+   regression tests for unset, empty-string, comma-separated, and JSON-array env
+   forms. Focused API verification passed:
+   `pytest tests/api/v1/test_desktop_command_lifecycle.py tests/api/v1/test_desktop_control_contract.py tests/api/v1/test_desktop_control_config.py -q`
+   (49/49), `ruff check app/core/config.py app/services/desktop_control_service.py tests/api/v1/test_desktop_command_lifecycle.py tests/api/v1/test_desktop_control_config.py`,
+   and `git diff --check`.
+9. Claudia C re-baselined the gap map after #823. Closed/advanced: default-empty
+   canary allowlist, v2 native proof policy, envelope `target` block, server-side
+   grant/proof target enforcement, core API negative tests, and the unchanged
+   safety floor. Still open before Phase 3: `NSWorkspace` live frontmost bundle
+   reader, live active-app/window/display/bounds preflight, per-capability gate,
+   gate-helper wiring, durable Tauri replay window, and release/install gates.
+   Native actuation remains closed.
 
 #### Hard gates before Phase 3
 

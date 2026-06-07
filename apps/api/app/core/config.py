@@ -1,7 +1,9 @@
 import json
 import os
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class Settings(BaseSettings):
@@ -50,7 +52,7 @@ class Settings(BaseSettings):
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: str = "agentprovision-desktop-command-ed25519-v1"
     # Default-empty by design: no native-control target is canary-eligible until
     # an operator explicitly allow-lists a bundle id in env / Helm / compose.
-    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: list[str] = []
+    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: Annotated[list[str], NoDecode] = []
     # 24 hours. Long-running clients (Luna desktop) call /auth/refresh
     # proactively 5 minutes before expiry to avoid mid-session logouts.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
