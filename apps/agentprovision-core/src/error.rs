@@ -65,6 +65,9 @@ pub enum Error {
     #[error("stream ended unexpectedly")]
     StreamEnded,
 
+    #[error("stream interrupted: {0}")]
+    StreamInterrupted(String),
+
     #[error("{0}")]
     Other(String),
 }
@@ -105,6 +108,7 @@ impl Error {
             Error::Offline(_) => ErrorKind::Offline,
             Error::Timeout(_) => ErrorKind::Timeout,
             Error::Transport(_) => ErrorKind::Transport,
+            Error::StreamInterrupted(_) => ErrorKind::Transport,
             Error::StreamEnded => ErrorKind::StreamEnded,
             Error::Api { status, .. } if (500..600).contains(status) => ErrorKind::ApiServer,
             Error::Api { status, .. } if (400..500).contains(status) => ErrorKind::ApiClient,
@@ -144,8 +148,9 @@ impl From<reqwest::Error> for Error {
             Error::Offline(e)
         } else if e.is_timeout() {
             Error::Timeout(e)
-        } else if e.is_body() || e.is_request() {
-            // is_body: response-body/stream failure mid-flight (drop, reset).
+        } else if e.is_body() || e.is_decode() || e.is_request() {
+            // is_body/is_decode: response-body/stream failure mid-flight
+            // (drop, reset, incomplete transfer framing).
             // is_request: failure building or sending the request.
             Error::Transport(e)
         } else {
@@ -191,6 +196,13 @@ mod tests {
     fn stream_ended_is_retryable() {
         assert_eq!(Error::StreamEnded.kind(), ErrorKind::StreamEnded);
         assert!(Error::StreamEnded.is_retryable());
+    }
+
+    #[test]
+    fn stream_interrupted_is_transport_and_retryable() {
+        let err = Error::StreamInterrupted("sse parse error".into());
+        assert_eq!(err.kind(), ErrorKind::Transport);
+        assert!(err.is_retryable());
     }
 
     #[test]

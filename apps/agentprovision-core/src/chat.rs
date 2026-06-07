@@ -19,7 +19,7 @@
 //! `{"delta":"..."}` / `{"text":"..."}` / `{"done":true}` shapes and
 //! the `[DONE]` sentinel some servers emit.
 
-use eventsource_stream::Eventsource;
+use eventsource_stream::{EventStreamError, Eventsource};
 use futures_util::stream::Stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -201,7 +201,20 @@ pub async fn stream_chat_job_events(
         return Err(Error::Api { status, body });
     }
     let stream = resp.bytes_stream().eventsource().map(|res| {
-        let ev = res.map_err(|e| Error::other(format!("sse error: {e}")))?;
+        let ev = match res {
+            Ok(ev) => ev,
+            // A mid-stream transport break (proxy RST, premature EOF) is
+            // retryable by definition: classify it as Error::Transport so the
+            // CLI reconnect loop resumes by seq instead of bailing. Without
+            // this, an abrupt SSE drop collapsed to non-retryable Error::Other
+            // and the loop's `!is_retryable()` guard would bail, defeating the
+            // whole point of the durable transport (PR-A2 item 3/5).
+            Err(EventStreamError::Transport(e)) => return Err(Error::from(e)),
+            // UTF-8 / SSE-parse failures are below the application protocol:
+            // treat them as a stream interruption so the CLI can reconnect by
+            // seq instead of failing a resumable job.
+            Err(e) => return Err(Error::StreamInterrupted(format!("sse error: {e}"))),
+        };
         parse_chat_job_event(&ev.data)
     });
     Ok(stream)

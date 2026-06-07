@@ -13,6 +13,7 @@ use agentprovision_core::chat::{
     next_event_before, stream_chat_job_events, ChatJobStreamEvent, NextEvent,
 };
 use agentprovision_core::client::ApiClient;
+use agentprovision_core::error::ErrorKind;
 
 const GUARD: Duration = Duration::from_secs(6); // hard cap so a hang can't wedge CI
 
@@ -195,4 +196,48 @@ async fn clean_close_yields_ended() {
     .await
     .expect("guard not hit");
     assert!(ended, "expected Ended on clean close");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn abrupt_mid_stream_drop_is_retryable_transport_error() {
+    // One complete chunk, then a chunk header promising more bytes than are
+    // sent, then an abrupt socket drop: an incomplete chunked body that reqwest
+    // surfaces as a transport/body error (the proxy-RST-mid-SSE case). It must
+    // classify as retryable so the CLI reconnects by seq rather than bailing.
+    let addr = spawn_server(|sock| {
+        send_headers(sock);
+        let _ = write_chunk(sock, CHUNK_SEQ1);
+        // 0x40 = promise 64 bytes, send far fewer, then drop (no terminator).
+        let _ = sock.write_all(b"40\r\ndata: {\"type\":\"event\",\"seq\":2");
+        let _ = sock.flush();
+        // closure returns -> socket dropped mid-frame.
+    });
+    let client = client_for(addr);
+    let mut stream = stream_chat_job_events(&client, "job1", 0)
+        .await
+        .expect("stream opens");
+
+    let retryable = tokio::time::timeout(GUARD, async {
+        loop {
+            match next_event_before(
+                &mut stream,
+                tokio::time::Instant::now() + Duration::from_secs(3),
+            )
+            .await
+            {
+                Ok(NextEvent::Event(_)) => continue, // drain the first complete chunk
+                Ok(NextEvent::Ended) => return None, // graceful close: not the case under test
+                Ok(NextEvent::Stalled) => return None,
+                Err(e) => return Some((e.kind(), e.is_retryable())),
+            }
+        }
+    })
+    .await
+    .expect("guard not hit");
+
+    assert_eq!(
+        retryable,
+        Some((ErrorKind::Transport, true)),
+        "an abrupt mid-stream drop must be a retryable transport error so the CLI reconnects by seq"
+    );
 }
