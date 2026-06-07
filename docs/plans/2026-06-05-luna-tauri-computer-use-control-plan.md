@@ -47,7 +47,10 @@ The council operating model for Luna computer-use work is:
    feedback, performs local verification, and keeps the plan current.
 4. Alpha CLI is Luna's local kernel. Luna-facing API changes must include the
    matching Alpha CLI/core support needed by the Tauri app.
-5. Do not persist login credentials, Apple credentials, app-specific passwords,
+5. Codex owns installed-version validation: whenever a new Luna app version or
+   Luna feature is deployed, Codex must test it through Computer Use before the
+   release or feature gate is considered complete.
+6. Do not persist login credentials, Apple credentials, app-specific passwords,
    signing private keys, or other secrets in this plan or the repository.
 
 ---
@@ -2906,3 +2909,7 @@ Exit criteria:
     complete:
     `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`
     must return no output.
+15. For every newly deployed Luna version or Luna feature, Codex must run the
+    installed app with Computer Use, validate the changed behavior end to end,
+    and record the result in this plan before marking the release or feature
+    validation complete.
