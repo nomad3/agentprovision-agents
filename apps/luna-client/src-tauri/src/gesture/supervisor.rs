@@ -49,7 +49,10 @@ fn app_handle() -> Option<AppHandle> {
 pub async fn list_cameras() -> Vec<String> {
     #[cfg(target_os = "macos")]
     {
-        camera::list_devices().into_iter().map(|(_, name)| name).collect()
+        camera::list_devices()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect()
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -171,7 +174,10 @@ async fn run_engine_loop(app: AppHandle) -> Result<(), String> {
     let mut last_state = WakeState::Sleeping;
 
     let camera_index = CAMERA_INDEX.load(Ordering::SeqCst);
-    log::info!("gesture: opening camera index={} target_fps=30", camera_index);
+    log::info!(
+        "gesture: opening camera index={} target_fps=30",
+        camera_index
+    );
     let mut stream = camera::start(camera_index, 30).map_err(|e| {
         log::error!("gesture: camera::start failed: {}", e);
         e
@@ -213,9 +219,7 @@ async fn run_engine_loop(app: AppHandle) -> Result<(), String> {
                 frame_count += 1;
                 let hands = extractor.extract(&frame.rgb, frame.width, frame.height);
                 hands_seen_total += hands.len() as u64;
-                let primary_pose = hands
-                    .first()
-                    .map(|h| crate::gesture::pose::classify(h).0);
+                let primary_pose = hands.first().map(|h| crate::gesture::pose::classify(h).0);
                 let primary_conf = hands.first().map(|h| h.confidence).unwrap_or(0.0);
 
                 // Heartbeat once per second so we can tell from the log

@@ -30,7 +30,11 @@ fn propagate_updater_pubkey() {
     let pubkey = std::fs::read_to_string(&conf_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.pointer("/plugins/updater/pubkey").and_then(|p| p.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.pointer("/plugins/updater/pubkey")
+                .and_then(|p| p.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_default();
     // The pubkey can contain quotes / multi-line minisign content; only
     // its emptiness affects install_update behavior, so emit the trimmed

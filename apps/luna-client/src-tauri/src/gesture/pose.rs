@@ -44,9 +44,20 @@ pub fn classify(frame: &HandFrame) -> (Pose, FingersExtended) {
     let count_non_thumb = extended[1..].iter().filter(|b| **b).count();
     // OpenPalm and Five are the same canonical pose for our grammar — both
     // mean thumb + 4 fingers extended. We map the geometry to OpenPalm.
-    let pose = match (extended[0], count_non_thumb, extended[1], extended[2], extended[3], extended[4]) {
+    let pose = match (
+        extended[0],
+        count_non_thumb,
+        extended[1],
+        extended[2],
+        extended[3],
+        extended[4],
+    ) {
         (_, 0, _, _, _, _) => {
-            if extended[0] { Pose::ThumbUp } else { Pose::Fist }
+            if extended[0] {
+                Pose::ThumbUp
+            } else {
+                Pose::Fist
+            }
         }
         (true, 4, _, _, _, _) => Pose::OpenPalm,
         (false, 4, _, _, _, _) => Pose::Four,

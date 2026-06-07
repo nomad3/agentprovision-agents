@@ -24,9 +24,14 @@ locally; PR #812 macOS app-monitor event-contract hardening merged and unsigned
 creation/claim-time CAS consumption merged and unsigned `luna-v0.1.104`
 installed locally. Native actuation remains disabled; the next gated phase is
 Alpha-kernel/native-boundary proof before any pointer or keyboard invoke can
-ship.
+ship. Current branch adds first-use macOS permission onboarding actions in the
+TCC panel so Luna can guide users to the exact Screen Recording,
+Accessibility, Automation, Camera, and Microphone setup flows needed for
+end-to-end computer-use validation. Developer ID signing is now being
+re-enabled for the release lane with a newly generated Luna signing certificate
+and Tauri updater key.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-v0104-validation-plan`
+Current implementation branch: `codex/luna-native-boundary-proof`
 
 ---
 
@@ -711,6 +716,323 @@ Additional discovery inputs:
     Observe Alpha OK Mac Denied` with Screen Recording/Accessibility denied as
     expected, keeps Assist and Control disabled, and `Stop` relatches to
     `Stopped Alpha OK Mac Stopped`.
+75. Current branch `codex/luna-native-boundary-proof` adds a first-use
+    permission-onboarding slice before deeper native-boundary work. The
+    existing `TCC` readiness panel remains passive on launch, but denied or
+    unknown rows now expose explicit `Enable`/`Open` actions. Clicking an
+    action calls a native `control_open_permission_setup` command that opens
+    the scoped macOS Privacy & Security pane for only that permission
+    (`Screen Recording`, `Accessibility`, `Automation`, `Input Monitoring`,
+    `Camera`, or `Microphone`); Screen Recording also asks macOS to present the
+    standard capture-access prompt when available. This makes Luna behave more
+    like Codex Desktop for first-run setup without silently changing OS
+    privacy settings or enabling pointer/keyboard actuation.
+76. Follow-up finding from local validation: macOS TCC grants are scoped to the
+    currently running code identity, not just the display name. With unsigned
+    ad-hoc development builds, `/Applications/Luna.app` and a branch debug
+    bundle can both display as `Luna` and use bundle ID `com.agentprovision.luna`
+    while codesign reports different ad-hoc identifiers (for example
+    `luna-525c10c19781945d` versus `luna-27be493139265cb6`). That explains
+    the confusing state where System Settings appears to show Luna fully
+    allowed but the active branch process still reports Screen/AX denied. The
+    TCC modal must show the running app bundle path, bundle ID, ad-hoc
+    signature identifier, and a TCC-scope note so users know which Luna entry
+    macOS is evaluating. A local copy re-signed with
+    `codesign --sign - --identifier com.agentprovision.luna` still produced a
+    designated requirement based on `cdhash`, so an explicit ad-hoc identifier
+    is not enough to guarantee TCC continuity between builds. While development
+    remains unsigned/ad-hoc, permission-state diagnostics must be explicit; the
+    durable fix for update-to-update TCC continuity is Developer ID signing when
+    the project is ready to re-enable it.
+77. Developer ID release signing setup was created on 2026-06-06 for Luna:
+    certificate ID `W5K3DXA7TD`, subject `Developer ID Application: Simon
+    Aguilera (KF9LPYY7KK)`, Team ID `KF9LPYY7KK`, G2 issuer, expiration
+    `2031-06-07`, SHA256 fingerprint
+    `A0:BF:89:39:3D:7C:AC:07:8B:0A:42:35:19:F2:50:2F:62:9C:88:28:04:29:6E:BC:0E:CD:DB:F9:22:1B:ED:F4`.
+    The private key, `.p12`, updater signing key, and generated passphrases
+    live outside the repo under `~/Documents/LunaSigning` with owner-only file
+    permissions. GitHub Actions secrets are configured for
+    `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
+    `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `TAURI_SIGNING_PRIVATE_KEY`, and
+    `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The client updater public key was
+    rotated in `apps/luna-client/src-tauri/tauri.conf.json`; therefore the
+    first signed build containing this new public key must be manually
+    installed from its DMG before automatic updater continuity can be validated
+    for later releases.
+78. Review and validation status for the current release-signing/permission
+    onboarding slice: Luna Supervisor reviewed through Alpha Chat and reported
+    no blocker before the PR/CI signed-build gate, with the explicit caveat
+    that updater continuity remains pending until the first rotated-key signed
+    build is manually installed from DMG. Codex local review found no
+    permission-counting, setup-command, or native-actuation regression. Claude
+    Code print mode answered a tiny health-check prompt, but both Opus/max and
+    Sonnet substantive read-only review prompts hung without output and were
+    terminated; do not treat Claude review as completed for this pass.
+79. First signed-mode CI attempt on branch `codex/luna-native-boundary-proof`
+    failed in `cargo tauri build` while importing the PKCS#12 certificate:
+    `SecKeychainItemImport: MAC verification failed during PKCS12 import`. Local
+    reproduction showed OpenSSL could read the file, but macOS `security import`
+    rejected it. The certificate was regenerated from the same Developer ID cert
+    and private key using an Apple-compatible legacy PKCS#12 format, verified
+    locally with a temporary keychain, and `APPLE_CERTIFICATE` plus trimmed
+    `APPLE_CERTIFICATE_PASSWORD` were re-uploaded to GitHub Actions secrets.
+80. After the Apple-compatible PKCS#12 fix, CI imported the Developer ID
+    identity but codesign failed with `unable to build chain to self-signed root
+    for signer`. The Luna workflow now installs Apple's official Developer ID
+    G2 intermediate certificate into the self-hosted runner login keychain before
+    `cargo tauri build`, so the signer chain can be resolved during CI signing.
+81. Signed-mode CI run `27071333346` cleared certificate import and codesign:
+    the Luna app, native binary, and `libluna_hand_landmarker.dylib` were signed
+    with `Developer ID Application: Simon Aguilera (KF9LPYY7KK)`. The run then
+    failed at notarization with Apple HTTP 401: Apple requires an app-specific
+    password generated at `appleid.apple.com`; the normal Apple account password
+    cannot be used as `APPLE_PASSWORD` for Tauri notarization.
+82. Notarization root cause + CI redesign (2026-06-06, after the app-specific
+    password was uploaded). Signed branch run `27071762194` reached Apple's
+    notary service but never returned: Tauri ran `notarytool submit --wait`
+    inside `cargo tauri build` and slept. Diagnosis via the validated local
+    keychain profile (`luna-notary-local`) showed the queue, not Luna, was the
+    problem — `xcrun notarytool history` reported BOTH Luna submissions
+    (`15e4f6e5…` 19:23Z, `c7d2cc34…` 19:32Z) AND a tiny independently-signed
+    probe app (`7a9120cc…`, `LunaNotaryProbe.zip`, 20:07Z) all stuck
+    `In Progress` 45–60+ min later (checked 20:16Z). A minimal probe stuck
+    identically to Luna proves the blocker is Apple notary-service backlog, not
+    app size or certificate corruption (the Developer ID cert/key/P12 had already
+    validated: fingerprint `A0:BF:89…ED:F4`, valid 2026-06-06→2031-06-07). No
+    code makes Apple faster, so CI was rebuilt to SURVIVE the backlog rather than
+    block on it. Key correctness fact established by reading
+    `tauri-bundler-2.9.2`/`tauri-macos-sign-2.3.4`: Tauri notarizes the app and
+    staples it BEFORE building the DMG (so the DMG normally carries a stapled
+    app), it authenticates notarytool only via Apple-ID-password (`--apple-id
+    --password --team-id`, password on the long-lived `--wait` argv) or App Store
+    Connect API key (`APPLE_API_KEY`/`APPLE_API_ISSUER`/`APPLE_API_KEY_PATH`, no
+    password) — there is NO keychain-profile support — and `--skip-stapling`
+    switches Tauri to `submit --no-wait` (returns the submission id immediately,
+    no staple). Also: notarization is keyed on the code cdhash and stored
+    server-side; stapling only caches the ticket locally, so once a submission is
+    Accepted EVERY copy of that exact app (DMG, updater tarball) passes Gatekeeper
+    online — only offline `stapler validate` needs a locally-stapled copy.
+83. Redesigned `.github/workflows/luna-client-build.yaml` to an explicit,
+    observable, queue-decoupled notarization pipeline (req-2/req-3 of the
+    operator handoff). (a) `cargo tauri build` now signs ONLY — the Apple-ID and
+    API-key env vars are withheld so tauri-bundler signs the app+dylib and skips
+    notarization. (b) A new `Notarize` step imports the Developer ID identity into
+    a disposable, run-scoped keychain (kept off the global search list; used later
+    to sign the rebuilt DMG), sets up notary auth preferring an App Store Connect
+    API key and otherwise seeding a keychain profile from the app-specific
+    password via `notarytool store-credentials` (the password reaches a process
+    argument ONLY there, for a few seconds — never during the poll, vs Tauri's
+    ~hour-long `submit --wait`), `ditto --sequesterRsrc` zips the app, `notarytool
+    submit --no-wait` captures the submission id, then a bounded poll of
+    `notarytool info` runs: `Accepted`→staple and continue; `Invalid`/`Rejected`
+    →`notarytool log` and fail; past `NOTARY_TIMEOUT_SECONDS` (default 1800,
+    overridable via `workflow_dispatch` input/`vars`, validated to a numeric
+    [60,7200])→mark `pending` and exit 0 so signed smoke artifacts still upload.
+    (c) Still on the same step (so the keychain + notary auth stay in scope), once
+    the app is Accepted+stapled the DMG is recreated from the now-stapled app via
+    `hdiutil` + `codesign` so a dragged-out `/Applications/Luna.app` carries the
+    ticket and offline `stapler validate` passes, then the DMG itself is
+    notarized+stapled through the same bounded poll so a downloaded DMG opens
+    without a Gatekeeper prompt; the updater `Luna.app.tar.gz`+`.sig` is left
+    untouched (same cdhash → notarized online once Accepted; no re-sign needed,
+    updater integrity preserved). (d) `Verify` re-checks codesign on the app and
+    asserts offline Gatekeeper (`stapler validate` + `spctl --ignore-cache -t
+    exec`) on the app inside the mounted rebuilt DMG — the copy users actually
+    receive. (e) Publication — the
+    signed GitHub Release and the stable `luna-latest` updater manifest — is now
+    gated on `notarized == 'accepted'` AND (`main` or `luna-v*`); the unsigned
+    dev-prerelease path is preserved; branch/PR/`workflow_dispatch` builds and
+    `pending` builds never publish. Decision on req-3: we go beyond Tauri
+    `--skip-stapling` — Tauri does no notarization at all and the explicit step
+    owns submit/poll/staple, which is the only way to also fix the
+    password-on-argv exposure (Tauri cannot use a keychain profile) and to fetch
+    the failure log. Validated locally: `actionlint` clean, `bash -n` on all run
+    blocks + a control-flow simulation under the runner's real bash 3.2.57,
+    `hdiutil` create/attach/detach mechanics, `base64 --decode` + `find-identity`
+    field layout; a 4-lens adversarial agent review (secrets, bash-3.2, signing
+    semantics, CI gating) with per-finding verification whose five confirmed
+    IMPORTANTs (jq-parse abort under pipefail, timeout-input validation, the
+    un-notarized DMG, mounted-copy Gatekeeper assertion, and the cert-password
+    argv threat-model note) were all fixed. Still PENDING on Apple:
+    a fully Accepted run, the rebuilt-DMG install smoke (`codesign -dv`,
+    `stapler validate`, `spctl`), and first stable-updater publication — finalize
+    once Apple's queue drains (re-run the signed build; the poll completes fast on
+    a healthy queue). Follow-up to fully retire the brief password exposure:
+    create an App Store Connect API key and add `APPLE_API_KEY` (base64 .p8),
+    `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` secrets — the workflow already prefers
+    them when present.
+84. Runner codesign regression surfaced while validating entry 83 (2026-06-06
+    ~21:15Z). Two `workflow_dispatch` validation runs on the redesigned workflow
+    (`27073858932`, `27074079154`) proved the new structure behaves correctly —
+    compile finished in ~1 min, the new Notarize/Verify/publish steps were gated
+    and skipped as designed, and the always() keychain cleanup ran — but BOTH
+    failed inside `cargo tauri build` at Tauri's OWN code-signing of
+    `libluna_hand_landmarker.dylib` with `codesign: errSecInternalComponent`
+    ("replacing existing signature" → errSec on the first dylib). This is NOT
+    caused by the notarization redesign (that change only withholds the
+    notarization credentials so Tauri signs-but-skips-notarize; signing itself is
+    unchanged and was unaffected). Diagnosis on the runner (this machine, same
+    user): `codesign --sign "Developer ID Application: Simon Aguilera
+    (KF9LPYY7KK)"` against the ESTABLISHED key (the identity lives in
+    `~/Documents/LunaSigning/luna-notary-local.keychain-db`, in the user search
+    list — the login keychain itself holds 0 codesigning identities) SUCCEEDS,
+    while Tauri's pattern of importing `APPLE_CERTIFICATE` into a FRESH per-build
+    temp keychain (create→unlock→import→`set-key-partition-list`→`codesign
+    --keychain`) FAILS. Initial hypothesis (degraded securityd after sleep) was
+    WRONG — restarting the runner LaunchAgent
+    (`actions.runner.nomad3-servicetsunami-agents.macbook-local`, PID 1569→21709)
+    did NOT fix it.
+85. CONFIRMED root cause + fix for the entry-84 codesign failure (2026-06-06
+    ~21:27Z): a DUPLICATE Developer ID Application identity in the runner's user
+    search list. The debugging session that diagnosed entry 82 created
+    `~/Documents/LunaSigning/luna-notary-local.keychain-db` (to hold the
+    `luna-notary-local` notarytool profile) and added it to the user keychain
+    search list; it holds a second copy of the same Developer ID identity. It did
+    not exist at the last good build (19:30Z), appeared ~20:00Z, and broke every
+    build after. When Tauri runs `codesign --keychain <temp> --sign "Developer ID
+    Application: …"`, the duplicate identity reachable via the search list yields
+    `errSecInternalComponent`. Removing the keychain from the search list
+    (`security list-keychains -d user -s ~/Library/Keychains/login.keychain-db`)
+    immediately fixed signing: run `27074342545` (search list = login only)
+    compiled, **signed successfully**, and proceeded into the explicit Notarize
+    step exactly as designed. The keychain FILE is left in place (the prior
+    session's notarytool profile is still usable by explicit `--keychain <path>`);
+    only the search-list entry was removed. Operational rule: keep ad-hoc
+    Developer-ID-bearing keychains OUT of the runner's user search list — access
+    notary creds by explicit path. The redesign (467560f3) is now validated
+    through signing + the explicit notarize submit/poll on real CI; full
+    notarized-release validation (the `accepted` path: stapled-DMG install +
+    `stapler validate`/`spctl`, first `luna-latest` publish) still awaits Apple's
+    notary-queue backlog draining (entry 82) — re-run `gh workflow run
+    luna-client-build.yaml --ref codex/luna-native-boundary-proof` (default
+    1800s poll) once the queue is healthy.
+86. Signed Luna `0.1.105` local TCC validation found the next permission
+    onboarding gap. `/Applications/Luna.app` now has stable Developer ID
+    identity `com.agentprovision.luna | team KF9LPYY7KK`, but old ad-hoc Luna
+    grants can leave System Settings showing a misleading enabled `Luna` row
+    while Apple's live preflight still returns denied for the running signed
+    app. The local host reset Luna-scoped TCC decisions with
+    `tccutil reset All/ScreenCapture/Accessibility/AppleEvents/Camera/Microphone/ListenEvent com.agentprovision.luna`;
+    after relaunch, clicking Luna's Screen `Enable` button registered the
+    current signed app in `Screen & System Audio Recording`, and after explicit
+    user approval plus relaunch/focus refresh Computer Use verified Luna now
+    reports `TCC 3/3` with Screen Recording `granted`, Accessibility `granted`,
+    and Input Monitoring `not_required`; after relaunch, Automation/System
+    Events also resolved to `granted` and the installed app showed `TCC 4/4`.
+    Luna remained `Stopped Alpha OK Mac Stopped` with Assist/Control disabled.
+    Product
+    implication: setup buttons must trigger native macOS prompt APIs where
+    available before deep-linking to Settings, and the UI must repoll readiness
+    when Luna regains focus after the user returns from System Settings. This
+    branch now adds Accessibility prompt registration via
+    `AXIsProcessTrustedWithOptions`, asks Automation/System Events with
+    `AEDeterminePermissionToAutomateTarget(..., ask_user_if_needed=true)`, and
+    refreshes permission readiness on focus/visibility changes. This remains
+    setup-only: it cannot and must not silently grant OS permissions or unlock
+    Assist/Control.
+87. Follow-up Computer Use smoke after Screen/AX were granted reached
+    `Control Locked Alpha OK Mac Locked`, then `Observe Alpha OK Mac Ready`
+    with Assist/Control still disabled and no pointer/keyboard actuation.
+    Pressing Stop wrote the durable `desktop-control-stop` latch before any
+    secondary teardown, but the current installed WebView stayed visually in
+    Observe with the Stop button disabled until app relaunch; relaunch restored
+    `Stopped Alpha OK Mac Stopped`, proving the native latch was authoritative
+    and the UI was stale. The branch now adds a WebView-side Stop fallback:
+    pressing Stop immediately publishes an optimistic stopped posture, clears
+    local control affordances, and times out a slow native Stop invoke instead
+    of leaving the UI in Observe. This does not weaken safety because native
+    Stop already persists the latch before gesture teardown; it only makes the
+    visible state fail closed when the bridge is slow. Luna re-review later
+    tightened this: the UI must not claim `Stopped` until native
+    `control_stop_all` returns or a confirmed safety refresh reports the Stop
+    latch. The branch now shows a disabled `Stopping` posture during pending
+    native confirmation; `Stopped` is published only from native state.
+88. Luna Supervisor reviewed entry 86/87 via Alpha Chat and accepted the branch
+    framing as TCC readiness plus Stop fail-closed UX hardening only. Her merge
+    condition remains unchanged: review must confirm the patch does not add any
+    native pointer, keyboard, Assist, or Control execution path. Native
+    actuation stays blocked until approval-envelope authenticity, replay
+    defense, revocation, session/device/command binding, and denial audit gates
+    are proven at the native boundary.
+89. Native-boundary proof slice added on `codex/luna-native-boundary-proof`.
+    Native pointer/keyboard claims now pass through a proof-only Tauri command
+    before terminal command completion. Valid-looking claims run JS preflight
+    first and then the Rust proof; malformed native-control claims also call the
+    Rust proof when possible, so missing/malformed envelopes are rejected at the
+    native boundary rather than only in the WebView. The Rust boundary
+    independently rejects missing envelopes, malformed/unsigned envelopes,
+    expired envelopes, replayed nonces, revoked grants, wrong shell/session/
+    device/command bindings, and approval grant mismatches; it emits
+    `desktop_native_control_denied` display-safe audit metadata and returns a
+    structured denial result to the claim loop.
+    The proof still sets `tier_enabled=false`, so even a valid native-control
+    envelope completes as `desktop native control tier disabled` and no
+    `control_pointer_*` or `control_keyboard_*` macOS path is invoked. Local
+    validation passed `cargo fmt --check`, `cargo check`, `cargo test`, `npm
+    test -- ControlSafetyStrip.test.jsx --run`, `npm test --
+    useDesktopCommandClaims.test.jsx --run`, `npm run build`, and `git diff
+    --check`. Remaining caveat: cryptographic verification is not implemented
+    in this slice; Rust checks envelope metadata plus signature presence, while
+    API-side HMAC signing remains the current server verifier.
+90. Mainline PR #817 merged `docs/plans/2026-06-06-grounded-agentprovision-pattern.md`
+    as merge `3442a3fe`, adding the claim ledger, assumption firewall,
+    grounding statuses, desktop-native grounding surface, and PR ladder. The
+    Luna computer-use plan should now treat native-control envelope proofs as
+    evidence contracts: denial audit events and future approval-verifier traces
+    must be joinable to claim/action provenance, missing checks, risk posture,
+    and operator-visible grounding state. The next native-control work should
+    align with the grounded plan's sequence: measure/trace first, enforce next,
+    and only then consider canary actuation.
+91. PR #816 signed smoke artifact validation on branch head `e2e652d5`
+    completed with CI run `27077213653`. The branch Tests run `27077174348`
+    passed, and Luna Client Tauri Build signed version `0.1.105` with Developer
+    ID team `KF9LPYY7KK`, then uploaded artifact `7459146318`. Apple's notary
+    service kept submission `c94a2cab-b871-456a-bf95-6adc0c60f131`
+    `In Progress` for the full 1800-second poll, so the workflow intentionally
+    emitted signed un-stapled smoke artifacts only: `Verify signing,
+    notarization, and stapled DMG`, updater manifest generation, release
+    publication, and `luna-latest` publication were skipped. Local smoke
+    installed the uploaded DMG into `/Applications/Luna.app` after checksum
+    verification; the installed bundle is `com.agentprovision.luna` version
+    `0.1.105`, CDHash `d7af69145fc45eb6c17a76480f220a26c1b7b0a8`, signed by
+    `Developer ID Application: Simon Aguilera (KF9LPYY7KK)`. Expected pending
+    notary state was confirmed: `stapler validate` reports no ticket and
+    `spctl` rejects as `Unnotarized Developer ID`. Computer Use verified the
+    smoke build launches authenticated, opens expanded at `0,34 1496x933`,
+    reports running identity `com.agentprovision.luna | team KF9LPYY7KK`, shows
+    Screen/AX granted, resolves Events granted after Stop, reaches `TCC 4/4`,
+    and preserves the safe flow `Stopped -> Control Locked -> Observe Alpha OK
+    Mac Ready -> Stopped` with Assist/Control disabled and no pointer/keyboard
+    actuation. Luna's exact Docker `_work` mount gate returned no output. This
+    validates the signed smoke artifact and local TCC/safety behavior, but it
+    does NOT close the signed/notarized release gate; that remains blocked on an
+    Accepted/stapled run and first updater/release publication.
+92. Luna Supervisor reviewed the entry-91 packet in Alpha Chat from the
+    installed signed smoke build. She fetched
+    `origin/codex/luna-native-boundary-proof` and verified remote head
+    `e2e652d5b27349b11e12132028c33206e3735f0e`. Her blocker-focused result:
+    PR #816 is acceptable to keep PR-ready/review-ready as the native-boundary
+    proof slice, with the notarized-release gate still open. She found no
+    code-level proof-boundary blocker: `control_prove_native_command_boundary`
+    exists and is proof/audit-only; pointer/keyboard Tauri commands still route
+    to denial-only policy; `desktop_control_allows_actuation()` remains hard
+    false; `tier_enabled=false` still blocks native control after a
+    valid-looking claim; the Stop truth issue appears fixed by `Stopping`
+    pending state plus native/refreshed `Stopped`; Rust rejects missing,
+    malformed, expired, replayed, revoked, wrong-binding approval/envelope
+    cases; and the React claim path does not invoke `control_pointer_*` or
+    `control_keyboard_*` for native-control claims. Her exact remaining blocker
+    is release-only: do not call the work release-complete until notarization,
+    stapling, updater/release artifact verification, local install smoke, and
+    `spctl` pass. She also called out the known proof-slice caveat as
+    acceptable only while explicit in the PR: Rust validates envelope metadata,
+    signature presence, replay, revocation, and bindings, but does not yet
+    perform cryptographic public-key verification.
+93. PR #816 body was updated with the native-boundary proof scope, signed smoke
+    artifact validation, explicit non-cryptographic verifier caveat, and the
+    pending notarized-release gate. After Luna's entry-92 review result, PR #816
+    was marked ready for review. It is not merged and must not be treated as
+    release-complete until the accepted/stapled release path passes.
 
 ---
 
@@ -825,6 +1147,9 @@ Release hardening requirements:
    allocation instead of `git rev-list --count` over full history. Main-branch
    release builds must be serialized so two queued builds cannot claim the
    same next Luna version.
+9. Tauri updater private keys and Apple Developer certificate material must
+   stay outside the repository and flow into CI only through GitHub Actions
+   secrets. The app embeds only the updater public key.
 
 ### Alpha Control Reuse
 
@@ -1047,6 +1372,9 @@ First-use permission sheet:
 5. Exact capabilities toggled independently.
 6. Whether raw pixels/text may leave the device, or metadata-only observation is
    required.
+7. Missing macOS TCC permissions have direct, scoped setup buttons that open the
+   correct System Settings pane from Luna instead of leaving users to hunt
+   through Privacy & Security manually.
 
 Just-in-time approval policy:
 
@@ -1231,6 +1559,52 @@ Current verification finding (2026-06-06):
       `cargo tauri build --debug --bundles app --no-sign`, installed into
       `/Applications/Luna.app`, launched with Computer Use, and verified
       `Control Locked -> Observe -> Lock -> Control Locked` plus Stop latch.
+- [x] Developer ID signing material created for Luna on 2026-06-06 and stored
+      outside the repo under `~/Documents/LunaSigning`; CI secrets now include
+      the Apple certificate, certificate password, Apple ID, Apple notarization
+      password, Team ID, Tauri updater private key, and updater-key password.
+- [x] Rotate the Luna Tauri updater public key in `tauri.conf.json` to match
+      the newly generated updater private key configured in GitHub Actions.
+- [ ] First signed-release validation after updater-key rotation: build from
+      GitHub Actions, confirm CI enters signed mode, notarization/stapling pass,
+      `latest.json` contains a non-empty signature, manually install the DMG,
+      and verify the installed app reports Developer ID identity plus stable
+      TCC permission state.
+- [x] Fix signed-mode certificate import for macOS CI: regenerate the PKCS#12
+      as Apple-compatible after `security import` rejected the OpenSSL-default
+      bundle, verify import locally with a temporary keychain, and refresh
+      `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD` secrets.
+- [x] Add CI keychain chain-prep for signed builds: install Apple's official
+      Developer ID G2 intermediate into the self-hosted runner login keychain
+      before Tauri invokes `codesign`.
+- [x] Replace `APPLE_PASSWORD` with an Apple app-specific password for
+      notarization (secret rotated 2026-06-06).
+- [x] Diagnose the notarization stall as Apple notary-service backlog (not cert
+      or app-size) via `notarytool history` on the validated keychain profile: a
+      minimal signed probe app sat `In Progress` alongside both Luna submissions
+      for 45–60+ min (log entry 82).
+- [x] Rebuild the Luna workflow to an explicit, queue-decoupled notarization
+      pipeline: Tauri signs only; explicit `notarytool submit --no-wait` +
+      bounded poll + `notarytool log` on failure; staple on Accept; rebuild the
+      DMG from the stapled app; publication gated on `notarized == 'accepted'` and
+      `main`/`luna-v*` (log entry 83).
+- [ ] Finalize once Apple's queue drains: re-run the signed build, confirm
+      `notarized == 'accepted'`, then install the rebuilt DMG and verify
+      `codesign -dv`, `stapler validate`, `spctl`, and the Computer Use smoke;
+      confirm the first stable `luna-latest` updater manifest publishes.
+- [ ] (Optional hardening) Create an App Store Connect API key and add
+      `APPLE_API_KEY`/`APPLE_API_KEY_ID`/`APPLE_API_ISSUER` secrets to remove the
+      brief `store-credentials` password exposure entirely (the workflow already
+      prefers the API key when present).
+- [x] Luna lead review for the release-signing/permission-onboarding slice:
+      Alpha Chat ACKed no blocker before PR/CI signed-build gate and preserved
+      the manual first-DMG install requirement after updater-key rotation.
+- [x] Codex local review for the release-signing/permission-onboarding slice:
+      no blocker found in permission counts, identity metadata display,
+      setup-command allow-listing, or Assist/Control actuation gating.
+- [ ] Claude Code review for the release-signing/permission-onboarding slice:
+      attempted with Opus/max and Sonnet read-only prompts, but the CLI hung on
+      substantive review inputs and returned no review result.
 
 - [x] Change Luna updater endpoint to a Luna-specific manifest URL, for example
       a stable `luna-latest` release asset.
@@ -1311,6 +1685,9 @@ Exit criteria:
       re-enabled.
 - [ ] Signed `latest.json` points at `nomad3/agentprovision-agents` and
       includes a non-empty signature.
+- [ ] First signed/notarized Luna release with the rotated updater public key
+      is manually installed from DMG; automatic updater validation starts from
+      that installed build forward.
 - [x] The release path documents GitHub Actions/GitHub Releases for release
       artifacts and local unsigned builds for development smoke only.
 - [x] Local install smoke from the unsigned development app bundle confirms
@@ -1448,9 +1825,18 @@ Goal: ship read-only computer-use primitives with audit and explicit UX.
 - [x] Register macOS permission readiness for Screen Recording, Accessibility,
       Automation/System Events, Input Monitoring, camera, and microphone.
   - [x] Keep readiness probes passive on startup: Screen Recording uses
-        preflight, Accessibility uses `AXIsProcessTrusted`, and System
-        Events/Automation remains `unknown` until an explicit setup flow so
-        Luna does not trigger TCC prompts by merely opening the chat window.
+        preflight, Accessibility uses `AXIsProcessTrusted`, System
+        Events/Automation uses `AEDeterminePermissionToAutomateTarget` with
+        `askUserIfNeeded=false`, and Camera/Mic use
+        `AVCaptureDevice.authorizationStatusForMediaType`. Luna must not
+        trigger TCC prompts by merely opening the chat window.
+- [x] Add user-facing permission setup actions in the TCC panel for denied or
+      unknown macOS permissions. The buttons open scoped Privacy & Security
+      panes through Tauri command `control_open_permission_setup`; they do not
+      grant permissions automatically and do not enable native actuation.
+- [x] Add running-app TCC identity diagnostics to the permission modal so
+      unsigned/ad-hoc release and debug builds that share the Luna display name
+      but have different macOS code identities are visible to the user.
 - [x] Add unit coverage for the Phase 1 permission-readiness status contract.
 - [x] Add `desktop_control` tool group in `tool_groups.py`.
   - [x] Add `desktop_control` group key for the planned read-only observation
@@ -2099,6 +2485,71 @@ Exit criteria:
       authenticated chat/session startup, `Stopped -> Control Locked ->
       Observe Mac Denied -> Stopped` transitions, Assist/Control disabled, and
       no pointer/keyboard actuation.
+- [x] Current branch permission-onboarding smoke: open `TCC` details in Luna,
+      verify the modal shows the running app identity, denied Screen/AX rows
+      show `Enable`, unknown rows show `Open`, granted/not-required rows stay
+      read-only, and clicking each setup action opens only the matching macOS
+      Privacy & Security pane. Computer Use verified the branch debug bundle
+      shows `Stopped Alpha OK Mac Stopped`, the high-contrast TCC popup, running
+      app identity `ad-hoc | luna-c475546d746c42c2`, explicit non-Applications
+      TCC-scope note, Screen/AX `Enable`, Camera/Mic `Open`, no Assist/Control
+      enablement, and correct routing to Screen & System Audio Recording,
+      Accessibility, Camera, and Microphone settings panes.
+- [x] PR #816 signed smoke artifact install: run `27077213653` uploaded
+      artifact `7459146318`; checksum verified; installed `/Applications/Luna.app`
+      version `0.1.105` with Developer ID team `KF9LPYY7KK` and CDHash
+      `d7af69145fc45eb6c17a76480f220a26c1b7b0a8`; Computer Use verified
+      authenticated expanded startup, TCC `4/4`, `Stopped -> Control Locked ->
+      Observe -> Stopped`, Assist/Control disabled, and no pointer/keyboard
+      actuation; Docker `_work` mount gate returned no output.
+- [x] PR #816 Luna lead review after signed smoke install: Luna Supervisor
+      verified remote head `e2e652d5` and accepted the branch as PR-ready/
+      review-ready for the native-boundary proof slice, with no code-level
+      native-actuation blocker and the notarized-release gate still open.
+- [x] PR #816 body updated with native-boundary proof scope, signed smoke
+      validation, explicit non-cryptographic verifier caveat, and pending
+      notarized-release gate; PR marked ready for review.
+- [ ] PR #816 signed/notarized release gate: rerun Tauri build when Apple
+      notary returns Accepted, then verify stapled DMG/app with `stapler` and
+      `spctl`, install the notarized DMG locally, and validate updater/release
+      publication from the accepted path.
+- [x] PR #816 review gate update: Luna Code Reviewer returned no code-level
+      native-control blocker and recommended holding only for signed/notarized
+      CI plus first-DMG install/updater validation. Luna Supervisor Alpha Chat
+      hit the known Cloudflare 524 path. Claude hosted `ultrareview` was
+      unavailable because usage credits were exhausted; local Claude Code
+      Opus/max fallback stayed silent for over 13 minutes and was terminated
+      before it consumed more resources. Codex review found a release-workflow
+      blocker for signed manual branch builds: `luna-latest` publication was
+      gated only on signed mode, while release creation is skipped off `main`/
+      `luna-v*` tags. The in-flight branch run `27071553333` was cancelled
+      before release-publication steps, and the workflow guard was tightened so
+      stable updater manifest publication only runs on `main` or `luna-v*` tags.
+- [x] Developer ID integrity check after the long signed branch build:
+      Certificate Assistant had been stuck during the macOS UI flow, but the
+      certificate material itself validated locally. The Developer ID
+      Application certificate parses cleanly as `Developer ID Application:
+      Simon Aguilera (KF9LPYY7KK)`, issued by Apple Developer ID G2, valid
+      `2026-06-06` through `2031-06-07`, with fingerprint
+      `A0:BF:89:39:3D:7C:AC:07:8B:0A:42:35:19:F2:50:2F:62:9C:88:28:04:29:6E:BC:0E:CD:DB:F9:22:1B:ED:F4`.
+      The certificate modulus matches the private key, the Apple-compatible P12
+      contains a certificate bag plus shrouded keybag, and the P12 certificate
+      matches the private key. The signed branch run was not compiling; it was
+      sleeping inside Apple's `notarytool submit --wait` for the uploaded Luna
+      ZIP. Root cause to pursue if the run times out: notarization wait
+      reliability and secret handling, not corrupted cert material.
+- [x] Signed branch run `27071762194` timed out after `30m21s`. Logs show
+      release compile finished in about one minute, Developer ID certificate
+      import succeeded, Luna binaries and app bundle were signed with
+      `Developer ID Application: Simon Aguilera`, and Tauri entered
+      notarization at `2026-06-06T19:32:18Z`. GitHub cancelled the job at
+      `2026-06-06T20:01:01Z`, after about `28m43s` inside Apple's
+      notarization wait. Tauri's own installed bundler docs note first
+      notarization can take multiple hours, so the workflow timeout was raised
+      from 30 to 120 minutes. Follow-up remains: move notarization auth to
+      App Store Connect API key or a keychain profile path so the app-specific
+      password is not visible in local process arguments on the self-hosted
+      runner.
 - [ ] Sign in once; no second login prompt appears.
 - [ ] Open Labs/Spatial explicitly; close it without losing chat.
 - [ ] Enable Observe; capture screenshot; verify event appears in chat activity.
@@ -2143,31 +2594,38 @@ Exit criteria:
 
 ## Next Actions
 
-1. Continue the next gated phase after the merged approval trust-boundary
-   slice: prove the native boundary rejects every missing, malformed, expired,
-   replayed, revoked, wrong-device, wrong-session, or wrong-command approval
-   envelope immediately before macOS invoke. Keep pointer/keyboard disabled.
-2. Extend the Alpha-kernel adapter beyond readiness:
+1. Keep PR #816 review-ready but unmerged until the remaining release gate is
+   cleared or explicitly waived: Luna accepted the proof slice, but the
+   accepted/stapled release path is still open.
+2. Re-run the Luna Tauri Build once Apple's notary queue accepts the app, or
+   after App Store Connect API-key secrets are added, and do not mark the signed
+   release gate complete until the accepted path verifies stapled app+DMG,
+   `spctl`, local install, updater manifest, and release publication.
+3. Exercise the proof command in an installed local branch build once a native
+   command claim can be queued safely, and verify `desktop_native_control_denied`
+   audit metadata reaches the expected Luna/session surfaces.
+4. Extend the Alpha-kernel adapter beyond readiness:
    auth/session handoff, chat-job streaming from `alpha`, cancellation, error
    display, offline behavior, release packaging, and app-monitor event mapping
    into Luna UI.
-3. Add an API/Alpha CLI parity checklist for every Luna-facing platform
+5. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
-4. Add Tauri-side public-key command-envelope validation before any pointer or
-   keyboard execution: nonce, expiry, session, shell, device, command id, policy
-   version, replay protection, revocation, and policy-decision binding.
-5. Re-review approval grant creation/consumption with council and Luna, then add
-   Tauri-side public-key/Ed25519 verification or an equivalent local verifier
-   before enabling narrow canary pointer execution.
-6. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+6. Add Tauri-side cryptographic command-envelope validation before any pointer
+   or keyboard execution: public-key/Ed25519 or equivalent local verifier,
+   nonce expiry, session, shell, device, command id, policy version, replay
+   protection, revocation, and policy-decision binding.
+7. Re-review approval grant creation/consumption with council and Luna after the
+   local verifier lands, then decide whether a narrow canary pointer execution
+   gate can be designed without broad macOS actuation.
+8. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-7. Close remaining pre-live-content hardening gaps: disable or display-safe route
+9. Close remaining pre-live-content hardening gaps: disable or display-safe route
    ambient clipboard/activity raw emissions, and add remaining revoked/offline
    regression coverage around Stop and shell reconnect behavior.
-8. Treat the post-deploy `No connected desktop shell` observation as a
+10. Treat the post-deploy `No connected desktop shell` observation as a
    hardening follow-up: Luna should re-register shell presence after API
    restarts or heartbeat failures, not require an app restart.
-9. Include the PR #797 command-palette maximize follow-up in the next branch or
+11. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.

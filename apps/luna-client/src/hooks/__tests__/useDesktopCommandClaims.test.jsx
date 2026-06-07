@@ -234,6 +234,44 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.metadata).toEqual({ result_kind: 'error' });
   });
 
+  it('routes malformed native-control envelopes through the Rust boundary proof', async () => {
+    invokeMock.mockResolvedValueOnce({
+      allowed: false,
+      outcome: 'denied',
+      reason: 'desktop command envelope missing; pointer_click denied',
+      action: 'pointer_click',
+      capability: 'pointer_control',
+      audit_event_id: 'native-audit-missing-envelope',
+      mode: 'control_locked',
+    });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_click', null),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_prove_native_command_boundary', {
+      request: expect.objectContaining({
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        command_envelope: null,
+      }),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).not.toHaveBeenCalledWith('control_pointer_click');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('desktop command envelope missing; pointer_click denied');
+    expect(body.metadata).toEqual({
+      control_mode: 'control_locked',
+      native_boundary_audit_event_id: 'native-audit-missing-envelope',
+      native_boundary_capability: 'pointer_control',
+      result_kind: 'native_boundary_denial',
+    });
+  });
+
   it('denies claimed commands without approval metadata before native invocation', async () => {
     const command = claimedCommand('get_active_app');
     delete command.payload.approval;
@@ -379,7 +417,17 @@ describe('executeClaimedDesktopCommand', () => {
   });
 
   it('denies native control commands without invoking local pointer or keyboard controls', async () => {
-    invokeMock.mockResolvedValueOnce({ mode: 'control_locked', can_control: false });
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockResolvedValueOnce({
+        allowed: false,
+        outcome: 'denied',
+        reason: 'desktop native control tier disabled; pointer_click denied',
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        audit_event_id: 'native-audit-1',
+        mode: 'control_locked',
+      });
 
     await executeClaimedDesktopCommand(
       claimedCommand('pointer_click'),
@@ -389,13 +437,26 @@ describe('executeClaimedDesktopCommand', () => {
     );
 
     expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).toHaveBeenCalledWith('control_prove_native_command_boundary', {
+      request: expect.objectContaining({
+        desktop_command_id: COMMAND_ID,
+        shell_id: SHELL_ID,
+        session_id: SESSION_ID,
+        device_id: DEVICE_ID,
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        approval_id: APPROVAL_ID,
+      }),
+    });
     expect(invokeMock).not.toHaveBeenCalledWith('control_pointer_click');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('denied');
-    expect(body.reason).toBe('desktop native control disabled; pointer_click denied');
+    expect(body.reason).toBe('desktop native control tier disabled; pointer_click denied');
     expect(body.metadata).toEqual(withEnvelope({
       control_mode: 'control_locked',
-      result_kind: 'unsupported',
+      native_boundary_audit_event_id: 'native-audit-1',
+      native_boundary_capability: 'pointer_control',
+      result_kind: 'native_boundary_denial',
     }));
   });
 
@@ -415,6 +476,34 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.status).toBe('preempted');
     expect(body.reason).toBe('desktop control stopped; keyboard_type preempted');
     expect(body.metadata).toEqual(withEnvelope({ control_mode: 'stopped' }));
+  });
+
+  it('fails closed when the native-control boundary proof is unavailable', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'observe', can_control: false })
+      .mockRejectedValueOnce(new Error('native boundary unavailable'));
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('keyboard_key_chord'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_prove_native_command_boundary', {
+      request: expect.objectContaining({
+        action: 'keyboard_key_chord',
+        capability: 'keyboard_control',
+      }),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('control_keyboard_key_chord');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('failed');
+    expect(body.reason).toContain('native boundary unavailable');
+    expect(body.metadata).toEqual(withEnvelope({
+      control_mode: 'observe',
+      result_kind: 'error',
+    }));
   });
 
   it('completes claimed commands as failed when safety state is unavailable', async () => {

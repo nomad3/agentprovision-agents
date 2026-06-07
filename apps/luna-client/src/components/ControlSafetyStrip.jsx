@@ -39,6 +39,15 @@ const FALLBACK_STATE = {
   last_stop_at_ms: null,
 };
 
+const PERMISSION_KEYS = [
+  'screen_recording',
+  'accessibility',
+  'automation_system_events',
+  'input_monitoring',
+  'camera',
+  'microphone',
+];
+
 export function labelForControlMode(mode) {
   switch (mode) {
     case 'observe':
@@ -49,14 +58,55 @@ export function labelForControlMode(mode) {
       return 'Control';
     case 'stopped':
       return 'Stopped';
+    case 'stopping':
+      return 'Stopping';
     default:
       return 'Control Locked';
   }
 }
 
-async function invokeControl(command) {
+async function invokeControl(command, args) {
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke(command);
+  return args ? invoke(command, args) : invoke(command);
+}
+
+function invokeControlWithTimeout(command, args, timeoutMs = 5000) {
+  let timeoutId;
+  return Promise.race([
+    invokeControl(command, args),
+    new Promise((_, reject) => {
+      timeoutId = window.setTimeout(() => reject(new Error(`${command} timed out`)), timeoutMs);
+    }),
+  ]).finally(() => window.clearTimeout(timeoutId));
+}
+
+function readSafetyStateWithTimeout(timeoutMs = 1500) {
+  return invokeControlWithTimeout('control_get_safety_state', undefined, timeoutMs);
+}
+
+function stoppingStateFrom(current) {
+  return {
+    ...current,
+    mode: 'stopping',
+    observe_enabled: false,
+    assist_enabled: false,
+    control_enabled: false,
+    stopped: false,
+    control_locked: true,
+    capture_running: false,
+    gesture_state: 'stopping',
+    cursor_global: false,
+    can_observe: false,
+    can_assist: false,
+    can_control: false,
+    can_control_pointer: false,
+    can_control_keyboard: false,
+    macos_app_monitor: {
+      ...(current.macos_app_monitor || FALLBACK_STATE.macos_app_monitor),
+      status: 'locked',
+      reason: 'macOS app monitoring is pending local Stop confirmation.',
+    },
+  };
 }
 
 function permissionLabel(key) {
@@ -79,13 +129,22 @@ function permissionLabel(key) {
 }
 
 function permissionEntries(permissions) {
-  return Object.entries(permissions || {}).map(([key, value]) => ({
-    key,
-    label: permissionLabel(key),
-    status: value?.status || 'unknown',
-    reason: value?.reason || '',
-    requiredFor: value?.required_for || [],
-  }));
+  return PERMISSION_KEYS
+    .filter((key) => permissions?.[key])
+    .map((key) => {
+      const value = permissions[key];
+      return {
+        key,
+        label: permissionLabel(key),
+        status: value?.status || 'unknown',
+        reason: value?.reason || '',
+        requiredFor: value?.required_for || [],
+      };
+    });
+}
+
+export function permissionIdentity(permissions) {
+  return permissions?.app_identity || null;
 }
 
 export function summarizePermissions(permissions) {
@@ -113,6 +172,16 @@ export function labelForPermissionStatus(status) {
   }
 }
 
+export function canOpenPermissionSetup(permission) {
+  return ['denied', 'unknown'].includes(permission?.status);
+}
+
+export function labelForPermissionSetupAction(permission) {
+  if (permission?.status === 'denied') return 'Enable';
+  if (permission?.status === 'unknown') return 'Open';
+  return '';
+}
+
 export function labelForAlphaKernelStatus(status, available) {
   if (available || status === 'available') return 'Alpha OK';
   return 'Alpha --';
@@ -137,6 +206,7 @@ export default function ControlSafetyStrip() {
   const [state, setState] = useState(FALLBACK_STATE);
   const [busy, setBusy] = useState(false);
   const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [permissionBusy, setPermissionBusy] = useState(null);
   const [activeApp, setActiveApp] = useState(null);
 
   const publishState = useCallback((next) => {
@@ -156,6 +226,28 @@ export default function ControlSafetyStrip() {
 
   useEffect(() => {
     refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!permissionsOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setPermissionsOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [permissionsOpen]);
+
+  useEffect(() => {
+    const handleFocus = () => refresh();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [refresh]);
 
   const handleActivityPayload = useCallback((payload) => {
@@ -197,13 +289,41 @@ export default function ControlSafetyStrip() {
 
   const run = useCallback(async (command) => {
     setBusy(true);
+    const optimisticStop = command === 'control_stop_all';
+    if (optimisticStop) {
+      publishState(stoppingStateFrom(state));
+    }
     try {
-      const next = await invokeControl(command);
+      const next = await invokeControlWithTimeout(command, undefined, optimisticStop ? 1500 : 5000);
+      publishState(next);
+    } catch {
+      if (optimisticStop) {
+        try {
+          const refreshed = await readSafetyStateWithTimeout(1500);
+          publishState(
+            refreshed?.mode === 'stopped' ? refreshed : stoppingStateFrom(refreshed || state),
+          );
+        } catch {
+          publishState(stoppingStateFrom(state));
+        }
+      } else {
+        await refresh();
+      }
+    } finally {
+      setBusy(false);
+    }
+  }, [publishState, refresh, state]);
+
+  const openPermissionSetup = useCallback(async (permission) => {
+    if (!canOpenPermissionSetup(permission)) return;
+    setPermissionBusy(permission.key);
+    try {
+      const next = await invokeControl('control_open_permission_setup', { permission: permission.key });
       publishState(next);
     } catch {
       await refresh();
     } finally {
-      setBusy(false);
+      setPermissionBusy(null);
     }
   }, [publishState, refresh]);
 
@@ -216,6 +336,18 @@ export default function ControlSafetyStrip() {
     () => permissionEntries(state.permissions),
     [state.permissions],
   );
+  const identity = useMemo(
+    () => permissionIdentity(state.permissions),
+    [state.permissions],
+  );
+  const signatureLabel = useMemo(() => {
+    if (!identity) return null;
+    return [
+      identity.code_signature_kind,
+      identity.code_signature_identifier,
+      identity.code_signature_team_identifier ? `team ${identity.code_signature_team_identifier}` : null,
+    ].filter(Boolean).join(' | ');
+  }, [identity]);
   const title = useMemo(() => {
     const gesture = state.gesture_state || 'unknown';
     const cursor = state.cursor_global ? 'global cursor on' : 'global cursor off';
@@ -223,6 +355,7 @@ export default function ControlSafetyStrip() {
   }, [label, permissionSummary.title, state.gesture_state, state.cursor_global]);
   const alphaKernel = state.alpha_kernel || FALLBACK_STATE.alpha_kernel;
   const macosMonitor = state.macos_app_monitor || FALLBACK_STATE.macos_app_monitor;
+  const stopping = state.mode === 'stopping';
   const alphaTitle = alphaKernel.available
     ? `Alpha CLI kernel: ${alphaKernel.binary_path || 'available'}`
     : `Alpha CLI kernel: ${alphaKernel.reason || 'missing'}`;
@@ -256,21 +389,21 @@ export default function ControlSafetyStrip() {
         <button
           className="control-safety-action"
           onClick={() => run('control_observe_status')}
-          disabled={busy || state.mode === 'observe' || !state.can_observe}
+          disabled={busy || stopping || state.mode === 'observe' || !state.can_observe}
           title="Enable observe-only mode"
         >
           Observe
         </button>
         <button
           className="control-safety-action"
-          disabled={busy || !state.can_assist}
+          disabled={busy || stopping || !state.can_assist}
           title="Assist mode requires API governance and approval grants"
         >
           Assist
         </button>
         <button
           className="control-safety-action"
-          disabled={busy || !state.can_control}
+          disabled={busy || stopping || !state.can_control}
           title="Control mode is locked until command governance ships"
         >
           Control
@@ -278,7 +411,7 @@ export default function ControlSafetyStrip() {
         <button
           className="control-safety-action"
           onClick={() => run('control_lock_all')}
-          disabled={busy || state.mode === 'control_locked' || state.mode === 'stopped'}
+          disabled={busy || stopping || state.mode === 'control_locked' || state.mode === 'stopped'}
           title="Lock observation without latching Stop"
         >
           Lock
@@ -286,7 +419,7 @@ export default function ControlSafetyStrip() {
         <button
           className="control-safety-action control-safety-stop"
           onClick={() => run('control_stop_all')}
-          disabled={busy || state.mode === 'stopped'}
+          disabled={busy || stopping || state.mode === 'stopped'}
           title="Stop all local desktop control and capture loops"
         >
           Stop
@@ -313,19 +446,62 @@ export default function ControlSafetyStrip() {
         </button>
       </div>
       {permissionsOpen && (
-        <div className="control-permissions" aria-label="Permission readiness details">
-          {permissionDetails.length === 0 ? (
-            <div className="control-permission control-permission-unknown">
-              <span className="control-permission-main">
-                <span className="control-permission-name">TCC</span>
-                <span className="control-permission-detail">Permission readiness is unavailable.</span>
-              </span>
-              <span className="control-permission-status">Unknown</span>
+        <div
+          className="control-permissions-backdrop"
+          onClick={() => setPermissionsOpen(false)}
+        >
+          <div
+            className="control-permissions"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Permission readiness details"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="control-permissions-header">
+              <span className="control-permissions-title">Mac Permissions</span>
+              <span className="control-permissions-summary">{permissionSummary.label}</span>
+              <button
+                className="control-permissions-close"
+                type="button"
+                aria-label="Close permission readiness details"
+                onClick={() => setPermissionsOpen(false)}
+              >
+                Close
+              </button>
             </div>
-          ) : permissionDetails.map((permission) => (
-            <div className={`control-permission control-permission-${permission.status}`} key={permission.key}>
-              <span className="control-permission-main">
-                <span className="control-permission-name">{permission.label}</span>
+            {identity && (
+              <div className="control-permissions-identity">
+                <span className="control-permissions-identity-title">Running Luna Identity</span>
+                {identity.bundle_id && (
+                  <span className="control-permissions-identity-line">Bundle: {identity.bundle_id}</span>
+                )}
+                {signatureLabel && (
+                  <span className="control-permissions-identity-line">Signature: {signatureLabel}</span>
+                )}
+                {identity.app_bundle_path && (
+                  <span className="control-permissions-identity-line">App: {identity.app_bundle_path}</span>
+                )}
+                {identity.permission_scope_note && (
+                  <span className="control-permissions-identity-note">{identity.permission_scope_note}</span>
+                )}
+              </div>
+            )}
+            <div className="control-permissions-list">
+              {permissionDetails.length === 0 ? (
+                <div className="control-permission control-permission-unknown">
+                  <span className="control-permission-main">
+                    <span className="control-permission-name">TCC</span>
+                    <span className="control-permission-detail">Permission readiness is unavailable.</span>
+                  </span>
+                  <span className="control-permission-status">Unknown</span>
+                </div>
+              ) : permissionDetails.map((permission) => {
+                const setupAllowed = canOpenPermissionSetup(permission);
+                const setupLabel = labelForPermissionSetupAction(permission);
+                return (
+                  <div className={`control-permission control-permission-${permission.status}`} key={permission.key}>
+                <span className="control-permission-main">
+                  <span className="control-permission-name">{permission.label}</span>
                 {permission.reason && (
                   <span className="control-permission-detail">{permission.reason}</span>
                 )}
@@ -334,10 +510,27 @@ export default function ControlSafetyStrip() {
                     Required for: {permission.requiredFor.join(', ')}
                   </span>
                 )}
-              </span>
-              <span className="control-permission-status">{labelForPermissionStatus(permission.status)}</span>
+                </span>
+                <span className="control-permission-side">
+                  <span className="control-permission-status">{labelForPermissionStatus(permission.status)}</span>
+                  {setupAllowed && (
+                    <button
+                      className="control-permission-action"
+                      type="button"
+                      disabled={busy || permissionBusy === permission.key}
+                      onClick={() => openPermissionSetup(permission)}
+                      aria-label={`${setupLabel} ${permission.label} permission`}
+                      title={`Open macOS settings for ${permission.label}`}
+                    >
+                      {permissionBusy === permission.key ? 'Opening' : setupLabel}
+                    </button>
+                  )}
+                </span>
+              </div>
+                );
+              })}
             </div>
-          ))}
+          </div>
         </div>
       )}
     </div>

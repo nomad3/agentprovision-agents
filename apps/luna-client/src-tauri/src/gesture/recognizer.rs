@@ -111,7 +111,11 @@ impl Recognizer {
         if let Some(m) = motion {
             if matches!(
                 m.kind,
-                MotionKind::Swipe | MotionKind::Sweep | MotionKind::Pinch | MotionKind::Tap | MotionKind::Rotate
+                MotionKind::Swipe
+                    | MotionKind::Sweep
+                    | MotionKind::Pinch
+                    | MotionKind::Tap
+                    | MotionKind::Rotate
             ) {
                 self.motion.clear();
             }

@@ -48,12 +48,16 @@ unsafe impl Send for SendEnigo {}
 #[cfg(target_os = "macos")]
 impl std::ops::Deref for SendEnigo {
     type Target = Enigo;
-    fn deref(&self) -> &Enigo { &self.0 }
+    fn deref(&self) -> &Enigo {
+        &self.0
+    }
 }
 
 #[cfg(target_os = "macos")]
 impl std::ops::DerefMut for SendEnigo {
-    fn deref_mut(&mut self) -> &mut Enigo { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut Enigo {
+        &mut self.0
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -161,7 +165,11 @@ fn read_main_display_size() -> (i32, i32) {
         let did = CGMainDisplayID();
         let w = CGDisplayPixelsWide(did) as i32;
         let h = CGDisplayPixelsHigh(did) as i32;
-        if w > 0 && h > 0 { (w, h) } else { (1920, 1080) }
+        if w > 0 && h > 0 {
+            (w, h)
+        } else {
+            (1920, 1080)
+        }
     }
 }
 
@@ -175,9 +183,15 @@ fn ensure_display_size() -> (i32, i32) {
 /// Luna isn't frontmost.
 #[cfg(target_os = "macos")]
 pub async fn move_abs(x: f32, y: f32) {
-    if !crate::desktop_control_allows_actuation() { return; }
-    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) { return; }
-    if !GLOBAL_MODE.load(Ordering::SeqCst) && !frontmost_is_luna_cached() { return; }
+    if !crate::desktop_control_allows_actuation() {
+        return;
+    }
+    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
+        return;
+    }
+    if !GLOBAL_MODE.load(Ordering::SeqCst) && !frontmost_is_luna_cached() {
+        return;
+    }
 
     let (dw, dh) = ensure_display_size();
     let px = (x.clamp(0.0, 1.0) * dw as f32) as i32;
@@ -194,9 +208,15 @@ pub async fn move_abs(x: f32, y: f32) {
 
 #[cfg(target_os = "macos")]
 pub async fn click() {
-    if !crate::desktop_control_allows_actuation() { return; }
-    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) { return; }
-    if !GLOBAL_MODE.load(Ordering::SeqCst) && !frontmost_is_luna_cached() { return; }
+    if !crate::desktop_control_allows_actuation() {
+        return;
+    }
+    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
+        return;
+    }
+    if !GLOBAL_MODE.load(Ordering::SeqCst) && !frontmost_is_luna_cached() {
+        return;
+    }
 
     let mut guard = ENIGO.lock().await;
     if guard.is_none() {

@@ -7,6 +7,8 @@ mod gesture;
 
 lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    static ref NATIVE_BOUNDARY_REPLAY_NONCES: std::sync::Mutex<std::collections::HashMap<String, u64>> =
+        std::sync::Mutex::new(std::collections::HashMap::new());
 }
 
 const CONTROL_MODE_LOCKED: u8 = 0;
@@ -333,6 +335,27 @@ struct DesktopObservationAuditEvent {
     automation_system_events_status: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct DesktopNativeControlAuditEvent {
+    event_id: String,
+    event_type: String,
+    source: String,
+    action: String,
+    capability: String,
+    outcome: String,
+    reason: Option<String>,
+    mode: String,
+    shell_id: Option<String>,
+    desktop_command_id: Option<String>,
+    approval_id: Option<String>,
+    device_id: Option<String>,
+    session_id: Option<String>,
+    created_at_ms: u64,
+    screen_recording_status: String,
+    accessibility_status: String,
+    automation_system_events_status: String,
+}
+
 #[derive(Clone)]
 struct ObservationAuditContext {
     event_id: String,
@@ -342,6 +365,81 @@ struct ObservationAuditContext {
     permissions: computer_use::DesktopPermissionReadiness,
     shell_id: Option<String>,
 }
+
+#[derive(Clone, serde::Deserialize)]
+struct NativeControlBoundaryProofRequest {
+    desktop_command_id: Option<String>,
+    shell_id: Option<String>,
+    session_id: Option<String>,
+    device_id: Option<String>,
+    action: String,
+    capability: Option<String>,
+    approval_id: Option<String>,
+    command_envelope: Option<NativeControlBoundaryEnvelope>,
+    approval: Option<NativeControlBoundaryApproval>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct NativeControlBoundaryEnvelope {
+    schema: Option<String>,
+    signed: Option<bool>,
+    signature_alg: Option<String>,
+    signature: Option<String>,
+    policy_version: Option<u16>,
+    issuer: Option<String>,
+    nonce: Option<String>,
+    expires_at_ms: Option<u64>,
+    desktop_command_id: Option<String>,
+    shell_id: Option<String>,
+    session_id: Option<String>,
+    device_id: Option<String>,
+    action: Option<String>,
+    capability: Option<String>,
+    approval_id: Option<String>,
+    approval_risk_tier: Option<String>,
+    risk_tier: Option<String>,
+    policy_decision: Option<String>,
+    revoked: Option<bool>,
+    replayed: Option<bool>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct NativeControlBoundaryApproval {
+    approval_id: Option<String>,
+    risk_tier: Option<String>,
+    capability: Option<String>,
+    expires_at_ms: Option<u64>,
+    revoked: Option<bool>,
+}
+
+#[derive(Clone, serde::Serialize)]
+struct NativeControlBoundaryProofResult {
+    allowed: bool,
+    outcome: String,
+    reason: String,
+    action: String,
+    capability: String,
+    audit_event_id: String,
+    mode: String,
+}
+
+struct NativeControlBoundaryDecision {
+    allowed: bool,
+    outcome: &'static str,
+    reason: String,
+    action: String,
+    capability: String,
+}
+
+struct ValidNativeControlBoundaryEnvelope {
+    envelope: computer_use::policy::NativeControlCommandEnvelope,
+}
+
+const DESKTOP_COMMAND_ENVELOPE_SCHEMA: &str = "agentprovision.desktop_command_envelope.v1";
+const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG: &str = "HMAC-SHA256";
+const DESKTOP_COMMAND_ENVELOPE_ISSUER: &str = "agentprovision-api";
+const DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL: &str = "native_control";
+const DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED: &str = "lease_claimed";
 
 fn control_mode_name(mode: u8) -> &'static str {
     match mode {
@@ -514,6 +612,302 @@ fn fail_observation_audit(app: &tauri::AppHandle, ctx: &ObservationAuditContext,
     );
 }
 
+fn native_control_capability_for_action(
+    action: &str,
+) -> Option<computer_use::NativeControlCapability> {
+    match action {
+        "pointer_move" | "pointer_click" => Some(computer_use::NativeControlCapability::Pointer),
+        "keyboard_type" | "keyboard_key_chord" => {
+            Some(computer_use::NativeControlCapability::Keyboard)
+        }
+        _ => None,
+    }
+}
+
+fn non_empty_text(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn required_binding(value: &Option<String>) -> Result<&str, &'static str> {
+    non_empty_text(value).ok_or("desktop command envelope binding mismatch")
+}
+
+fn envelope_field_matches(actual: &Option<String>, expected: &str) -> bool {
+    non_empty_text(actual) == Some(expected)
+}
+
+fn native_boundary_denial(
+    action: &str,
+    capability: computer_use::NativeControlCapability,
+    outcome: &'static str,
+    base_reason: &str,
+) -> NativeControlBoundaryDecision {
+    NativeControlBoundaryDecision {
+        allowed: false,
+        outcome,
+        reason: format!("{base_reason}; {action} denied"),
+        action: action.to_string(),
+        capability: capability.as_str().to_string(),
+    }
+}
+
+fn native_boundary_policy_decision(
+    action: &str,
+    result: Result<(), computer_use::policy::NativeControlPolicyDenial>,
+) -> NativeControlBoundaryDecision {
+    match result {
+        Ok(()) => NativeControlBoundaryDecision {
+            allowed: true,
+            outcome: "allowed",
+            reason: String::new(),
+            action: action.to_string(),
+            capability: "native_control".to_string(),
+        },
+        Err(denial) => NativeControlBoundaryDecision {
+            allowed: false,
+            outcome: if denial.reason.contains("desktop control stopped") {
+                "preempted"
+            } else {
+                "denied"
+            },
+            reason: denial.reason,
+            action: action.to_string(),
+            capability: denial.capability.as_str().to_string(),
+        },
+    }
+}
+
+fn lock_native_boundary_replay_nonces(
+) -> std::sync::MutexGuard<'static, std::collections::HashMap<String, u64>> {
+    NATIVE_BOUNDARY_REPLAY_NONCES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn remember_native_boundary_nonce(nonce: &str, expires_at_ms: u64, now_ms: u64) -> bool {
+    let mut nonces = lock_native_boundary_replay_nonces();
+    nonces.retain(|_, expires_at| *expires_at > now_ms);
+    if nonces.contains_key(nonce) {
+        return false;
+    }
+    nonces.insert(nonce.to_string(), expires_at_ms);
+    true
+}
+
+fn validate_native_control_boundary_envelope(
+    request: &NativeControlBoundaryProofRequest,
+    action: &str,
+    expected_capability: computer_use::NativeControlCapability,
+    now_ms: u64,
+    mut remember_nonce: impl FnMut(&str, u64, u64) -> bool,
+) -> Result<ValidNativeControlBoundaryEnvelope, &'static str> {
+    let envelope = request
+        .command_envelope
+        .as_ref()
+        .ok_or("desktop command envelope missing")?;
+    let nonce = non_empty_text(&envelope.nonce)
+        .ok_or("desktop command envelope nonce missing")?
+        .to_string();
+
+    if envelope.replayed == Some(true) {
+        return Err("desktop command envelope replayed");
+    }
+    if envelope.revoked == Some(true)
+        || non_empty_text(&envelope.policy_decision) == Some("revoked")
+    {
+        return Err("desktop command approval grant revoked");
+    }
+    if envelope.schema.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SCHEMA)
+        || envelope.signed != Some(true)
+        || envelope.signature_alg.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG)
+        || envelope.policy_version
+            != Some(computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION)
+        || envelope.issuer.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_ISSUER)
+    {
+        return Err("desktop command envelope binding mismatch");
+    }
+    if non_empty_text(&envelope.signature).is_none() {
+        return Err("desktop command envelope signature invalid");
+    }
+    let expires_at_ms = envelope
+        .expires_at_ms
+        .ok_or("desktop command envelope expired")?;
+    if expires_at_ms <= now_ms {
+        return Err("desktop command envelope expired");
+    }
+
+    let approval = request
+        .approval
+        .as_ref()
+        .ok_or("desktop command approval grant missing")?;
+    if approval.revoked == Some(true) {
+        return Err("desktop command approval grant revoked");
+    }
+    if approval
+        .expires_at_ms
+        .is_some_and(|approval_expires_at_ms| approval_expires_at_ms <= now_ms)
+    {
+        return Err("desktop command approval grant expired");
+    }
+
+    let request_approval_id =
+        non_empty_text(&request.approval_id).ok_or("desktop command approval grant missing")?;
+    let approval_id =
+        non_empty_text(&approval.approval_id).ok_or("desktop command approval grant missing")?;
+    if uuid::Uuid::parse_str(request_approval_id).is_err()
+        || uuid::Uuid::parse_str(approval_id).is_err()
+    {
+        return Err("desktop command approval grant missing");
+    }
+    if request_approval_id != approval_id {
+        return Err("desktop command approval grant binding mismatch");
+    }
+
+    let expected_capability_label = expected_capability.as_str();
+    if non_empty_text(&approval.risk_tier) != Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL)
+        || non_empty_text(&approval.capability) != Some(expected_capability_label)
+        || non_empty_text(&envelope.risk_tier) != Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL)
+        || non_empty_text(&envelope.approval_risk_tier)
+            != Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL)
+        || non_empty_text(&envelope.policy_decision)
+            != Some(DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED)
+    {
+        return Err("desktop command approval grant binding mismatch");
+    }
+
+    let desktop_command_id = required_binding(&request.desktop_command_id)?;
+    let shell_id = required_binding(&request.shell_id)?;
+    let session_id = required_binding(&request.session_id)?;
+    let device_id = required_binding(&request.device_id)?;
+    let request_capability = required_binding(&request.capability)?;
+    if request_capability != expected_capability_label
+        || !envelope_field_matches(&envelope.desktop_command_id, desktop_command_id)
+        || !envelope_field_matches(&envelope.shell_id, shell_id)
+        || !envelope_field_matches(&envelope.session_id, session_id)
+        || !envelope_field_matches(&envelope.device_id, device_id)
+        || !envelope_field_matches(&envelope.action, action)
+        || !envelope_field_matches(&envelope.capability, expected_capability_label)
+        || !envelope_field_matches(&envelope.approval_id, request_approval_id)
+    {
+        return Err("desktop command envelope binding mismatch");
+    }
+
+    if !remember_nonce(&nonce, expires_at_ms, now_ms) {
+        return Err("desktop command envelope replayed");
+    }
+
+    Ok(ValidNativeControlBoundaryEnvelope {
+        envelope: computer_use::policy::NativeControlCommandEnvelope {
+            signed: true,
+            policy_version: envelope
+                .policy_version
+                .expect("policy version was checked above"),
+            expires_at_ms,
+        },
+    })
+}
+
+fn evaluate_native_control_boundary_request(
+    request: &NativeControlBoundaryProofRequest,
+    mode: computer_use::DesktopControlMode,
+    permissions: &computer_use::DesktopPermissionReadiness,
+    now_ms: u64,
+    remember_nonce: impl FnMut(&str, u64, u64) -> bool,
+) -> NativeControlBoundaryDecision {
+    let action = request.action.trim();
+    let action = if action.is_empty() { "unknown" } else { action };
+    let Some(capability) = native_control_capability_for_action(action) else {
+        return NativeControlBoundaryDecision {
+            allowed: false,
+            outcome: "denied",
+            reason: format!("desktop native control action unsupported; {action} denied"),
+            action: action.to_string(),
+            capability: request
+                .capability
+                .as_deref()
+                .unwrap_or("unknown")
+                .to_string(),
+        };
+    };
+
+    if mode == computer_use::DesktopControlMode::Stopped {
+        return native_boundary_denial(action, capability, "preempted", "desktop control stopped");
+    }
+
+    let envelope = match validate_native_control_boundary_envelope(
+        request,
+        action,
+        capability,
+        now_ms,
+        remember_nonce,
+    ) {
+        Ok(envelope) => envelope,
+        Err(reason) => return native_boundary_denial(action, capability, "denied", reason),
+    };
+
+    native_boundary_policy_decision(
+        action,
+        computer_use::evaluate_native_control_command_policy(
+            computer_use::NativeControlCommandPolicy {
+                mode,
+                capability,
+                has_claim_lease: true,
+                tier_enabled: false,
+                envelope: Some(envelope.envelope),
+                now_ms,
+            },
+            permissions,
+            action,
+        ),
+    )
+}
+
+fn emit_native_control_audit(
+    app: &tauri::AppHandle,
+    request: &NativeControlBoundaryProofRequest,
+    decision: &NativeControlBoundaryDecision,
+    event_id: &str,
+    mode: computer_use::DesktopControlMode,
+    permissions: &computer_use::DesktopPermissionReadiness,
+) {
+    let event = DesktopNativeControlAuditEvent {
+        event_id: event_id.to_string(),
+        event_type: "desktop_native_control_denied".to_string(),
+        source: "tauri_local".to_string(),
+        action: decision.action.clone(),
+        capability: decision.capability.clone(),
+        outcome: decision.outcome.to_string(),
+        reason: if decision.reason.is_empty() {
+            None
+        } else {
+            Some(decision.reason.clone())
+        },
+        mode: mode.as_str().to_string(),
+        shell_id: request.shell_id.clone(),
+        desktop_command_id: request.desktop_command_id.clone(),
+        approval_id: request.approval_id.clone(),
+        device_id: request.device_id.clone(),
+        session_id: request.session_id.clone(),
+        created_at_ms: now_unix_ms(),
+        screen_recording_status: permissions.screen_recording.status.clone(),
+        accessibility_status: permissions.accessibility.status.clone(),
+        automation_system_events_status: permissions.automation_system_events.status.clone(),
+    };
+    if let Err(e) = app.emit("desktop-control-audit", &event) {
+        log::warn!(
+            "desktop native-control audit emit failed for {}: {e}",
+            decision.action
+        );
+    }
+    log::warn!(
+        "desktop native-control audit: action={} capability={} outcome={} reason={}",
+        event.action,
+        event.capability,
+        event.outcome,
+        event.reason.as_deref().unwrap_or("")
+    );
+}
+
 pub(crate) fn desktop_control_allows_actuation() -> bool {
     false
 }
@@ -588,6 +982,49 @@ async fn current_control_safety_state() -> ControlSafetyState {
 #[tauri::command]
 async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
     Ok(current_control_safety_state().await)
+}
+
+#[tauri::command]
+async fn control_prove_native_command_boundary(
+    app: tauri::AppHandle,
+    request: NativeControlBoundaryProofRequest,
+) -> Result<NativeControlBoundaryProofResult, String> {
+    let mode = current_desktop_control_mode();
+    let permissions = computer_use::current_permission_readiness();
+    let audit_event_id = uuid::Uuid::new_v4().to_string();
+    let decision = evaluate_native_control_boundary_request(
+        &request,
+        mode,
+        &permissions,
+        now_unix_ms(),
+        remember_native_boundary_nonce,
+    );
+
+    emit_native_control_audit(
+        &app,
+        &request,
+        &decision,
+        &audit_event_id,
+        mode,
+        &permissions,
+    );
+
+    Ok(NativeControlBoundaryProofResult {
+        allowed: decision.allowed,
+        outcome: decision.outcome.to_string(),
+        reason: if decision.reason.is_empty() {
+            format!(
+                "desktop native control disabled; {} denied",
+                decision.action
+            )
+        } else {
+            decision.reason
+        },
+        action: decision.action,
+        capability: decision.capability,
+        audit_event_id,
+        mode: mode.as_str().to_string(),
+    })
 }
 
 #[tauri::command]
@@ -671,6 +1108,17 @@ async fn control_clear_stop(app: tauri::AppHandle) -> Result<ControlSafetyState,
         CAPTURE_RUNNING.store(false, Ordering::SeqCst);
         persist_stop_latch(&app, false, 0);
     }
+    let state = current_control_safety_state().await;
+    let _ = app.emit("control-safety-changed", state.clone());
+    Ok(state)
+}
+
+#[tauri::command]
+async fn control_open_permission_setup(
+    app: tauri::AppHandle,
+    permission: String,
+) -> Result<ControlSafetyState, String> {
+    computer_use::permissions::open_permission_setup(&permission)?;
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
@@ -1696,10 +2144,12 @@ pub fn run() {
             alpha_kernel_status,
             get_or_create_shell_id,
             control_get_safety_state,
+            control_prove_native_command_boundary,
             control_observe_status,
             control_stop_all,
             control_lock_all,
             control_clear_stop,
+            control_open_permission_setup,
             capture_screenshot,
             get_active_app,
             read_clipboard,
@@ -1768,6 +2218,238 @@ mod tests {
         );
 
         CONTROL_MODE.store(CONTROL_MODE_LOCKED, Ordering::SeqCst);
+    }
+
+    fn native_boundary_permissions() -> computer_use::DesktopPermissionReadiness {
+        use crate::computer_use::permissions::{
+            DesktopPermissionReadiness, PermissionAppIdentity, PermissionProbe,
+        };
+
+        DesktopPermissionReadiness {
+            app_identity: PermissionAppIdentity {
+                bundle_id: Some("com.agentprovision.luna.test".to_string()),
+                executable_path: None,
+                app_bundle_path: None,
+                code_signature_identifier: None,
+                code_signature_team_identifier: None,
+                code_signature_kind: None,
+                permission_scope_note: "test identity".to_string(),
+            },
+            screen_recording: PermissionProbe::granted(&["test"], "granted"),
+            accessibility: PermissionProbe::granted(&["test"], "granted"),
+            automation_system_events: PermissionProbe::granted(&["test"], "granted"),
+            input_monitoring: PermissionProbe::not_required(&["test"], "not required"),
+            camera: PermissionProbe::unknown(&["test"], "deferred"),
+            microphone: PermissionProbe::unknown(&["test"], "deferred"),
+        }
+    }
+
+    fn native_boundary_request(action: &str, nonce: &str) -> NativeControlBoundaryProofRequest {
+        let capability = match action {
+            "pointer_move" | "pointer_click" => "pointer_control",
+            "keyboard_type" | "keyboard_key_chord" => "keyboard_control",
+            _ => "unknown",
+        };
+        NativeControlBoundaryProofRequest {
+            desktop_command_id: Some("99999999-9999-9999-9999-999999999999".to_string()),
+            shell_id: Some("desktop-44444444-4444-4444-4444-444444444444".to_string()),
+            session_id: Some("33333333-3333-3333-3333-333333333333".to_string()),
+            device_id: Some("88888888-8888-8888-8888-888888888888".to_string()),
+            action: action.to_string(),
+            capability: Some(capability.to_string()),
+            approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
+            command_envelope: Some(NativeControlBoundaryEnvelope {
+                schema: Some(DESKTOP_COMMAND_ENVELOPE_SCHEMA.to_string()),
+                signed: Some(true),
+                signature_alg: Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG.to_string()),
+                signature: Some("valid-test-signature".to_string()),
+                policy_version: Some(computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION),
+                issuer: Some(DESKTOP_COMMAND_ENVELOPE_ISSUER.to_string()),
+                nonce: Some(nonce.to_string()),
+                expires_at_ms: Some(2_000),
+                desktop_command_id: Some("99999999-9999-9999-9999-999999999999".to_string()),
+                shell_id: Some("desktop-44444444-4444-4444-4444-444444444444".to_string()),
+                session_id: Some("33333333-3333-3333-3333-333333333333".to_string()),
+                device_id: Some("88888888-8888-8888-8888-888888888888".to_string()),
+                action: Some(action.to_string()),
+                capability: Some(capability.to_string()),
+                approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
+                approval_risk_tier: Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL.to_string()),
+                risk_tier: Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL.to_string()),
+                policy_decision: Some(DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED.to_string()),
+                revoked: Some(false),
+                replayed: Some(false),
+            }),
+            approval: Some(NativeControlBoundaryApproval {
+                approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
+                risk_tier: Some(DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL.to_string()),
+                capability: Some(capability.to_string()),
+                expires_at_ms: Some(2_000),
+                revoked: Some(false),
+            }),
+        }
+    }
+
+    fn native_boundary_decision(
+        request: &NativeControlBoundaryProofRequest,
+    ) -> NativeControlBoundaryDecision {
+        let permissions = native_boundary_permissions();
+        evaluate_native_control_boundary_request(
+            request,
+            computer_use::DesktopControlMode::ControlLocked,
+            &permissions,
+            1_000,
+            |_, _, _| true,
+        )
+    }
+
+    #[test]
+    fn native_boundary_rejects_missing_and_malformed_envelopes() {
+        let mut missing = native_boundary_request("pointer_click", "missing-envelope");
+        missing.command_envelope = None;
+        let decision = native_boundary_decision(&missing);
+        assert!(!decision.allowed);
+        assert!(decision.reason.contains("desktop command envelope missing"));
+
+        let mut malformed = native_boundary_request("pointer_click", "malformed-envelope");
+        malformed
+            .command_envelope
+            .as_mut()
+            .expect("envelope")
+            .signature = Some("".to_string());
+        let decision = native_boundary_decision(&malformed);
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop command envelope signature invalid"));
+    }
+
+    #[test]
+    fn native_boundary_rejects_expired_and_revoked_approvals() {
+        let mut expired = native_boundary_request("keyboard_type", "expired-envelope");
+        expired
+            .command_envelope
+            .as_mut()
+            .expect("envelope")
+            .expires_at_ms = Some(1_000);
+        let decision = native_boundary_decision(&expired);
+        assert!(!decision.allowed);
+        assert!(decision.reason.contains("desktop command envelope expired"));
+
+        let mut revoked = native_boundary_request("keyboard_type", "revoked-envelope");
+        revoked.approval.as_mut().expect("approval").revoked = Some(true);
+        let decision = native_boundary_decision(&revoked);
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop command approval grant revoked"));
+    }
+
+    #[test]
+    fn native_boundary_rejects_wrong_command_session_and_device_bindings() {
+        let cases: Vec<(
+            &str,
+            Box<dyn FnOnce(&mut NativeControlBoundaryProofRequest)>,
+        )> = vec![
+            (
+                "wrong-command",
+                Box::new(|request| {
+                    request
+                        .command_envelope
+                        .as_mut()
+                        .expect("envelope")
+                        .desktop_command_id =
+                        Some("99999999-9999-9999-9999-999999999998".to_string());
+                }),
+            ),
+            (
+                "wrong-shell",
+                Box::new(|request| {
+                    request
+                        .command_envelope
+                        .as_mut()
+                        .expect("envelope")
+                        .shell_id =
+                        Some("desktop-55555555-5555-5555-5555-555555555555".to_string());
+                }),
+            ),
+            (
+                "wrong-session",
+                Box::new(|request| {
+                    request
+                        .command_envelope
+                        .as_mut()
+                        .expect("envelope")
+                        .session_id = Some("33333333-3333-3333-3333-333333333334".to_string());
+                }),
+            ),
+            (
+                "wrong-device",
+                Box::new(|request| {
+                    request
+                        .command_envelope
+                        .as_mut()
+                        .expect("envelope")
+                        .device_id = Some("88888888-8888-8888-8888-888888888887".to_string());
+                }),
+            ),
+        ];
+
+        for (nonce, mutate) in cases {
+            let mut request = native_boundary_request("pointer_click", nonce);
+            mutate(&mut request);
+            let decision = native_boundary_decision(&request);
+            assert!(!decision.allowed);
+            assert!(
+                decision
+                    .reason
+                    .contains("desktop command envelope binding mismatch"),
+                "case {nonce} got {}",
+                decision.reason
+            );
+        }
+    }
+
+    #[test]
+    fn native_boundary_rejects_replayed_envelope_nonces() {
+        let permissions = native_boundary_permissions();
+        let mut seen = std::collections::HashSet::new();
+        let request = native_boundary_request("pointer_click", "replayed-envelope");
+
+        let first = evaluate_native_control_boundary_request(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            &permissions,
+            1_000,
+            |nonce, _, _| seen.insert(nonce.to_string()),
+        );
+        assert!(!first.allowed);
+        assert!(first
+            .reason
+            .contains("desktop native control tier disabled"));
+
+        let replayed = evaluate_native_control_boundary_request(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            &permissions,
+            1_000,
+            |nonce, _, _| seen.insert(nonce.to_string()),
+        );
+        assert!(!replayed.allowed);
+        assert!(replayed
+            .reason
+            .contains("desktop command envelope replayed"));
+    }
+
+    #[test]
+    fn native_boundary_still_denies_valid_native_claims_before_actuation() {
+        let request = native_boundary_request("pointer_click", "valid-but-disabled");
+        let decision = native_boundary_decision(&request);
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop native control tier disabled"));
+        assert_eq!(decision.capability, "pointer_control");
     }
 
     #[test]
@@ -1972,13 +2654,13 @@ mod tests {
         assert_eq!(event["from_app"], "Terminal");
         assert_eq!(event["to_app"], "Luna");
         assert_eq!(event["detail_level"], "metadata_only");
-        assert_eq!(
-            event["schema"],
-            "agentprovision.macos_app_monitor_event.v1"
-        );
+        assert_eq!(event["schema"], "agentprovision.macos_app_monitor_event.v1");
         assert!(uuid::Uuid::parse_str(event["event_id"].as_str().unwrap()).is_ok());
         assert_eq!(event["observed_at_ms"], 12345000);
-        assert!(event["active_context_id"].as_str().unwrap().starts_with("Luna:"));
+        assert!(event["active_context_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("Luna:"));
         assert_eq!(event["window_title_present"], true);
         assert_eq!(event["window_title_chars"], 24);
         assert!(event.get("window_title").is_none());

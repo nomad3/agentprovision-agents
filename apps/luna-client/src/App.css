@@ -509,30 +509,113 @@
   color: var(--color-text);
 }
 
+.control-permissions-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 96px 16px 24px;
+  background: rgba(5,10,18,0.62);
+  z-index: 2600;
+}
+
 .control-permissions {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
+  display: grid;
+  gap: 10px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 128px));
+  padding: 14px;
+  border: 1px solid rgba(130,160,204,0.48);
+  border-radius: 8px;
+  background: #0d1624;
+  box-shadow: 0 22px 54px rgba(0,0,0,0.64);
+  overflow: auto;
+}
+
+.control-permissions-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(130,160,204,0.24);
+}
+
+.control-permissions-title {
+  color: #f2f7ff;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.control-permissions-summary {
+  color: #c3d1ef;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.control-permissions-close {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(130,160,204,0.38);
+  border-radius: 6px;
+  background: #162234;
+  color: #f2f7ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.control-permissions-close:hover {
+  border-color: rgba(130,160,204,0.64);
+  background: #1d2c42;
+}
+
+.control-permissions-identity {
   display: grid;
   gap: 4px;
-  width: min(340px, calc(100vw - 24px));
-  padding: 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-bg);
-  box-shadow: 0 12px 32px rgba(0,0,0,0.32);
-  z-index: 2300;
+  padding: 10px 12px;
+  border: 1px solid rgba(250,204,21,0.38);
+  border-radius: 7px;
+  background: #1b2432;
+  color: #f6f9ff;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.control-permissions-identity-title {
+  color: #ffe28a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.control-permissions-identity-line,
+.control-permissions-identity-note {
+  overflow-wrap: anywhere;
+}
+
+.control-permissions-identity-line {
+  color: #dbe7f8;
+}
+
+.control-permissions-identity-note {
+  color: #ffdf9b;
+}
+
+.control-permissions-list {
+  display: grid;
+  gap: 8px;
 }
 
 .control-permission {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 34px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  background: rgba(255,255,255,0.04);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  min-height: 54px;
+  padding: 10px 12px;
+  border: 1px solid rgba(130,160,204,0.24);
+  border-radius: 7px;
+  background: #162234;
   font-size: 12px;
 }
 
@@ -549,27 +632,58 @@
 }
 
 .control-permission-name {
-  color: var(--color-text);
+  color: #f2f7ff;
   font-weight: 700;
 }
 
 .control-permission-status {
-  color: var(--color-text-muted);
+  color: #d7e2f5;
   font-weight: 700;
   text-align: right;
   white-space: nowrap;
 }
 
+.control-permission-side {
+  display: grid;
+  justify-items: end;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.control-permission-action {
+  min-width: 76px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(99,210,151,0.74);
+  border-radius: 6px;
+  background: rgba(99,210,151,0.24);
+  color: #d8ffe8;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 26px;
+  cursor: pointer;
+}
+
+.control-permission-action:hover:not(:disabled) {
+  border-color: rgba(99,210,151,0.72);
+  background: rgba(99,210,151,0.26);
+}
+
+.control-permission-action:disabled {
+  opacity: 0.62;
+  cursor: default;
+}
+
 .control-permission-detail {
-  color: var(--color-text-muted);
+  color: #b7c7df;
   font-size: 11px;
   line-height: 1.25;
 }
 
 .control-permission-granted .control-permission-status,
-.control-permission-not_required .control-permission-status { color: #63d297; }
-.control-permission-denied .control-permission-status { color: #ffb0b0; }
-.control-permission-unknown .control-permission-status { color: #a7b4d4; }
+.control-permission-not_required .control-permission-status { color: #7ce0aa; }
+.control-permission-denied .control-permission-status { color: #ffbfc2; }
+.control-permission-unknown .control-permission-status { color: #c3d1ef; }
 
 .luna-floating-safety {
   position: fixed;
