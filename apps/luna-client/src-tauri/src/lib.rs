@@ -759,8 +759,7 @@ fn write_canonical_json_string(value: &str, output: &mut String) {
                 let scalar = character as u32 - 0x1_0000;
                 let high = 0xd800 + (scalar >> 10);
                 let low = 0xdc00 + (scalar & 0x3ff);
-                write!(output, "\\u{high:04x}\\u{low:04x}")
-                    .expect("writing to string cannot fail");
+                write!(output, "\\u{high:04x}\\u{low:04x}").expect("writing to string cannot fail");
             }
         }
     }
@@ -2425,6 +2424,33 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use pretty_assertions::assert_eq;
 
+    static DESKTOP_COMMAND_ENVELOPE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvVarRestore {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvVarRestore {
+        fn set(key: &'static str, value: Option<&str>) -> Self {
+            let previous = std::env::var(key).ok();
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarRestore {
+        fn drop(&mut self) {
+            match self.previous.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
     // ── desktop control safety ─────────────────────────────────────────────
     #[test]
     fn stopped_control_mode_blocks_control_entrypoints() {
@@ -2667,6 +2693,60 @@ mod tests {
             )
             .expect_err("malformed registry fails closed"),
             "desktop command envelope key registry invalid"
+        );
+    }
+
+    #[test]
+    fn native_boundary_verifies_versioned_key_id_through_registry_config() {
+        let _env_lock = DESKTOP_COMMAND_ENVELOPE_ENV_LOCK
+            .lock()
+            .expect("desktop command envelope env lock");
+        let _registry_restore =
+            EnvVarRestore::set("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS", None);
+        let _default_restore =
+            EnvVarRestore::set("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY", None);
+
+        let key_id = "agentprovision-desktop-command-ed25519-2026-06";
+        let signing_key = SigningKey::from_bytes(&[11u8; 32]);
+        let wrong_signing_key = SigningKey::from_bytes(&[12u8; 32]);
+        let mut request = native_boundary_request("pointer_click", "ed25519-registry-key");
+        native_boundary_envelope_mut(&mut request)
+            .insert("key_id".to_string(), serde_json::json!(key_id));
+        let public_key = sign_native_boundary_envelope_for_test(&mut request, &signing_key);
+        let wrong_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(wrong_signing_key.verifying_key().to_bytes());
+        std::env::set_var(
+            "LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS",
+            format!(
+                "{default}={wrong};{key_id}={public}",
+                default = DESKTOP_COMMAND_ENVELOPE_DEFAULT_KEY_ID,
+                wrong = wrong_public_key,
+                public = public_key,
+            ),
+        );
+
+        let envelope = request.command_envelope.as_ref().expect("envelope");
+        assert!(verify_native_control_boundary_envelope_signature(envelope).is_ok());
+
+        let mut unknown = request.clone();
+        native_boundary_envelope_mut(&mut unknown)
+            .insert("key_id".to_string(), serde_json::json!("unknown-key"));
+        assert_eq!(
+            verify_native_control_boundary_envelope_signature(
+                unknown.command_envelope.as_ref().expect("unknown envelope"),
+            )
+            .expect_err("unknown key fails closed"),
+            "desktop command envelope key unknown",
+        );
+
+        std::env::set_var(
+            "LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS",
+            format!("{key_id}={wrong_public_key}"),
+        );
+        assert_eq!(
+            verify_native_control_boundary_envelope_signature(envelope)
+                .expect_err("wrong key fails closed"),
+            "desktop command envelope signature invalid",
         );
     }
 
