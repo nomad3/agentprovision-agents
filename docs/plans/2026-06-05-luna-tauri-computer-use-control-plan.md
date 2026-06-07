@@ -1100,7 +1100,23 @@ Additional discovery inputs:
     the mocked permission state replaced the initial `TCC --`; commit
     `8d809b5f` changed the assertion to wait for the permission summary. Local
     targeted validation for that fix passed:
-    `npm test -- ControlSafetyStrip.test.jsx --run`.
+    `npm test -- ControlSafetyStrip.test.jsx --run`. Claude Code Desktop
+    Superpowers ultrareview later found no blocker/high issues, but raised two
+    mediums before key ids become load-bearing: empty Ed25519 key ids should
+    deny through an audited path instead of surfacing an uncaught claim-time
+    `RuntimeError`, and the Tauri registry verifier needed an end-to-end
+    composed test for a versioned key id. Commit `c5bb7f49` closes both:
+    API claim now preflights Ed25519 signing config and terminalizes bad
+    configuration with a display-safe denial audit, while Luna Tauri verifies a
+    signed versioned-key envelope through the configured registry and proves
+    unknown ids plus wrong-key signatures fail closed. Fresh stacked validation
+    passed `ruff check app/services/desktop_control_service.py
+    tests/api/v1/test_desktop_command_lifecycle.py`, `pytest
+    tests/api/v1/test_desktop_command_lifecycle.py -q`, `cargo fmt --check`,
+    `cargo check`, `cargo test`, `npm test -- ControlSafetyStrip.test.jsx
+    --run`, and `git diff --check`. Luna Supervisor's Alpha Chat re-review
+    cleared PR #818 to merge and cleared PR #820 as the next draft slice after
+    #818 lands; native actuation remains disabled.
 
 ---
 
