@@ -187,8 +187,11 @@ pub async fn stream_chat_job_events(
     from_seq: u64,
 ) -> Result<impl Stream<Item = Result<ChatJobStreamEvent>>> {
     let path = format!("/api/v1/chat/jobs/{job_id}/events");
+    // Use the dedicated no-total-timeout stream client: the unary 180s timeout
+    // bounds a bytes_stream body (A0, tests/stream_timeout_spike.rs), which would
+    // kill a long agent turn's event stream mid-flight. PR-A1.
     let req = client
-        .request(reqwest::Method::GET, &path)?
+        .stream_request(reqwest::Method::GET, &path)?
         .header("Accept", "text/event-stream")
         .query(&[("from_seq", from_seq.to_string())]);
     let resp = req.send().await?;

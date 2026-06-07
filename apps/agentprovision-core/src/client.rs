@@ -69,9 +69,26 @@ fn preview_body(bytes: &[u8]) -> String {
 /// the CLI then keeps the existing refresh token in place.
 pub type RefreshPersistFn = dyn Fn(&str, Option<&str>) + Send + Sync;
 
+/// Build the dedicated SSE/streaming reqwest client: same user-agent as the
+/// unary client but with **no total `.timeout()`**. A0
+/// (`tests/stream_timeout_spike.rs`) proved reqwest's client-level total timeout
+/// bounds a `bytes_stream` body, which would kill long Luna/alpha agent turns
+/// mid-stream. Long-running job-event SSE rides this client; liveness is handled
+/// by the caller's reconnect loop + the server's terminal/timeout frames rather
+/// than a hard total cap. Exposed `pub` so focused tests can cover it directly.
+pub fn build_stream_client() -> Result<Client> {
+    Ok(Client::builder()
+        .user_agent(concat!("agentprovision-core/", env!("CARGO_PKG_VERSION")))
+        .build()?)
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     inner: Client,
+    /// Dedicated SSE/streaming client with NO total timeout (see
+    /// [`build_stream_client`]). reqwest's client-level `.timeout()` bounds a
+    /// streamed `bytes_stream` body (A0), so SSE endpoints ride this client.
+    stream_inner: Client,
     base: Url,
     token: Arc<StdMutex<Option<String>>>,
     tenant_id: Arc<StdMutex<Option<String>>>,
@@ -98,14 +115,18 @@ impl ApiClient {
     pub fn new(base_url: &str) -> Result<Self> {
         let base = Url::parse(base_url)?;
         let inner = Client::builder()
-            // Chat turns can run >60s (agent router → Temporal → MCP → LLM).
-            // The streaming SSE endpoints aren't bounded by this timeout
-            // because they consume `bytes_stream`, which is fine.
+            // Unary JSON requests get a bounded 180s total timeout. NOTE: this
+            // total timeout DOES bound a streamed `bytes_stream` body too (proven
+            // by tests/stream_timeout_spike.rs - A0), so SSE/streaming endpoints
+            // must NOT use this client; they use `stream_inner` (no total timeout)
+            // via `stream_request()`.
             .timeout(Duration::from_secs(180))
             .user_agent(concat!("agentprovision-core/", env!("CARGO_PKG_VERSION")))
             .build()?;
+        let stream_inner = build_stream_client()?;
         Ok(Self {
             inner,
+            stream_inner,
             base,
             token: Arc::new(StdMutex::new(None)),
             tenant_id: Arc::new(StdMutex::new(None)),
@@ -213,6 +234,19 @@ impl ApiClient {
     pub fn request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
         let url = self.build_url(path)?;
         let req = self.inner.request(method, url).headers(self.auth_headers());
+        Ok(req)
+    }
+
+    /// Like [`request`](Self::request), but on the dedicated no-total-timeout
+    /// streaming client ([`build_stream_client`]) for SSE endpoints such as
+    /// `/chat/jobs/{id}/events`. Carries the same auth/tenant/device headers, so
+    /// a long agent turn's event stream is not cut at the unary 180s timeout.
+    pub fn stream_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
+        let url = self.build_url(path)?;
+        let req = self
+            .stream_inner
+            .request(method, url)
+            .headers(self.auth_headers());
         Ok(req)
     }
 
