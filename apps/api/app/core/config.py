@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     JWT_USER_SECRET: str | None = None
     JWT_AGENT_TOKEN_SECRET: str | None = None
     JWT_OAUTH_STATE_SECRET: str | None = None
+    # Desktop command envelopes default to the existing HMAC contract so current
+    # clients keep working. Set DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519
+    # and provide a base64url/hex 32-byte private key to issue envelopes that
+    # Luna can verify locally with only the matching public key.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: str = "HMAC-SHA256"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: str | None = None
     # 24 hours. Long-running clients (Luna desktop) call /auth/refresh
     # proactively 5 minutes before expiry to avoid mid-session logouts.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
