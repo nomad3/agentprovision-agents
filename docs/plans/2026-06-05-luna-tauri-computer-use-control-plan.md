@@ -983,6 +983,56 @@ Additional discovery inputs:
     and operator-visible grounding state. The next native-control work should
     align with the grounded plan's sequence: measure/trace first, enforce next,
     and only then consider canary actuation.
+91. PR #816 signed smoke artifact validation on branch head `e2e652d5`
+    completed with CI run `27077213653`. The branch Tests run `27077174348`
+    passed, and Luna Client Tauri Build signed version `0.1.105` with Developer
+    ID team `KF9LPYY7KK`, then uploaded artifact `7459146318`. Apple's notary
+    service kept submission `c94a2cab-b871-456a-bf95-6adc0c60f131`
+    `In Progress` for the full 1800-second poll, so the workflow intentionally
+    emitted signed un-stapled smoke artifacts only: `Verify signing,
+    notarization, and stapled DMG`, updater manifest generation, release
+    publication, and `luna-latest` publication were skipped. Local smoke
+    installed the uploaded DMG into `/Applications/Luna.app` after checksum
+    verification; the installed bundle is `com.agentprovision.luna` version
+    `0.1.105`, CDHash `d7af69145fc45eb6c17a76480f220a26c1b7b0a8`, signed by
+    `Developer ID Application: Simon Aguilera (KF9LPYY7KK)`. Expected pending
+    notary state was confirmed: `stapler validate` reports no ticket and
+    `spctl` rejects as `Unnotarized Developer ID`. Computer Use verified the
+    smoke build launches authenticated, opens expanded at `0,34 1496x933`,
+    reports running identity `com.agentprovision.luna | team KF9LPYY7KK`, shows
+    Screen/AX granted, resolves Events granted after Stop, reaches `TCC 4/4`,
+    and preserves the safe flow `Stopped -> Control Locked -> Observe Alpha OK
+    Mac Ready -> Stopped` with Assist/Control disabled and no pointer/keyboard
+    actuation. Luna's exact Docker `_work` mount gate returned no output. This
+    validates the signed smoke artifact and local TCC/safety behavior, but it
+    does NOT close the signed/notarized release gate; that remains blocked on an
+    Accepted/stapled run and first updater/release publication.
+92. Luna Supervisor reviewed the entry-91 packet in Alpha Chat from the
+    installed signed smoke build. She fetched
+    `origin/codex/luna-native-boundary-proof` and verified remote head
+    `e2e652d5b27349b11e12132028c33206e3735f0e`. Her blocker-focused result:
+    PR #816 is acceptable to keep PR-ready/review-ready as the native-boundary
+    proof slice, with the notarized-release gate still open. She found no
+    code-level proof-boundary blocker: `control_prove_native_command_boundary`
+    exists and is proof/audit-only; pointer/keyboard Tauri commands still route
+    to denial-only policy; `desktop_control_allows_actuation()` remains hard
+    false; `tier_enabled=false` still blocks native control after a
+    valid-looking claim; the Stop truth issue appears fixed by `Stopping`
+    pending state plus native/refreshed `Stopped`; Rust rejects missing,
+    malformed, expired, replayed, revoked, wrong-binding approval/envelope
+    cases; and the React claim path does not invoke `control_pointer_*` or
+    `control_keyboard_*` for native-control claims. Her exact remaining blocker
+    is release-only: do not call the work release-complete until notarization,
+    stapling, updater/release artifact verification, local install smoke, and
+    `spctl` pass. She also called out the known proof-slice caveat as
+    acceptable only while explicit in the PR: Rust validates envelope metadata,
+    signature presence, replay, revocation, and bindings, but does not yet
+    perform cryptographic public-key verification.
+93. PR #816 body was updated with the native-boundary proof scope, signed smoke
+    artifact validation, explicit non-cryptographic verifier caveat, and the
+    pending notarized-release gate. After Luna's entry-92 review result, PR #816
+    was marked ready for review. It is not merged and must not be treated as
+    release-complete until the accepted/stapled release path passes.
 
 ---
 
@@ -2445,6 +2495,24 @@ Exit criteria:
       TCC-scope note, Screen/AX `Enable`, Camera/Mic `Open`, no Assist/Control
       enablement, and correct routing to Screen & System Audio Recording,
       Accessibility, Camera, and Microphone settings panes.
+- [x] PR #816 signed smoke artifact install: run `27077213653` uploaded
+      artifact `7459146318`; checksum verified; installed `/Applications/Luna.app`
+      version `0.1.105` with Developer ID team `KF9LPYY7KK` and CDHash
+      `d7af69145fc45eb6c17a76480f220a26c1b7b0a8`; Computer Use verified
+      authenticated expanded startup, TCC `4/4`, `Stopped -> Control Locked ->
+      Observe -> Stopped`, Assist/Control disabled, and no pointer/keyboard
+      actuation; Docker `_work` mount gate returned no output.
+- [x] PR #816 Luna lead review after signed smoke install: Luna Supervisor
+      verified remote head `e2e652d5` and accepted the branch as PR-ready/
+      review-ready for the native-boundary proof slice, with no code-level
+      native-actuation blocker and the notarized-release gate still open.
+- [x] PR #816 body updated with native-boundary proof scope, signed smoke
+      validation, explicit non-cryptographic verifier caveat, and pending
+      notarized-release gate; PR marked ready for review.
+- [ ] PR #816 signed/notarized release gate: rerun Tauri build when Apple
+      notary returns Accepted, then verify stapled DMG/app with `stapler` and
+      `spctl`, install the notarized DMG locally, and validate updater/release
+      publication from the accepted path.
 - [x] PR #816 review gate update: Luna Code Reviewer returned no code-level
       native-control blocker and recommended holding only for signed/notarized
       CI plus first-DMG install/updater validation. Luna Supervisor Alpha Chat
@@ -2526,33 +2594,38 @@ Exit criteria:
 
 ## Next Actions
 
-1. Review the native-boundary proof slice with Luna/council and confirm no new
-   pointer, keyboard, Assist, or Control execution path was introduced.
-2. Exercise the proof command in an installed local branch build once a native
+1. Keep PR #816 review-ready but unmerged until the remaining release gate is
+   cleared or explicitly waived: Luna accepted the proof slice, but the
+   accepted/stapled release path is still open.
+2. Re-run the Luna Tauri Build once Apple's notary queue accepts the app, or
+   after App Store Connect API-key secrets are added, and do not mark the signed
+   release gate complete until the accepted path verifies stapled app+DMG,
+   `spctl`, local install, updater manifest, and release publication.
+3. Exercise the proof command in an installed local branch build once a native
    command claim can be queued safely, and verify `desktop_native_control_denied`
    audit metadata reaches the expected Luna/session surfaces.
-3. Extend the Alpha-kernel adapter beyond readiness:
+4. Extend the Alpha-kernel adapter beyond readiness:
    auth/session handoff, chat-job streaming from `alpha`, cancellation, error
    display, offline behavior, release packaging, and app-monitor event mapping
    into Luna UI.
-4. Add an API/Alpha CLI parity checklist for every Luna-facing platform
+5. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
-5. Add Tauri-side cryptographic command-envelope validation before any pointer
+6. Add Tauri-side cryptographic command-envelope validation before any pointer
    or keyboard execution: public-key/Ed25519 or equivalent local verifier,
    nonce expiry, session, shell, device, command id, policy version, replay
    protection, revocation, and policy-decision binding.
-6. Re-review approval grant creation/consumption with council and Luna after the
+7. Re-review approval grant creation/consumption with council and Luna after the
    local verifier lands, then decide whether a narrow canary pointer execution
    gate can be designed without broad macOS actuation.
-7. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
+8. Keep real pointer, keyboard, clipboard-write, and global macOS actuation
    disabled until signed envelopes, replay defense, approval grant consumption,
    device trust checks, and privacy/TCC boundaries are implemented and reviewed.
-8. Close remaining pre-live-content hardening gaps: disable or display-safe route
+9. Close remaining pre-live-content hardening gaps: disable or display-safe route
    ambient clipboard/activity raw emissions, and add remaining revoked/offline
    regression coverage around Stop and shell reconnect behavior.
-9. Treat the post-deploy `No connected desktop shell` observation as a
+10. Treat the post-deploy `No connected desktop shell` observation as a
    hardening follow-up: Luna should re-register shell presence after API
    restarts or heartbeat failures, not require an app restart.
-10. Include the PR #797 command-palette maximize follow-up in the next branch or
+11. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.
