@@ -152,7 +152,7 @@ describe('ControlSafetyStrip', () => {
 
     expect(await screen.findByRole('button', { name: /^assist$/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /^control$/i })).toBeDisabled();
-    expect(screen.getByText('TCC 1/2')).toBeInTheDocument();
+    expect(await screen.findByText('TCC 1/2')).toBeInTheDocument();
     expect(screen.getByLabelText('Permission readiness TCC 1/2')).toBeInTheDocument();
   });
 
