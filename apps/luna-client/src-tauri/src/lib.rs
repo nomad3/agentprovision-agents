@@ -1130,6 +1130,14 @@ fn evaluate_native_control_boundary_request(
     )
 }
 
+fn boundary_request_with_native_frontmost_bundle(
+    mut request: NativeControlBoundaryProofRequest,
+    live_frontmost_bundle_id: Option<String>,
+) -> NativeControlBoundaryProofRequest {
+    request.live_frontmost_bundle_id = live_frontmost_bundle_id;
+    request
+}
+
 fn emit_native_control_audit(
     app: &tauri::AppHandle,
     request: &NativeControlBoundaryProofRequest,
@@ -1260,6 +1268,8 @@ async fn control_prove_native_command_boundary(
     let mode = current_desktop_control_mode();
     let permissions = computer_use::current_permission_readiness();
     let audit_event_id = uuid::Uuid::new_v4().to_string();
+    let request =
+        boundary_request_with_native_frontmost_bundle(request, frontmost_application_bundle_id());
     let decision = evaluate_native_control_boundary_request(
         &request,
         mode,
@@ -2961,6 +2971,23 @@ mod tests {
 
         assert!(!decision.allowed);
         assert!(decision.reason.contains("active_app_drift"));
+    }
+
+    #[test]
+    fn native_boundary_command_overrides_frontend_supplied_frontmost_bundle() {
+        let mut request = native_boundary_request("pointer_click", "native-frontmost-override");
+        request.live_frontmost_bundle_id = Some("com.example.SpoofedFromFrontend".to_string());
+
+        let request = boundary_request_with_native_frontmost_bundle(
+            request,
+            Some("com.example.LunaCanaryTarget".to_string()),
+        );
+        let decision = native_boundary_decision(&request);
+
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop native control tier disabled"));
     }
 
     #[test]
