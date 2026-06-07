@@ -383,6 +383,7 @@ struct NativeControlBoundaryProofRequest {
     capability: Option<String>,
     approval_id: Option<String>,
     target: Option<NativeControlBoundaryTarget>,
+    live_frontmost_bundle_id: Option<String>,
     command_envelope: Option<serde_json::Value>,
     approval: Option<NativeControlBoundaryApproval>,
 }
@@ -453,6 +454,7 @@ struct NativeControlBoundaryDecision {
 
 struct ValidNativeControlBoundaryEnvelope {
     envelope: computer_use::policy::NativeControlCommandEnvelope,
+    target_bundle_id: String,
 }
 
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA: &str = "agentprovision.desktop_command_envelope.v1";
@@ -1060,6 +1062,7 @@ fn validate_native_control_boundary_envelope(
                 .expect("policy version was checked above"),
             expires_at_ms,
         },
+        target_bundle_id: envelope_target_bundle.to_string(),
     })
 }
 
@@ -1102,6 +1105,13 @@ fn evaluate_native_control_boundary_request(
         Ok(envelope) => envelope,
         Err(reason) => return native_boundary_denial(action, capability, "denied", reason),
     };
+
+    if let Some(denial) = computer_use::denial_codes::frontmost_app_decision(
+        non_empty_text(&request.live_frontmost_bundle_id),
+        &envelope.target_bundle_id,
+    ) {
+        return native_boundary_denial(action, capability, "denied", denial.as_str());
+    }
 
     native_boundary_policy_decision(
         action,
@@ -1381,6 +1391,73 @@ async fn control_open_permission_setup(
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
+}
+
+#[cfg(target_os = "macos")]
+fn frontmost_application_bundle_id() -> Option<String> {
+    use std::ffi::{c_char, c_void, CStr};
+
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+
+    #[link(name = "objc")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+
+    type MsgSendObject = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
+    type MsgSendUtf8String = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const c_char;
+
+    let class = unsafe { objc_getClass(b"NSWorkspace\0".as_ptr().cast()) };
+    let shared_selector = unsafe { sel_registerName(b"sharedWorkspace\0".as_ptr().cast()) };
+    let frontmost_selector = unsafe { sel_registerName(b"frontmostApplication\0".as_ptr().cast()) };
+    let bundle_selector = unsafe { sel_registerName(b"bundleIdentifier\0".as_ptr().cast()) };
+    let utf8_selector = unsafe { sel_registerName(b"UTF8String\0".as_ptr().cast()) };
+    if class.is_null()
+        || shared_selector.is_null()
+        || frontmost_selector.is_null()
+        || bundle_selector.is_null()
+        || utf8_selector.is_null()
+    {
+        return None;
+    }
+
+    let send_object: MsgSendObject = unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    let send_utf8: MsgSendUtf8String = unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    let workspace = unsafe { send_object(class, shared_selector) };
+    if workspace.is_null() {
+        return None;
+    }
+    let app = unsafe { send_object(workspace, frontmost_selector) };
+    if app.is_null() {
+        return None;
+    }
+    let bundle = unsafe { send_object(app, bundle_selector) };
+    if bundle.is_null() {
+        return None;
+    }
+    let ptr = unsafe { send_utf8(bundle, utf8_selector) };
+    if ptr.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .ok()
+        .map(str::trim)
+        .filter(|bundle_id| !bundle_id.is_empty())
+        .map(ToString::to_string)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn frontmost_application_bundle_id() -> Option<String> {
+    None
+}
+
+#[tauri::command]
+async fn control_get_frontmost_app_bundle_id() -> Result<Option<String>, String> {
+    Ok(frontmost_application_bundle_id())
 }
 
 /// Resolve (and create) Luna's Tauri app-data dir for durable safety state.
@@ -2404,6 +2481,7 @@ pub fn run() {
             get_or_create_shell_id,
             control_get_safety_state,
             control_prove_native_command_boundary,
+            control_get_frontmost_app_bundle_id,
             control_observe_status,
             control_stop_all,
             control_lock_all,
@@ -2584,6 +2662,7 @@ mod tests {
                 bounds: None,
                 observed_at: Some("2026-06-07T00:00:00Z".to_string()),
             }),
+            live_frontmost_bundle_id: Some("com.example.LunaCanaryTarget".to_string()),
             command_envelope: Some(command_envelope),
             approval: Some(NativeControlBoundaryApproval {
                 approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
@@ -2860,6 +2939,28 @@ mod tests {
         assert!(tampered_decision
             .reason
             .contains("desktop command envelope signature invalid"));
+    }
+
+    #[test]
+    fn native_boundary_rejects_missing_live_frontmost_bundle() {
+        let mut request = native_boundary_request("pointer_click", "missing-frontmost-bundle");
+        request.live_frontmost_bundle_id = None;
+
+        let decision = native_boundary_decision(&request);
+
+        assert!(!decision.allowed);
+        assert!(decision.reason.contains("active_app_drift"));
+    }
+
+    #[test]
+    fn native_boundary_rejects_mismatched_live_frontmost_bundle() {
+        let mut request = native_boundary_request("keyboard_type", "mismatched-frontmost-bundle");
+        request.live_frontmost_bundle_id = Some("com.example.OtherApp".to_string());
+
+        let decision = native_boundary_decision(&request);
+
+        assert!(!decision.allowed);
+        assert!(decision.reason.contains("active_app_drift"));
     }
 
     #[test]
