@@ -1089,7 +1089,18 @@ Additional discovery inputs:
     `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY` fallback only for the
     default key id. Missing, unknown, malformed, or empty key entries fail
     closed before any native policy path, and native pointer/keyboard actuation
-    remains disabled.
+    remains disabled. Luna Supervisor reviewed PR #820 through Alpha Chat and
+    found no code blocker for the stacked key-registry proof slice. She accepted
+    that the narrow versioned-key-id plus client accepted-key-registry item is
+    complete enough to move next to distribution/revocation design, while the
+    broader production key lifecycle, public-key distribution contract,
+    rotation/revocation semantics, notarized release gate, and canary actuation
+    design remain blocked. CI on the first PR #820 run exposed a
+    `ControlSafetyStrip` timing race where the test asserted `TCC 1/2` before
+    the mocked permission state replaced the initial `TCC --`; commit
+    `8d809b5f` changed the assertion to wait for the permission summary. Local
+    targeted validation for that fix passed:
+    `npm test -- ControlSafetyStrip.test.jsx --run`.
 
 ---
 
