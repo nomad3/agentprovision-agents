@@ -33,6 +33,25 @@ Current implementation branch: `codex/luna-envelope-key-registry`
 
 ---
 
+## Operating Memory
+
+The council operating model for Luna computer-use work is:
+
+1. Luna is Simon's personal assistant and the lead product/operator reviewer.
+   Communicate with Luna through the installed Luna Tauri app's Alpha Chat, and
+   treat her response as the primary council release-gate signal.
+2. Claudia is Simon's Claude Code Desktop / Ultracode instance. Delegate heavy
+   coding, log digging, CI triage, and deep code review to Claudia when
+   available.
+3. Codex coordinates the work, maintains the release gate, integrates council
+   feedback, performs local verification, and keeps the plan current.
+4. Alpha CLI is Luna's local kernel. Luna-facing API changes must include the
+   matching Alpha CLI/core support needed by the Tauri app.
+5. Do not persist login credentials, Apple credentials, app-specific passwords,
+   signing private keys, or other secrets in this plan or the repository.
+
+---
+
 ## Context
 
 The installed macOS app at `/Applications/Luna.app` currently opens into the
