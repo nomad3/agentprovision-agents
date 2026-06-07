@@ -1072,6 +1072,15 @@ Additional discovery inputs:
     tests/api/v1/test_desktop_command_lifecycle.py -q`, `ruff check
     app/services/desktop_control_service.py app/core/config.py
     tests/api/v1/test_desktop_command_lifecycle.py`, and `git diff --check`.
+    Luna Supervisor, Claude Code Desktop Superpowers review, and Codex review
+    all kept the slice blocked until Rust canonicalization matched the API's
+    `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=True)`
+    Ed25519 signing contract. Commits `23aadffe` and `8b08dc5e` fixed the
+    native verifier to remove only top-level `signature`, recursively sort JSON
+    object keys, ASCII-escape non-printable/non-ASCII strings including `U+007F`,
+    and prove signature verification is independent of received JSON key order.
+    Fresh parent-branch validation passed `cargo fmt --check`, `cargo check`,
+    `cargo test`, and `git diff --check`. Native actuation remains disabled.
 
 ---
 
