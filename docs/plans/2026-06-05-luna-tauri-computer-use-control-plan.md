@@ -52,6 +52,86 @@ The council operating model for Luna computer-use work is:
 
 ---
 
+## Parallel Day Workstreams
+
+These workstreams can run in parallel as long as each owner keeps the listed
+boundaries.
+
+### Claudia A: Release And Stack Gate
+
+Primary scope: PR #818/#820 release-gate support.
+
+1. Finish blocker-focused review for PR #818 and PR #820.
+2. Report verdicts and exact gates only; Codex owns merge, retarget, rebase,
+   and release-gate actions unless Simon explicitly delegates them.
+3. Watch GitHub checks for both PRs and flag any new red or stale check state.
+4. Verify the native-control safety invariants stay true: native actuation
+   disabled, `desktop_control_allows_actuation()` hard false, `tier_enabled:
+   false`, HMAC default safe until PR #820 lands, and registry failures closed.
+5. After merge or release activity, help monitor Luna Tauri Build, Docker
+   deployment, and the exact Docker `_work` mount gate.
+
+### Claudia B: Next-Phase Architecture
+
+Primary scope: read-only next-phase readiness. No patches until Codex opens a
+specific implementation slice.
+
+1. Produce the next-phase checklist that starts only after PR #818 lands and PR
+   #820 is retargeted.
+2. Design Ed25519 public-key distribution, key rotation, and revocation.
+3. Define Alpha CLI parity for every Luna-facing API/event shape.
+4. Draft operator runbook items for
+   `DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID`,
+   `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS`, HMAC-to-Ed25519 rollout,
+   signed release validation, and local install validation.
+5. Define the minimum safe canary-actuation gate while keeping real
+   pointer/keyboard disabled until explicit approval.
+6. Identify likely files and test suites for the next implementation PR.
+
+### Computer-Use Pending Work
+
+This can be planned in parallel with the envelope stack, but implementation
+waits for a clear PR boundary and release-gate owner.
+
+1. Screenshot and observation path: verify API/MCP/Tauri request flow and add
+   missing denied, granted, stopped, locked, no-shell, and TCC-state tests.
+2. macOS app/window monitor: define active app/window event schema, display-safe
+   `session_events` mirror rules, and macOS-only scope. Windows remains out of
+   scope.
+3. Permission UX: review TCC popup/modal behavior, stale ad-hoc permission
+   rows, signed app identity display, and `Open Settings` / `Recheck` / `Why
+   needed` affordances.
+4. Stop and Lock safety: verify Stop across relaunch, shell reconnect, API
+   restart, pending command claims, and queued-command cancellation.
+5. Approval lifecycle: design bounded approval grants with expiry, replay
+   defense, wrong-device, wrong-session, wrong-command, revoked, and audit
+   cases.
+6. Canary actuation design: start with no-op proof or an isolated test-app
+   action; require explicit user approval, visible countdown, Stop preemption,
+   TCC ready, signed envelope, and authoritative audit.
+7. Test and validation matrix: cover local dev, CI, installed DMG,
+   signed/notarized DMG, live Docker stack, exact `_work` mount gate, and
+   installed Luna Computer Use smoke steps.
+
+### Alpha CLI Rework
+
+Alpha CLI is Luna's kernel and needs its own agent-friendly rework before it is
+load-bearing for desktop control.
+
+1. Remove brittle fixed request timeouts from agent-facing chat/task flows.
+   Replace them with durable async jobs, resumable polling or streams, explicit
+   cancellation, idempotent retries, and progress/status events.
+2. Make `alpha chat` and related CLI calls safe for long-running agent turns:
+   no Cloudflare/browser request lifetime coupling, no silent hangs, clear
+   timeout classification, and recoverable stream-open failures.
+3. Provide typed CLI/core request and response models for desktop command
+   claims, observation results, permission state, audit events, command
+   completion, and errors.
+4. Ensure Luna Tauri consumes AgentProvision through Alpha CLI/core rather than
+   inventing a separate ad hoc local agent loop.
+
+---
+
 ## Context
 
 The installed macOS app at `/Applications/Luna.app` currently opens into the
@@ -2717,10 +2797,11 @@ Exit criteria:
 3. Exercise the proof command in an installed local branch build once a native
    command claim can be queued safely, and verify `desktop_native_control_denied`
    audit metadata reaches the expected Luna/session surfaces.
-4. Extend the Alpha-kernel adapter beyond readiness:
-   auth/session handoff, chat-job streaming from `alpha`, cancellation, error
-   display, offline behavior, release packaging, and app-monitor event mapping
-   into Luna UI.
+4. Extend and rework the Alpha CLI/kernel path beyond readiness:
+   auth/session handoff, durable async chat jobs, agent-friendly timeout
+   removal, resumable streaming from `alpha`, cancellation, error display,
+   offline behavior, release packaging, app-monitor event mapping into Luna UI,
+   and typed desktop-control request/response models.
 5. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
