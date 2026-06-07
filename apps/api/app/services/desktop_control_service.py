@@ -125,7 +125,6 @@ DESKTOP_COMMAND_ENVELOPE_SCHEMA = "agentprovision.desktop_command_envelope.v1"
 DESKTOP_COMMAND_ENVELOPE_ALGORITHM = "HMAC-SHA256"
 DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM = "Ed25519"
 DESKTOP_COMMAND_ENVELOPE_KEY_ID = "agentprovision-desktop-command-hmac-v1"
-DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID = "agentprovision-desktop-command-ed25519-v1"
 
 
 @dataclass(frozen=True)
@@ -403,6 +402,16 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         "desktop command approval grant replay denied",
     }:
         return normalized
+    for prefix in (
+        "desktop command envelope key unknown",
+        "desktop command envelope key registry invalid",
+        "desktop command envelope public key missing",
+        "desktop command envelope public key invalid",
+    ):
+        if normalized == prefix:
+            return normalized
+        if normalized.startswith(f"{prefix};"):
+            return f"{prefix}; {action} denied"
     if normalized == "desktop command pending ttl expired":
         return normalized
     if normalized in {"operator Stop", "local Stop latched", "desktop control stopped"}:
@@ -965,7 +974,10 @@ def _desktop_command_envelope_algorithm() -> str:
 
 def _desktop_command_envelope_key_id(algorithm: str) -> str:
     if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
-        return DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID
+        key_id = (settings.DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID or "").strip()
+        if not key_id:
+            raise RuntimeError("DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID is required for Ed25519 envelopes")
+        return key_id
     return DESKTOP_COMMAND_ENVELOPE_KEY_ID
 
 

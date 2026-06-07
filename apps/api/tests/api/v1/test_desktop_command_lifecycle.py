@@ -279,6 +279,10 @@ def test_claim_can_issue_ed25519_command_envelope_and_complete(db_session, seede
         desktop_control_service.settings,
         "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
         encoded_private_key,
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID",
+        "agentprovision-desktop-command-ed25519-2026-06",
     ), patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
         return_value=_presence(),
@@ -293,7 +297,7 @@ def test_claim_can_issue_ed25519_command_envelope_and_complete(db_session, seede
 
         envelope = claimed.payload["command_envelope"]
         assert envelope["signature_alg"] == "Ed25519"
-        assert envelope["key_id"] == "agentprovision-desktop-command-ed25519-v1"
+        assert envelope["key_id"] == "agentprovision-desktop-command-ed25519-2026-06"
         assert envelope["signature"]
         assert _verify_envelope_signature(envelope)
         assert not _verify_envelope_signature({**envelope, "action": "read_clipboard"})

@@ -441,7 +441,7 @@ struct ValidNativeControlBoundaryEnvelope {
 
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA: &str = "agentprovision.desktop_command_envelope.v1";
 const DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG: &str = "Ed25519";
-const DESKTOP_COMMAND_ENVELOPE_KEY_ID: &str = "agentprovision-desktop-command-ed25519-v1";
+const DESKTOP_COMMAND_ENVELOPE_DEFAULT_KEY_ID: &str = "agentprovision-desktop-command-ed25519-v1";
 const DESKTOP_COMMAND_ENVELOPE_ISSUER: &str = "agentprovision-api";
 const DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL: &str = "native_control";
 const DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED: &str = "lease_claimed";
@@ -665,7 +665,18 @@ fn decode_envelope_key_material(value: &str) -> Result<Vec<u8>, &'static str> {
         .map_err(|_| "desktop command envelope signature invalid")
 }
 
-fn desktop_command_envelope_public_key_config() -> Option<String> {
+fn desktop_command_envelope_key_registry_config() -> Option<String> {
+    std::env::var("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            option_env!("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS")
+                .map(str::to_string)
+                .filter(|value| !value.trim().is_empty())
+        })
+}
+
+fn desktop_command_envelope_default_public_key_config() -> Option<String> {
     std::env::var("LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -674,6 +685,54 @@ fn desktop_command_envelope_public_key_config() -> Option<String> {
                 .map(str::to_string)
                 .filter(|value| !value.trim().is_empty())
         })
+}
+
+fn public_key_from_desktop_command_envelope_registry(
+    key_id: &str,
+    registry: Option<&str>,
+    default_public_key: Option<&str>,
+) -> Result<String, &'static str> {
+    let key_id = key_id.trim();
+    if key_id.is_empty() {
+        return Err("desktop command envelope key unknown");
+    }
+    if let Some(registry) = registry {
+        for raw_entry in registry.split(|c| matches!(c, ',' | ';' | '\n')) {
+            let entry = raw_entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let Some((entry_key_id, public_key)) = entry.split_once('=') else {
+                return Err("desktop command envelope key registry invalid");
+            };
+            if entry_key_id.trim() == key_id {
+                let public_key = public_key.trim();
+                if public_key.is_empty() {
+                    return Err("desktop command envelope public key invalid");
+                }
+                return Ok(public_key.to_string());
+            }
+        }
+    }
+    if key_id == DESKTOP_COMMAND_ENVELOPE_DEFAULT_KEY_ID {
+        if let Some(public_key) = default_public_key
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(public_key.to_string());
+        }
+    }
+    Err("desktop command envelope key unknown")
+}
+
+fn desktop_command_envelope_public_key_config_for_key_id(
+    key_id: &str,
+) -> Result<String, &'static str> {
+    public_key_from_desktop_command_envelope_registry(
+        key_id,
+        desktop_command_envelope_key_registry_config().as_deref(),
+        desktop_command_envelope_default_public_key_config().as_deref(),
+    )
 }
 
 fn write_canonical_json_string(value: &str, output: &mut String) {
@@ -700,7 +759,8 @@ fn write_canonical_json_string(value: &str, output: &mut String) {
                 let scalar = character as u32 - 0x1_0000;
                 let high = 0xd800 + (scalar >> 10);
                 let low = 0xdc00 + (scalar & 0x3ff);
-                write!(output, "\\u{high:04x}\\u{low:04x}").expect("writing to string cannot fail");
+                write!(output, "\\u{high:04x}\\u{low:04x}")
+                    .expect("writing to string cannot fail");
             }
         }
     }
@@ -761,8 +821,10 @@ fn canonical_envelope_payload_json(
 fn verify_native_control_boundary_envelope_signature(
     envelope_value: &serde_json::Value,
 ) -> Result<(), &'static str> {
-    let public_key = desktop_command_envelope_public_key_config()
-        .ok_or("desktop command envelope public key missing")?;
+    let envelope: NativeControlBoundaryEnvelope = serde_json::from_value(envelope_value.clone())
+        .map_err(|_| "desktop command envelope binding mismatch")?;
+    let key_id = non_empty_text(&envelope.key_id).ok_or("desktop command envelope key unknown")?;
+    let public_key = desktop_command_envelope_public_key_config_for_key_id(key_id)?;
     verify_native_control_boundary_envelope_signature_with_public_key(envelope_value, &public_key)
 }
 
@@ -773,7 +835,7 @@ fn verify_native_control_boundary_envelope_signature_with_public_key(
     let envelope: NativeControlBoundaryEnvelope = serde_json::from_value(envelope_value.clone())
         .map_err(|_| "desktop command envelope binding mismatch")?;
     if envelope.signature_alg.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG)
-        || envelope.key_id.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_KEY_ID)
+        || non_empty_text(&envelope.key_id).is_none()
     {
         return Err("desktop command envelope signature invalid");
     }
@@ -884,7 +946,7 @@ fn validate_native_control_boundary_envelope(
     if envelope.schema.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SCHEMA)
         || envelope.signed != Some(true)
         || envelope.signature_alg.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG)
-        || envelope.key_id.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_KEY_ID)
+        || non_empty_text(&envelope.key_id).is_none()
         || envelope.policy_version
             != Some(computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION)
         || envelope.issuer.as_deref() != Some(DESKTOP_COMMAND_ENVELOPE_ISSUER)
@@ -2424,7 +2486,7 @@ mod tests {
             "schema": DESKTOP_COMMAND_ENVELOPE_SCHEMA,
             "signed": true,
             "signature_alg": DESKTOP_COMMAND_ENVELOPE_SIGNATURE_ALG,
-            "key_id": DESKTOP_COMMAND_ENVELOPE_KEY_ID,
+            "key_id": DESKTOP_COMMAND_ENVELOPE_DEFAULT_KEY_ID,
             "signature": "valid-test-signature",
             "policy_version": computer_use::policy::CURRENT_NATIVE_CONTROL_POLICY_VERSION,
             "issuer": DESKTOP_COMMAND_ENVELOPE_ISSUER,
@@ -2560,6 +2622,52 @@ mod tests {
         assert!(decision
             .reason
             .contains("desktop native control tier disabled"));
+    }
+
+    #[test]
+    fn desktop_command_envelope_key_registry_selects_versioned_keys_and_fallback() {
+        let default_key = "default-public-key";
+        assert_eq!(
+            public_key_from_desktop_command_envelope_registry(
+                DESKTOP_COMMAND_ENVELOPE_DEFAULT_KEY_ID,
+                None,
+                Some(default_key),
+            )
+            .expect("default key fallback"),
+            default_key
+        );
+
+        assert_eq!(
+            public_key_from_desktop_command_envelope_registry(
+                "agentprovision-desktop-command-ed25519-2026-06",
+                Some(
+                    "agentprovision-desktop-command-ed25519-v1=old-key;\
+                     agentprovision-desktop-command-ed25519-2026-06=new-key",
+                ),
+                Some(default_key),
+            )
+            .expect("versioned key"),
+            "new-key"
+        );
+
+        assert_eq!(
+            public_key_from_desktop_command_envelope_registry(
+                "unknown-key",
+                None,
+                Some(default_key)
+            )
+            .expect_err("unknown key fails closed"),
+            "desktop command envelope key unknown"
+        );
+        assert_eq!(
+            public_key_from_desktop_command_envelope_registry(
+                "agentprovision-desktop-command-ed25519-2026-06",
+                Some("malformed-entry"),
+                Some(default_key),
+            )
+            .expect_err("malformed registry fails closed"),
+            "desktop command envelope key registry invalid"
+        );
     }
 
     #[test]

@@ -22,16 +22,14 @@ command-envelope preflight merged and unsigned `luna-v0.1.102` installed
 locally; PR #812 macOS app-monitor event-contract hardening merged and unsigned
 `luna-v0.1.103` installed locally; PR #813 explicit approval-grant
 creation/claim-time CAS consumption merged and unsigned `luna-v0.1.104`
-installed locally. Native actuation remains disabled; the next gated phase is
-Alpha-kernel/native-boundary proof before any pointer or keyboard invoke can
-ship. Current branch adds first-use macOS permission onboarding actions in the
-TCC panel so Luna can guide users to the exact Screen Recording,
-Accessibility, Automation, Camera, and Microphone setup flows needed for
-end-to-end computer-use validation. Developer ID signing is now being
-re-enabled for the release lane with a newly generated Luna signing certificate
-and Tauri updater key.
+installed locally; PR #816 native-boundary proof merged and signed smoke
+`luna-v0.1.105` installed locally; PR #818 adds opt-in Ed25519 envelope
+verification and is ready after Luna/Codex review plus green CI, with Claude
+Code review blocked by a desktop network error. Native actuation remains
+disabled. Current stacked branch adds configurable Ed25519 key ids and a Luna
+accepted-key registry before production key rotation/revocation work.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-native-boundary-proof`
+Current implementation branch: `codex/luna-envelope-key-registry`
 
 ---
 
@@ -1081,6 +1079,17 @@ Additional discovery inputs:
     and prove signature verification is independent of received JSON key order.
     Fresh parent-branch validation passed `cargo fmt --check`, `cargo check`,
     `cargo test`, and `git diff --check`. Native actuation remains disabled.
+95. Branch `codex/luna-envelope-key-registry` is the next stacked Phase 2 slice
+    on top of PR #818. The API now exposes
+    `DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID` so Ed25519 envelope issuers can use
+    versioned key ids instead of a hard-coded client constant. Luna Tauri now
+    supports `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS`, a
+    comma/semicolon/newline-separated accepted-key registry in
+    `key_id=public_key` form, while preserving the legacy
+    `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY` fallback only for the
+    default key id. Missing, unknown, malformed, or empty key entries fail
+    closed before any native policy path, and native pointer/keyboard actuation
+    remains disabled.
 
 ---
 
@@ -1957,6 +1966,10 @@ Goal: add the missing API-to-Tauri path for action envelopes.
 - [ ] Add Ed25519 key lifecycle: key generation during enrollment, public key
       storage in `device_registry`, private key storage in Tauri secure storage,
       and rotation/revocation.
+  - [x] Add configurable API Ed25519 envelope key id plus Luna-side accepted-key
+        registry for versioned public keys. This is distribution plumbing only;
+        generation, secure storage, rotation, revocation, and device-scoped key
+        persistence remain pending.
 - [ ] Bind shell presence to `device_id`, `shell_id`, app version, hostname hash,
       OS username hash, and current capability manifest.
   - [x] Bind Luna shell presence to authenticated `device_id`, `shell_id`, and
@@ -2666,9 +2679,11 @@ Exit criteria:
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
 6. Finish the Ed25519 production key lifecycle before canary actuation:
-   generate/store the API signing key, distribute the pinned Luna public key in
-   release/installer config, rotate/revoke keys, and mirror Helm/GitHub secrets
-   so local proof verification and deployed envelopes use the same trust root.
+   generate/store the API signing key, define the Luna public-key distribution
+   contract, rotate/revoke keys, and mirror Helm/GitHub secrets so local proof
+   verification and deployed envelopes use the same trust root. The current
+   stacked branch only adds versioned key ids and the client accepted-key
+   registry.
 7. Re-review approval grant creation/consumption with council and Luna after the
    local verifier lands, then decide whether a narrow canary pointer execution
    gate can be designed without broad macOS actuation.
