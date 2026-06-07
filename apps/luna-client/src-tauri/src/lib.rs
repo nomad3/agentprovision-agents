@@ -687,7 +687,7 @@ fn write_canonical_json_string(value: &str, output: &mut String) {
             '\n' => output.push_str("\\n"),
             '\r' => output.push_str("\\r"),
             '\t' => output.push_str("\\t"),
-            character if (character as u32) < 0x20 => {
+            character if (character as u32) < 0x20 || character == '\u{7f}' => {
                 write!(output, "\\u{:04x}", character as u32)
                     .expect("writing to string cannot fail");
             }
@@ -2506,7 +2506,7 @@ mod tests {
     #[test]
     fn canonical_envelope_payload_json_matches_api_sorted_ascii_contract() {
         let envelope = serde_json::json!({
-            "z": "ultimo",
+            "z": "ultimo\u{7f}",
             "signature": "ignored",
             "nested": {
                 "b": true,
@@ -2519,7 +2519,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(canonical_envelope_payload_json(&envelope).unwrap()).unwrap(),
-            r#"{"a":1,"accent":"\u00faltimo\n","emoji":"\ud83e\udd16","nested":{"a":null,"b":true},"z":"ultimo"}"#,
+            r#"{"a":1,"accent":"\u00faltimo\n","emoji":"\ud83e\udd16","nested":{"a":null,"b":true},"z":"ultimo\u007f"}"#,
         );
     }
 
