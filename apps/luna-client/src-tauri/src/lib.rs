@@ -1,5 +1,6 @@
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -675,6 +676,75 @@ fn desktop_command_envelope_public_key_config() -> Option<String> {
         })
 }
 
+fn write_canonical_json_string(value: &str, output: &mut String) {
+    output.push('"');
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\u{08}' => output.push_str("\\b"),
+            '\u{0c}' => output.push_str("\\f"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character if (character as u32) < 0x20 => {
+                write!(output, "\\u{:04x}", character as u32)
+                    .expect("writing to string cannot fail");
+            }
+            character if (character as u32) < 0x80 => output.push(character),
+            character if (character as u32) <= 0xffff => {
+                write!(output, "\\u{:04x}", character as u32)
+                    .expect("writing to string cannot fail");
+            }
+            character => {
+                let scalar = character as u32 - 0x1_0000;
+                let high = 0xd800 + (scalar >> 10);
+                let low = 0xdc00 + (scalar & 0x3ff);
+                write!(output, "\\u{high:04x}\\u{low:04x}").expect("writing to string cannot fail");
+            }
+        }
+    }
+    output.push('"');
+}
+
+fn write_canonical_json_value(
+    value: &serde_json::Value,
+    output: &mut String,
+) -> Result<(), &'static str> {
+    match value {
+        serde_json::Value::Null => output.push_str("null"),
+        serde_json::Value::Bool(true) => output.push_str("true"),
+        serde_json::Value::Bool(false) => output.push_str("false"),
+        serde_json::Value::Number(number) => output.push_str(&number.to_string()),
+        serde_json::Value::String(value) => write_canonical_json_string(value, output),
+        serde_json::Value::Array(values) => {
+            output.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_canonical_json_value(value, output)?;
+            }
+            output.push(']');
+        }
+        serde_json::Value::Object(object) => {
+            let mut entries: Vec<_> = object.iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            output.push('{');
+            for (index, (key, value)) in entries.iter().enumerate() {
+                if index > 0 {
+                    output.push(',');
+                }
+                write_canonical_json_string(key, output);
+                output.push(':');
+                write_canonical_json_value(value, output)?;
+            }
+            output.push('}');
+        }
+    }
+    Ok(())
+}
+
 fn canonical_envelope_payload_json(
     envelope_value: &serde_json::Value,
 ) -> Result<Vec<u8>, &'static str> {
@@ -683,7 +753,9 @@ fn canonical_envelope_payload_json(
         return Err("desktop command envelope binding mismatch");
     };
     object.remove("signature");
-    serde_json::to_vec(&payload).map_err(|_| "desktop command envelope binding mismatch")
+    let mut canonical = String::new();
+    write_canonical_json_value(&payload, &mut canonical)?;
+    Ok(canonical.into_bytes())
 }
 
 fn verify_native_control_boundary_envelope_signature(
@@ -2429,6 +2501,65 @@ mod tests {
         );
         base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(signing_key.verifying_key().to_bytes())
+    }
+
+    #[test]
+    fn canonical_envelope_payload_json_matches_api_sorted_ascii_contract() {
+        let envelope = serde_json::json!({
+            "z": "ultimo",
+            "signature": "ignored",
+            "nested": {
+                "b": true,
+                "a": null,
+            },
+            "emoji": "🤖",
+            "accent": "último\n",
+            "a": 1,
+        });
+
+        assert_eq!(
+            String::from_utf8(canonical_envelope_payload_json(&envelope).unwrap()).unwrap(),
+            r#"{"a":1,"accent":"\u00faltimo\n","emoji":"\ud83e\udd16","nested":{"a":null,"b":true},"z":"ultimo"}"#,
+        );
+    }
+
+    #[test]
+    fn native_boundary_ed25519_signature_is_independent_of_json_key_order() {
+        let permissions = native_boundary_permissions();
+        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+        let mut request = native_boundary_request("pointer_click", "ed25519-key-order");
+        let public_key = sign_native_boundary_envelope_for_test(&mut request, &signing_key);
+        let signed_envelope = request.command_envelope.clone().expect("envelope");
+        let mut entries: Vec<_> = signed_envelope
+            .as_object()
+            .expect("envelope object")
+            .iter()
+            .collect();
+        entries.sort_by(|(left, _), (right, _)| right.cmp(left));
+
+        let mut reordered = serde_json::Map::new();
+        for (key, value) in entries {
+            reordered.insert(key.clone(), value.clone());
+        }
+        request.command_envelope = Some(serde_json::Value::Object(reordered));
+
+        let decision = evaluate_native_control_boundary_request(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            &permissions,
+            1_000,
+            |envelope| {
+                verify_native_control_boundary_envelope_signature_with_public_key(
+                    envelope,
+                    &public_key,
+                )
+            },
+            |_, _, _| true,
+        );
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop native control tier disabled"));
     }
 
     #[test]
