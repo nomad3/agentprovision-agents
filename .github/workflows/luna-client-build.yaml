@@ -12,9 +12,14 @@ on:
     inputs:
       notary_timeout_seconds:
         # No default: leaving it empty lets the precedence chain resolve as
-        # input -> vars.LUNA_NOTARY_TIMEOUT_SECONDS -> '1800' (a non-empty
+        # input -> vars.LUNA_NOTARY_TIMEOUT_SECONDS -> '180' (a non-empty
         # default here would always shadow the org/repo variable on dispatch).
-        description: "Max seconds (60-7200) to poll Apple notary before marking the submission pending; signed smoke artifacts still ship, nothing publishes. Blank = repo var or 1800."
+        # Short by design: Apple's 2026 in-depth-analysis holds keep first-party
+        # submissions "In Progress" for 24-72h+ (developer.apple.com/forums/thread/811968),
+        # so a long in-build poll only burns runner time. The build submits,
+        # grace-polls briefly, records the submission id, and ships unstapled
+        # smoke; async finalize/publish is a separate concern (see plan).
+        description: "Max seconds (60-7200) to grace-poll Apple notary before deferring to pending; signed smoke artifacts still ship, nothing publishes. Blank = repo var or 180 (short grace — Apple holds run 24-72h, polling longer in-build is futile)."
         required: false
 
 permissions:
@@ -215,7 +220,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          NOTARY_TIMEOUT_SECONDS: ${{ github.event.inputs.notary_timeout_seconds || vars.LUNA_NOTARY_TIMEOUT_SECONDS || '1800' }}
+          NOTARY_TIMEOUT_SECONDS: ${{ github.event.inputs.notary_timeout_seconds || vars.LUNA_NOTARY_TIMEOUT_SECONDS || '180' }}
         run: |
           set -eo pipefail
 
