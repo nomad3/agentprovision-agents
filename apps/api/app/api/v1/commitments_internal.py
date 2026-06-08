@@ -20,8 +20,12 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.config import settings
-from app.schemas.accountable_learning import ESCALATION_POLICIES, RISK_THRESHOLDS
-from app.services import commitment_service, red_flag_engine
+from app.schemas.accountable_learning import (
+    ESCALATION_POLICIES,
+    RISK_THRESHOLDS,
+    LearningArtifact,
+)
+from app.services import commitment_service, learning_artifact_io, red_flag_engine
 
 router = APIRouter()
 
@@ -153,3 +157,68 @@ def internal_red_flags(
         db, tenant_id, session_id=session_id, min_level=min_level
     )
     return [f.__dict__ for f in flags]
+
+
+class LearningArtifactIn(BaseModel):
+    task_summary: str
+    intended_outcome: str
+    observed_outcome: str
+    outcome_quality: str  # succeeded | partially_succeeded | failed | inconclusive
+    memory_write_recommendation: str  # fact|preference|commitment|pattern|...|none
+    confidence: str = "medium"
+    proof_refs: List[str] = Field(default_factory=list)
+    failed_assumptions: List[str] = Field(default_factory=list)
+    user_corrections: List[str] = Field(default_factory=list)
+    source_refs: List[str] = Field(default_factory=list)
+    reusable_pattern: Optional[str] = None
+    anti_pattern: Optional[str] = None
+    system_update_candidate: Optional[str] = None
+    source_commitment_id: Optional[str] = None
+    source_contract_id: Optional[str] = None
+
+
+@router.post("/learning-artifacts", dependencies=[Depends(_verify_internal_key)])
+def internal_write_learning_artifact(
+    body: LearningArtifactIn,
+    tenant_id: uuid.UUID = Depends(_tenant_id),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    # agent_memory.agent_id is a non-null FK; anchor on the tenant's agent.
+    from app.models.agent import Agent
+    agent = (
+        db.query(Agent)
+        .filter(Agent.tenant_id == tenant_id)
+        .order_by(Agent.id)
+        .first()
+    )
+    if agent is None:
+        raise HTTPException(status_code=422, detail="no agent for tenant")
+    try:
+        artifact = LearningArtifact(
+            tenant_id=str(tenant_id),
+            artifact_id=str(uuid.uuid4()),
+            created_at=datetime.utcnow().isoformat() + "Z",
+            source_refs=body.source_refs,
+            task_summary=body.task_summary,
+            intended_outcome=body.intended_outcome,
+            observed_outcome=body.observed_outcome,
+            outcome_quality=body.outcome_quality,
+            proof_refs=body.proof_refs,
+            failed_assumptions=body.failed_assumptions,
+            user_corrections=body.user_corrections,
+            memory_write_recommendation=body.memory_write_recommendation,
+            confidence=body.confidence,
+            source_commitment_id=body.source_commitment_id,
+            source_contract_id=body.source_contract_id,
+            reusable_pattern=body.reusable_pattern,
+            anti_pattern=body.anti_pattern,
+            system_update_candidate=body.system_update_candidate,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    aid = learning_artifact_io.write_learning_artifact(
+        db, artifact=artifact, agent_id=agent.id, current_tenant_id=tenant_id
+    )
+    if not aid:
+        raise HTTPException(status_code=500, detail="learning artifact write failed")
+    return {"artifact_id": str(aid), "outcome_quality": artifact.outcome_quality}
