@@ -67,6 +67,7 @@ from app.api.v1 import (
     safety,
     goals,
     commitments,
+    commitments_internal,
     learning_artifacts,
     agent_identity,
     world_state,
@@ -268,6 +269,7 @@ router.include_router(safety.router, prefix="/safety", tags=["safety"])
 router.include_router(goals.router, prefix="/goals", tags=["goals"])
 router.include_router(commitments.router, prefix="/commitments", tags=["commitments"])
 router.include_router(learning_artifacts.router, prefix="/learning-artifacts", tags=["learning-artifacts"])
+router.include_router(commitments_internal.router, prefix="/internal", tags=["internal"])
 router.include_router(agent_identity.router, prefix="/agent-identity", tags=["agent-identity"])
 router.include_router(world_state.router, prefix="/world-state", tags=["world-state"])
 router.include_router(memory_admin.router, prefix="/internal/memory", tags=["internal"])
