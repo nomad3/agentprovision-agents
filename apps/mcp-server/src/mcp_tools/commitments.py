@@ -154,3 +154,50 @@ async def commitment_scan_red_flags(
         path += f"&session_id={session_id}"
     flags = await _internal("get", path, tid)
     return {"red_flags": flags} if isinstance(flags, list) else flags
+
+
+@mcp.tool()
+async def learning_artifact_write(
+    task_summary: str,
+    intended_outcome: str,
+    observed_outcome: str,
+    outcome_quality: str,
+    memory_write_recommendation: str = "none",
+    confidence: str = "medium",
+    failed_assumptions: Optional[List[str]] = None,
+    reusable_pattern: Optional[str] = None,
+    proof_refs: Optional[List[str]] = None,
+    source_commitment_id: Optional[str] = None,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Record a distilled learning artifact after a task finishes/fails/corrects.
+
+    Capture what to reuse and what NOT to repeat — not a transcript. Use when a
+    task completed, failed, got corrected, or revealed a bad assumption.
+
+    Args:
+        task_summary: One-line what-happened.
+        intended_outcome / observed_outcome: planned vs actual.
+        outcome_quality: succeeded | partially_succeeded | failed | inconclusive.
+        memory_write_recommendation: fact|preference|commitment|pattern|
+            failed_assumption|business_context|emotional_context|stale_context|none.
+        failed_assumptions: assumptions that caused a correction/risk (reused later).
+        reusable_pattern: a workflow/decision rule worth repeating.
+        source_commitment_id: the commitment this came from, if any.
+        tenant_id: Tenant UUID.
+    """
+    tid = resolve_tenant_id(ctx) or tenant_id
+    body = {
+        "task_summary": task_summary,
+        "intended_outcome": intended_outcome,
+        "observed_outcome": observed_outcome,
+        "outcome_quality": outcome_quality,
+        "memory_write_recommendation": memory_write_recommendation,
+        "confidence": confidence,
+        "failed_assumptions": failed_assumptions or [],
+        "reusable_pattern": reusable_pattern,
+        "proof_refs": proof_refs or [],
+        "source_commitment_id": source_commitment_id,
+    }
+    return await _internal("post", "/api/v1/internal/learning-artifacts", tid, body)
