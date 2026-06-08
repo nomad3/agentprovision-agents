@@ -4,6 +4,7 @@
 //! and feeds the visible safety strip. Pointer and keyboard actuation remain
 //! hard-locked elsewhere until command governance ships.
 
+pub mod actuation_lease;
 pub mod denial_codes;
 pub mod permissions;
 pub mod policy;
