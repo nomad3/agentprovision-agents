@@ -30,6 +30,9 @@ EXPECTED_FRONTMATTER_TOOL_GROUPS = {
     "monitor", "jira", "github", "workflows", "skills", "ecommerce",
     "competitor", "knowledge", "meta", "sales", "web_research",
     "higgsfield", "learning",
+    # Added by the Accountable Learning & Commitment System (migration 165)
+    # so Luna can drive commitments — see test_accountable_learning_luna_tool_group.py.
+    "commitments",
 }
 
 

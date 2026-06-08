@@ -212,6 +212,19 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "submit_learning_feedback",
         "get_simulation_summary",
     ],
+    # Accountable Learning & Commitment System (plan 2026-06-08). The
+    # drive surface that lets Luna be the lead: create/complete commitments
+    # (proof-gated server-side), list open ones, scan red flags, and record
+    # learning artifacts. Tools registered in
+    # apps/mcp-server/src/mcp_tools/commitments.py; backed by the
+    # /api/v1/internal/commitments* + /learning-artifacts internal routes.
+    "commitments": [
+        "commitment_create",
+        "commitment_complete",
+        "commitment_list_open",
+        "commitment_scan_red_flags",
+        "learning_artifact_write",
+    ],
     "desktop_control": [
         "desktop_observe_screen",
         "desktop_get_active_app",
