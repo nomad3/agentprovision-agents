@@ -396,6 +396,12 @@ struct NativeControlBoundaryProofRequest {
     last_native_action_at_ms: Option<u64>,
     #[serde(default)]
     current_actuation_owner_shell_id: Option<String>,
+    // Phase 2.75 target-window TOCTOU input: whether the live focused window /
+    // element still matches the envelope target (title hash / bounds / display
+    // id, compared Rust-side). None until Phase 3 supplies the live reader, so
+    // the gate is inert-but-tested for now. Never trusted from the JS request.
+    #[serde(default)]
+    live_window_matches_target: Option<bool>,
     command_envelope: Option<serde_json::Value>,
     approval: Option<NativeControlBoundaryApproval>,
 }
@@ -1109,6 +1115,18 @@ fn evaluate_native_control_boundary_request(
         return native_boundary_denial(action, capability, "preempted", "desktop control stopped");
     }
 
+    // Phase 2.75: observe-lock — an observe-only lease must never silently
+    // upgrade into control. A native control action while the desktop is locked
+    // to observe is denied before any envelope validation or adapter call.
+    if mode == computer_use::DesktopControlMode::Observe {
+        return native_boundary_denial(
+            action,
+            capability,
+            "denied",
+            computer_use::denial_codes::DenialCode::ObserveLocked.as_str(),
+        );
+    }
+
     let envelope = match validate_native_control_boundary_envelope(
         request,
         action,
@@ -1124,6 +1142,17 @@ fn evaluate_native_control_boundary_request(
     if let Some(denial) = computer_use::denial_codes::frontmost_app_decision(
         non_empty_text(&request.live_frontmost_bundle_id),
         &envelope.target_bundle_id,
+    ) {
+        return native_boundary_denial(action, capability, "denied", denial.as_str());
+    }
+
+    // Phase 2.75: target-window TOCTOU — beyond the frontmost bundle, the live
+    // focused window / element must still match the envelope target (title hash /
+    // bounds / display id, compared Rust-side). A non-match denies as
+    // target_drift before the adapter. (Inert — None resolves to "matches" —
+    // until Phase 3 supplies the live window reader; tested here.)
+    if let Some(denial) = computer_use::denial_codes::target_window_decision(
+        request.live_window_matches_target.unwrap_or(true),
     ) {
         return native_boundary_denial(action, capability, "denied", denial.as_str());
     }
@@ -2825,6 +2854,7 @@ mod tests {
             secure_input_active: None,
             last_native_action_at_ms: None,
             current_actuation_owner_shell_id: None,
+            live_window_matches_target: None,
             command_envelope: Some(command_envelope),
             approval: Some(NativeControlBoundaryApproval {
                 approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
@@ -2850,10 +2880,20 @@ mod tests {
     fn native_boundary_decision(
         request: &NativeControlBoundaryProofRequest,
     ) -> NativeControlBoundaryDecision {
+        native_boundary_decision_with_mode(
+            request,
+            computer_use::DesktopControlMode::ControlLocked,
+        )
+    }
+
+    fn native_boundary_decision_with_mode(
+        request: &NativeControlBoundaryProofRequest,
+        mode: computer_use::DesktopControlMode,
+    ) -> NativeControlBoundaryDecision {
         let permissions = native_boundary_permissions();
         evaluate_native_control_boundary_request(
             request,
-            computer_use::DesktopControlMode::ControlLocked,
+            mode,
             &permissions,
             1_000,
             |_| Ok(()),
@@ -3343,6 +3383,52 @@ mod tests {
             decision.reason.contains("rate_capped"),
             "got {}",
             decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_target_bounds_drift_before_adapter() {
+        // Phase 2.75: beyond the frontmost bundle, if the live focused window /
+        // element no longer matches the envelope target (title hash / bounds /
+        // display id), deny as target_drift before any native call.
+        let mut request = native_boundary_request("pointer_click", "target-bounds-drift");
+        request.live_window_matches_target = Some(false);
+        let decision = native_boundary_decision(&request);
+        assert!(!decision.allowed);
+        assert!(
+            decision.reason.contains("target_drift"),
+            "got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_stop_or_lock_before_adapter() {
+        // Phase 2.75: both an emergency Stop and an observe-Lock (control locked
+        // out) deny a native control action before any adapter call. Each is a
+        // kill-switch checked ahead of envelope validation.
+        let stop_request = native_boundary_request("pointer_click", "stop-preempt-before-adapter");
+        let stop_decision = native_boundary_decision_with_mode(
+            &stop_request,
+            computer_use::DesktopControlMode::Stopped,
+        );
+        assert!(!stop_decision.allowed);
+        assert!(
+            stop_decision.reason.contains("stopped"),
+            "got {}",
+            stop_decision.reason
+        );
+
+        let lock_request = native_boundary_request("pointer_click", "observe-lock-before-adapter");
+        let lock_decision = native_boundary_decision_with_mode(
+            &lock_request,
+            computer_use::DesktopControlMode::Observe,
+        );
+        assert!(!lock_decision.allowed);
+        assert!(
+            lock_decision.reason.contains("observe_locked"),
+            "got {}",
+            lock_decision.reason
         );
     }
 
