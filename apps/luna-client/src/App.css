@@ -685,6 +685,108 @@
 .control-permission-denied .control-permission-status { color: #ffbfc2; }
 .control-permission-unknown .control-permission-status { color: #c3d1ef; }
 
+/* Codex-style Mac permissions modal: higher contrast + status cards. */
+.control-permissions-backdrop { background: rgba(3,7,14,0.78); }
+.control-permissions {
+  border-color: rgba(150,178,220,0.62);
+  background: #0b1320;
+}
+.control-permissions-header {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+.control-permissions-recheck {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(120,180,255,0.62);
+  border-radius: 6px;
+  background: rgba(70,120,200,0.30);
+  color: #eaf2ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.control-permissions-recheck:hover:not(:disabled) {
+  border-color: rgba(120,180,255,0.9);
+  background: rgba(70,120,200,0.42);
+}
+.control-permissions-recheck:disabled { opacity: 0.55; cursor: default; }
+
+/* Status pills: higher contrast than the prior plain colored text. */
+.control-permission-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+.control-permission-pill-granted,
+.control-permission-pill-not_required {
+  color: #08180f;
+  background: #7ce0aa;
+  border-color: #4fcf8e;
+}
+.control-permission-pill-denied {
+  color: #2a0a0d;
+  background: #ff9ba1;
+  border-color: #ff7b83;
+}
+.control-permission-pill-unknown {
+  color: #0b1426;
+  background: #c3d1ef;
+  border-color: #9fb4e0;
+}
+
+/* Optional camera/mic signal: not a blocker for desktop control. */
+.control-permission-optional {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(150,178,220,0.5);
+  background: rgba(150,178,220,0.16);
+  color: #c9d8f3;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  vertical-align: middle;
+}
+
+.control-permission-why {
+  color: #9fb4d8;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.control-permissions-stale-hint {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(250,204,21,0.5);
+  background: rgba(250,204,21,0.10);
+  color: #ffe6a8;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.control-permissions-blocker {
+  padding: 9px 12px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,123,131,0.55);
+  background: rgba(255,123,131,0.12);
+  color: #ffd2d5;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.control-safety-chip-caution {
+  color: #ffe28a;
+  border-color: rgba(250,204,21,0.62);
+  background: rgba(250,204,21,0.14);
+}
+
 .luna-floating-safety {
   position: fixed;
   top: 12px;

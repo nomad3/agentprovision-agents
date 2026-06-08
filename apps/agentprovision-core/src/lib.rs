@@ -19,6 +19,7 @@ pub mod auth;
 pub mod chat;
 pub mod client;
 pub mod config;
+pub mod desktop;
 pub mod error;
 pub mod events;
 pub mod mcp;

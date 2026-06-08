@@ -33,7 +33,7 @@ dirs = "5"
 which = "6"
 async-trait = "0.1"
 futures-util = "0.3"
-tokio = { version = "1", features = ["sync", "time", "rt", "macros", "io-util"] }
+tokio = { version = "1", features = ["sync", "time", "rt", "macros", "io-util", "net"] }
 # `gzip` + `brotli` enable transparent response decompression. Without
 # them reqwest only sends `Accept-Encoding: identity`, but Cloudflare in
 # front of agentprovision.com still returns Brotli-compressed bodies for
@@ -50,3 +50,12 @@ keyring = { version = "2", optional = true }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 tempfile = "3"
+# Integration tests link only the lib's public API + dev-deps; the desktop
+# contract parity test (tests/desktop_contract.rs) parses golden fixtures as
+# serde_json::Value, so serde_json must be a dev-dep too (it is also a runtime dep).
+serde_json = "1"
+# PR-A A0 stream-timeout spike (tests/stream_timeout_spike.rs) drives a real
+# reqwest streamed body; both are already runtime deps, so listing them here only
+# lets the integration test `use` them (cargo unifies features - no new crates).
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+futures-util = "0.3"

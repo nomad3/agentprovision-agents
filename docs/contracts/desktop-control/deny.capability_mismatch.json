@@ -1,0 +1,18 @@
+{
+  "contract": "agentprovision.desktop_control.v1",
+  "kind": "command_denied",
+  "_note": "Denial fixture: requested action's capability is not matched by the approved grant. `code`/`reason` align to the canonical PR-C enum DesktopDenialCode in apps/api/app/services/desktop_control_codes.py — code_for_reason(reason) maps to this code. Display-safe only.",
+  "status": "denied",
+  "event_type": "desktop_command_approval_denied",
+  "action": "pointer_click",
+  "capability": "pointer_control",
+  "risk_tier": "native_control",
+  "code": "approval_binding_mismatch",
+  "reason": "desktop command approval grant binding mismatch; pointer_click denied",
+  "down_channel_available": false,
+  "desktop_command_id": "00000000-0000-4000-8000-000000000003",
+  "correlation_id": "00000000-0000-4000-8000-0000000000c2",
+  "session_id": "00000000-0000-4000-8000-0000000000d0",
+  "shell_id": "desktop-0a0a0a0a-0b0b-4c0c-8d0d-0e0e0e0e0e0e",
+  "created_at": "2026-06-07T00:00:00Z"
+}

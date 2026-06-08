@@ -8,13 +8,16 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 import ControlSafetyStrip, {
+  activeAppMonitorBlocked,
   canOpenPermissionSetup,
+  isOptionalPermission,
   labelForAlphaKernelStatus,
   labelForControlMode,
   labelForMacosMonitorStatus,
   labelForPermissionSetupAction,
   labelForPermissionStatus,
   permissionIdentity,
+  permissionWhyNeeded,
   summarizePermissions,
 } from '../ControlSafetyStrip';
 
@@ -412,6 +415,61 @@ describe('ControlSafetyStrip', () => {
 
     await screen.findByRole('button', { name: /^observe$/i });
     expect(screen.queryByRole('button', { name: /^resume$/i })).toBeNull();
+  });
+
+  it('marks camera and microphone as optional, control permissions as required', () => {
+    expect(isOptionalPermission('camera')).toBe(true);
+    expect(isOptionalPermission('microphone')).toBe(true);
+    expect(isOptionalPermission('accessibility')).toBe(false);
+    expect(isOptionalPermission('automation_system_events')).toBe(false);
+    expect(isOptionalPermission('screen_recording')).toBe(false);
+  });
+
+  it('treats Events unknown or denied as an active-app blocker, granted as clear', () => {
+    expect(activeAppMonitorBlocked({ automation_system_events_status: 'unknown' })).toBe(true);
+    expect(activeAppMonitorBlocked({ automation_system_events_status: 'denied' })).toBe(true);
+    expect(activeAppMonitorBlocked({ automation_system_events_status: 'granted' })).toBe(false);
+    expect(activeAppMonitorBlocked({})).toBe(false);
+    expect(activeAppMonitorBlocked(null)).toBe(false);
+  });
+
+  it('provides display-safe why-needed copy and nothing for unknown keys', () => {
+    expect(permissionWhyNeeded('screen_recording')).toMatch(/screen/i);
+    expect(permissionWhyNeeded('camera')).toMatch(/optional/i);
+    expect(permissionWhyNeeded('microphone')).toMatch(/push-to-talk/i);
+    expect(permissionWhyNeeded('not_a_real_key')).toBe('');
+  });
+
+  it('rechecks readiness, surfaces the Events blocker, and flags camera optional', async () => {
+    invokeMock.mockResolvedValue({
+      mode: 'control_locked',
+      can_observe: true,
+      macos_app_monitor: {
+        status: 'ready',
+        accessibility_status: 'granted',
+        automation_system_events_status: 'unknown',
+      },
+      permissions: {
+        automation_system_events: { status: 'unknown', reason: 'not yet granted' },
+        camera: { status: 'denied', reason: 'camera off' },
+      },
+    });
+
+    render(<ControlSafetyStrip />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Permission readiness/ }));
+
+    // Events-unknown is surfaced as an active-app blocker inside the modal.
+    expect(screen.getByText(/Active-app awareness\s+is blocked/i)).toBeInTheDocument();
+    // Camera is badged Optional (not a hard blocker for control).
+    expect(screen.getByText('Optional', { selector: '.control-permission-optional' })).toBeInTheDocument();
+
+    // Recheck re-reads the native safety state.
+    invokeMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Recheck permission readiness' }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
+    });
   });
 
   it('broadcasts native safety state changes for shell presence sync', async () => {
