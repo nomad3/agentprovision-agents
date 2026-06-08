@@ -66,6 +66,16 @@ def create_commitment(
         due_at=commitment_in.due_at,
         goal_id=commitment_in.goal_id,
         related_entity_ids=commitment_in.related_entity_ids,
+        # Accountable Learning ledger fields (plan §6) — must be persisted on
+        # create, else the proof path the §6 invariant depends on is lost.
+        contract_id=commitment_in.contract_id,
+        proof_required=commitment_in.proof_required,
+        stakeholder_refs=commitment_in.stakeholder_refs,
+        risk_threshold=commitment_in.risk_threshold,
+        escalation_policy=commitment_in.escalation_policy,
+        checkpoint_at=commitment_in.checkpoint_at,
+        escalation_at=commitment_in.escalation_at,
+        stale_after=commitment_in.stale_after,
     )
     db.add(commitment)
     db.commit()

@@ -5,7 +5,15 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.accountable_learning import ESCALATION_POLICIES, RISK_THRESHOLDS
+
+
+def _validate_optional_choice(value, allowed, name):
+    if value is not None and value not in allowed:
+        raise ValueError(f"{name} {value!r} not in {sorted(allowed)}")
+    return value
 
 
 class CommitmentType(str, Enum):
@@ -65,6 +73,16 @@ class CommitmentRecordCreate(BaseModel):
     escalation_at: Optional[datetime] = None
     stale_after: Optional[datetime] = None
 
+    @field_validator("risk_threshold")
+    @classmethod
+    def _v_risk(cls, v):
+        return _validate_optional_choice(v, RISK_THRESHOLDS, "risk_threshold")
+
+    @field_validator("escalation_policy")
+    @classmethod
+    def _v_esc(cls, v):
+        return _validate_optional_choice(v, ESCALATION_POLICIES, "escalation_policy")
+
 
 class CommitmentRecordUpdate(BaseModel):
     title: Optional[str] = None
@@ -87,6 +105,16 @@ class CommitmentRecordUpdate(BaseModel):
     escalation_at: Optional[datetime] = None
     last_verified_at: Optional[datetime] = None
     stale_after: Optional[datetime] = None
+
+    @field_validator("risk_threshold")
+    @classmethod
+    def _v_risk(cls, v):
+        return _validate_optional_choice(v, RISK_THRESHOLDS, "risk_threshold")
+
+    @field_validator("escalation_policy")
+    @classmethod
+    def _v_esc(cls, v):
+        return _validate_optional_choice(v, ESCALATION_POLICIES, "escalation_policy")
 
 
 class CommitmentRecordInDB(BaseModel):
