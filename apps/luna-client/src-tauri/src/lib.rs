@@ -3152,6 +3152,75 @@ mod tests {
     }
 
     #[test]
+    fn test_native_boundary_denies_wrong_capability_before_adapter() {
+        // Phase 2.75: a keyboard-capability envelope must never authorize a
+        // pointer action (and vice-versa). The boundary denies on the capability
+        // binding inside envelope validation — before the policy/adapter path —
+        // so a mismatched capability can never reach a native call.
+        let mut keyboard_for_pointer =
+            native_boundary_request("pointer_click", "wrong-capability-pointer");
+        native_boundary_envelope_mut(&mut keyboard_for_pointer)
+            .insert("capability".to_string(), serde_json::json!("keyboard_control"));
+        let decision = native_boundary_decision(&keyboard_for_pointer);
+        assert!(!decision.allowed);
+        assert!(
+            decision
+                .reason
+                .contains("desktop command envelope binding mismatch"),
+            "pointer-with-keyboard-capability got {}",
+            decision.reason
+        );
+
+        let mut pointer_for_keyboard =
+            native_boundary_request("keyboard_type", "wrong-capability-keyboard");
+        native_boundary_envelope_mut(&mut pointer_for_keyboard)
+            .insert("capability".to_string(), serde_json::json!("pointer_control"));
+        let decision = native_boundary_decision(&pointer_for_keyboard);
+        assert!(!decision.allowed);
+        assert!(
+            decision
+                .reason
+                .contains("desktop command envelope binding mismatch"),
+            "keyboard-with-pointer-capability got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_frontmost_bundle_drift_before_adapter() {
+        // Phase 2.75: if the live frontmost app is not the envelope's bound
+        // target at proof time, deny as active_app_drift before any native call.
+        let mut request =
+            native_boundary_request("pointer_click", "frontmost-drift-before-adapter");
+        request.live_frontmost_bundle_id = Some("com.example.NotTheCanaryTarget".to_string());
+        let decision = native_boundary_decision(&request);
+        assert!(!decision.allowed);
+        assert!(
+            decision.reason.contains("active_app_drift"),
+            "got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_stale_native_approval_before_adapter() {
+        // Phase 2.75: a stale (expired) native approval/envelope denies before
+        // any native call. now_ms is 1_000 in native_boundary_decision; an
+        // envelope that already expired at 1_000 is rejected during validation.
+        let mut request =
+            native_boundary_request("keyboard_type", "stale-approval-before-adapter");
+        native_boundary_envelope_mut(&mut request)
+            .insert("expires_at_ms".to_string(), serde_json::json!(1_000));
+        let decision = native_boundary_decision(&request);
+        assert!(!decision.allowed);
+        assert!(
+            decision.reason.contains("desktop command envelope expired"),
+            "got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
     fn native_boundary_rejects_replayed_envelope_nonces() {
         let permissions = native_boundary_permissions();
         let mut seen = std::collections::HashSet::new();
