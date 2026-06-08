@@ -22,6 +22,12 @@ class CommitmentState(str, Enum):
     FULFILLED = "fulfilled"
     BROKEN = "broken"
     CANCELLED = "cancelled"
+    # Accountable Learning & Commitment System (plan 2026-06-08 §6).
+    # Added to the canonical vocabulary rather than forking new spellings:
+    # the plan's "done"->fulfilled, "failed"->broken, "canceled"->cancelled.
+    BLOCKED = "blocked"
+    AT_RISK = "at_risk"
+    RENEGOTIATED = "renegotiated"
 
 
 class CommitmentSourceType(str, Enum):
@@ -49,6 +55,15 @@ class CommitmentRecordCreate(BaseModel):
     due_at: Optional[datetime] = None
     goal_id: Optional[uuid.UUID] = None
     related_entity_ids: List[str] = Field(default_factory=list)
+    # Accountable Learning fields (plan 2026-06-08 §6).
+    contract_id: Optional[uuid.UUID] = None
+    proof_required: List[str] = Field(default_factory=list)
+    stakeholder_refs: List[str] = Field(default_factory=list)
+    risk_threshold: Optional[str] = None
+    escalation_policy: Optional[str] = None
+    checkpoint_at: Optional[datetime] = None
+    escalation_at: Optional[datetime] = None
+    stale_after: Optional[datetime] = None
 
 
 class CommitmentRecordUpdate(BaseModel):
@@ -61,6 +76,17 @@ class CommitmentRecordUpdate(BaseModel):
     goal_id: Optional[uuid.UUID] = None
     related_entity_ids: Optional[List[str]] = None
     broken_reason: Optional[str] = None
+    # Accountable Learning fields (plan 2026-06-08 §6).
+    proof_required: Optional[List[str]] = None
+    proof_refs: Optional[List[str]] = None
+    blocker_refs: Optional[List[str]] = None
+    stakeholder_refs: Optional[List[str]] = None
+    risk_threshold: Optional[str] = None
+    escalation_policy: Optional[str] = None
+    checkpoint_at: Optional[datetime] = None
+    escalation_at: Optional[datetime] = None
+    last_verified_at: Optional[datetime] = None
+    stale_after: Optional[datetime] = None
 
 
 class CommitmentRecordInDB(BaseModel):
@@ -81,6 +107,18 @@ class CommitmentRecordInDB(BaseModel):
     broken_reason: Optional[str] = None
     goal_id: Optional[uuid.UUID] = None
     related_entity_ids: List[Any] = Field(default_factory=list)
+    # Accountable Learning fields (plan 2026-06-08 §6).
+    contract_id: Optional[uuid.UUID] = None
+    proof_required: List[Any] = Field(default_factory=list)
+    proof_refs: List[Any] = Field(default_factory=list)
+    stakeholder_refs: List[Any] = Field(default_factory=list)
+    blocker_refs: List[Any] = Field(default_factory=list)
+    risk_threshold: Optional[str] = None
+    escalation_policy: Optional[str] = None
+    checkpoint_at: Optional[datetime] = None
+    escalation_at: Optional[datetime] = None
+    last_verified_at: Optional[datetime] = None
+    stale_after: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
