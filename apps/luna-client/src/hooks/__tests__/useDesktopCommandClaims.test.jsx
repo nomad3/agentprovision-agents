@@ -37,6 +37,7 @@ const DEVICE_ID = '88888888-8888-8888-8888-888888888888';
 const COMMAND_ID = '99999999-9999-9999-9999-999999999999';
 const APPROVAL_ID = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
 const DEFAULT_ENVELOPE_NONCE = 'envelope-nonce-test';
+const CANARY_BUNDLE_ID = 'com.example.LunaCanaryTarget';
 
 const CAPABILITY_BY_ACTION = {
   capture_screenshot: 'screenshot',
@@ -58,7 +59,7 @@ function validEnvelope(action, overrides = {}) {
     key_id: isNativeControl
       ? 'agentprovision-desktop-command-ed25519-v1'
       : 'agentprovision-desktop-command-hmac-v1',
-    policy_version: 1,
+    policy_version: isNativeControl ? 2 : 1,
     issuer: 'agentprovision-api',
     tenant_id: '11111111-1111-1111-1111-111111111111',
     user_id: '22222222-2222-2222-2222-222222222222',
@@ -78,6 +79,18 @@ function validEnvelope(action, overrides = {}) {
     expires_at: new Date(Date.now() + 60_000).toISOString(),
     expires_at_ms: Date.now() + 60_000,
     signature: 'valid-test-signature',
+    ...(isNativeControl
+      ? {
+          target: {
+            bundle_id: CANARY_BUNDLE_ID,
+            window_title_pattern: 'Luna Canary',
+            window_title_hash: null,
+            display_id: null,
+            bounds: null,
+            observed_at: new Date(Date.now() - 1000).toISOString(),
+          },
+        }
+      : {}),
     ...overrides,
   };
 }

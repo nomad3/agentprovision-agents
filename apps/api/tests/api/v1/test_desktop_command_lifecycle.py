@@ -49,6 +49,8 @@ DEVICE_ID = uuid.UUID("88888888-8888-8888-8888-888888888888")
 DEVICE_ID_2 = uuid.UUID("88888888-8888-8888-8888-888888888889")
 DEVICE_TOKEN = "device-token-test"
 ED25519_PRIVATE_KEY_BYTES = bytes(range(32))
+CANARY_BUNDLE_ID = "com.example.LunaCanaryTarget"
+OTHER_CANARY_BUNDLE_ID = "com.example.OtherCanaryTarget"
 
 
 def _b64url(data: bytes) -> str:
@@ -149,6 +151,43 @@ def _enqueue(db: Session, *, nonce: str | None = None, grant: bool = True):
                 ),
             )
         db.refresh(command)
+    return command
+
+
+def _native_pending_command(
+    db: Session,
+    *,
+    nonce: str,
+    bundle_id: str = CANARY_BUNDLE_ID,
+    action: str = "pointer_click",
+):
+    now = _utcnow()
+    command = DesktopCommand(
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        shell_id=SHELL_ID,
+        device_id=DEVICE_ID,
+        capability="pointer_control",
+        status="pending",
+        source="test",
+        nonce=nonce,
+        payload={
+            "action": action,
+            "tool_name": "desktop_pointer_click",
+            "mode": "control_locked",
+            "target": {
+                "bundle_id": bundle_id,
+                "action": action,
+                "window_title_pattern": "Luna Canary",
+            },
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(command)
+    db.commit()
+    db.refresh(command)
     return command
 
 
@@ -267,6 +306,200 @@ def test_claim_issues_signed_command_envelope_and_nonce_row(db_session, seeded):
     assert event.event_metadata["envelope_nonce"] == envelope["nonce"]
     assert event.event_metadata["envelope_policy_version"] == 1
     assert len(event.event_metadata["envelope_hash"]) == 64
+
+
+def test_native_control_grant_rejects_missing_or_unallowlisted_target(db_session, seeded):
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ):
+        with pytest.raises(HTTPException) as missing:
+            create_desktop_approval_grant(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandApprovalGrantCreate(
+                    session_id=SESSION_ID,
+                    risk_tier="native_control",
+                    capability="pointer_control",
+                    target_binding={"action": "pointer_click"},
+                ),
+            )
+        with pytest.raises(HTTPException) as unallowlisted:
+            create_desktop_approval_grant(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandApprovalGrantCreate(
+                    session_id=SESSION_ID,
+                    risk_tier="native_control",
+                    capability="pointer_control",
+                    target_binding={
+                        "bundle_id": CANARY_BUNDLE_ID,
+                        "action": "pointer_click",
+                    },
+                ),
+            )
+
+    assert missing.value.status_code == 422
+    assert unallowlisted.value.status_code == 422
+    assert "target not allowlisted" in str(unallowlisted.value.detail).lower()
+    assert (
+        db_session.query(DesktopCommandApprovalGrant)
+        .filter(DesktopCommandApprovalGrant.risk_tier == "native_control")
+        .count()
+        == 0
+    )
+
+
+def test_native_control_grant_persists_only_allowlisted_target(db_session, seeded):
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={
+                    "bundle_id": CANARY_BUNDLE_ID,
+                    "action": "pointer_click",
+                    "window_title_pattern": "Luna Canary",
+                },
+            ),
+        )
+
+    assert grant.target_binding == {
+        "bundle_id": CANARY_BUNDLE_ID,
+        "action": "pointer_click",
+        "window_title_pattern": "Luna Canary",
+    }
+    assert grant.remaining_actions == 1
+
+
+def test_native_control_claim_denies_target_binding_mismatch(db_session, seeded):
+    encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
+    command = _native_pending_command(db_session, nonce="nonce-native-target-mismatch")
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID, OTHER_CANARY_BUNDLE_ID],
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM",
+        "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+        encoded_private_key,
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={
+                    "bundle_id": OTHER_CANARY_BUNDLE_ID,
+                    "action": "pointer_click",
+                    "window_title_pattern": "Luna Canary",
+                },
+            ),
+        )
+        command.approval_id = grant.id
+        db_session.commit()
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    db_session.refresh(command)
+    db_session.refresh(grant)
+    assert claimed is None
+    assert command.status == "denied"
+    assert grant.status == "active"
+    assert grant.remaining_actions == 1
+    assert event.event_type == "desktop_command_approval_denied"
+    assert event.reason == "desktop command approval grant binding mismatch"
+    assert event.event_metadata["denial_code"] == "approval_binding_mismatch"
+
+
+def test_native_control_claim_issues_target_bound_v2_envelope(db_session, seeded):
+    encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
+    command = _native_pending_command(db_session, nonce="nonce-native-target-envelope")
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM",
+        "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+        encoded_private_key,
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                desktop_command_id=command.id,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={
+                    "bundle_id": CANARY_BUNDLE_ID,
+                    "action": "pointer_click",
+                    "window_title_pattern": "Luna Canary",
+                },
+            ),
+        )
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    envelope = claimed.payload["command_envelope"]
+    assert envelope["signature_alg"] == "Ed25519"
+    assert envelope["policy_version"] == 2
+    assert envelope["risk_tier"] == "native_control"
+    assert envelope["approval_risk_tier"] == "native_control"
+    assert envelope["target"]["bundle_id"] == CANARY_BUNDLE_ID
+    assert envelope["target"]["window_title_pattern"] == "Luna Canary"
+    assert envelope["target"]["window_title_hash"] is None
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+        encoded_private_key,
+    ):
+        assert _verify_envelope_signature(envelope)
+    assert event.event_metadata["envelope_policy_version"] == 2
 
 
 def test_claim_can_issue_ed25519_command_envelope_and_complete(db_session, seeded):

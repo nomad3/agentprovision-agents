@@ -53,6 +53,7 @@ services:
       - USE_RUST_EMBEDDING=true
       - USE_RUST_MEMORY=true
       - MCP_SERVER_URL=http://mcp-tools:8086
+      - DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST=${DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST:-}
     depends_on:
       db:
         condition: service_healthy

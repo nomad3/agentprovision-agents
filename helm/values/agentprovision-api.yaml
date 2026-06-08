@@ -150,6 +150,9 @@ configMap:
     EMAIL_SMTP_USE_TLS: "true"
     EMAIL_FROM: "noreply@agentprovision.com"
     EMAIL_FROM_NAME: "AgentProvision"
+    # Default-empty fail-closed native-control canary allowlist. Operators must
+    # explicitly stamp bundle ids before native-control grants can persist.
+    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
 
 # External Secrets - pulls from GCP Secret Manager
 externalSecret:

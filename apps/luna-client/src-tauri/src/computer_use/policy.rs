@@ -88,7 +88,7 @@ pub struct NativeControlCommandPolicy {
     pub now_ms: u64,
 }
 
-pub const CURRENT_NATIVE_CONTROL_POLICY_VERSION: u16 = 1;
+pub const CURRENT_NATIVE_CONTROL_POLICY_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservationPolicyDenial {

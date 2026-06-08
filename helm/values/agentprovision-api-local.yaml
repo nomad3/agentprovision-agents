@@ -74,6 +74,7 @@ configMap:
     MEMORY_CORE_URL: "memory-core:50052"
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
     TEMPORAL_ADDRESS: "temporal:7233"
+    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
 
 # Load secrets from k8s secret (created from apps/api/.env)
 envFrom:
