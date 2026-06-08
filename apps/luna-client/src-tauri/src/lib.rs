@@ -1120,7 +1120,7 @@ fn evaluate_native_control_boundary_request(
                 mode,
                 capability,
                 has_claim_lease: true,
-                tier_enabled: false,
+                tier_enabled: desktop_control_allows_capability(capability),
                 envelope: Some(envelope.envelope),
                 now_ms,
             },
@@ -1185,7 +1185,46 @@ fn emit_native_control_audit(
 }
 
 pub(crate) fn desktop_control_allows_actuation() -> bool {
+    // Legacy global gate for the gesture-cursor CGEvent path. Kept HARD-disabled
+    // here: per-capability enablement (below) governs the command-boundary
+    // policy, but the real gesture actuation path stays off until a reviewed
+    // Phase 3 canary wires capability-aware gesture actuation. Phase 2.75 ships
+    // the gate, never the CGEvent call.
     false
+}
+
+/// Returns true only when `var` is set to an explicit truthy value. Anything
+/// else (unset, empty, "0", "false", junk) is false — native actuation is
+/// fail-closed by default.
+fn actuation_env_flag_enabled(var: &str) -> bool {
+    std::env::var(var)
+        .map(|raw| {
+            let v = raw.trim();
+            v.eq_ignore_ascii_case("true") || v == "1" || v.eq_ignore_ascii_case("yes")
+        })
+        .unwrap_or(false)
+}
+
+/// Per-capability native-actuation enablement (Phase 2.75). Environment-driven so
+/// a shipped build can opt a single capability into a reviewed canary — or be
+/// rolled back — WITHOUT a rebuild. BOTH capabilities default DISABLED, and the
+/// flags are independent: enabling `LUNA_ACTUATION_POINTER_ENABLED` never makes
+/// keyboard reachable, and vice-versa. This gate only feeds the command-boundary
+/// policy `tier_enabled`; the pointer/keyboard Tauri commands remain
+/// non-actuating stubs (denied at `has_claim_lease`) and the gesture CGEvent path
+/// stays hard-disabled, so flipping a flag in this phase still posts no native
+/// event — it only lets the boundary proof reach its policy decision.
+pub(crate) fn desktop_control_allows_capability(
+    capability: computer_use::NativeControlCapability,
+) -> bool {
+    match capability {
+        computer_use::NativeControlCapability::Pointer => {
+            actuation_env_flag_enabled("LUNA_ACTUATION_POINTER_ENABLED")
+        }
+        computer_use::NativeControlCapability::Keyboard => {
+            actuation_env_flag_enabled("LUNA_ACTUATION_KEYBOARD_ENABLED")
+        }
+    }
 }
 
 fn ensure_desktop_control_allows_native_control(
@@ -1199,7 +1238,10 @@ fn ensure_desktop_control_allows_native_control(
             mode,
             capability,
             has_claim_lease: false,
-            tier_enabled: false,
+            // Uniform per-capability gate. Moot on this path — the policy denies
+            // at `has_claim_lease: false` before the tier check — but keeps the
+            // actuation gate single-sourced through `desktop_control_allows_capability`.
+            tier_enabled: desktop_control_allows_capability(capability),
             envelope: None,
             now_ms: now_unix_ms(),
         },
@@ -2565,6 +2607,48 @@ mod tests {
                 Some(value) => std::env::set_var(self.key, value),
                 None => std::env::remove_var(self.key),
             }
+        }
+    }
+
+    #[test]
+    fn per_capability_actuation_gate_defaults_disabled_and_isolates_capabilities() {
+        let _env_lock = DESKTOP_COMMAND_ENVELOPE_ENV_LOCK.lock().expect("env lock");
+        let _pointer = EnvVarRestore::set("LUNA_ACTUATION_POINTER_ENABLED", None);
+        let _keyboard = EnvVarRestore::set("LUNA_ACTUATION_KEYBOARD_ENABLED", None);
+
+        // Both capabilities are fail-closed by default, and the legacy gesture
+        // CGEvent gate stays hard-disabled regardless of env.
+        assert!(!desktop_control_allows_capability(
+            computer_use::NativeControlCapability::Pointer
+        ));
+        assert!(!desktop_control_allows_capability(
+            computer_use::NativeControlCapability::Keyboard
+        ));
+        assert!(!desktop_control_allows_actuation());
+
+        // Enabling pointer must NOT make keyboard reachable — a mouse canary can
+        // never arm the keyboard path (Phase 2.75 exit criterion #1).
+        {
+            let _on = EnvVarRestore::set("LUNA_ACTUATION_POINTER_ENABLED", Some("true"));
+            assert!(desktop_control_allows_capability(
+                computer_use::NativeControlCapability::Pointer
+            ));
+            assert!(!desktop_control_allows_capability(
+                computer_use::NativeControlCapability::Keyboard
+            ));
+            // The gesture CGEvent gate is independent and stays off.
+            assert!(!desktop_control_allows_actuation());
+        }
+
+        // Symmetric: enabling keyboard alone must not enable pointer.
+        {
+            let _on = EnvVarRestore::set("LUNA_ACTUATION_KEYBOARD_ENABLED", Some("1"));
+            assert!(desktop_control_allows_capability(
+                computer_use::NativeControlCapability::Keyboard
+            ));
+            assert!(!desktop_control_allows_capability(
+                computer_use::NativeControlCapability::Pointer
+            ));
         }
     }
 
