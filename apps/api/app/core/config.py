@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Luna can verify locally with only the matching public key.
     DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: str = "HMAC-SHA256"
     DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: str | None = None
+    DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: str = "agentprovision-desktop-command-ed25519-v1"
     # 24 hours. Long-running clients (Luna desktop) call /auth/refresh
     # proactively 5 minutes before expiry to avoid mid-session logouts.
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440

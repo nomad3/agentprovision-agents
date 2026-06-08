@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -100,9 +101,11 @@ _DISABLED_NATIVE_CONTROL_ACTIONS = frozenset(_NATIVE_CONTROL_CAPABILITIES)
 _SAFE_METADATA_KEYS = {
     "can_observe",
     "control_mode",
+    "envelope_config_error",
     "envelope_hash",
     "envelope_nonce",
     "envelope_policy_version",
+    "envelope_signing_algorithm",
     "approval_id",
     "approval_remaining_actions",
     "approval_risk_tier",
@@ -125,7 +128,6 @@ DESKTOP_COMMAND_ENVELOPE_SCHEMA = "agentprovision.desktop_command_envelope.v1"
 DESKTOP_COMMAND_ENVELOPE_ALGORITHM = "HMAC-SHA256"
 DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM = "Ed25519"
 DESKTOP_COMMAND_ENVELOPE_KEY_ID = "agentprovision-desktop-command-hmac-v1"
-DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID = "agentprovision-desktop-command-ed25519-v1"
 
 
 @dataclass(frozen=True)
@@ -347,6 +349,17 @@ def _safe_metadata(raw: dict[str, Any] | None) -> dict[str, Any]:
             safe[normalized_key] = value[:96]
         elif normalized_key == "envelope_policy_version" and isinstance(value, int):
             safe[normalized_key] = value
+        elif normalized_key == "envelope_signing_algorithm" and value in {
+            DESKTOP_COMMAND_ENVELOPE_ALGORITHM,
+            DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM,
+        }:
+            safe[normalized_key] = value
+        elif normalized_key == "envelope_config_error" and value in {
+            "RuntimeError",
+            "ValueError",
+            "Error",
+        }:
+            safe[normalized_key] = value
         elif normalized_key == "approval_id" and isinstance(value, str):
             try:
                 safe[normalized_key] = str(uuid.UUID(value))
@@ -403,6 +416,16 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         "desktop command approval grant replay denied",
     }:
         return normalized
+    for prefix in (
+        "desktop command envelope key unknown",
+        "desktop command envelope key registry invalid",
+        "desktop command envelope public key missing",
+        "desktop command envelope public key invalid",
+    ):
+        if normalized == prefix:
+            return normalized
+        if normalized.startswith(f"{prefix};"):
+            return f"{prefix}; {action} denied"
     if normalized == "desktop command pending ttl expired":
         return normalized
     if normalized in {"operator Stop", "local Stop latched", "desktop control stopped"}:
@@ -763,6 +786,60 @@ def _deny_pending_command_for_approval_failure(
     return command, event, session_event
 
 
+def _deny_pending_command_for_envelope_configuration_failure(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None]:
+    now = _utcnow()
+    result = db.execute(
+        update(DesktopCommand)
+        .where(
+            DesktopCommand.id == command.id,
+            DesktopCommand.tenant_id == command.tenant_id,
+            DesktopCommand.status == "pending",
+        )
+        .values(
+            status="denied",
+            completed_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Desktop command envelope claim is no longer valid")
+    command.status = "denied"
+    command.completed_at = now
+    command.updated_at = now
+    event = _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_envelope_denied",
+        source="api",
+        outcome="denied",
+        reason=reason,
+        metadata=metadata,
+    )
+    db.commit()
+    db.refresh(command)
+    db.refresh(event)
+    session_event = _publish_display_safe_session_event(
+        command.session_id,
+        event.event_type,
+        {
+            **_display_safe_command_payload(command),
+            "desktop_event_id": str(event.id),
+            "outcome": event.outcome,
+            "reason": event.reason,
+        },
+        tenant_id=command.tenant_id,
+    )
+    return command, event, session_event
+
+
 def _matching_approval_grant(
     db: Session,
     command: DesktopCommand,
@@ -965,8 +1042,19 @@ def _desktop_command_envelope_algorithm() -> str:
 
 def _desktop_command_envelope_key_id(algorithm: str) -> str:
     if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
-        return DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID
+        key_id = (settings.DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID or "").strip()
+        if not key_id:
+            raise RuntimeError("DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID is required for Ed25519 envelopes")
+        return key_id
     return DESKTOP_COMMAND_ENVELOPE_KEY_ID
+
+
+def _validate_desktop_command_envelope_signing_config() -> str:
+    algorithm = _desktop_command_envelope_algorithm()
+    _desktop_command_envelope_key_id(algorithm)
+    if algorithm == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+        _desktop_command_envelope_ed25519_private_key()
+    return algorithm
 
 
 def _desktop_command_envelope_ed25519_private_key() -> Ed25519PrivateKey:
@@ -1860,6 +1948,28 @@ def claim_next_desktop_command(
                 tenant_id=user.tenant_id,
         )
         return None, None, None
+
+    try:
+        _validate_desktop_command_envelope_signing_config()
+    except (RuntimeError, ValueError, binascii.Error) as exc:
+        _denied_command, denied_event, denied_session_event = (
+            _deny_pending_command_for_envelope_configuration_failure(
+                db,
+                command,
+                reason=f"desktop command envelope signing configuration invalid: {exc}",
+                metadata={
+                    "envelope_signing_algorithm": settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM,
+                    "envelope_config_error": exc.__class__.__name__,
+                },
+            )
+        )
+        for expired_event in expired_events:
+            _publish_display_safe_command_event(
+                expired_event,
+                status="expired",
+                tenant_id=user.tenant_id,
+            )
+        return None, denied_event, denied_session_event
 
     approval_result = _consume_approval_grant_or_deny(
         db,

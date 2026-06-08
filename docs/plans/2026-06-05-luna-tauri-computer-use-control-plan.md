@@ -22,16 +22,184 @@ command-envelope preflight merged and unsigned `luna-v0.1.102` installed
 locally; PR #812 macOS app-monitor event-contract hardening merged and unsigned
 `luna-v0.1.103` installed locally; PR #813 explicit approval-grant
 creation/claim-time CAS consumption merged and unsigned `luna-v0.1.104`
-installed locally. Native actuation remains disabled; the next gated phase is
-Alpha-kernel/native-boundary proof before any pointer or keyboard invoke can
-ship. Current branch adds first-use macOS permission onboarding actions in the
-TCC panel so Luna can guide users to the exact Screen Recording,
-Accessibility, Automation, Camera, and Microphone setup flows needed for
-end-to-end computer-use validation. Developer ID signing is now being
-re-enabled for the release lane with a newly generated Luna signing certificate
-and Tauri updater key.
+installed locally; PR #816 native-boundary proof merged and signed smoke
+`luna-v0.1.105` installed locally; PR #818 adds opt-in Ed25519 envelope
+verification and is ready after Luna/Codex review plus green CI, with Claude
+Code review blocked by a desktop network error. Native actuation remains
+disabled. Current stacked branch adds configurable Ed25519 key ids and a Luna
+accepted-key registry before production key rotation/revocation work.
 Scope: `apps/luna-client`, API/MCP control plane, desktop-control governance
-Current implementation branch: `codex/luna-native-boundary-proof`
+Current implementation branch: `codex/luna-envelope-key-registry`
+
+---
+
+## Operating Memory
+
+The council operating model for Luna computer-use work is:
+
+1. Luna is Simon's personal assistant and the lead product/operator reviewer.
+   Communicate with Luna through the installed Luna Tauri app's Alpha Chat, and
+   treat her response as the primary council release-gate signal.
+2. Claudia is Simon's Claude Code Desktop / Ultracode instance. Delegate heavy
+   coding, log digging, CI triage, and deep code review to Claudia when
+   available.
+3. Codex coordinates the work, maintains the release gate, integrates council
+   feedback, performs local verification, and keeps the plan current.
+4. Alpha CLI is Luna's local kernel. Luna-facing API changes must include the
+   matching Alpha CLI/core support needed by the Tauri app.
+5. Codex owns installed-version validation: whenever a new Luna app version or
+   Luna feature is deployed, Codex must test it through Computer Use before the
+   release or feature gate is considered complete.
+6. Do not persist login credentials, Apple credentials, app-specific passwords,
+   signing private keys, or other secrets in this plan or the repository.
+
+---
+
+## Parallel Day Workstreams
+
+These workstreams can run in parallel as long as each owner keeps the listed
+boundaries.
+
+### Claudia A: Release And Stack Gate
+
+Primary scope: PR #818/#820 release-gate support.
+
+1. Finish blocker-focused review for PR #818 and PR #820.
+2. Report verdicts and exact gates only; Codex owns merge, retarget, rebase,
+   and release-gate actions unless Simon explicitly delegates them.
+3. Watch GitHub checks for both PRs and flag any new red or stale check state.
+4. Verify the native-control safety invariants stay true: native actuation
+   disabled, `desktop_control_allows_actuation()` hard false, `tier_enabled:
+   false`, HMAC default safe until PR #820 lands, and registry failures closed.
+5. After merge or release activity, help monitor Luna Tauri Build, Docker
+   deployment, and the exact Docker `_work` mount gate.
+
+### Claudia B: Next-Phase Architecture
+
+Primary scope: Alpha CLI/core and next-phase architecture readiness. No patches
+until Codex opens a specific implementation slice.
+
+1. Produce the next-phase checklist that starts only after PR #818 lands and PR
+   #820 is retargeted.
+2. Design Ed25519 public-key distribution, key rotation, and revocation.
+3. Define Alpha CLI parity for every Luna-facing API/event shape.
+4. Draft operator runbook items for
+   `DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID`,
+   `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS`, HMAC-to-Ed25519 rollout,
+   signed release validation, and local install validation.
+5. Define the minimum safe canary-actuation gate while keeping real
+   pointer/keyboard disabled until explicit approval.
+6. Identify likely files and test suites for the next implementation PR.
+7. Keep Alpha CLI/core work scoped to Luna's kernel path: durable async chat
+   jobs, reconnect, cancellation, typed models, and parity tests. Do not
+   duplicate Claudia C's macOS UX/TCC/schema lane except to name schema
+   dependencies.
+
+Claudia B 2026-06-07 packet:
+
+1. Confirmed job contract: `POST /api/v1/chat/sessions/{sid}/messages/start`
+   returns `{job_id}` quickly; `GET /api/v1/chat/jobs/{job_id}/events?from_seq=N`
+   replays SSE events with `seq > from_seq` and closes on terminal status;
+   `GET /api/v1/chat/jobs/{job_id}` returns the terminal snapshot; and
+   `POST /api/v1/chat/jobs/{job_id}/cancel` sets cooperative cancellation.
+2. Confirmed state model: `queued -> running -> done|failed|cancelled`,
+   monotonic event `seq`, tenant-scoped job visibility, terminal idempotency,
+   and CLI chat already using the async job path rather than the old blocking
+   stream path.
+3. Open Alpha questions before implementation: verify whether the shared
+   `ApiClient` 180-second timeout still bounds job-events streams; add an
+   idempotency key to `/messages/start` before retrying starts; treat server
+   `timeout{last_seq}` frames and transport drops as reconnect signals; and
+   coordinate with the orphaned-`running` chat-job reclaim fix so reattach does
+   not poll forever after worker death.
+4. Recommended PR sequence: transport hardening and reconnect loop first; chat
+   job cancellation second; idempotent start third; progress/status taxonomy
+   and old blocking-stream retirement fourth; typed desktop-control models only
+   after Claudia C freezes the desktop-control schemas.
+
+### Claudia C: macOS UX And Schema Readiness
+
+Primary scope: macOS-only Luna computer-use UX, TCC/onboarding, observation
+schema, and validation matrix readiness. No patches until Codex opens a
+specific implementation slice.
+
+1. Own the TCC/permission modal UX: running app identity, signed/ad-hoc
+   identity diagnostics, stale old-Luna cleanup guidance, scoped setup actions,
+   `Recheck`, and `Why needed`.
+2. Own display-safe observation schemas for screenshot/active-app/window events
+   and the `session_events` mirror. The CLI/core may surface only display-safe
+   fields and must treat raw screenshots, titles, clipboard, and OCR as opaque
+   or unavailable unless a future reviewed contract explicitly allows them.
+3. Own the Stop/Lock/approval lifecycle UX matrix and the installed-app smoke
+   cells for macOS only. Windows remains out of scope for this phase.
+4. Hand Claudia B the frozen field names, enums, endpoint paths, and safe/raw
+   boundaries for command claims, observations, permission state, audit events,
+   command completion, and errors before Alpha CLI/core typed models begin.
+
+Claudia C 2026-06-07 packet:
+
+1. Verified invariants from code/read-only audit: native pointer/keyboard
+   actuation is still hard-disabled; raw screenshot/title/clipboard/OCR data is
+   not mirrored into audit/activity/args; Stop revokes active grants and
+   preempts success; approval-grant consumption is predicate-bound and
+   fail-closed; HMAC and Ed25519 envelope verification are present; and TCC
+   state remains a readiness gate, not an implicit unlock.
+2. First safe implementation slice: TCC modal UX hardening only. Add explicit
+   `Recheck`, `Why needed`, and stale permission cleanup affordances; preserve
+   scoped `Open`/`Enable` actions; keep all rows read-only unless macOS reports
+   a grant; and do not enable Assist/Control or native actuation.
+3. Confirmed gaps to close: modal refresh is currently focus/visibility driven
+   rather than user-triggered, stale ad-hoc cleanup is not yet guided in-product,
+   and the CI/release gate does not yet assert Luna's exact Docker `_work`
+   mount command as a machine-enforced check.
+
+### Computer-Use Pending Work
+
+This can be planned in parallel with the envelope stack, but implementation
+waits for a clear PR boundary and release-gate owner.
+
+1. Screenshot and observation path: verify API/MCP/Tauri request flow and add
+   missing denied, granted, stopped, locked, no-shell, and TCC-state tests.
+2. macOS app/window monitor: define active app/window event schema, display-safe
+   `session_events` mirror rules, and macOS-only scope. Windows remains out of
+   scope.
+3. Permission UX: review TCC popup/modal behavior, stale ad-hoc permission
+   rows, signed app identity display, and `Open Settings` / `Recheck` / `Why
+   needed` affordances.
+4. Stop and Lock safety: verify Stop across relaunch, shell reconnect, API
+   restart, pending command claims, and queued-command cancellation.
+5. Approval lifecycle: design bounded approval grants with expiry, replay
+   defense, wrong-device, wrong-session, wrong-command, revoked, and audit
+   cases.
+6. Canary actuation design: start with no-op proof or an isolated test-app
+   action; require explicit user approval, visible countdown, Stop preemption,
+   TCC ready, signed envelope, and authoritative audit.
+7. Test and validation matrix: cover local dev, CI, installed DMG,
+   signed/notarized DMG, live Docker stack, exact `_work` mount gate, and
+   installed Luna Computer Use smoke steps.
+
+### Alpha CLI Rework
+
+Alpha CLI is Luna's kernel and needs its own agent-friendly rework before it is
+load-bearing for desktop control.
+
+1. Remove brittle fixed request timeouts from agent-facing chat/task flows.
+   Replace them with durable async jobs, resumable polling or streams, explicit
+   cancellation, idempotent retries, and progress/status events.
+2. Make `alpha chat` and related CLI calls safe for long-running agent turns:
+   no Cloudflare/browser request lifetime coupling, no silent hangs, clear
+   timeout classification, and recoverable stream-open failures.
+3. Provide typed CLI/core request and response models for desktop command
+   claims, observation results, permission state, audit events, command
+   completion, and errors.
+4. Ensure Luna Tauri consumes AgentProvision through Alpha CLI/core rather than
+   inventing a separate ad hoc local agent loop.
+5. Implement the Alpha PR sequence from Claudia B: reconnecting job-events
+   transport, chat-job cancellation, idempotent job start, progress/status
+   taxonomy, then typed desktop-control models after the macOS schema freeze.
+6. Add tests for reconnect-from-`last_seq`, stream-open retry/backoff,
+   timeout-vs-failure classification, cancel-to-terminal behavior, offline
+   reattach, and duplicate-start idempotency once the API contract exists.
 
 ---
 
@@ -1081,6 +1249,44 @@ Additional discovery inputs:
     and prove signature verification is independent of received JSON key order.
     Fresh parent-branch validation passed `cargo fmt --check`, `cargo check`,
     `cargo test`, and `git diff --check`. Native actuation remains disabled.
+95. Branch `codex/luna-envelope-key-registry` is the next stacked Phase 2 slice
+    on top of PR #818. The API now exposes
+    `DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID` so Ed25519 envelope issuers can use
+    versioned key ids instead of a hard-coded client constant. Luna Tauri now
+    supports `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS`, a
+    comma/semicolon/newline-separated accepted-key registry in
+    `key_id=public_key` form, while preserving the legacy
+    `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY` fallback only for the
+    default key id. Missing, unknown, malformed, or empty key entries fail
+    closed before any native policy path, and native pointer/keyboard actuation
+    remains disabled. Luna Supervisor reviewed PR #820 through Alpha Chat and
+    found no code blocker for the stacked key-registry proof slice. She accepted
+    that the narrow versioned-key-id plus client accepted-key-registry item is
+    complete enough to move next to distribution/revocation design, while the
+    broader production key lifecycle, public-key distribution contract,
+    rotation/revocation semantics, notarized release gate, and canary actuation
+    design remain blocked. CI on the first PR #820 run exposed a
+    `ControlSafetyStrip` timing race where the test asserted `TCC 1/2` before
+    the mocked permission state replaced the initial `TCC --`; commit
+    `8d809b5f` changed the assertion to wait for the permission summary. Local
+    targeted validation for that fix passed:
+    `npm test -- ControlSafetyStrip.test.jsx --run`. Claude Code Desktop
+    Superpowers ultrareview later found no blocker/high issues, but raised two
+    mediums before key ids become load-bearing: empty Ed25519 key ids should
+    deny through an audited path instead of surfacing an uncaught claim-time
+    `RuntimeError`, and the Tauri registry verifier needed an end-to-end
+    composed test for a versioned key id. Commit `c5bb7f49` closes both:
+    API claim now preflights Ed25519 signing config and terminalizes bad
+    configuration with a display-safe denial audit, while Luna Tauri verifies a
+    signed versioned-key envelope through the configured registry and proves
+    unknown ids plus wrong-key signatures fail closed. Fresh stacked validation
+    passed `ruff check app/services/desktop_control_service.py
+    tests/api/v1/test_desktop_command_lifecycle.py`, `pytest
+    tests/api/v1/test_desktop_command_lifecycle.py -q`, `cargo fmt --check`,
+    `cargo check`, `cargo test`, `npm test -- ControlSafetyStrip.test.jsx
+    --run`, and `git diff --check`. Luna Supervisor's Alpha Chat re-review
+    cleared PR #818 to merge and cleared PR #820 as the next draft slice after
+    #818 lands; native actuation remains disabled.
 
 ---
 
@@ -1957,6 +2163,10 @@ Goal: add the missing API-to-Tauri path for action envelopes.
 - [ ] Add Ed25519 key lifecycle: key generation during enrollment, public key
       storage in `device_registry`, private key storage in Tauri secure storage,
       and rotation/revocation.
+  - [x] Add configurable API Ed25519 envelope key id plus Luna-side accepted-key
+        registry for versioned public keys. This is distribution plumbing only;
+        generation, secure storage, rotation, revocation, and device-scoped key
+        persistence remain pending.
 - [ ] Bind shell presence to `device_id`, `shell_id`, app version, hostname hash,
       OS username hash, and current capability manifest.
   - [x] Bind Luna shell presence to authenticated `device_id`, `shell_id`, and
@@ -2658,17 +2868,20 @@ Exit criteria:
 3. Exercise the proof command in an installed local branch build once a native
    command claim can be queued safely, and verify `desktop_native_control_denied`
    audit metadata reaches the expected Luna/session surfaces.
-4. Extend the Alpha-kernel adapter beyond readiness:
-   auth/session handoff, chat-job streaming from `alpha`, cancellation, error
-   display, offline behavior, release packaging, and app-monitor event mapping
-   into Luna UI.
+4. Extend and rework the Alpha CLI/kernel path beyond readiness:
+   auth/session handoff, durable async chat jobs, agent-friendly timeout
+   removal, resumable streaming from `alpha`, cancellation, error display,
+   offline behavior, release packaging, app-monitor event mapping into Luna UI,
+   and typed desktop-control request/response models.
 5. Add an API/Alpha CLI parity checklist for every Luna-facing platform
    capability: if API endpoints, schemas, or event types change, add matching
    Alpha CLI/core support and tests in the same PR.
 6. Finish the Ed25519 production key lifecycle before canary actuation:
-   generate/store the API signing key, distribute the pinned Luna public key in
-   release/installer config, rotate/revoke keys, and mirror Helm/GitHub secrets
-   so local proof verification and deployed envelopes use the same trust root.
+   generate/store the API signing key, define the Luna public-key distribution
+   contract, rotate/revoke keys, and mirror Helm/GitHub secrets so local proof
+   verification and deployed envelopes use the same trust root. The current
+   stacked branch only adds versioned key ids and the client accepted-key
+   registry.
 7. Re-review approval grant creation/consumption with council and Luna after the
    local verifier lands, then decide whether a narrow canary pointer execution
    gate can be designed without broad macOS actuation.
@@ -2683,3 +2896,20 @@ Exit criteria:
    restarts or heartbeat failures, not require an app restart.
 11. Include the PR #797 command-palette maximize follow-up in the next branch or
    explicitly keep it as a separate UX hardening item.
+12. Open the next macOS-only UX slice for Claudia C's first safe slice: add TCC
+    modal `Recheck`, `Why needed`, stale permission cleanup guidance, and
+    high-contrast/readability checks while preserving read-only readiness and
+    disabled native actuation.
+13. Open the next Alpha CLI/core slice for Claudia B's confirmed kernel gaps:
+    reconnecting job-events transport, cancel-to-terminal wiring, timeout
+    classification, and stream-open retry. Keep typed desktop-control models
+    blocked until Claudia C freezes the schema.
+14. Promote the exact Docker `_work` mount command from manual release smoke to
+    a CI/release assertion before marking future installed-release validation
+    complete:
+    `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`
+    must return no output.
+15. For every newly deployed Luna version or Luna feature, Codex must run the
+    installed app with Computer Use, validate the changed behavior end to end,
+    and record the result in this plan before marking the release or feature
+    validation complete.
