@@ -9,16 +9,50 @@
 //! short or heartbeat-backed and lets the CLI reconnect by event sequence.
 
 use clap::Args;
-use futures_util::StreamExt;
 use serde::Serialize;
 use std::io::Write;
 use std::time::Duration;
 
-use agentprovision_core::chat::{stream_chat_job_events, ChatJobStreamEvent};
+use agentprovision_core::chat::{
+    next_event_before, stream_chat_job_events, ChatJobStreamEvent, NextEvent,
+};
 
 use crate::context::Context;
 use crate::output;
 use crate::thinking::Thinking;
+
+// Transport resilience tuning (PR-A2 items 4 & 5).
+/// Base delay for capped-exponential backoff between failed stream-open
+/// attempts. Doubles each consecutive failure up to [`STREAM_OPEN_BACKOFF_CAP`].
+const STREAM_OPEN_BACKOFF_BASE: Duration = Duration::from_millis(500);
+/// Ceiling for the stream-open backoff.
+const STREAM_OPEN_BACKOFF_CAP: Duration = Duration::from_secs(8);
+/// Bounded retry budget: after this many *consecutive* stream-open failures
+/// (with the job not yet terminal) we give up and surface a resumable error
+/// instead of reconnecting forever.
+const MAX_STREAM_OPEN_FAILURES: u32 = 6;
+/// Idle-stall deadline: if no seq-advancing event arrives within this window
+/// (measured across reconnects, since the last rendered seq), the job is
+/// treated as stalled. The `job_id` stays resumable.
+const IDLE_STALL_DEADLINE: Duration = Duration::from_secs(120);
+
+/// Capped-exponential backoff for the Nth (1-based) consecutive failure:
+/// `base * 2^(attempt-1)`, clamped to `cap`. The shift is bounded so the
+/// multiplier can never overflow for pathological attempt counts.
+fn backoff_delay(attempt: u32, base: Duration, cap: Duration) -> Duration {
+    let shift = attempt.saturating_sub(1).min(20);
+    let mult = 1u128 << shift;
+    let ms = base.as_millis().saturating_mul(mult).min(cap.as_millis());
+    Duration::from_millis(ms as u64)
+}
+
+fn idle_stalled_since(
+    now: tokio::time::Instant,
+    last_progress: tokio::time::Instant,
+    deadline: Duration,
+) -> bool {
+    now.duration_since(last_progress) >= deadline
+}
 
 #[derive(Debug, Args)]
 pub struct SendArgs {
@@ -177,7 +211,7 @@ async fn stream_and_collect(
     let mut last_seq = 0_u64;
     let mut full = String::new();
     let mut stdout = std::io::stdout();
-    let mut stream_open_failures = 0_u8;
+    let mut stream_open_failures = 0_u32;
     // When --json or --no-stream is set we MUST NOT write deltas to stdout — they would
     // contaminate the JSON envelope printed at the end (which scripts pipe
     // to jq). Reviewer Important #1 from the PR #332 final review.
@@ -199,64 +233,146 @@ async fn stream_and_collect(
     let mut cur_col: u32 = 0;
     let mut rows_used: u32 = 0;
 
+    // Idle-stall deadline anchor (PR-A2 item 5). Declared OUTSIDE the reconnect
+    // loop so "idle since last seq" is measured across cooperative reconnects,
+    // not reset on every stream re-open. Only seq-advancing events push it.
+    let mut last_progress = tokio::time::Instant::now();
+
     loop {
+        if idle_stalled_since(
+            tokio::time::Instant::now(),
+            last_progress,
+            IDLE_STALL_DEADLINE,
+        ) {
+            think.finish();
+            anyhow::bail!(
+                "job stalled; no progress in {}s (job_id={job_id}; the job may still be \
+                 running; reconnect to resume)",
+                IDLE_STALL_DEADLINE.as_secs()
+            );
+        }
+
         let mut stream = match stream_chat_job_events(&ctx.client, &job_id, last_seq).await {
             Ok(stream) => {
                 stream_open_failures = 0;
                 stream
             }
             Err(err) => {
+                // A non-retryable open error (auth, 404 job-not-found, malformed
+                // request) will never succeed; surface it now, with the
+                // resumable job id, rather than burning the retry budget.
+                if !err.is_retryable() {
+                    think.finish();
+                    anyhow::bail!("chat job stream could not be opened (job_id={job_id}): {err}");
+                }
                 stream_open_failures = stream_open_failures.saturating_add(1);
-                log::warn!("chat job event stream open failed; polling before reconnect: {err}");
-                let job = ctx.client.get_chat_job(&job_id).await?;
-                match job.status.as_str() {
-                    "done" => {
-                        if let Some(result_message_id) = job.result_message_id {
-                            if let Some(content) = fetch_result_message_content(
-                                ctx,
-                                session_id,
-                                &result_message_id.to_string(),
-                            )
-                            .await?
-                            {
+                log::warn!(
+                    "chat job event stream open failed (attempt {stream_open_failures}); \
+                     polling job before reconnect: {err}"
+                );
+                // Poll the snapshot, but TOLERATE a failed poll: the same outage
+                // that broke the stream open usually breaks this too, and we must
+                // never exit without leaving the user a resumable job id.
+                match ctx.client.get_chat_job(&job_id).await {
+                    Ok(job) => match job.status.as_str() {
+                        "done" => {
+                            if let Some(result_message_id) = job.result_message_id {
+                                if let Some(content) = fetch_result_message_content(
+                                    ctx,
+                                    session_id,
+                                    &result_message_id.to_string(),
+                                )
+                                .await?
+                                {
+                                    think.finish();
+                                    full = content;
+                                    break;
+                                }
+                            }
+                            if stream_open_failures >= 3 {
                                 think.finish();
-                                full = content;
-                                break;
+                                anyhow::bail!(
+                                    "chat job completed, but its event stream could not be \
+                                     replayed (job_id={job_id})"
+                                );
                             }
                         }
-                        if stream_open_failures >= 3 {
+                        "failed" => {
+                            think.finish();
                             anyhow::bail!(
-                                "chat job completed, but the event stream could not be replayed"
+                                "chat job failed: {}",
+                                job.error.unwrap_or_else(|| "unknown error".to_string())
                             );
                         }
+                        "cancelled" => {
+                            think.finish();
+                            anyhow::bail!("chat job was cancelled");
+                        }
+                        _ => {}
+                    },
+                    Err(poll_err) => {
+                        log::warn!("chat job snapshot poll failed: {poll_err}");
                     }
-                    "failed" => {
-                        anyhow::bail!(
-                            "chat job failed: {}",
-                            job.error.unwrap_or_else(|| "unknown error".to_string())
-                        );
-                    }
-                    "cancelled" => anyhow::bail!("chat job was cancelled"),
-                    _ => {}
                 }
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                // Bounded retry budget: stop reconnecting after too many
+                // consecutive open failures and surface a clear, resumable error.
+                if stream_open_failures >= MAX_STREAM_OPEN_FAILURES {
+                    think.finish();
+                    anyhow::bail!(
+                        "server unreachable / job stalled after {stream_open_failures} attempts \
+                         (job_id={job_id}; the job may still be running; reconnect to resume): {err}"
+                    );
+                }
+                tokio::time::sleep(backoff_delay(
+                    stream_open_failures,
+                    STREAM_OPEN_BACKOFF_BASE,
+                    STREAM_OPEN_BACKOFF_CAP,
+                ))
+                .await;
                 continue;
             }
         };
         let mut reconnect = false;
+        // Whether this stream session produced any seq progress, used only to
+        // pace reconnects (an empty/dropped stream waits a beat to avoid a hot
+        // spin; a productive one re-opens promptly).
+        let mut made_progress_this_stream = false;
 
-        while let Some(item) = stream.next().await {
-            let event = match item {
-                Ok(event) => event,
+        loop {
+            let deadline = last_progress + IDLE_STALL_DEADLINE;
+            let next = match next_event_before(&mut stream, deadline).await {
+                Ok(next) => next,
                 Err(err) => {
+                    if !err.is_retryable() {
+                        think.finish();
+                        anyhow::bail!("chat job stream error (job_id={job_id}): {err}");
+                    }
                     log::warn!("chat job event stream interrupted; reconnecting: {err}");
                     reconnect = true;
                     break;
                 }
             };
+            let event = match next {
+                NextEvent::Event(event) => event,
+                NextEvent::Ended => {
+                    // Clean close without a terminal frame; reconnect by seq.
+                    reconnect = true;
+                    break;
+                }
+                NextEvent::Stalled => {
+                    think.finish();
+                    anyhow::bail!(
+                        "job stalled; no progress in {}s (job_id={job_id}; the job may still be \
+                         running; reconnect to resume)",
+                        IDLE_STALL_DEADLINE.as_secs()
+                    );
+                }
+            };
             match event {
                 ChatJobStreamEvent::Chunk { seq, text } => {
                     last_seq = last_seq.max(seq);
+                    last_progress = tokio::time::Instant::now();
+                    made_progress_this_stream = true;
                     // First chunk: clear the spinner before printing so
                     // the braille frame doesn't get pinned to the line we're
                     // about to write into. Subsequent calls are no-ops.
@@ -286,6 +402,8 @@ async fn stream_and_collect(
                 }
                 ChatJobStreamEvent::Event(event) => {
                     last_seq = last_seq.max(event.seq);
+                    last_progress = tokio::time::Instant::now();
+                    made_progress_this_stream = true;
                     // Lifecycle/tool frames are intentionally silent in the
                     // user-facing chat path; they remain available in the
                     // persisted job event log.
@@ -300,7 +418,8 @@ async fn stream_and_collect(
                     think.finish();
                     match status.as_str() {
                         "done" => {
-                            reconnect = false;
+                            // reconnect stays false (initializer); the post-loop
+                            // snapshot sees "done" and breaks the outer loop.
                             break;
                         }
                         "failed" => {
@@ -319,33 +438,75 @@ async fn stream_and_collect(
                     break;
                 }
                 ChatJobStreamEvent::Truncated { from_seq } => {
+                    // PR-A2 item 6: explicit handling. The server's replay window
+                    // no longer covers our cursor; events between last_seq and
+                    // from_seq are gone. Warn that some streamed output was
+                    // skipped, advance to the server floor, and reconnect. We do
+                    // NOT touch `last_progress`; a truncation is not new output.
+                    if from_seq > last_seq {
+                        log::warn!(
+                            "chat job replay window exceeded: skipping events {}..{from_seq} \
+                             (job_id={job_id}); some streamed output may be missing",
+                            last_seq.saturating_add(1)
+                        );
+                    }
                     last_seq = last_seq.max(from_seq);
                     reconnect = true;
                     break;
                 }
                 ChatJobStreamEvent::Other(_) => {
-                    // Ignore unknown frames silently in the user-facing path.
+                    // Heartbeat / unknown frame: NOT seq progress, so the idle
+                    // deadline is unchanged. Guard against a heartbeat-only
+                    // stream masking a real stall; `timeout_at` can return a
+                    // ready item even after the deadline has passed.
+                    if idle_stalled_since(
+                        tokio::time::Instant::now(),
+                        last_progress,
+                        IDLE_STALL_DEADLINE,
+                    ) {
+                        think.finish();
+                        anyhow::bail!(
+                            "job stalled; no progress in {}s (job_id={job_id}; the job may still \
+                             be running; reconnect to resume)",
+                            IDLE_STALL_DEADLINE.as_secs()
+                        );
+                    }
                 }
             }
         }
 
-        let job = ctx.client.get_chat_job(&job_id).await?;
-        match job.status.as_str() {
-            "done" => {
-                think.finish();
-                break;
-            }
-            "failed" => {
-                anyhow::bail!(
-                    "chat job failed: {}",
-                    job.error.unwrap_or_else(|| "unknown error".to_string())
-                );
-            }
-            "cancelled" => anyhow::bail!("chat job was cancelled"),
-            _ => {
-                if !reconnect {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+        // Snapshot the job to decide terminal vs. reconnect. TOLERATE a failed
+        // poll for the same resumability reason as above; the idle-stall
+        // deadline (measured across reconnects) is the global backstop that
+        // bounds any reconnect spin.
+        match ctx.client.get_chat_job(&job_id).await {
+            Ok(job) => match job.status.as_str() {
+                "done" => {
+                    think.finish();
+                    break;
                 }
+                "failed" => {
+                    think.finish();
+                    anyhow::bail!(
+                        "chat job failed: {}",
+                        job.error.unwrap_or_else(|| "unknown error".to_string())
+                    );
+                }
+                "cancelled" => {
+                    think.finish();
+                    anyhow::bail!("chat job was cancelled");
+                }
+                _ => {
+                    // Still running. Re-open promptly after a productive
+                    // reconnect; pace empty/dropped streams to avoid a hot spin.
+                    if !reconnect || !made_progress_this_stream {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            },
+            Err(poll_err) => {
+                log::warn!("chat job snapshot poll failed; will reconnect: {poll_err}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         }
     }
@@ -413,4 +574,63 @@ async fn fetch_result_message_content(
 fn render_markdown(text: &str) {
     let skin = termimad::MadSkin::default();
     skin.print_text(text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_grows_then_caps() {
+        let base = Duration::from_millis(500);
+        let cap = Duration::from_secs(8);
+        assert_eq!(backoff_delay(1, base, cap), Duration::from_millis(500));
+        assert_eq!(backoff_delay(2, base, cap), Duration::from_secs(1));
+        assert_eq!(backoff_delay(3, base, cap), Duration::from_secs(2));
+        assert_eq!(backoff_delay(4, base, cap), Duration::from_secs(4));
+        assert_eq!(backoff_delay(5, base, cap), Duration::from_secs(8));
+        // Capped from here on.
+        assert_eq!(backoff_delay(6, base, cap), Duration::from_secs(8));
+        assert_eq!(backoff_delay(7, base, cap), Duration::from_secs(8));
+    }
+
+    #[test]
+    fn backoff_never_overflows_for_large_attempts() {
+        let base = Duration::from_millis(500);
+        let cap = Duration::from_secs(8);
+        // Pathological attempt counts must clamp, not panic/overflow.
+        assert_eq!(backoff_delay(64, base, cap), cap);
+        assert_eq!(backoff_delay(u32::MAX, base, cap), cap);
+    }
+
+    #[test]
+    fn backoff_attempt_zero_is_base() {
+        // Defensive: 1-based callers never pass 0, but it must not underflow.
+        let base = Duration::from_millis(500);
+        let cap = Duration::from_secs(8);
+        assert_eq!(backoff_delay(0, base, cap), base);
+    }
+
+    #[test]
+    fn idle_stall_deadline_is_inclusive() {
+        let now = tokio::time::Instant::now();
+        let deadline = Duration::from_secs(120);
+
+        assert!(!idle_stalled_since(now, now, deadline));
+        assert!(!idle_stalled_since(
+            now,
+            now - Duration::from_secs(119),
+            deadline
+        ));
+        assert!(idle_stalled_since(
+            now,
+            now - Duration::from_secs(120),
+            deadline
+        ));
+        assert!(idle_stalled_since(
+            now,
+            now - Duration::from_secs(121),
+            deadline
+        ));
+    }
 }

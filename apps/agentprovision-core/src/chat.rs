@@ -19,7 +19,7 @@
 //! `{"delta":"..."}` / `{"text":"..."}` / `{"done":true}` shapes and
 //! the `[DONE]` sentinel some servers emit.
 
-use eventsource_stream::Eventsource;
+use eventsource_stream::{EventStreamError, Eventsource};
 use futures_util::stream::Stream;
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -187,8 +187,11 @@ pub async fn stream_chat_job_events(
     from_seq: u64,
 ) -> Result<impl Stream<Item = Result<ChatJobStreamEvent>>> {
     let path = format!("/api/v1/chat/jobs/{job_id}/events");
+    // Use the dedicated no-total-timeout stream client: the unary 180s timeout
+    // bounds a bytes_stream body (A0, tests/stream_timeout_spike.rs), which would
+    // kill a long agent turn's event stream mid-flight. PR-A1.
     let req = client
-        .request(reqwest::Method::GET, &path)?
+        .stream_request(reqwest::Method::GET, &path)?
         .header("Accept", "text/event-stream")
         .query(&[("from_seq", from_seq.to_string())]);
     let resp = req.send().await?;
@@ -198,7 +201,20 @@ pub async fn stream_chat_job_events(
         return Err(Error::Api { status, body });
     }
     let stream = resp.bytes_stream().eventsource().map(|res| {
-        let ev = res.map_err(|e| Error::other(format!("sse error: {e}")))?;
+        let ev = match res {
+            Ok(ev) => ev,
+            // A mid-stream transport break (proxy RST, premature EOF) is
+            // retryable by definition: classify it as Error::Transport so the
+            // CLI reconnect loop resumes by seq instead of bailing. Without
+            // this, an abrupt SSE drop collapsed to non-retryable Error::Other
+            // and the loop's `!is_retryable()` guard would bail, defeating the
+            // whole point of the durable transport (PR-A2 item 3/5).
+            Err(EventStreamError::Transport(e)) => return Err(Error::from(e)),
+            // UTF-8 / SSE-parse failures are below the application protocol:
+            // treat them as a stream interruption so the CLI can reconnect by
+            // seq instead of failing a resumable job.
+            Err(e) => return Err(Error::StreamInterrupted(format!("sse error: {e}"))),
+        };
         parse_chat_job_event(&ev.data)
     });
     Ok(stream)
@@ -251,6 +267,45 @@ fn parse_chat_job_event(data: &str) -> Result<ChatJobStreamEvent> {
             })))
         }
         _ => Ok(ChatJobStreamEvent::Other(data.to_string())),
+    }
+}
+
+/// Outcome of awaiting the next chat-job event under an idle deadline.
+///
+/// Used by the CLI reconnect loop to implement an idle-stall deadline
+/// (PR-A2 item 5): the caller resets `deadline` on each seq-advancing event,
+/// so a returned [`NextEvent::Stalled`] means no progress arrived within the
+/// idle window; the job is wedged, but the `job_id` is still resumable.
+#[derive(Debug)]
+pub enum NextEvent {
+    /// A frame arrived before the deadline.
+    Event(ChatJobStreamEvent),
+    /// The deadline elapsed before any frame arrived (idle stall).
+    Stalled,
+    /// The stream closed cleanly with no further frames.
+    Ended,
+}
+
+/// Await the next event from a chat-job stream, bounded by an absolute idle
+/// `deadline`. Returns [`NextEvent::Stalled`] if the deadline passes with no
+/// frame, [`NextEvent::Ended`] on clean close, [`NextEvent::Event`] otherwise.
+/// Transport errors surface as `Err` so the caller can classify and reconnect.
+///
+/// The caller owns "idle since last seq": it recomputes `deadline` from the
+/// last progress instant on every seq-advancing event, so heartbeats / unknown
+/// frames (which do not advance `seq`) do not extend the deadline.
+pub async fn next_event_before<S>(
+    stream: &mut S,
+    deadline: tokio::time::Instant,
+) -> Result<NextEvent>
+where
+    S: Stream<Item = Result<ChatJobStreamEvent>> + Unpin,
+{
+    match tokio::time::timeout_at(deadline, stream.next()).await {
+        Err(_elapsed) => Ok(NextEvent::Stalled),
+        Ok(None) => Ok(NextEvent::Ended),
+        Ok(Some(Ok(ev))) => Ok(NextEvent::Event(ev)),
+        Ok(Some(Err(e))) => Err(e),
     }
 }
 
