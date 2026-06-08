@@ -41,6 +41,18 @@ const ACTION_CAPABILITIES = {
   keyboard_key_chord: 'keyboard_control',
 };
 
+// Phase 3 pointer canary: once the boundary proof is ALLOWED, the actuation
+// runs through these Tauri commands (themselves flag-gated + lease-checked +
+// Stop/frontmost re-checked Rust-side). Keyboard has no actuation command yet
+// (Phase 4), so a keyboard proof never actuates. The canary actuates at the
+// centre of the active display — deterministic, safe, reversible; real
+// targeting arrives in a later phase.
+const POINTER_ACTUATION_COMMANDS = {
+  pointer_move: 'control_pointer_move',
+  pointer_click: 'control_pointer_click',
+};
+const POINTER_CANARY_POINT = { x: 0.5, y: 0.5 };
+
 function commandId(command) {
   return command?.desktop_command_id || command?.id;
 }
@@ -534,14 +546,111 @@ export async function executeClaimedDesktopCommand(
       );
       return;
     }
-    const completion = nativeBoundaryCompletion(action, proof, safety?.mode || null);
+    if (!proof?.allowed) {
+      const completion = nativeBoundaryCompletion(action, proof, safety?.mode || null);
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        completion.status,
+        completion.reason,
+        completion.metadata,
+        timeouts,
+      );
+      return;
+    }
+
+    // Proof allowed → actuate. Keyboard has no actuation command yet (Phase 4),
+    // so it is reported denied rather than executed.
+    const actuationCommand = POINTER_ACTUATION_COMMANDS[action];
+    if (!actuationCommand) {
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        'denied',
+        `desktop native control disabled; ${action} denied`,
+        {
+          control_mode: proof?.mode || safety?.mode || null,
+          native_boundary_audit_event_id: proof?.audit_event_id || null,
+          native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
+          result_kind: 'native_boundary_denial',
+        },
+        timeouts,
+      );
+      return;
+    }
+
+    try {
+      await invokeWithArgsTimeout(
+        invoke,
+        actuationCommand,
+        { x: POINTER_CANARY_POINT.x, y: POINTER_CANARY_POINT.y },
+        timeouts.nativeTimeoutMs,
+      );
+    } catch (error) {
+      // The actuation command fails closed on every gate it re-checks
+      // (flag/Stop/Observe/lease/frontmost/bounds). A 'stop'/'preempt' reason is
+      // a preemption; any other gate denial is a denial; everything else failed.
+      const reason = reasonText(error) || `desktop ${action} actuation failed`;
+      const lowered = reason.toLowerCase();
+      let status = 'failed';
+      if (lowered.includes('stop') || lowered.includes('preempt')) {
+        status = 'preempted';
+      } else if (
+        lowered.includes('disabled') ||
+        lowered.includes('drift') ||
+        lowered.includes('locked') ||
+        lowered.includes('rate_capped') ||
+        lowered.includes('denied') ||
+        lowered.includes('claim_required') ||
+        lowered.includes('approval_')
+      ) {
+        status = 'denied';
+      }
+      await completeCommand(
+        command,
+        shellId,
+        deviceToken,
+        status,
+        reason,
+        {
+          control_mode: safety?.mode || null,
+          native_boundary_audit_event_id: proof?.audit_event_id || null,
+          native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
+          result_kind: 'native_actuation_error',
+        },
+        timeouts,
+      );
+      return;
+    }
+
+    // Re-read safety: a Stop landing during actuation is reported as preemption.
+    let postSafety = null;
+    try {
+      postSafety = await invokeWithTimeout(
+        invoke,
+        'control_get_safety_state',
+        timeouts.safetyTimeoutMs,
+      );
+    } catch (_error) {
+      postSafety = null;
+    }
+    const preempted = postSafety?.mode === 'stopped';
     await completeCommand(
       command,
       shellId,
       deviceToken,
-      completion.status,
-      completion.reason,
-      completion.metadata,
+      preempted ? 'preempted' : 'succeeded',
+      preempted
+        ? `desktop control stopped; ${action} preempted`
+        : `desktop ${action} actuated`,
+      {
+        control_mode: postSafety?.mode || safety?.mode || null,
+        native_boundary_audit_event_id: proof?.audit_event_id || null,
+        native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
+        result_kind: 'native_actuation',
+      },
       timeouts,
     );
     return;

@@ -520,6 +520,94 @@ describe('executeClaimedDesktopCommand', () => {
     }));
   });
 
+  it('actuates the pointer canary when the native boundary proof is allowed', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }) // pre-actuation safety
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID) // live frontmost
+      .mockResolvedValueOnce({
+        allowed: true,
+        outcome: 'allowed',
+        reason: '',
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        audit_event_id: 'native-audit-actuate',
+        mode: 'control_locked',
+      }) // boundary proof
+      .mockResolvedValueOnce(undefined) // control_pointer_click actuation
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }); // post-actuation safety
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_click'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_pointer_click', { x: 0.5, y: 0.5 });
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('succeeded');
+    expect(body.reason).toBe('desktop pointer_click actuated');
+    expect(body.metadata.result_kind).toBe('native_actuation');
+    expect(body.metadata.native_boundary_audit_event_id).toBe('native-audit-actuate');
+  });
+
+  it('reports preempted when Stop lands during pointer actuation', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID)
+      .mockResolvedValueOnce({
+        allowed: true,
+        outcome: 'allowed',
+        reason: '',
+        action: 'pointer_move',
+        capability: 'pointer_control',
+        audit_event_id: 'native-audit-preempt',
+        mode: 'control_locked',
+      })
+      .mockResolvedValueOnce(undefined) // actuation
+      .mockResolvedValueOnce({ mode: 'stopped', can_control: false }); // Stop landed mid-actuation
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_move'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_pointer_move', { x: 0.5, y: 0.5 });
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('preempted');
+    expect(body.reason).toBe('desktop control stopped; pointer_move preempted');
+  });
+
+  it('reports denied when pointer actuation is rejected by a Rust gate', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID)
+      .mockResolvedValueOnce({
+        allowed: true,
+        outcome: 'allowed',
+        reason: '',
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        audit_event_id: 'native-audit-gate',
+        mode: 'control_locked',
+      })
+      .mockRejectedValueOnce(new Error('active_app_drift')); // actuation re-check denies
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_click'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_pointer_click', { x: 0.5, y: 0.5 });
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.metadata.result_kind).toBe('native_actuation_error');
+  });
+
   it('preempts native control commands when local Stop is latched', async () => {
     invokeMock.mockResolvedValueOnce({ mode: 'stopped', can_control: false });
 
