@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -25,6 +25,7 @@ from app.schemas.accountable_learning import (
     RISK_THRESHOLDS,
     LearningArtifact,
 )
+from app.schemas.commitment_record import strip_blank_refs
 from app.services import commitment_service, learning_artifact_io, red_flag_engine
 
 router = APIRouter()
@@ -80,6 +81,11 @@ class CommitmentCreateIn(BaseModel):
 class CommitmentCompleteInternalIn(BaseModel):
     proof_refs: List[str] = Field(default_factory=list)
     user_confirmed: bool = False
+
+    @field_validator("proof_refs")
+    @classmethod
+    def _v_proof_refs(cls, v):
+        return strip_blank_refs(v) or []
 
 
 @router.post("/commitments", dependencies=[Depends(_verify_internal_key)])
@@ -149,7 +155,7 @@ def internal_list_open(
 @router.get("/commitments/red-flags", dependencies=[Depends(_verify_internal_key)])
 def internal_red_flags(
     session_id: Optional[str] = None,
-    min_level: str = "warn",
+    min_level: Literal["watch", "warn", "escalate", "block"] = "warn",
     tenant_id: uuid.UUID = Depends(_tenant_id),
     db: Session = Depends(get_db),
 ) -> list[dict[str, Any]]:

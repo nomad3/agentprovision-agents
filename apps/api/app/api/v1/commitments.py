@@ -1,10 +1,10 @@
 """Tenant-scoped commitment record API endpoints."""
 
 import uuid
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -13,6 +13,7 @@ from app.schemas.commitment_record import (
     CommitmentRecordCreate,
     CommitmentRecordInDB,
     CommitmentRecordUpdate,
+    strip_blank_refs,
 )
 from app.services import commitment_service, red_flag_engine
 
@@ -24,6 +25,11 @@ class CommitmentCompleteIn(BaseModel):
 
     proof_refs: List[str] = []
     user_confirmed: bool = False
+
+    @field_validator("proof_refs")
+    @classmethod
+    def _v_proof_refs(cls, v):
+        return strip_blank_refs(v) or []
 
 
 @router.get("", response_model=List[CommitmentRecordInDB])
@@ -76,7 +82,7 @@ def list_open_commitments(
 @router.get("/red-flags")
 def list_red_flags(
     session_id: Optional[str] = Query(default=None),
-    min_level: str = Query(default="warn"),
+    min_level: Literal["watch", "warn", "escalate", "block"] = Query(default="warn"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):

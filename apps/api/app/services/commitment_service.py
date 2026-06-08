@@ -28,6 +28,25 @@ class CommitmentProofRequired(ValueError):
 OPEN_COMMITMENT_STATES = ("open", "in_progress", "blocked", "at_risk")
 
 
+def _clean_proofs(refs) -> List[str]:
+    """Normalize proof_refs to real, non-blank evidence.
+
+    The proof gate must check proof CONTENT, not list length: a list like
+    ``[""]`` or ``["   "]`` is truthy and would otherwise satisfy the gate with
+    semantically-empty evidence (adversarial-review HIGH finding). Strip each
+    string and drop blanks; non-string entries are preserved as-is.
+    """
+    out: List[str] = []
+    for r in refs or []:
+        if isinstance(r, str):
+            s = r.strip()
+            if s:
+                out.append(s)
+        elif r is not None:
+            out.append(r)
+    return out
+
+
 def _validate_goal_ref(
     db: Session,
     tenant_id: uuid.UUID,
@@ -142,15 +161,18 @@ def update_commitment(
             # proof_refs (present on the record or set in this same update).
             # The explicit user-confirmation escape lives in
             # complete_commitment_with_proof(user_confirmed=True).
-            proof_after = update_data.get("proof_refs")
-            if proof_after is None:
-                proof_after = list(commitment.proof_refs or [])
+            proof_in = update_data.get("proof_refs")
+            if proof_in is None:
+                proof_in = list(commitment.proof_refs or [])
+            proof_after = _clean_proofs(proof_in)
             if not proof_after:
                 raise CommitmentProofRequired(
                     "Cannot mark commitment fulfilled without proof_refs; use "
                     "complete_commitment_with_proof(user_confirmed=True) for "
                     "explicit user confirmation."
                 )
+            # Persist the cleaned proof list (drops blank/whitespace entries).
+            update_data["proof_refs"] = proof_after
             update_data["fulfilled_at"] = datetime.utcnow()
             update_data["broken_at"] = None
             update_data["broken_reason"] = None
@@ -319,7 +341,7 @@ def complete_commitment_with_proof(
     if not commitment:
         return None
 
-    proofs = list(proof_refs or []) or list(commitment.proof_refs or [])
+    proofs = _clean_proofs(proof_refs) or _clean_proofs(commitment.proof_refs)
     if not proofs and not user_confirmed:
         raise CommitmentProofRequired(
             f"Commitment {commitment_id} cannot be completed without proof_refs "

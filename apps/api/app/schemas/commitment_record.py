@@ -16,6 +16,16 @@ def _validate_optional_choice(value, allowed, name):
     return value
 
 
+def strip_blank_refs(value):
+    """Drop blank/whitespace string entries from a refs list (None passes through).
+
+    Shared by the proof-gate input schemas so an empty string can never be
+    accepted as evidence (adversarial-review HIGH finding)."""
+    if value is None:
+        return value
+    return [s.strip() for s in value if isinstance(s, str) and s.strip()]
+
+
 class CommitmentType(str, Enum):
     ACTION = "action"
     FOLLOWUP = "followup"
@@ -115,6 +125,14 @@ class CommitmentRecordUpdate(BaseModel):
     @classmethod
     def _v_esc(cls, v):
         return _validate_optional_choice(v, ESCALATION_POLICIES, "escalation_policy")
+
+    @field_validator("proof_refs")
+    @classmethod
+    def _v_proof_refs(cls, v):
+        # Drop blank/whitespace proof entries so they can never count as
+        # evidence (adversarial-review HIGH). The service gate strips too;
+        # this keeps the persisted list clean on any PATCH path.
+        return strip_blank_refs(v)
 
 
 class CommitmentRecordInDB(BaseModel):

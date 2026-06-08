@@ -187,13 +187,25 @@ def scan_open_commitments(
     Returns [] when the engine is disabled for the tenant (fail-closed). The
     actual notification + dedup of unchanged conditions lives in the operator
     surface (PR6); this scan is pure detection.
+
+    Raises ValueError on an unrecognized ``min_level`` rather than silently
+    defaulting to ``warn`` (adversarial-review LOW finding) — an operator asking
+    for escalate-only must never get warn rows back from a typo'd filter. The
+    API boundary additionally constrains it with a Literal (422 on bad input).
     """
+    # Validate BEFORE the killswitch early-return so a bad level always errors,
+    # regardless of whether the engine is enabled for this tenant.
+    if min_level not in _LEVEL_RANK:
+        raise ValueError(
+            f"unknown min_level {min_level!r}; expected one of "
+            f"{sorted(_LEVEL_RANK)}"
+        )
     if not is_red_flag_engine_enabled(db, tenant_id):
         return []
     from app.services import commitment_service as cs
 
     now = now or datetime.utcnow()
-    threshold = _LEVEL_RANK.get(min_level, 1)
+    threshold = _LEVEL_RANK[min_level]
     flags: List[RedFlag] = []
     for c in cs.list_open_commitments(db, tenant_id, session_id=session_id):
         flag = evaluate_red_flag(c, now=now)
