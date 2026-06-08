@@ -97,7 +97,12 @@ _COMMAND_TOOL_ACTIONS = {
     "desktop_keyboard_key_chord": "keyboard_key_chord",
 }
 
-_DISABLED_NATIVE_CONTROL_ACTIONS = frozenset(_NATIVE_CONTROL_CAPABILITIES)
+# Pointer is the Phase 3 canary: enabled (issued as a signed native-control
+# command, gated by an approval grant + allowlisted target). Keyboard stays
+# disabled until Phase 4 exits.
+_POINTER_CONTROL_ACTIONS = frozenset({"pointer_move", "pointer_click"})
+_KEYBOARD_CONTROL_ACTIONS = frozenset({"keyboard_type", "keyboard_key_chord"})
+_DISABLED_NATIVE_CONTROL_ACTIONS = _KEYBOARD_CONTROL_ACTIONS
 
 _SAFE_METADATA_KEYS = {
     "can_observe",
@@ -686,6 +691,105 @@ def _enqueue_disabled_native_control_command(
             "outcome": event.outcome,
             "reason": event.reason,
             **_denial_result_code_field(event),
+        },
+        tenant_id=tenant_id,
+    )
+    return command, event, session_event
+
+
+def _enqueue_native_control_command(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: DesktopCommandEnqueue,
+    shell_id: str,
+    shell_capabilities: dict[str, Any],
+    device_id: uuid.UUID,
+    capability: str,
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None]:
+    """Enqueue a PENDING pointer (Phase 3 canary) native-control command.
+
+    Pointer actuation is allowed only against an allowlisted target and only when
+    backed by an approval grant. The ed25519-signed envelope is built when the
+    desktop shell claims the command (``_build_signed_command_envelope`` →
+    ``claim_next_desktop_command``); this only validates + queues. Keyboard
+    control stays disabled (Phase 4) via ``_enqueue_disabled_native_control_command``.
+    """
+    if not bool(shell_capabilities.get("can_observe")):
+        raise HTTPException(status_code=409, detail="Desktop shell cannot observe")
+    # Native control must target an allowlisted bundle. The approval grant is
+    # enforced (and consumed) at claim time, like observe — a pending command
+    # cannot be actuated until claim_next_desktop_command matches + consumes a
+    # native_control grant for this exact target.
+    raw_target = request.payload.get("target") if isinstance(request.payload, dict) else None
+    target = _require_native_control_target_binding(raw_target, action=request.action)
+
+    now = _utcnow()
+    command = DesktopCommand(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=request.session_id,
+        shell_id=shell_id,
+        device_id=device_id,
+        approval_id=request.approval_id,
+        capability=capability,
+        status="pending",
+        source="mcp",
+        nonce=request.nonce,
+        payload={
+            "action": request.action,
+            "tool_name": request.tool_name,
+            "mode": "control_locked",
+            "risk_tier": "native_control",
+            "target": target,
+            "request": _safe_request_metadata(request.payload),
+        },
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(command)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = _matching_enqueued_command_for_nonce(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request=request,
+        )
+        if existing:
+            return existing, _event_for_existing_command(
+                db,
+                existing,
+                tool_name=request.tool_name,
+            ), None
+        raise HTTPException(status_code=409, detail="Desktop command nonce already used")
+
+    event = _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_queued",
+        source="mcp",
+        outcome="requested",
+        metadata={
+            "tool_name": request.tool_name,
+            "risk_tier": "native_control",
+            **_safe_request_metadata(request.payload),
+        },
+    )
+    db.commit()
+    db.refresh(command)
+    db.refresh(event)
+
+    session_event = _publish_display_safe_session_event(
+        request.session_id,
+        event.event_type,
+        {
+            **_display_safe_command_payload(command),
+            "desktop_event_id": str(event.id),
+            "outcome": event.outcome,
         },
         tenant_id=tenant_id,
     )
@@ -2008,6 +2112,17 @@ def enqueue_desktop_command(
             request=request,
             shell_id=shell_id,
             device_id=device_id,
+        )
+    if request.action in _POINTER_CONTROL_ACTIONS:
+        return _enqueue_native_control_command(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request=request,
+            shell_id=shell_id,
+            shell_capabilities=shell_capabilities,
+            device_id=device_id,
+            capability=capability,
         )
 
     required_capability = "can_observe"

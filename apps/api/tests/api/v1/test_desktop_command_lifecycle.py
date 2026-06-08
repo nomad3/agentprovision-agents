@@ -894,7 +894,105 @@ def test_replayed_envelope_nonce_is_denied_and_audited(db_session, seeded):
     assert nonce_row.status == "replayed"
 
 
-def test_native_control_command_enqueue_is_denied_before_claim(db_session, seeded):
+def test_pointer_enqueue_rejects_missing_or_unallowlisted_target(db_session, seeded):
+    # Phase 3: pointer issuance is enabled, but only against an allowlisted
+    # target. A missing or non-allowlisted target is rejected before queuing.
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as missing:
+            enqueue_desktop_command(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandEnqueue(
+                    session_id=SESSION_ID,
+                    action="pointer_click",
+                    tool_name="desktop_pointer_click",
+                    shell_id=None,
+                    nonce="pointer-missing-target",
+                    payload={"x": 1, "y": 2},
+                ),
+            )
+        assert missing.value.status_code == 422
+
+        with pytest.raises(HTTPException) as unallowlisted:
+            enqueue_desktop_command(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandEnqueue(
+                    session_id=SESSION_ID,
+                    action="pointer_click",
+                    tool_name="desktop_pointer_click",
+                    shell_id=None,
+                    nonce="pointer-bad-target",
+                    payload={
+                        "target": {
+                            "bundle_id": OTHER_CANARY_BUNDLE_ID,
+                            "action": "pointer_click",
+                        }
+                    },
+                ),
+            )
+        assert unallowlisted.value.status_code == 422
+        assert "target not allowlisted" in str(unallowlisted.value.detail).lower()
+
+
+def test_pointer_enqueue_queues_pending_for_allowlisted_target(db_session, seeded):
+    # An allowlisted pointer command queues a PENDING native-control command
+    # (no longer denied at enqueue). Raw coordinates are never persisted.
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, event, _session_event = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="pointer_move",
+                tool_name="desktop_pointer_move",
+                shell_id=None,
+                nonce="pointer-pending",
+                payload={
+                    "x": 100,
+                    "y": 200,
+                    "raw_target_text": "must not persist",
+                    "target": {
+                        "bundle_id": CANARY_BUNDLE_ID,
+                        "action": "pointer_move",
+                        "window_title_pattern": "Luna Canary",
+                    },
+                },
+            ),
+        )
+
+    assert command.status == "pending"
+    assert command.capability == "pointer_control"
+    assert command.completed_at is None
+    assert command.payload["mode"] == "control_locked"
+    assert command.payload["risk_tier"] == "native_control"
+    assert command.payload["target"]["bundle_id"] == CANARY_BUNDLE_ID
+    assert command.payload["target"]["action"] == "pointer_move"
+    assert event.event_type == "desktop_command_queued"
+    assert event.outcome == "requested"
+    assert "must not persist" not in str(command.payload)
+    assert "must not persist" not in str(event.event_metadata)
+
+
+def test_keyboard_enqueue_still_denied(db_session, seeded):
+    # Keyboard control stays fully disabled until Phase 4.
     with patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
         return_value=_presence(),
@@ -905,37 +1003,102 @@ def test_native_control_command_enqueue_is_denied_before_claim(db_session, seede
             user_id=USER_ID,
             request=DesktopCommandEnqueue(
                 session_id=SESSION_ID,
+                action="keyboard_type",
+                tool_name="desktop_keyboard_type",
+                shell_id=None,
+                nonce="keyboard-still-denied",
+                payload={"text": "must not persist"},
+            ),
+        )
+
+    assert command.status == "denied"
+    assert command.capability == "keyboard_control"
+    assert event.outcome == "denied"
+    assert event.reason == "desktop native control disabled; keyboard_type denied"
+    assert "must not persist" not in str(command.payload)
+
+
+def test_pointer_command_claim_issues_signed_native_control_envelope(db_session, seeded):
+    # End-to-end server issuance: an allowlisted pointer command backed by a
+    # native_control grant is claimed into a SIGNED (Ed25519) envelope and the
+    # grant is consumed — this is the envelope the client proves + actuates.
+    encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM",
+        "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+        encoded_private_key,
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={
+                    "bundle_id": CANARY_BUNDLE_ID,
+                    "action": "pointer_click",
+                    "window_title_pattern": "Luna Canary",
+                },
+                expires_in_seconds=60,
+            ),
+        )
+        command, _event, _session_event = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
                 action="pointer_click",
                 tool_name="desktop_pointer_click",
                 shell_id=None,
-                nonce="native-pointer-denied",
+                nonce="pointer-claim-signed",
+                approval_id=grant.id,
                 payload={
-                    "x": 100,
-                    "y": 200,
-                    "raw_target_text": "must not persist",
+                    "target": {
+                        "bundle_id": CANARY_BUNDLE_ID,
+                        "action": "pointer_click",
+                        "window_title_pattern": "Luna Canary",
+                    },
                 },
             ),
         )
-        claimed, claim_event, _claim_session_event = claim_next_desktop_command(
+        claimed, event, _claim_session_event = claim_next_desktop_command(
             db_session,
             user=seeded,
             device_token=DEVICE_TOKEN,
             claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
         )
 
-    assert command.status == "denied"
-    assert command.capability == "pointer_control"
-    assert command.completed_at is not None
-    assert command.lease_expires_at is None
-    assert command.payload["mode"] == "control_locked"
-    assert event.event_type == "desktop_command_completed"
-    assert event.outcome == "denied"
-    assert event.reason == "desktop native control disabled; pointer_click denied"
-    assert event.event_metadata["result_kind"] == "unsupported"
-    assert "must not persist" not in str(command.payload)
-    assert "must not persist" not in str(event.event_metadata)
-    assert claimed is None
-    assert claim_event is None
+    assert claimed is not None
+    assert claimed.id == command.id
+    assert claimed.status == "claimed"
+    envelope = claimed.payload["command_envelope"]
+    assert envelope["signature_alg"] == "Ed25519"
+    assert envelope["capability"] == "pointer_control"
+    assert envelope["risk_tier"] == "native_control"
+    assert envelope["action"] == "pointer_click"
+    assert envelope["approval_risk_tier"] == "native_control"
+    assert envelope["approval_id"] == str(grant.id)
+    assert envelope["target"]["bundle_id"] == CANARY_BUNDLE_ID
+    assert envelope["signature"]
+    assert event.event_type == "desktop_command_claimed"
+    consumed = db_session.query(DesktopCommandApprovalGrant).filter(
+        DesktopCommandApprovalGrant.id == grant.id,
+    ).one()
+    assert consumed.status == "consumed"
 
 
 def test_native_control_denial_nonce_retry_is_idempotent(db_session, seeded):
