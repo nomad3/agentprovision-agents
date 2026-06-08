@@ -476,6 +476,7 @@ describe('executeClaimedDesktopCommand', () => {
   it('denies native control commands without invoking local pointer or keyboard controls', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID)
       .mockResolvedValueOnce({
         allowed: false,
         outcome: 'denied',
@@ -503,8 +504,10 @@ describe('executeClaimedDesktopCommand', () => {
         action: 'pointer_click',
         capability: 'pointer_control',
         approval_id: APPROVAL_ID,
+        live_frontmost_bundle_id: CANARY_BUNDLE_ID,
       }),
     });
+    expect(invokeMock).toHaveBeenCalledWith('control_get_frontmost_app_bundle_id');
     expect(invokeMock).not.toHaveBeenCalledWith('control_pointer_click');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('denied');
@@ -528,6 +531,7 @@ describe('executeClaimedDesktopCommand', () => {
     );
 
     expect(invokeMock).toHaveBeenCalledWith('control_get_safety_state');
+    expect(invokeMock).not.toHaveBeenCalledWith('control_get_frontmost_app_bundle_id');
     expect(invokeMock).not.toHaveBeenCalledWith('control_keyboard_type');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('preempted');
@@ -535,9 +539,49 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.metadata).toEqual(withEnvelope({ control_mode: 'stopped' }));
   });
 
+  it('passes a null live bundle to the native boundary when frontmost preflight fails', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockRejectedValueOnce(new Error('frontmost unavailable'))
+      .mockResolvedValueOnce({
+        allowed: false,
+        outcome: 'denied',
+        reason: 'active_app_drift; pointer_click denied',
+        action: 'pointer_click',
+        capability: 'pointer_control',
+        audit_event_id: 'native-audit-frontmost-missing',
+        mode: 'control_locked',
+      });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('pointer_click'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_prove_native_command_boundary', {
+      request: expect.objectContaining({
+        action: 'pointer_click',
+        live_frontmost_bundle_id: null,
+      }),
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('control_pointer_click');
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('denied');
+    expect(body.reason).toBe('active_app_drift; pointer_click denied');
+    expect(body.metadata).toEqual(withEnvelope({
+      control_mode: 'control_locked',
+      native_boundary_audit_event_id: 'native-audit-frontmost-missing',
+      native_boundary_capability: 'pointer_control',
+      result_kind: 'native_boundary_denial',
+    }));
+  });
+
   it('fails closed when the native-control boundary proof is unavailable', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'observe', can_control: false })
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID)
       .mockRejectedValueOnce(new Error('native boundary unavailable'));
 
     await executeClaimedDesktopCommand(
@@ -551,8 +595,10 @@ describe('executeClaimedDesktopCommand', () => {
       request: expect.objectContaining({
         action: 'keyboard_key_chord',
         capability: 'keyboard_control',
+        live_frontmost_bundle_id: CANARY_BUNDLE_ID,
       }),
     });
+    expect(invokeMock).toHaveBeenCalledWith('control_get_frontmost_app_bundle_id');
     expect(invokeMock).not.toHaveBeenCalledWith('control_keyboard_key_chord');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('failed');

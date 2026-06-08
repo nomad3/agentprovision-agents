@@ -174,10 +174,21 @@ function envelopeBindingFields(command, action, shellId, expectedContext = {}) {
   };
 }
 
-function nativeBoundaryProofRequest(command, action, shellId, expectedContext = {}) {
+function nativeBoundaryProofRequest(
+  command,
+  action,
+  shellId,
+  expectedContext = {},
+  liveFrontmostBundleId = null,
+) {
+  const normalizedLiveBundle = typeof liveFrontmostBundleId === 'string'
+    && liveFrontmostBundleId.trim().length > 0
+    ? liveFrontmostBundleId.trim()
+    : null;
   return {
     ...envelopeBindingFields(command, action, shellId, expectedContext),
     target: command?.payload?.target || command?.payload?.command_envelope?.target || null,
+    live_frontmost_bundle_id: normalizedLiveBundle,
     command_envelope: command?.payload?.command_envelope || null,
     approval: command?.payload?.approval || null,
   };
@@ -403,6 +414,19 @@ async function invokeWithArgsTimeout(invoke, command, args, timeoutMs) {
   return withTimeout(() => invoke(command, args), timeoutMs, `Tauri command ${command}`);
 }
 
+async function readLiveFrontmostBundleId(invoke, timeouts) {
+  try {
+    return await invokeWithTimeout(
+      invoke,
+      'control_get_frontmost_app_bundle_id',
+      timeouts.nativeTimeoutMs,
+    );
+  } catch (error) {
+    console.warn('[Luna] frontmost app bundle preflight failed:', reasonText(error));
+    return null;
+  }
+}
+
 export async function executeClaimedDesktopCommand(
   command,
   shellId,
@@ -481,12 +505,21 @@ export async function executeClaimedDesktopCommand(
       );
       return;
     }
+    const liveFrontmostBundleId = await readLiveFrontmostBundleId(invoke, timeouts);
     let proof;
     try {
       proof = await invokeWithArgsTimeout(
         invoke,
         'control_prove_native_command_boundary',
-        { request: nativeBoundaryProofRequest(command, action, shellId, expectedContext) },
+        {
+          request: nativeBoundaryProofRequest(
+            command,
+            action,
+            shellId,
+            expectedContext,
+            liveFrontmostBundleId,
+          ),
+        },
         timeouts.nativeTimeoutMs,
       );
     } catch (error) {

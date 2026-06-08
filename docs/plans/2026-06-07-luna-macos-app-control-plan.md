@@ -228,6 +228,12 @@ enabled in this phase. `desktop_control_allows_actuation()` stays false and
 server-side native target allowlist, grant target binding, v2 native proof
 envelope target block, Luna hook validation, and Rust native-boundary target
 presence checks implemented locally; live native enqueue remains denied.
+2026-06-07 PR-C2 local slice (`codex/luna-c2-frontmost-preflight`) adds the
+macOS `NSWorkspace.shared.frontmostApplication.bundleIdentifier` proof reader,
+derives the live frontmost bundle inside the Rust proof command before boundary
+evaluation, and denies missing or mismatched live bundles as `active_app_drift`
+while preserving `desktop_control_allows_actuation() == false` and
+`tier_enabled == false`.
 
 Goal: make "act only on the approved, currently-frontmost, allow-listed app" an
 enforced, tested, server-plus-client property before any actuation unblock. This
@@ -439,6 +445,16 @@ Tauri (`apps/luna-client/src/hooks/__tests__/useDesktopCommandClaims.test.jsx`,
    reader, live active-app/window/display/bounds preflight, per-capability gate,
    gate-helper wiring, durable Tauri replay window, and release/install gates.
    Native actuation remains closed.
+10. Codex PR-C2 local branch `codex/luna-c2-frontmost-preflight` now implements
+    the `NSWorkspace` live frontmost bundle reader and Rust proof binding for
+    bundle drift. The Tauri proof command overwrites any frontend-supplied live
+    bundle with the native `NSWorkspace` read before boundary evaluation.
+    Verified locally with
+    `vitest run src/hooks/__tests__/useDesktopCommandClaims.test.jsx` (32/32),
+    `cargo test native_boundary --lib` (11/11), `npm run build`, `cargo check`,
+    and `git diff --check`. This advances item 9's frontmost-bundle gap only:
+    window/title/display/bounds preflight, per-capability gate, durable replay,
+    release/install gates, and actual native actuation remain open and disabled.
 
 #### Hard gates before Phase 3
 
