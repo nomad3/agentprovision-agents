@@ -109,6 +109,17 @@ pub(crate) fn gesture_native_boundary_allows(actuation_enabled: bool, stopped: b
     actuation_enabled && !stopped
 }
 
+/// Phase 3 pointer-canary actuation guard. Distinct from the gesture-pinch path
+/// above: the canary is governed by the per-capability pointer flag
+/// (`LUNA_ACTUATION_POINTER_ENABLED`) plus the command-boundary proof and lease,
+/// NOT the hard-disabled global `desktop_control_allows_actuation()` kill switch.
+/// Pure + deny-by-default: a final live Stop re-check (`stopped`) still vetoes
+/// even when the flag is on, so a flag flip alone cannot post an event while
+/// Stop is latched.
+pub(crate) fn canary_pointer_actuation_allowed(pointer_flag_enabled: bool, stopped: bool) -> bool {
+    pointer_flag_enabled && !stopped
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -277,6 +288,69 @@ pub async fn move_abs(_x: f32, _y: f32) {}
 #[cfg(not(target_os = "macos"))]
 pub async fn click() {}
 
+// ---- Phase 3 pointer canary actuation -----------------------------------
+//
+// A separate, command-boundary-governed actuation path. Unlike `move_abs` /
+// `click` (the gesture-pinch path, gated on the hard-disabled global kill
+// switch), these are called ONLY by the actuation command after a boundary
+// proof + lease + live Stop/frontmost/bounds re-check have all passed. They
+// must NOT re-impose the gesture-pinch frontmost/global-mode policy — the
+// command path owns target binding. They still require Accessibility and
+// surface a structured error instead of silently no-oping, so the command can
+// audit the result.
+
+/// Move the system cursor to normalized [0, 1] coordinates of the main display.
+/// Caller MUST have proven the boundary + lease + live Stop/frontmost/bounds
+/// first; this only performs the bounds clamp + the native move.
+#[cfg(target_os = "macos")]
+pub async fn canary_move_norm(norm_x: f64, norm_y: f64) -> Result<(), String> {
+    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
+        return Err("accessibility_denied".to_string());
+    }
+    let (dw, dh) = ensure_display_size();
+    let px = (norm_x.clamp(0.0, 1.0) * dw as f64) as i32;
+    let py = (norm_y.clamp(0.0, 1.0) * dh as f64) as i32;
+    let mut guard = ENIGO.lock().await;
+    if guard.is_none() {
+        *guard = Enigo::new(&Settings::default()).ok().map(SendEnigo);
+    }
+    match guard.as_mut() {
+        Some(e) => e
+            .move_mouse(px, py, Coordinate::Abs)
+            .map_err(|err| format!("enigo_move_failed: {err:?}")),
+        None => Err("enigo_unavailable".to_string()),
+    }
+}
+
+/// Synthesize a single left click at the current cursor position. Phase 3
+/// allows left single-click only (no drag, no multi-click).
+#[cfg(target_os = "macos")]
+pub async fn canary_click() -> Result<(), String> {
+    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
+        return Err("accessibility_denied".to_string());
+    }
+    let mut guard = ENIGO.lock().await;
+    if guard.is_none() {
+        *guard = Enigo::new(&Settings::default()).ok().map(SendEnigo);
+    }
+    match guard.as_mut() {
+        Some(e) => e
+            .button(Button::Left, Direction::Click)
+            .map_err(|err| format!("enigo_click_failed: {err:?}")),
+        None => Err("enigo_unavailable".to_string()),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn canary_move_norm(_norm_x: f64, _norm_y: f64) -> Result<(), String> {
+    Err("unsupported_platform".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn canary_click() -> Result<(), String> {
+    Err("unsupported_platform".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,5 +401,16 @@ mod tests {
         ));
         set_gesture_stopped(true); // restore safe default for any other test
         assert!(gesture_stopped());
+    }
+
+    #[test]
+    fn canary_guard_requires_flag_and_not_stopped() {
+        // Flag off denies regardless of Stop.
+        assert!(!canary_pointer_actuation_allowed(false, false));
+        assert!(!canary_pointer_actuation_allowed(false, true));
+        // Even with the pointer flag on, a latched Stop still vetoes.
+        assert!(!canary_pointer_actuation_allowed(true, true));
+        // Only flag-on AND not-stopped proceeds.
+        assert!(canary_pointer_actuation_allowed(true, false));
     }
 }

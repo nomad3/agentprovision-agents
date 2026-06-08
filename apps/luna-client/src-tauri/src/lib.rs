@@ -12,6 +12,13 @@ lazy_static::lazy_static! {
     static ref CAPTURE_RUNNING: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     static ref NATIVE_BOUNDARY_REPLAY_NONCES: std::sync::Mutex<std::collections::HashMap<String, u64>> =
         std::sync::Mutex::new(std::collections::HashMap::new());
+    /// The single live native-actuation lease (Phase 3). Claimed when a pointer
+    /// boundary proof is allowed; consumed + decremented by each pointer canary
+    /// event; cleared on Stop / Lock / Resume. A `tokio::sync::Mutex` so the
+    /// actuation command can hold it across the enigo await — that serializes
+    /// native events and makes the lease decision + budget update atomic.
+    static ref ACTUATION_LEASE: tokio::sync::Mutex<Option<computer_use::actuation_lease::ActuationLease>> =
+        tokio::sync::Mutex::new(None);
 }
 
 const CONTROL_MODE_LOCKED: u8 = 0;
@@ -484,6 +491,14 @@ const DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED: &str = "lease_claimed";
 /// Minimum interval between native actuation events (Phase 2.75 pacing): a large
 /// per-grant budget cannot fire as a burst.
 const NATIVE_ACTION_MIN_INTERVAL_MS: u64 = 250;
+
+/// Phase 3 actuation lease lifetime: short, so a stale grant dies quickly and a
+/// different shell can re-claim. The boundary proof refreshes it on each allowed
+/// proof.
+const ACTUATION_LEASE_TTL_MS: u64 = 8_000;
+/// Phase 3 per-grant native action budget. Pacing still applies between events,
+/// so this bounds total events per grant, not a burst.
+const ACTUATION_LEASE_MAX_ACTIONS: u32 = 8;
 
 fn control_mode_name(mode: u8) -> &'static str {
     match mode {
@@ -1357,6 +1372,214 @@ fn ensure_desktop_control_allows_keyboard_actuation(action: &str) -> Result<(), 
     )
 }
 
+// ── Phase 3 pointer canary actuation ────────────────────────────────────────
+//
+// The first path that posts a REAL native event. It actuates ONLY when a prior
+// boundary proof claimed a live `ActuationLease` AND the per-capability pointer
+// flag is on AND a final live Stop/Observe/frontmost/bounds re-check passes at
+// the instant of the event. Default-off: with `LUNA_ACTUATION_POINTER_ENABLED`
+// unset, the flag gate denies before any enigo call, so shipped builds never
+// actuate.
+
+#[derive(Clone, Debug)]
+enum PointerCanaryAction {
+    Move { norm_x: f64, norm_y: f64 },
+    Click { norm_x: f64, norm_y: f64, button: Option<String> },
+}
+
+impl PointerCanaryAction {
+    fn action_name(&self) -> &'static str {
+        match self {
+            PointerCanaryAction::Move { .. } => "control_pointer_move",
+            PointerCanaryAction::Click { .. } => "control_pointer_click",
+        }
+    }
+
+    fn norm_point(&self) -> (f64, f64) {
+        match self {
+            PointerCanaryAction::Move { norm_x, norm_y } => (*norm_x, *norm_y),
+            PointerCanaryAction::Click { norm_x, norm_y, .. } => (*norm_x, *norm_y),
+        }
+    }
+}
+
+/// Pure pre-lease gate for the pointer canary: the per-capability pointer flag
+/// must be enabled and the live control mode must be neither Stopped nor Observe.
+/// Read live and re-evaluated immediately before the native event (TOCTOU).
+fn pointer_canary_mode_gate(
+    pointer_flag_enabled: bool,
+    mode: computer_use::DesktopControlMode,
+) -> Option<computer_use::denial_codes::DenialCode> {
+    use computer_use::denial_codes::DenialCode;
+    use computer_use::DesktopControlMode;
+    if !pointer_flag_enabled {
+        return Some(DenialCode::NativeControlTierDisabled);
+    }
+    match mode {
+        DesktopControlMode::Stopped => Some(DenialCode::Stopped),
+        DesktopControlMode::Observe => Some(DenialCode::ObserveLocked),
+        DesktopControlMode::ControlLocked => None,
+    }
+}
+
+/// Audit one pointer-canary boundary outcome (request → acceptance/denial →
+/// action → result). Display-safe: no coordinates beyond in/out-of-bounds, no
+/// screenshots, no window titles.
+fn emit_pointer_canary_audit(
+    app: &tauri::AppHandle,
+    action: &str,
+    outcome: &str,
+    reason: &str,
+    frontmost: Option<&str>,
+) {
+    log::info!(
+        "pointer_canary action={action} outcome={outcome} reason={reason} frontmost={frontmost:?}"
+    );
+    let _ = app.emit(
+        "desktop-native-actuation",
+        serde_json::json!({
+            "action": action,
+            "outcome": outcome,
+            "reason": reason,
+            "frontmost_bundle_id": frontmost,
+            "created_at_ms": now_unix_ms(),
+        }),
+    );
+}
+
+/// Claim (or refresh) the live pointer actuation lease after an allowed proof.
+/// The lease target is the Rust-read live frontmost bundle that the boundary
+/// just validated against the signed envelope — never a JS-supplied value.
+async fn claim_pointer_actuation_lease(
+    request: &NativeControlBoundaryProofRequest,
+    now_ms: u64,
+) {
+    let Some(owner) = non_empty_text(&request.shell_id) else {
+        return;
+    };
+    let Some(target) = non_empty_text(&request.live_frontmost_bundle_id) else {
+        return;
+    };
+    // TTL is the shorter of our fixed cap and any approval expiry.
+    let mut expires_at_ms = now_ms.saturating_add(ACTUATION_LEASE_TTL_MS);
+    if let Some(approval_expiry) = request.approval.as_ref().and_then(|a| a.expires_at_ms) {
+        expires_at_ms = expires_at_ms.min(approval_expiry);
+    }
+    let lease = computer_use::actuation_lease::ActuationLease {
+        owner_shell_id: owner.to_string(),
+        target_bundle_id: target.to_string(),
+        capability: computer_use::NativeControlCapability::Pointer,
+        expires_at_ms,
+        max_actions: ACTUATION_LEASE_MAX_ACTIONS,
+        actions_used: 0,
+        last_action_at_ms: None,
+    };
+    *ACTUATION_LEASE.lock().await = Some(lease);
+}
+
+/// Drop any live actuation lease — called by Stop / Lock / Resume so a latched
+/// safety action also revokes the actuation grant, not just the gesture path.
+async fn release_actuation_lease() {
+    *ACTUATION_LEASE.lock().await = None;
+}
+
+/// The shared pointer-canary actuation boundary. Runs the live flag + mode gate,
+/// the lease decision (capability, TTL, budget, pacing, frontmost, bounds), a
+/// final deny-by-default guard, then the native event — auditing every outcome.
+async fn actuate_pointer_canary(
+    app: &tauri::AppHandle,
+    action: PointerCanaryAction,
+) -> Result<(), String> {
+    use computer_use::actuation_lease::{
+        lease_actuation_decision, normalized_point_in_bounds, ActuationAttempt,
+    };
+    use computer_use::denial_codes::DenialCode;
+    use computer_use::NativeControlCapability;
+
+    let action_name = action.action_name();
+    let pointer_flag = desktop_control_allows_capability(NativeControlCapability::Pointer);
+
+    // 1. Flag + live Stop/Observe gate.
+    if let Some(code) = pointer_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
+        let reason = code.as_str().to_string();
+        emit_pointer_canary_audit(app, action_name, "denied", &reason, None);
+        return Err(reason);
+    }
+
+    // Phase 3 allows a left single click only — no drag, no multi-click.
+    if let PointerCanaryAction::Click {
+        button: Some(button),
+        ..
+    } = &action
+    {
+        if !button.eq_ignore_ascii_case("left") {
+            let reason = DenialCode::NativeControlActionUnsupported.as_str().to_string();
+            emit_pointer_canary_audit(app, action_name, "denied", &reason, None);
+            return Err(reason);
+        }
+    }
+
+    let now_ms = now_unix_ms();
+    let (norm_x, norm_y) = action.norm_point();
+    let point_in_bounds = normalized_point_in_bounds(norm_x, norm_y);
+    let frontmost = frontmost_application_bundle_id();
+
+    // 2. Lease decision + actuation under the lease lock (serializes events and
+    //    keeps the budget/last-action update atomic with the decision).
+    let mut guard = ACTUATION_LEASE.lock().await;
+    let attempt = ActuationAttempt {
+        capability: NativeControlCapability::Pointer,
+        now_ms,
+        live_frontmost_bundle: frontmost.as_deref(),
+        point_in_bounds,
+        min_interval_ms: NATIVE_ACTION_MIN_INTERVAL_MS,
+    };
+    if let Some(code) = lease_actuation_decision(guard.as_ref(), &attempt) {
+        let reason = code.as_str().to_string();
+        emit_pointer_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+
+    // 3. Final live re-check immediately before the native event (Stop could have
+    //    landed while we waited for the lease lock), then deny-by-default guard.
+    if let Some(code) = pointer_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
+        let reason = code.as_str().to_string();
+        emit_pointer_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+    if !gesture::cursor::canary_pointer_actuation_allowed(
+        pointer_flag,
+        current_desktop_control_mode() == computer_use::DesktopControlMode::Stopped,
+    ) {
+        let reason = DenialCode::NativeControlDisabled.as_str().to_string();
+        emit_pointer_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+
+    // 4. The native event.
+    let result = match &action {
+        PointerCanaryAction::Move { norm_x, norm_y } => {
+            gesture::cursor::canary_move_norm(*norm_x, *norm_y).await
+        }
+        PointerCanaryAction::Click { .. } => gesture::cursor::canary_click().await,
+    };
+
+    match result {
+        Ok(()) => {
+            if let Some(lease) = guard.as_mut() {
+                lease.actions_used = lease.actions_used.saturating_add(1);
+                lease.last_action_at_ms = Some(now_ms);
+            }
+            emit_pointer_canary_audit(app, action_name, "actuated", "ok", frontmost.as_deref());
+            Ok(())
+        }
+        Err(err) => {
+            emit_pointer_canary_audit(app, action_name, "failed", &err, frontmost.as_deref());
+            Err(err)
+        }
+    }
+}
+
 async fn current_control_safety_state() -> ControlSafetyState {
     let mode = CONTROL_MODE.load(Ordering::SeqCst);
     let last_stop = LAST_STOP_AT_MS.load(Ordering::SeqCst);
@@ -1402,15 +1625,28 @@ async fn control_prove_native_command_boundary(
     let mode = current_desktop_control_mode();
     let permissions = computer_use::current_permission_readiness();
     let audit_event_id = uuid::Uuid::new_v4().to_string();
+    let now_ms = now_unix_ms();
     let mut request =
         boundary_request_with_native_frontmost_bundle(request, frontmost_application_bundle_id());
     // Read macOS Secure Input locally at proof time — never trust the renderer.
     request.secure_input_active = Some(secure_input_is_active());
+    // Feed the live actuation-lease owner into the proof so the Phase 2.75
+    // single-owner gate fires: while one shell holds a live lease, a different
+    // shell's proof is denied (`actuation_owner_conflict`). An expired lease is
+    // treated as no owner so the slot can be reclaimed.
+    {
+        let lease = ACTUATION_LEASE.lock().await;
+        if let Some(active) = lease.as_ref() {
+            if active.is_live(now_ms) {
+                request.current_actuation_owner_shell_id = Some(active.owner_shell_id.clone());
+            }
+        }
+    }
     let decision = evaluate_native_control_boundary_request(
         &request,
         mode,
         &permissions,
-        now_unix_ms(),
+        now_ms,
         verify_native_control_boundary_envelope_signature,
         remember_native_boundary_nonce,
     );
@@ -1423,6 +1659,14 @@ async fn control_prove_native_command_boundary(
         mode,
         &permissions,
     );
+
+    // An allowed pointer proof claims (or refreshes) the live actuation lease.
+    // Keyboard stays unreachable in Phase 3 — only pointer claims.
+    if decision.allowed
+        && decision.capability == computer_use::NativeControlCapability::Pointer.as_str()
+    {
+        claim_pointer_actuation_lease(&request, now_ms).await;
+    }
 
     Ok(NativeControlBoundaryProofResult {
         allowed: decision.allowed,
@@ -1478,6 +1722,9 @@ async fn control_stop_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
         persist_stop_latch(&app, true, at);
     }
     gesture::set_global_mode(false);
+    // A latched Stop also revokes any live actuation lease — the next event must
+    // re-prove from scratch, it cannot ride a pre-Stop grant.
+    release_actuation_lease().await;
     // Stop is already authoritative + persisted above. A gesture-teardown error
     // must not make the UI believe the safety latch failed.
     if let Err(e) = gesture::stop_engine().await {
@@ -1499,6 +1746,8 @@ async fn control_lock_all(app: tauri::AppHandle) -> Result<ControlSafetyState, S
         CAPTURE_RUNNING.store(false, Ordering::SeqCst);
     }
     gesture::set_global_mode(false);
+    // Lock revokes any live actuation lease too.
+    release_actuation_lease().await;
     // Lock should not fail just because a gesture teardown is already stopped.
     if let Err(e) = gesture::stop_engine().await {
         log::warn!("desktop control: gesture stop errored during Lock: {e}");
@@ -1523,6 +1772,8 @@ async fn control_clear_stop(app: tauri::AppHandle) -> Result<ControlSafetyState,
         CAPTURE_RUNNING.store(false, Ordering::SeqCst);
         persist_stop_latch(&app, false, 0);
     }
+    // Resume drops to the safe LOCKED posture with no carried-over grant.
+    release_actuation_lease().await;
     let state = current_control_safety_state().await;
     let _ = app.emit("control-safety-changed", state.clone());
     Ok(state)
@@ -1775,13 +2026,26 @@ async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn control_pointer_move(_x: f64, _y: f64) -> Result<(), String> {
-    ensure_desktop_control_allows_pointer_actuation("control_pointer_move")
+async fn control_pointer_move(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
+    actuate_pointer_canary(&app, PointerCanaryAction::Move { norm_x: x, norm_y: y }).await
 }
 
 #[tauri::command]
-async fn control_pointer_click(_x: f64, _y: f64, _button: Option<String>) -> Result<(), String> {
-    ensure_desktop_control_allows_pointer_actuation("control_pointer_click")
+async fn control_pointer_click(
+    app: tauri::AppHandle,
+    x: f64,
+    y: f64,
+    button: Option<String>,
+) -> Result<(), String> {
+    actuate_pointer_canary(
+        &app,
+        PointerCanaryAction::Click {
+            norm_x: x,
+            norm_y: y,
+            button,
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2744,6 +3008,32 @@ mod tests {
                 computer_use::NativeControlCapability::Pointer
             ));
         }
+    }
+
+    #[test]
+    fn pointer_canary_mode_gate_denies_flag_off_and_unsafe_modes() {
+        use computer_use::denial_codes::DenialCode;
+        use computer_use::DesktopControlMode;
+
+        // Flag off denies before the mode is even consulted.
+        assert_eq!(
+            pointer_canary_mode_gate(false, DesktopControlMode::ControlLocked),
+            Some(DenialCode::NativeControlTierDisabled)
+        );
+        // Flag on, but Stop / Observe still veto the pointer canary.
+        assert_eq!(
+            pointer_canary_mode_gate(true, DesktopControlMode::Stopped),
+            Some(DenialCode::Stopped)
+        );
+        assert_eq!(
+            pointer_canary_mode_gate(true, DesktopControlMode::Observe),
+            Some(DenialCode::ObserveLocked)
+        );
+        // Only flag-on AND control-locked proceeds to the lease decision.
+        assert_eq!(
+            pointer_canary_mode_gate(true, DesktopControlMode::ControlLocked),
+            None
+        );
     }
 
     // ── desktop control safety ─────────────────────────────────────────────
