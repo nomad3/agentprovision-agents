@@ -384,6 +384,11 @@ struct NativeControlBoundaryProofRequest {
     approval_id: Option<String>,
     target: Option<NativeControlBoundaryTarget>,
     live_frontmost_bundle_id: Option<String>,
+    // Set Rust-side at proof time from IsSecureEventInputEnabled() — never
+    // trusted from the JS request. Phase 2.75: keyboard actuation is denied
+    // while macOS Secure Input is active anywhere on the system.
+    #[serde(default)]
+    secure_input_active: Option<bool>,
     command_envelope: Option<serde_json::Value>,
     approval: Option<NativeControlBoundaryApproval>,
 }
@@ -1113,6 +1118,16 @@ fn evaluate_native_control_boundary_request(
         return native_boundary_denial(action, capability, "denied", denial.as_str());
     }
 
+    // Phase 2.75: deny keyboard actuation while macOS Secure Input is active (a
+    // password/secure field is focused anywhere), before the policy/adapter path.
+    // Pointer is unaffected — secure input only gates keyboard.
+    if let Some(denial) = computer_use::denial_codes::secure_input_decision(
+        request.secure_input_active.unwrap_or(false),
+        capability,
+    ) {
+        return native_boundary_denial(action, capability, "denied", denial.as_str());
+    }
+
     native_boundary_policy_decision(
         action,
         computer_use::evaluate_native_control_command_policy(
@@ -1128,6 +1143,24 @@ fn evaluate_native_control_boundary_request(
             action,
         ),
     )
+}
+
+/// True when macOS Secure Input is enabled by ANY process (e.g. a password field
+/// is focused). Read locally via Carbon `IsSecureEventInputEnabled` — a harmless
+/// system-state read, no TCC. While active, synthetic keystrokes are unsafe, so
+/// the boundary denies keyboard actuation.
+#[cfg(target_os = "macos")]
+fn secure_input_is_active() -> bool {
+    #[link(name = "Carbon", kind = "framework")]
+    extern "C" {
+        fn IsSecureEventInputEnabled() -> u8;
+    }
+    unsafe { IsSecureEventInputEnabled() != 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn secure_input_is_active() -> bool {
+    false
 }
 
 fn boundary_request_with_native_frontmost_bundle(
@@ -1310,8 +1343,10 @@ async fn control_prove_native_command_boundary(
     let mode = current_desktop_control_mode();
     let permissions = computer_use::current_permission_readiness();
     let audit_event_id = uuid::Uuid::new_v4().to_string();
-    let request =
+    let mut request =
         boundary_request_with_native_frontmost_bundle(request, frontmost_application_bundle_id());
+    // Read macOS Secure Input locally at proof time — never trust the renderer.
+    request.secure_input_active = Some(secure_input_is_active());
     let decision = evaluate_native_control_boundary_request(
         &request,
         mode,
@@ -2757,6 +2792,7 @@ mod tests {
                 observed_at: Some("2026-06-07T00:00:00Z".to_string()),
             }),
             live_frontmost_bundle_id: Some("com.example.LunaCanaryTarget".to_string()),
+            secure_input_active: None,
             command_envelope: Some(command_envelope),
             approval: Some(NativeControlBoundaryApproval {
                 approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
@@ -3216,6 +3252,32 @@ mod tests {
         assert!(
             decision.reason.contains("desktop command envelope expired"),
             "got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_secure_input_keyboard_before_adapter() {
+        // Phase 2.75: with macOS Secure Input active, a keyboard native action is
+        // denied before any adapter call — no synthetic keystrokes can land in a
+        // password/secure field. Pointer is unaffected (secure input only gates
+        // keyboard), so it falls through to the (disabled) tier check instead.
+        let mut keyboard = native_boundary_request("keyboard_type", "secure-input-keyboard");
+        keyboard.secure_input_active = Some(true);
+        let decision = native_boundary_decision(&keyboard);
+        assert!(!decision.allowed);
+        assert!(
+            decision.reason.contains("secure_input_active"),
+            "keyboard got {}",
+            decision.reason
+        );
+
+        let mut pointer = native_boundary_request("pointer_click", "secure-input-pointer");
+        pointer.secure_input_active = Some(true);
+        let decision = native_boundary_decision(&pointer);
+        assert!(
+            !decision.reason.contains("secure_input_active"),
+            "pointer should not be secure-input-denied, got {}",
             decision.reason
         );
     }
