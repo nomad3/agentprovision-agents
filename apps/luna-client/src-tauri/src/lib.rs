@@ -389,6 +389,13 @@ struct NativeControlBoundaryProofRequest {
     // while macOS Secure Input is active anywhere on the system.
     #[serde(default)]
     secure_input_active: Option<bool>,
+    // Phase 2.75 pacing + single-owner inputs, set Rust-side from native
+    // actuation lifecycle state (None until Phase 3 wires that state, so these
+    // gates are inert-but-tested for now). Never trusted from the JS request.
+    #[serde(default)]
+    last_native_action_at_ms: Option<u64>,
+    #[serde(default)]
+    current_actuation_owner_shell_id: Option<String>,
     command_envelope: Option<serde_json::Value>,
     approval: Option<NativeControlBoundaryApproval>,
 }
@@ -468,6 +475,9 @@ const DESKTOP_COMMAND_ENVELOPE_DEFAULT_KEY_ID: &str = "agentprovision-desktop-co
 const DESKTOP_COMMAND_ENVELOPE_ISSUER: &str = "agentprovision-api";
 const DESKTOP_COMMAND_APPROVAL_RISK_NATIVE_CONTROL: &str = "native_control";
 const DESKTOP_COMMAND_POLICY_DECISION_LEASE_CLAIMED: &str = "lease_claimed";
+/// Minimum interval between native actuation events (Phase 2.75 pacing): a large
+/// per-grant budget cannot fire as a burst.
+const NATIVE_ACTION_MIN_INTERVAL_MS: u64 = 250;
 
 fn control_mode_name(mode: u8) -> &'static str {
     match mode {
@@ -1124,6 +1134,26 @@ fn evaluate_native_control_boundary_request(
     if let Some(denial) = computer_use::denial_codes::secure_input_decision(
         request.secure_input_active.unwrap_or(false),
         capability,
+    ) {
+        return native_boundary_denial(action, capability, "denied", denial.as_str());
+    }
+
+    // Phase 2.75: single-owner arbitration — only the shell that holds the live
+    // actuation lease may post events; a different shell is denied before the
+    // adapter. (Inert until Phase 3 sets the current owner; tested here.)
+    if let Some(denial) = computer_use::denial_codes::single_owner_decision(
+        non_empty_text(&request.current_actuation_owner_shell_id),
+        request.shell_id.as_deref().unwrap_or(""),
+    ) {
+        return native_boundary_denial(action, capability, "denied", denial.as_str());
+    }
+
+    // Phase 2.75: action pacing — deny a native action that fires within the
+    // minimum inter-action interval, so a large budget cannot burst.
+    if let Some(denial) = computer_use::denial_codes::pacing_decision(
+        request.last_native_action_at_ms,
+        now_ms,
+        NATIVE_ACTION_MIN_INTERVAL_MS,
     ) {
         return native_boundary_denial(action, capability, "denied", denial.as_str());
     }
@@ -2793,6 +2823,8 @@ mod tests {
             }),
             live_frontmost_bundle_id: Some("com.example.LunaCanaryTarget".to_string()),
             secure_input_active: None,
+            last_native_action_at_ms: None,
+            current_actuation_owner_shell_id: None,
             command_envelope: Some(command_envelope),
             approval: Some(NativeControlBoundaryApproval {
                 approval_id: Some("aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa".to_string()),
@@ -3278,6 +3310,38 @@ mod tests {
         assert!(
             !decision.reason.contains("secure_input_active"),
             "pointer should not be secure-input-denied, got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_single_owner_conflict_before_adapter() {
+        // Phase 2.75: only the shell that owns the live actuation lease may post
+        // events. A request from a different shell is denied before the adapter.
+        let mut request = native_boundary_request("pointer_click", "single-owner-conflict");
+        request.current_actuation_owner_shell_id =
+            Some("desktop-55555555-5555-5555-5555-555555555555".to_string());
+        let decision = native_boundary_decision(&request);
+        assert!(!decision.allowed);
+        assert!(
+            decision.reason.contains("actuation_owner_conflict"),
+            "got {}",
+            decision.reason
+        );
+    }
+
+    #[test]
+    fn test_native_boundary_denies_action_pacing_violation_before_adapter() {
+        // Phase 2.75: a native action that fires within the minimum inter-action
+        // interval is denied before the adapter (now_ms is 1_000 in
+        // native_boundary_decision; 1_000 - 990 = 10ms < 250ms min interval).
+        let mut request = native_boundary_request("pointer_click", "action-pacing-violation");
+        request.last_native_action_at_ms = Some(990);
+        let decision = native_boundary_decision(&request);
+        assert!(!decision.allowed);
+        assert!(
+            decision.reason.contains("rate_capped"),
+            "got {}",
             decision.reason
         );
     }
