@@ -121,6 +121,13 @@ class TenantFeatures(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 
+    # Per-tenant opt-in for the red-flag engine (Accountable Learning &
+    # Commitment System, plan 2026-06-08 §9). Default OFF, fail-closed.
+    # Operators flip per tenant after reviewing dry-run output. Migration 164.
+    red_flag_engine_enabled = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
     # CPA software export format for the Bookkeeper Agent's weekly
     # categorized output. AAHA stays canonical — the Bookkeeper still
     # categorizes against the AAHA chart of accounts; this just picks

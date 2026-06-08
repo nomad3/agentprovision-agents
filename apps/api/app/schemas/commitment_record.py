@@ -5,7 +5,15 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.accountable_learning import ESCALATION_POLICIES, RISK_THRESHOLDS
+
+
+def _validate_optional_choice(value, allowed, name):
+    if value is not None and value not in allowed:
+        raise ValueError(f"{name} {value!r} not in {sorted(allowed)}")
+    return value
 
 
 class CommitmentType(str, Enum):
@@ -22,6 +30,12 @@ class CommitmentState(str, Enum):
     FULFILLED = "fulfilled"
     BROKEN = "broken"
     CANCELLED = "cancelled"
+    # Accountable Learning & Commitment System (plan 2026-06-08 §6).
+    # Added to the canonical vocabulary rather than forking new spellings:
+    # the plan's "done"->fulfilled, "failed"->broken, "canceled"->cancelled.
+    BLOCKED = "blocked"
+    AT_RISK = "at_risk"
+    RENEGOTIATED = "renegotiated"
 
 
 class CommitmentSourceType(str, Enum):
@@ -49,6 +63,25 @@ class CommitmentRecordCreate(BaseModel):
     due_at: Optional[datetime] = None
     goal_id: Optional[uuid.UUID] = None
     related_entity_ids: List[str] = Field(default_factory=list)
+    # Accountable Learning fields (plan 2026-06-08 §6).
+    contract_id: Optional[uuid.UUID] = None
+    proof_required: List[str] = Field(default_factory=list)
+    stakeholder_refs: List[str] = Field(default_factory=list)
+    risk_threshold: Optional[str] = None
+    escalation_policy: Optional[str] = None
+    checkpoint_at: Optional[datetime] = None
+    escalation_at: Optional[datetime] = None
+    stale_after: Optional[datetime] = None
+
+    @field_validator("risk_threshold")
+    @classmethod
+    def _v_risk(cls, v):
+        return _validate_optional_choice(v, RISK_THRESHOLDS, "risk_threshold")
+
+    @field_validator("escalation_policy")
+    @classmethod
+    def _v_esc(cls, v):
+        return _validate_optional_choice(v, ESCALATION_POLICIES, "escalation_policy")
 
 
 class CommitmentRecordUpdate(BaseModel):
@@ -61,6 +94,27 @@ class CommitmentRecordUpdate(BaseModel):
     goal_id: Optional[uuid.UUID] = None
     related_entity_ids: Optional[List[str]] = None
     broken_reason: Optional[str] = None
+    # Accountable Learning fields (plan 2026-06-08 §6).
+    proof_required: Optional[List[str]] = None
+    proof_refs: Optional[List[str]] = None
+    blocker_refs: Optional[List[str]] = None
+    stakeholder_refs: Optional[List[str]] = None
+    risk_threshold: Optional[str] = None
+    escalation_policy: Optional[str] = None
+    checkpoint_at: Optional[datetime] = None
+    escalation_at: Optional[datetime] = None
+    last_verified_at: Optional[datetime] = None
+    stale_after: Optional[datetime] = None
+
+    @field_validator("risk_threshold")
+    @classmethod
+    def _v_risk(cls, v):
+        return _validate_optional_choice(v, RISK_THRESHOLDS, "risk_threshold")
+
+    @field_validator("escalation_policy")
+    @classmethod
+    def _v_esc(cls, v):
+        return _validate_optional_choice(v, ESCALATION_POLICIES, "escalation_policy")
 
 
 class CommitmentRecordInDB(BaseModel):
@@ -81,6 +135,18 @@ class CommitmentRecordInDB(BaseModel):
     broken_reason: Optional[str] = None
     goal_id: Optional[uuid.UUID] = None
     related_entity_ids: List[Any] = Field(default_factory=list)
+    # Accountable Learning fields (plan 2026-06-08 §6).
+    contract_id: Optional[uuid.UUID] = None
+    proof_required: List[Any] = Field(default_factory=list)
+    proof_refs: List[Any] = Field(default_factory=list)
+    stakeholder_refs: List[Any] = Field(default_factory=list)
+    blocker_refs: List[Any] = Field(default_factory=list)
+    risk_threshold: Optional[str] = None
+    escalation_policy: Optional[str] = None
+    checkpoint_at: Optional[datetime] = None
+    escalation_at: Optional[datetime] = None
+    last_verified_at: Optional[datetime] = None
+    stale_after: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
