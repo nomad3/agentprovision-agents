@@ -310,6 +310,25 @@ jobs:
           docker compose up -d
           trap - EXIT
 
+      - name: Assert no container mounts /actions-runner/_work
+        # Phase 2.5 hard gate #5 (docs/plans/2026-06-07-luna-macos-app-control-plan.md):
+        # a running container that bind-mounts the self-hosted runner's _work
+        # checkout would let a CLI / code-worker session read or write the
+        # runner's workspace (and other jobs' source) — a sandbox-escape risk.
+        # This is the same check the release sentinel runs by hand; fail the
+        # deploy if any live container exposes a _work source.
+        run: |
+          OFFENDERS="$(docker ps -q \
+            | xargs -r docker inspect \
+                --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' 2>/dev/null \
+            | grep '_work' || true)"
+          if [ -n "$OFFENDERS" ]; then
+            echo "::error::Live container(s) mount a runner _work source (sandbox-escape risk):"
+            printf '%s\n' "$OFFENDERS"
+            exit 1
+          fi
+          echo "OK — no live container mounts /actions-runner/_work"
+
       - name: Apply pending DB migrations
         # Runs after `docker compose up -d` so the db container is up,
         # but BEFORE the API serves traffic against the new image. The
