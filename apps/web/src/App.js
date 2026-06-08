@@ -59,6 +59,7 @@ const SkillsPage = lazy(() => import(/* webpackChunkName: "skills" */ './pages/S
 const WorkflowsPage = lazy(() => import(/* webpackChunkName: "workflows" */ './pages/WorkflowsPage'));
 const WorkflowBuilder = lazy(() => import(/* webpackChunkName: "workflow-builder" */ './components/workflows/WorkflowBuilder'));
 const LearningPage = lazy(() => import(/* webpackChunkName: "learning" */ './pages/LearningPage'));
+const CommitmentsPage = lazy(() => import(/* webpackChunkName: "commitments" */ './pages/CommitmentsPage'));
 
 // Create an Auth Context
 const AuthContext = createContext(null);
@@ -288,6 +289,7 @@ function App() {
                 <Route path="/memory" element={<ProtectedRoute><MemoryPage /></ProtectedRoute>} />
                 <Route path="/skills" element={<ProtectedRoute><SkillsPage /></ProtectedRoute>} />
                 <Route path="/learning" element={<ProtectedRoute><LearningPage /></ProtectedRoute>} />
+                <Route path="/commitments" element={<ProtectedRoute><CommitmentsPage /></ProtectedRoute>} />
                 <Route path="/workflows" element={<ProtectedRoute><WorkflowsPage /></ProtectedRoute>} />
                 <Route path="/workflows/builder" element={<ProtectedRoute><WorkflowBuilder /></ProtectedRoute>} />
                 <Route path="/workflows/builder/:id" element={<ProtectedRoute><WorkflowBuilder /></ProtectedRoute>} />

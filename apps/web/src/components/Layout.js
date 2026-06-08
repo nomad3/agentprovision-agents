@@ -14,6 +14,7 @@ import {
   FaRobot as Robot,
   FaSun as SunFill,
   FaPuzzlePiece as PuzzlePiece,
+  FaShieldAlt as ShieldAlt,
   FaHeartbeat as HeartbeatFill,
   FaAngleDoubleLeft,
   FaAngleDoubleRight,
@@ -94,6 +95,7 @@ const Layout = ({ children }) => {
         { path: '/agents', icon: Robot, label: t('sidebar.agentFleet', 'Agent Fleet'), description: t('sidebar_desc.agentFleet', 'Fleet, health, and cost in one view') },
         { path: '/workflows', icon: ProjectDiagramFill, label: t('sidebar.workflows'), description: t('sidebar_desc.workflows') },
         { path: '/memory', icon: DatabaseFill, label: t('sidebar.memory'), description: t('sidebar_desc.memoryLearning', 'Memory + learning') },
+        { path: '/commitments', icon: ShieldAlt, label: t('sidebar.commitments', 'Accountability'), description: t('sidebar_desc.commitments', 'Open commitments, red flags, and learnings') },
         { path: '/skills', icon: PuzzlePiece, label: t('sidebar.skills'), description: t('sidebar_desc.skills') },
       ]
     },
