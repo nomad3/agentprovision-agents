@@ -991,12 +991,34 @@ def test_pointer_enqueue_queues_pending_for_allowlisted_target(db_session, seede
     assert "must not persist" not in str(event.event_metadata)
 
 
-def test_keyboard_enqueue_still_denied(db_session, seeded):
-    # Keyboard control stays fully disabled until Phase 4.
-    with patch(
+def test_keyboard_enqueue_requires_allowlisted_target_then_queues(db_session, seeded):
+    # Phase 4: keyboard issuance is enabled, but (like pointer) only against an
+    # allowlisted target. Missing target -> 422; an allowlisted target -> a pending
+    # native-control command, and the typed text is never persisted.
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
         return_value=_presence(),
     ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as missing:
+            enqueue_desktop_command(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandEnqueue(
+                    session_id=SESSION_ID,
+                    action="keyboard_type",
+                    tool_name="desktop_keyboard_type",
+                    shell_id=None,
+                    nonce="keyboard-no-target",
+                    payload={"text": "must not persist"},
+                ),
+            )
+        assert missing.value.status_code == 422
+
         command, event, _session_event = enqueue_desktop_command(
             db_session,
             tenant_id=TENANT_ID,
@@ -1006,16 +1028,21 @@ def test_keyboard_enqueue_still_denied(db_session, seeded):
                 action="keyboard_type",
                 tool_name="desktop_keyboard_type",
                 shell_id=None,
-                nonce="keyboard-still-denied",
-                payload={"text": "must not persist"},
+                nonce="keyboard-allowlisted",
+                payload={
+                    "text": "must not persist",
+                    "target": {"bundle_id": CANARY_BUNDLE_ID, "action": "keyboard_type"},
+                },
             ),
         )
 
-    assert command.status == "denied"
+    assert command.status == "pending"
     assert command.capability == "keyboard_control"
-    assert event.outcome == "denied"
-    assert event.reason == "desktop native control disabled; keyboard_type denied"
+    assert command.payload["risk_tier"] == "native_control"
+    assert command.payload["target"]["bundle_id"] == CANARY_BUNDLE_ID
+    assert event.event_type == "desktop_command_queued"
     assert "must not persist" not in str(command.payload)
+    assert "must not persist" not in str(event.event_metadata)
 
 
 def test_pointer_command_claim_issues_signed_native_control_envelope(db_session, seeded):
@@ -1101,8 +1128,19 @@ def test_pointer_command_claim_issues_signed_native_control_envelope(db_session,
     assert consumed.status == "consumed"
 
 
-def test_native_control_denial_nonce_retry_is_idempotent(db_session, seeded):
-    with patch(
+def test_native_control_keyboard_nonce_retry_is_idempotent(db_session, seeded):
+    # Re-enqueuing the same keyboard command nonce returns the same pending
+    # command and writes only one queued event (Phase 4: keyboard is issued, not
+    # denied).
+    payload = {
+        "text": "must not persist",
+        "target": {"bundle_id": CANARY_BUNDLE_ID, "action": "keyboard_type"},
+    }
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
         return_value=_presence(),
     ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
@@ -1115,8 +1153,8 @@ def test_native_control_denial_nonce_retry_is_idempotent(db_session, seeded):
                 action="keyboard_type",
                 tool_name="desktop_keyboard_type",
                 shell_id=None,
-                nonce="native-keyboard-denied",
-                payload={"text": "must not persist"},
+                nonce="native-keyboard-pending",
+                payload=dict(payload),
             ),
         )[0]
         second = enqueue_desktop_command(
@@ -1128,18 +1166,19 @@ def test_native_control_denial_nonce_retry_is_idempotent(db_session, seeded):
                 action="keyboard_type",
                 tool_name="desktop_keyboard_type",
                 shell_id=None,
-                nonce="native-keyboard-denied",
-                payload={"text": "must not persist"},
+                nonce="native-keyboard-pending",
+                payload=dict(payload),
             ),
         )[0]
 
     assert second.id == first.id
-    events = db_session.query(DesktopCommandEvent).filter(
+    assert first.status == "pending"
+    queued = db_session.query(DesktopCommandEvent).filter(
         DesktopCommandEvent.desktop_command_id == first.id,
-        DesktopCommandEvent.event_type == "desktop_command_completed",
+        DesktopCommandEvent.event_type == "desktop_command_queued",
     ).all()
-    assert len(events) == 1
-    assert events[0].reason == "desktop native control disabled; keyboard_type denied"
+    assert len(queued) == 1
+    assert "must not persist" not in str(first.payload)
 
 
 def test_duplicate_completion_is_idempotent_and_writes_one_completion_event(db_session, seeded):
