@@ -520,21 +520,23 @@ describe('executeClaimedDesktopCommand', () => {
     }));
   });
 
-  it('actuates the pointer canary when the native boundary proof is allowed', async () => {
+  // Phase 5: the boundary proof now BOTH verifies and actuates (single Rust
+  // actuation site, server-signed args only). The renderer no longer invokes any
+  // separate actuation command — it completes straight from the proof outcome.
+  it('completes succeeded when the boundary proof actuates the pointer', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }) // pre-actuation safety
       .mockResolvedValueOnce(CANARY_BUNDLE_ID) // live frontmost
       .mockResolvedValueOnce({
         allowed: true,
-        outcome: 'allowed',
-        reason: '',
+        actuated: true,
+        outcome: 'actuated',
+        reason: 'desktop pointer_click actuated',
         action: 'pointer_click',
         capability: 'pointer_control',
         audit_event_id: 'native-audit-actuate',
         mode: 'control_locked',
-      }) // boundary proof
-      .mockResolvedValueOnce(undefined) // control_pointer_click actuation
-      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }); // post-actuation safety
+      }); // boundary proof verifies AND actuates
 
     await executeClaimedDesktopCommand(
       claimedCommand('pointer_click'),
@@ -543,7 +545,8 @@ describe('executeClaimedDesktopCommand', () => {
       invokeMock,
     );
 
-    expect(invokeMock).toHaveBeenCalledWith('control_pointer_click', { x: 0.5, y: 0.5 });
+    const invokedCommands = invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(invokedCommands).not.toContain('control_pointer_click');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('succeeded');
     expect(body.reason).toBe('desktop pointer_click actuated');
@@ -551,21 +554,20 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.metadata.native_boundary_audit_event_id).toBe('native-audit-actuate');
   });
 
-  it('actuates the keyboard canary (type) when the boundary proof is allowed', async () => {
+  it('completes succeeded when the boundary proof actuates keyboard type', async () => {
     invokeMock
-      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }) // pre-actuation safety
-      .mockResolvedValueOnce(CANARY_BUNDLE_ID) // live frontmost
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID)
       .mockResolvedValueOnce({
         allowed: true,
-        outcome: 'allowed',
-        reason: '',
+        actuated: true,
+        outcome: 'actuated',
+        reason: 'desktop keyboard_type actuated',
         action: 'keyboard_type',
         capability: 'keyboard_control',
         audit_event_id: 'native-audit-kbd',
         mode: 'control_locked',
-      }) // boundary proof
-      .mockResolvedValueOnce(undefined) // control_keyboard_type actuation
-      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }); // post-actuation safety
+      });
 
     await executeClaimedDesktopCommand(
       claimedCommand('keyboard_type'),
@@ -574,28 +576,28 @@ describe('executeClaimedDesktopCommand', () => {
       invokeMock,
     );
 
-    expect(invokeMock).toHaveBeenCalledWith('control_keyboard_type', { text: 'luna canary' });
+    const invokedCommands = invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(invokedCommands).not.toContain('control_keyboard_type');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('succeeded');
     expect(body.reason).toBe('desktop keyboard_type actuated');
     expect(body.metadata.result_kind).toBe('native_actuation');
   });
 
-  it('actuates the keyboard canary (chord) with the allowlisted navigation chord', async () => {
+  it('completes succeeded when the boundary proof actuates a keyboard chord', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
       .mockResolvedValueOnce(CANARY_BUNDLE_ID)
       .mockResolvedValueOnce({
         allowed: true,
-        outcome: 'allowed',
-        reason: '',
+        actuated: true,
+        outcome: 'actuated',
+        reason: 'desktop keyboard_key_chord actuated',
         action: 'keyboard_key_chord',
         capability: 'keyboard_control',
         audit_event_id: 'native-audit-chord',
         mode: 'control_locked',
-      })
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false });
+      });
 
     await executeClaimedDesktopCommand(
       claimedCommand('keyboard_key_chord'),
@@ -604,27 +606,27 @@ describe('executeClaimedDesktopCommand', () => {
       invokeMock,
     );
 
-    expect(invokeMock).toHaveBeenCalledWith('control_keyboard_key_chord', { keys: ['right'] });
+    const invokedCommands = invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(invokedCommands).not.toContain('control_keyboard_key_chord');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('succeeded');
     expect(body.metadata.result_kind).toBe('native_actuation');
   });
 
-  it('reports preempted when Stop lands during pointer actuation', async () => {
+  it('reports preempted when the boundary proof outcome is preempted', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
       .mockResolvedValueOnce(CANARY_BUNDLE_ID)
       .mockResolvedValueOnce({
         allowed: true,
-        outcome: 'allowed',
-        reason: '',
+        actuated: false,
+        outcome: 'preempted',
+        reason: 'desktop control stopped; pointer_move preempted',
         action: 'pointer_move',
         capability: 'pointer_control',
         audit_event_id: 'native-audit-preempt',
-        mode: 'control_locked',
-      })
-      .mockResolvedValueOnce(undefined) // actuation
-      .mockResolvedValueOnce({ mode: 'stopped', can_control: false }); // Stop landed mid-actuation
+        mode: 'stopped',
+      });
 
     await executeClaimedDesktopCommand(
       claimedCommand('pointer_move'),
@@ -633,26 +635,28 @@ describe('executeClaimedDesktopCommand', () => {
       invokeMock,
     );
 
-    expect(invokeMock).toHaveBeenCalledWith('control_pointer_move', { x: 0.5, y: 0.5 });
+    const invokedCommands = invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(invokedCommands).not.toContain('control_pointer_move');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('preempted');
     expect(body.reason).toBe('desktop control stopped; pointer_move preempted');
+    expect(body.metadata.result_kind).toBe('native_actuation_error');
   });
 
-  it('reports denied when pointer actuation is rejected by a Rust gate', async () => {
+  it('reports denied when the boundary proof actuation is rejected by a Rust gate', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
       .mockResolvedValueOnce(CANARY_BUNDLE_ID)
       .mockResolvedValueOnce({
         allowed: true,
-        outcome: 'allowed',
-        reason: '',
+        actuated: false,
+        outcome: 'denied',
+        reason: 'active_app_drift; pointer_click denied',
         action: 'pointer_click',
         capability: 'pointer_control',
         audit_event_id: 'native-audit-gate',
         mode: 'control_locked',
-      })
-      .mockRejectedValueOnce(new Error('active_app_drift')); // actuation re-check denies
+      });
 
     await executeClaimedDesktopCommand(
       claimedCommand('pointer_click'),
@@ -661,9 +665,11 @@ describe('executeClaimedDesktopCommand', () => {
       invokeMock,
     );
 
-    expect(invokeMock).toHaveBeenCalledWith('control_pointer_click', { x: 0.5, y: 0.5 });
+    const invokedCommands = invokeMock.mock.calls.map(([cmd]) => cmd);
+    expect(invokedCommands).not.toContain('control_pointer_click');
     const body = JSON.parse(completeCalls()[0][1].body);
     expect(body.status).toBe('denied');
+    expect(body.reason).toBe('active_app_drift; pointer_click denied');
     expect(body.metadata.result_kind).toBe('native_actuation_error');
   });
 

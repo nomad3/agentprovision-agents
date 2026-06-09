@@ -461,6 +461,11 @@ struct NativeControlBoundaryApproval {
 #[derive(Clone, serde::Serialize)]
 struct NativeControlBoundaryProofResult {
     allowed: bool,
+    // Phase 5: a native event was actually posted (the proof flow is the SINGLE
+    // actuation site — it both verifies the envelope AND actuates the signed args).
+    actuated: bool,
+    // Final outcome the renderer maps to a completion status:
+    // "actuated" | "preempted" | "denied" | "failed".
     outcome: String,
     reason: String,
     action: String,
@@ -475,11 +480,19 @@ struct NativeControlBoundaryDecision {
     reason: String,
     action: String,
     capability: String,
+    // Phase 5: the server-signed, signature-verified actuation args carried onto
+    // an ALLOWED decision so the proof flow actuates EXACTLY these values. `None`
+    // on any denial, and on the canary path (no `args` in the envelope) — the
+    // proof flow then falls back to the fixed canary values.
+    verified_args: Option<VerifiedActuationArgs>,
 }
 
 struct ValidNativeControlBoundaryEnvelope {
     envelope: computer_use::policy::NativeControlCommandEnvelope,
     target_bundle_id: String,
+    // Typed actuation args parsed from the verified (signature-covered) envelope.
+    // `None` when the envelope carries no `args` (the Phase 3/4 safety canary).
+    verified_args: Option<VerifiedActuationArgs>,
 }
 
 const DESKTOP_COMMAND_ENVELOPE_SCHEMA: &str = "agentprovision.desktop_command_envelope.v1";
@@ -924,6 +937,7 @@ fn native_boundary_denial(
         reason: format!("{base_reason}; {action} denied"),
         action: action.to_string(),
         capability: capability.as_str().to_string(),
+        verified_args: None,
     }
 }
 
@@ -942,6 +956,9 @@ fn native_boundary_policy_decision(
             capability: native_control_capability_for_action(action)
                 .map(|capability| capability.as_str().to_string())
                 .unwrap_or_else(|| "native_control".to_string()),
+            // Filled in by `evaluate_native_control_boundary_request` from the
+            // verified envelope (this helper has no envelope handle).
+            verified_args: None,
         },
         Err(denial) => NativeControlBoundaryDecision {
             allowed: false,
@@ -953,6 +970,7 @@ fn native_boundary_policy_decision(
             reason: denial.reason,
             action: action.to_string(),
             capability: denial.capability.as_str().to_string(),
+            verified_args: None,
         },
     }
 }
@@ -1103,6 +1121,10 @@ fn validate_native_control_boundary_envelope(
             expires_at_ms,
         },
         target_bundle_id: envelope_target_bundle.to_string(),
+        // The `args` field lives in the signature-covered canonical JSON, so it is
+        // authenticated by `verify_signature(envelope_value)?` above. Parse it
+        // fail-closed into typed args; `None` here means the canary path (no args).
+        verified_args: parse_verified_actuation_args(action, envelope_value.get("args")),
     })
 }
 
@@ -1127,6 +1149,7 @@ fn evaluate_native_control_boundary_request(
                 .as_deref()
                 .unwrap_or("unknown")
                 .to_string(),
+            verified_args: None,
         };
     };
 
@@ -1206,21 +1229,26 @@ fn evaluate_native_control_boundary_request(
         return native_boundary_denial(action, capability, "denied", denial.as_str());
     }
 
-    native_boundary_policy_decision(
+    let policy_result = computer_use::evaluate_native_control_command_policy(
+        computer_use::NativeControlCommandPolicy {
+            mode,
+            capability,
+            has_claim_lease: true,
+            tier_enabled: desktop_control_allows_capability(capability),
+            envelope: Some(envelope.envelope),
+            now_ms,
+        },
+        permissions,
         action,
-        computer_use::evaluate_native_control_command_policy(
-            computer_use::NativeControlCommandPolicy {
-                mode,
-                capability,
-                has_claim_lease: true,
-                tier_enabled: desktop_control_allows_capability(capability),
-                envelope: Some(envelope.envelope),
-                now_ms,
-            },
-            permissions,
-            action,
-        ),
-    )
+    );
+    let mut decision = native_boundary_policy_decision(action, policy_result);
+    // Carry the verified, server-signed actuation args onto the allowed decision
+    // so the single actuation site uses EXACTLY these values. A denied policy
+    // decision never carries args (nothing actuates).
+    if decision.allowed {
+        decision.verified_args = envelope.verified_args;
+    }
+    decision
 }
 
 /// True when macOS Secure Input is enabled by ANY process (e.g. a password field
@@ -1385,7 +1413,7 @@ fn ensure_desktop_control_allows_keyboard_actuation(action: &str) -> Result<(), 
 // unset, the flag gate denies before any enigo call, so shipped builds never
 // actuate.
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum PointerCanaryAction {
     Move { norm_x: f64, norm_y: f64 },
     Click { norm_x: f64, norm_y: f64, button: Option<String> },
@@ -1595,7 +1623,7 @@ async fn actuate_pointer_canary(
 // into a password/secure field), the lease (capability/TTL/budget/pacing/
 // frontmost), and the input bounds (max text length / allowlisted chord).
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum KeyboardCanaryAction {
     Type { text: String },
     Chord { keys: Vec<String> },
@@ -1742,6 +1770,280 @@ async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
     Ok(current_control_safety_state().await)
 }
 
+/// Phase 5: action-specific actuation args parsed from the VERIFIED
+/// (signature-checked) command envelope. Fail-closed — any missing/mistyped
+/// field yields `None` (never a `serde_json::Value` index panic on attacker
+/// JSON). Actuation uses ONLY these server-signed values, never renderer-
+/// supplied ones (design v2 §3 injection defense). Bounds (coord range, text
+/// length, chord allowlist) are re-enforced by the actuate fns + keyboard_bounds.
+#[derive(Debug, Clone, PartialEq)]
+enum VerifiedActuationArgs {
+    PointerMove { x: f64, y: f64 },
+    PointerClick { x: f64, y: f64, button: Option<String> },
+    KeyboardType { text: String },
+    KeyboardChord { keys: Vec<String> },
+}
+
+fn parse_verified_actuation_args(
+    action: &str,
+    args: Option<&serde_json::Value>,
+) -> Option<VerifiedActuationArgs> {
+    let obj = args?.as_object()?;
+    let f = |k: &str| obj.get(k).and_then(serde_json::Value::as_f64);
+    match action {
+        "pointer_move" => Some(VerifiedActuationArgs::PointerMove {
+            x: f("x")?,
+            y: f("y")?,
+        }),
+        "pointer_click" => Some(VerifiedActuationArgs::PointerClick {
+            x: f("x")?,
+            y: f("y")?,
+            button: obj
+                .get("button")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from),
+        }),
+        "keyboard_type" => Some(VerifiedActuationArgs::KeyboardType {
+            text: obj.get("text")?.as_str()?.to_string(),
+        }),
+        "keyboard_key_chord" => {
+            let keys: Vec<String> = obj
+                .get("keys")?
+                .as_array()?
+                .iter()
+                .filter_map(|k| k.as_str().map(String::from))
+                .collect();
+            if keys.is_empty() {
+                return None;
+            }
+            Some(VerifiedActuationArgs::KeyboardChord { keys })
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod verified_actuation_args_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_pointer_move() {
+        let a = json!({"x": 0.3, "y": 0.4});
+        assert_eq!(
+            parse_verified_actuation_args("pointer_move", Some(&a)),
+            Some(VerifiedActuationArgs::PointerMove { x: 0.3, y: 0.4 })
+        );
+    }
+
+    #[test]
+    fn parses_keyboard_type_and_chord() {
+        let t = json!({"text": "hello luna"});
+        assert_eq!(
+            parse_verified_actuation_args("keyboard_type", Some(&t)),
+            Some(VerifiedActuationArgs::KeyboardType { text: "hello luna".into() })
+        );
+        let c = json!({"keys": ["shift", "right"]});
+        assert_eq!(
+            parse_verified_actuation_args("keyboard_key_chord", Some(&c)),
+            Some(VerifiedActuationArgs::KeyboardChord { keys: vec!["shift".into(), "right".into()] })
+        );
+    }
+
+    #[test]
+    fn canary_absent_args_is_none() {
+        // no args (canary) -> None; the caller falls back to the canary defaults
+        assert_eq!(parse_verified_actuation_args("pointer_move", None), None);
+    }
+
+    #[test]
+    fn fail_closed_on_malformed_or_attacker_shapes() {
+        // missing field, wrong type, wrong shape -> None, never a panic
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 0.5}))), None);
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": "a", "y": 0.5}))), None);
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!([1, 2]))), None);
+        assert_eq!(parse_verified_actuation_args("keyboard_type", Some(&json!({"text": 5}))), None);
+        assert_eq!(parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": []}))), None);
+        assert_eq!(parse_verified_actuation_args("unknown_action", Some(&json!({"x": 0.5, "y": 0.5}))), None);
+    }
+}
+
+// Canary fallback actuation values, used ONLY when the verified envelope carries
+// no `args` (the Phase 3/4 safety-canary path). Server-signed Phase 5 commands
+// carry explicit args that override these. These mirror the former JS canary
+// constants — the renderer no longer supplies any actuation value.
+const POINTER_CANARY_NORM_POINT: (f64, f64) = (0.5, 0.5);
+const KEYBOARD_CANARY_TEXT: &str = "luna canary";
+const KEYBOARD_CANARY_CHORD: [&str; 1] = ["right"];
+
+/// Map a proven pointer action + its verified args to the concrete actuation.
+/// Verified args present → actuate EXACTLY those server-signed values; absent →
+/// the fixed canary fallback. Fail-closed: a verified-args variant that does not
+/// match the action (cannot happen via `parse_verified_actuation_args`, which
+/// keys off the action) yields `None` so nothing actuates.
+fn resolve_pointer_actuation(
+    action: &str,
+    verified: Option<&VerifiedActuationArgs>,
+) -> Option<PointerCanaryAction> {
+    match (action, verified) {
+        ("pointer_move", Some(VerifiedActuationArgs::PointerMove { x, y })) => {
+            Some(PointerCanaryAction::Move { norm_x: *x, norm_y: *y })
+        }
+        ("pointer_move", None) => Some(PointerCanaryAction::Move {
+            norm_x: POINTER_CANARY_NORM_POINT.0,
+            norm_y: POINTER_CANARY_NORM_POINT.1,
+        }),
+        ("pointer_click", Some(VerifiedActuationArgs::PointerClick { x, y, button })) => {
+            Some(PointerCanaryAction::Click {
+                norm_x: *x,
+                norm_y: *y,
+                button: button.clone(),
+            })
+        }
+        ("pointer_click", None) => Some(PointerCanaryAction::Click {
+            norm_x: POINTER_CANARY_NORM_POINT.0,
+            norm_y: POINTER_CANARY_NORM_POINT.1,
+            button: None,
+        }),
+        _ => None,
+    }
+}
+
+/// Map a proven keyboard action + its verified args to the concrete actuation.
+/// Same contract as `resolve_pointer_actuation`: signed args exact, else canary.
+fn resolve_keyboard_actuation(
+    action: &str,
+    verified: Option<&VerifiedActuationArgs>,
+) -> Option<KeyboardCanaryAction> {
+    match (action, verified) {
+        ("keyboard_type", Some(VerifiedActuationArgs::KeyboardType { text })) => {
+            Some(KeyboardCanaryAction::Type { text: text.clone() })
+        }
+        ("keyboard_type", None) => Some(KeyboardCanaryAction::Type {
+            text: KEYBOARD_CANARY_TEXT.to_string(),
+        }),
+        ("keyboard_key_chord", Some(VerifiedActuationArgs::KeyboardChord { keys })) => {
+            Some(KeyboardCanaryAction::Chord { keys: keys.clone() })
+        }
+        ("keyboard_key_chord", None) => Some(KeyboardCanaryAction::Chord {
+            keys: KEYBOARD_CANARY_CHORD.iter().map(|s| s.to_string()).collect(),
+        }),
+        _ => None,
+    }
+}
+
+/// Classify a canary-actuation Err reason into a final proof outcome the renderer
+/// maps to a completion status. A Stop/preempt reason is a preemption; a known
+/// gate-denial code is a denial; anything else is a failure.
+fn actuation_failure_outcome(reason: &str) -> &'static str {
+    let lowered = reason.to_lowercase();
+    if lowered.contains("stop") || lowered.contains("preempt") {
+        "preempted"
+    } else if lowered.contains("disabled")
+        || lowered.contains("drift")
+        || lowered.contains("locked")
+        || lowered.contains("denied")
+        || lowered.contains("secure_input")
+        || lowered.contains("rate")
+        || lowered.contains("claim")
+        || lowered.contains("approval")
+        || lowered.contains("unsupported")
+        || lowered.contains("frontmost")
+        || lowered.contains("bounds")
+        || lowered.contains("owner")
+    {
+        "denied"
+    } else {
+        "failed"
+    }
+}
+
+#[cfg(test)]
+mod actuation_resolver_tests {
+    use super::*;
+
+    #[test]
+    fn signed_args_actuate_exact_values_not_canary() {
+        let move_args = VerifiedActuationArgs::PointerMove { x: 0.12, y: 0.87 };
+        assert_eq!(
+            resolve_pointer_actuation("pointer_move", Some(&move_args)),
+            Some(PointerCanaryAction::Move { norm_x: 0.12, norm_y: 0.87 })
+        );
+        let click_args = VerifiedActuationArgs::PointerClick {
+            x: 0.4,
+            y: 0.6,
+            button: Some("left".into()),
+        };
+        assert_eq!(
+            resolve_pointer_actuation("pointer_click", Some(&click_args)),
+            Some(PointerCanaryAction::Click {
+                norm_x: 0.4,
+                norm_y: 0.6,
+                button: Some("left".into()),
+            })
+        );
+        let type_args = VerifiedActuationArgs::KeyboardType { text: "hi simon".into() };
+        assert_eq!(
+            resolve_keyboard_actuation("keyboard_type", Some(&type_args)),
+            Some(KeyboardCanaryAction::Type { text: "hi simon".into() })
+        );
+        let chord_args = VerifiedActuationArgs::KeyboardChord {
+            keys: vec!["shift".into(), "right".into()],
+        };
+        assert_eq!(
+            resolve_keyboard_actuation("keyboard_key_chord", Some(&chord_args)),
+            Some(KeyboardCanaryAction::Chord {
+                keys: vec!["shift".into(), "right".into()],
+            })
+        );
+    }
+
+    #[test]
+    fn absent_args_fall_back_to_fixed_canary() {
+        assert_eq!(
+            resolve_pointer_actuation("pointer_move", None),
+            Some(PointerCanaryAction::Move { norm_x: 0.5, norm_y: 0.5 })
+        );
+        assert_eq!(
+            resolve_pointer_actuation("pointer_click", None),
+            Some(PointerCanaryAction::Click {
+                norm_x: 0.5,
+                norm_y: 0.5,
+                button: None,
+            })
+        );
+        assert_eq!(
+            resolve_keyboard_actuation("keyboard_type", None),
+            Some(KeyboardCanaryAction::Type { text: "luna canary".into() })
+        );
+        assert_eq!(
+            resolve_keyboard_actuation("keyboard_key_chord", None),
+            Some(KeyboardCanaryAction::Chord { keys: vec!["right".into()] })
+        );
+    }
+
+    #[test]
+    fn mismatched_action_and_args_fail_closed() {
+        // A pointer action with keyboard args (or vice-versa) actuates nothing.
+        let kbd = VerifiedActuationArgs::KeyboardType { text: "x".into() };
+        assert_eq!(resolve_pointer_actuation("pointer_move", Some(&kbd)), None);
+        let ptr = VerifiedActuationArgs::PointerMove { x: 0.1, y: 0.1 };
+        assert_eq!(resolve_keyboard_actuation("keyboard_type", Some(&ptr)), None);
+        // Unknown actions never resolve.
+        assert_eq!(resolve_pointer_actuation("pointer_scroll", None), None);
+        assert_eq!(resolve_keyboard_actuation("keyboard_paste", None), None);
+    }
+
+    #[test]
+    fn actuation_failure_outcome_classifies_reasons() {
+        assert_eq!(actuation_failure_outcome("desktop control stopped"), "preempted");
+        assert_eq!(actuation_failure_outcome("active_app_drift"), "denied");
+        assert_eq!(actuation_failure_outcome("secure_input_active"), "denied");
+        assert_eq!(actuation_failure_outcome("native_control_disabled"), "denied");
+        assert_eq!(actuation_failure_outcome("enigo backend errored"), "failed");
+    }
+}
+
 #[tauri::command]
 async fn control_prove_native_command_boundary(
     app: tauri::AppHandle,
@@ -1786,36 +2088,64 @@ async fn control_prove_native_command_boundary(
     );
 
     // An allowed proof claims (or refreshes) the live actuation lease for the
-    // proven capability (pointer = Phase 3, keyboard = Phase 4).
+    // proven capability, then actuates at this SINGLE site (Phase 5): the verified,
+    // server-signed args — or the fixed canary fallback when the envelope carries
+    // none. The renderer never supplies actuation values, so a compromised renderer
+    // cannot drive the cursor/keyboard with attacker-chosen coordinates or text.
+    let mut actuated = false;
+    let mut outcome = decision.outcome.to_string();
+    let mut reason = if decision.reason.is_empty() {
+        format!("desktop native control disabled; {} denied", decision.action)
+    } else {
+        decision.reason.clone()
+    };
+
     if decision.allowed {
-        if decision.capability == computer_use::NativeControlCapability::Pointer.as_str() {
-            claim_actuation_lease(
-                &request,
-                computer_use::NativeControlCapability::Pointer,
-                now_ms,
-            )
-            .await;
-        } else if decision.capability == computer_use::NativeControlCapability::Keyboard.as_str() {
-            claim_actuation_lease(
-                &request,
-                computer_use::NativeControlCapability::Keyboard,
-                now_ms,
-            )
-            .await;
+        let capability = native_control_capability_for_action(&decision.action);
+        if let Some(cap) = capability {
+            claim_actuation_lease(&request, cap, now_ms).await;
+        }
+        let unsupported = || {
+            computer_use::denial_codes::DenialCode::NativeControlActionUnsupported
+                .as_str()
+                .to_string()
+        };
+        let actuation = match capability {
+            Some(computer_use::NativeControlCapability::Pointer) => {
+                match resolve_pointer_actuation(&decision.action, decision.verified_args.as_ref()) {
+                    Some(pointer) => actuate_pointer_canary(&app, pointer).await,
+                    None => Err(unsupported()),
+                }
+            }
+            Some(computer_use::NativeControlCapability::Keyboard) => {
+                match resolve_keyboard_actuation(&decision.action, decision.verified_args.as_ref())
+                {
+                    Some(keyboard) => actuate_keyboard_canary(&app, keyboard).await,
+                    None => Err(unsupported()),
+                }
+            }
+            None => Err(unsupported()),
+        };
+        match actuation {
+            Ok(()) => {
+                actuated = true;
+                outcome = "actuated".to_string();
+                reason = format!("desktop {} actuated", decision.action);
+            }
+            Err(err) => {
+                // The canary actuation fns already audited the precise outcome;
+                // classify the reason here for the renderer's completion status.
+                outcome = actuation_failure_outcome(&err).to_string();
+                reason = err;
+            }
         }
     }
 
     Ok(NativeControlBoundaryProofResult {
         allowed: decision.allowed,
-        outcome: decision.outcome.to_string(),
-        reason: if decision.reason.is_empty() {
-            format!(
-                "desktop native control disabled; {} denied",
-                decision.action
-            )
-        } else {
-            decision.reason
-        },
+        actuated,
+        outcome,
+        reason,
         action: decision.action,
         capability: decision.capability,
         audit_event_id,
@@ -2162,41 +2492,15 @@ async fn read_clipboard(app: tauri::AppHandle) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-#[tauri::command]
-async fn control_pointer_move(app: tauri::AppHandle, x: f64, y: f64) -> Result<(), String> {
-    actuate_pointer_canary(&app, PointerCanaryAction::Move { norm_x: x, norm_y: y }).await
-}
-
-#[tauri::command]
-async fn control_pointer_click(
-    app: tauri::AppHandle,
-    x: f64,
-    y: f64,
-    button: Option<String>,
-) -> Result<(), String> {
-    actuate_pointer_canary(
-        &app,
-        PointerCanaryAction::Click {
-            norm_x: x,
-            norm_y: y,
-            button,
-        },
-    )
-    .await
-}
-
-#[tauri::command]
-async fn control_keyboard_type(app: tauri::AppHandle, text: String) -> Result<(), String> {
-    actuate_keyboard_canary(&app, KeyboardCanaryAction::Type { text }).await
-}
-
-#[tauri::command]
-async fn control_keyboard_key_chord(
-    app: tauri::AppHandle,
-    keys: Vec<String>,
-) -> Result<(), String> {
-    actuate_keyboard_canary(&app, KeyboardCanaryAction::Chord { keys }).await
-}
+// NOTE (Phase 5): the renderer-invokable `control_pointer_move` /
+// `control_pointer_click` / `control_keyboard_type` / `control_keyboard_key_chord`
+// Tauri commands were REMOVED. They let the renderer pass actuation values
+// directly, so a compromised renderer could drive the cursor/keyboard with
+// attacker-chosen coordinates/text after any allowed proof. Actuation now happens
+// ONLY inside `control_prove_native_command_boundary`, using the server-signed,
+// signature-verified envelope args (or the fixed canary fallback). The
+// `actuate_pointer_canary` / `actuate_keyboard_canary` boundary fns are now
+// reachable solely from that single proof+actuate site.
 
 #[tauri::command]
 async fn toggle_spatial_hud(app: tauri::AppHandle) -> Result<(), String> {
@@ -3040,10 +3344,6 @@ pub fn run() {
             capture_screenshot,
             get_active_app,
             read_clipboard,
-            control_pointer_move,
-            control_pointer_click,
-            control_keyboard_type,
-            control_keyboard_key_chord,
             haptic_feedback,
             toggle_spatial_hud,
             start_spatial_capture,
