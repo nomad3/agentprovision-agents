@@ -128,6 +128,37 @@ app.include_router(install_scripts.router, tags=["install-scripts"])
 
 
 @app.on_event("startup")
+async def startup_desktop_control_preflight():
+    """Fail-fast on a misconfigured Ed25519 desktop-control signing key.
+
+    Gated to algorithm==Ed25519 so the HMAC default (the fleet) is untouched —
+    no behavior change. An Ed25519 deploy with a missing/invalid key fails
+    readiness here instead of denying every native command at first claim.
+    Backs ``alpha desktop preflight run``.
+    """
+    import logging as _logging
+    _log = _logging.getLogger(__name__)
+    try:
+        from app.services.desktop_control_service import (
+            run_desktop_preflight,
+            DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM,
+        )
+        result = run_desktop_preflight()
+    except Exception as exc:  # never let an unexpected preflight error block startup
+        _log.warning("desktop-control preflight skipped (unexpected error): %s", exc)
+        return
+    if result["ok"]:
+        _log.info("desktop-control preflight ok (algorithm=%s)", result["algorithm"])
+        return
+    if result["algorithm"] == DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+        raise RuntimeError(f"desktop-control Ed25519 preflight failed: {result['error']}")
+    _log.warning(
+        "desktop-control preflight (non-fatal, algorithm=%s): %s",
+        result["algorithm"], result["error"],
+    )
+
+
+@app.on_event("startup")
 async def startup_skill_manager():
     """Scan and load all file-based skill definitions."""
     import logging as _logging

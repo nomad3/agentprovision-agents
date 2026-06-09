@@ -33,6 +33,7 @@ from app.services.desktop_control_service import (
     preempt_desktop_commands_for_stop,
     record_local_observation_event,
     record_mcp_observation_request,
+    run_desktop_preflight,
 )
 
 router = APIRouter(prefix="/desktop-control", tags=["desktop-control"])
@@ -337,6 +338,17 @@ def _resolve_internal_user_id(
         return uuid.UUID(x_user_id)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="X-User-Id not a valid UUID")
+
+
+@router.get("/preflight")
+def desktop_control_preflight(
+    _user: UserModel = Depends(deps.require_superuser),
+) -> dict[str, Any]:
+    """``alpha desktop preflight run`` — validate the desktop-control envelope
+    signing config (fail-fast surface for operators). Superuser-only; a thin
+    delegation to ``run_desktop_preflight`` with no business logic in the route.
+    """
+    return run_desktop_preflight()
 
 
 @router.post(

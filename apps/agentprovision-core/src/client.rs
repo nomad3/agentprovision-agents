@@ -15,6 +15,7 @@ use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
+use crate::desktop::DesktopPreflight;
 use crate::error::{Error, Result};
 use crate::models::{
     Agent, ChatJobSnapshot, ChatJobStart, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn,
@@ -892,6 +893,13 @@ impl ApiClient {
             force,
         };
         self.post_json("/api/v1/workspace/clone", &body).await
+    }
+
+    /// `GET /api/v1/desktop-control/preflight` — validate the desktop-control
+    /// envelope signing config (the `alpha desktop preflight run` verb).
+    /// Superuser-only server-side; returns control-plane status, no key material.
+    pub async fn desktop_preflight(&self) -> Result<DesktopPreflight> {
+        self.get_json("/api/v1/desktop-control/preflight").await
     }
 }
 

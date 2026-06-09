@@ -3,7 +3,8 @@
 use clap::{Parser, Subcommand};
 
 use crate::commands::{
-    agent, cancel, chat, coalition, completions, goal, integration, learn, login, logout, memory,
+    agent, cancel, chat, coalition, completions, desktop, goal, integration, learn, login, logout,
+    memory,
     quickstart, recall, recipes, remember, review, run, session, sessions, skill, status, tasks,
     upgrade, usage, watch, workflow, workspace,
 };
@@ -209,6 +210,12 @@ pub enum Command {
     /// Task #255.
     #[command(subcommand)]
     Workspace(workspace::WorkspaceCommand),
+
+    /// Operator-facing desktop-control (Luna macOS computer-use) inspection
+    /// verbs. `alpha desktop preflight run` validates the envelope signing
+    /// config. Read-only — never actuates input.
+    #[command(subcommand)]
+    Desktop(desktop::DesktopCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -250,5 +257,6 @@ pub async fn dispatch(args: Cli, ctx: Context) -> anyhow::Result<()> {
         Command::Quickstart(a) => quickstart::run(a, ctx).await,
         Command::Completions(a) => completions::run(a, ctx).await,
         Command::Workspace(cmd) => workspace::dispatch(cmd, ctx).await,
+        Command::Desktop(cmd) => desktop::dispatch(cmd, ctx).await,
     }
 }
