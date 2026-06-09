@@ -1413,6 +1413,17 @@ def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
 _KEYBOARD_CHORD_ALLOWLIST = frozenset(
     {"left", "right", "up", "down", "shift+left", "shift+right", "shift+up", "shift+down"}
 )
+
+# Pointer coords are SIGNED as integer micro-units (parts-per-million) in
+# [0, 1_000_000], NOT raw floats. Python json.dumps and the Rust client's
+# serde_json serialize some floats to different bytes — sci-notation threshold /
+# exponent padding in (0, 1e-4) and 17-significant-digit parser rounding — so a
+# signed float coord could canonicalize differently on each side and fail Ed25519
+# verification for a value-dependent class of coords (the actuation would silently
+# never fire). Integers serialize identically in every JSON encoder, so the signed
+# payload is byte-stable cross-language. The client divides back by 1e6 after
+# verifying. 1e-6 granularity is ~0.004 px on a 4K display — far finer than needed.
+_POINTER_MICRO_UNITS = 1_000_000
 _ARROW_ALIASES = {
     "arrowleft": "left", "leftarrow": "left",
     "arrowright": "right", "rightarrow": "right",
@@ -1455,7 +1466,14 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
             raise ValueError("pointer args require numeric x and y")
         if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             raise ValueError("pointer x/y must be normalized in [0, 1]")
-        return {"x": x, "y": y}
+        # Quantize to integer micro-units before signing (see _POINTER_MICRO_UNITS):
+        # floats are not byte-stable across the Python signer and the Rust verifier.
+        # round() with no ndigits returns a Python int, so json.dumps emits "700000"
+        # (no decimal) — identical to the client's integer serialization.
+        return {
+            "x": round(x * _POINTER_MICRO_UNITS),
+            "y": round(y * _POINTER_MICRO_UNITS),
+        }
     if action == "keyboard_type":
         if not isinstance(raw, dict):
             raise ValueError("keyboard_type args must be an object")
