@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -725,6 +726,11 @@ def _enqueue_native_control_command(
     # native_control grant for this exact target.
     raw_target = request.payload.get("target") if isinstance(request.payload, dict) else None
     target = _require_native_control_target_binding(raw_target, action=request.action)
+    # Phase 5: validate + persist the action-specific actuation args at enqueue
+    # (fail-fast) so they reach _build_signed_command_envelope and get SIGNED.
+    # Canary commands carry no args -> None -> omitted (envelope unchanged).
+    raw_args = request.payload.get("args") if isinstance(request.payload, dict) else None
+    actuation_args = _normalize_native_control_args(request.action, raw_args)
 
     now = _utcnow()
     command = DesktopCommand(
@@ -745,6 +751,7 @@ def _enqueue_native_control_command(
             "risk_tier": "native_control",
             "target": target,
             "request": _safe_request_metadata(request.payload),
+            **({"args": actuation_args} if actuation_args is not None else {}),
         },
         created_at=now,
         updated_at=now,
@@ -1400,6 +1407,159 @@ def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
     return False
 
 
+# Mirror of the client safe-chord allowlist (keyboard_bounds.rs) — the server
+# enforces the ACTUAL allowed chord set, not just a loose token format. Expands
+# in lockstep with the client when Phase 5 widens the safe set.
+_KEYBOARD_CHORD_ALLOWLIST = frozenset(
+    {"left", "right", "up", "down", "shift+left", "shift+right", "shift+up", "shift+down"}
+)
+
+# Pointer coords are SIGNED as integer micro-units (parts-per-million) in
+# [0, 1_000_000], NOT raw floats. Python json.dumps and the Rust client's
+# serde_json serialize some floats to different bytes — sci-notation threshold /
+# exponent padding in (0, 1e-4) and 17-significant-digit parser rounding — so a
+# signed float coord could canonicalize differently on each side and fail Ed25519
+# verification for a value-dependent class of coords (the actuation would silently
+# never fire). Integers serialize identically in every JSON encoder, so the signed
+# payload is byte-stable cross-language. The client divides back by 1e6 after
+# verifying. 1e-6 granularity is ~0.004 px on a 4K display — far finer than needed.
+_POINTER_MICRO_UNITS = 1_000_000
+_ARROW_ALIASES = {
+    "arrowleft": "left", "leftarrow": "left",
+    "arrowright": "right", "rightarrow": "right",
+    "arrowup": "up", "uparrow": "up",
+    "arrowdown": "down", "downarrow": "down",
+}
+
+
+def _normalize_chord(keys: list[str]) -> str:
+    """Canonical chord string (mirrors keyboard_bounds.rs normalize_chord):
+    modifiers (shift) first, exactly one main key, joined with '+'. Returns ''
+    for a malformed chord (no/multiple main keys)."""
+    mods: list[str] = []
+    main: list[str] = []
+    for raw in keys:
+        k = _ARROW_ALIASES.get(raw.strip().lower(), raw.strip().lower())
+        (mods if k == "shift" else main).append(k)
+    if len(main) != 1:
+        return ""
+    return "+".join(sorted(set(mods)) + main)
+
+
+def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | None:
+    """Validate + normalize the action-specific actuation args that are SIGNED
+    into the envelope, so the client actuates exactly what the server authorized
+    — never a client-chosen or screen-derived value (Phase 5 §3 injection
+    defense). Returns None for actions that carry no args (e.g. a click at the
+    current cursor — canary-compatible). Raises ValueError on invalid args.
+    Defense-in-depth: the client re-validates against its own bounds.
+    """
+    if raw is None:
+        return None
+    if action in ("pointer_move", "pointer_click"):
+        if not isinstance(raw, dict):
+            raise ValueError("pointer args must be an object")
+        try:
+            x = float(raw["x"])
+            y = float(raw["y"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("pointer args require numeric x and y")
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise ValueError("pointer x/y must be normalized in [0, 1]")
+        # Quantize to integer micro-units before signing (see _POINTER_MICRO_UNITS):
+        # floats are not byte-stable across the Python signer and the Rust verifier.
+        # round() with no ndigits returns a Python int, so json.dumps emits "700000"
+        # (no decimal) — identical to the client's integer serialization.
+        return {
+            "x": round(x * _POINTER_MICRO_UNITS),
+            "y": round(y * _POINTER_MICRO_UNITS),
+        }
+    if action == "keyboard_type":
+        if not isinstance(raw, dict):
+            raise ValueError("keyboard_type args must be an object")
+        text = raw.get("text")
+        if not isinstance(text, str) or not text or len(text) > 256:
+            raise ValueError("keyboard_type text must be a non-empty string of <= 256 chars")
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+            raise ValueError("keyboard_type text must not contain control characters")
+        return {"text": text}
+    if action == "keyboard_key_chord":
+        if not isinstance(raw, dict):
+            raise ValueError("keyboard_key_chord args must be an object")
+        keys = raw.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not keys
+            or len(keys) > 5
+            or not all(isinstance(k, str) and k.strip() for k in keys)
+        ):
+            raise ValueError("keyboard_key_chord keys must be a non-empty list of <= 5 strings")
+        normalized = [k.strip().lower() for k in keys]
+        if not all(re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in normalized):
+            raise ValueError("keyboard_key_chord keys must be short [a-z0-9_+-] tokens")
+        # Server enforces the actual safe-chord allowlist (mirrors the client),
+        # not just the token format — don't rely on client re-validation alone.
+        if _normalize_chord(normalized) not in _KEYBOARD_CHORD_ALLOWLIST:
+            raise ValueError("keyboard_key_chord not in the safe-chord allowlist")
+        return {"keys": normalized}
+    return None
+
+
+def _validate_signed_actuation_args(action: str, args: Any) -> dict[str, Any] | None:
+    """Re-validate ALREADY-NORMALIZED actuation args at envelope-build time, WITHOUT
+    re-running the issuer-fraction normalization.
+
+    ``_normalize_native_control_args`` converts an issuer's [0, 1] fractional pointer
+    coord into integer micro-units, so it is NOT idempotent — re-applying it to the
+    persisted micro-unit value (e.g. 300000) would treat it as a fraction and reject
+    it (``float(300000)`` is outside [0, 1]). The args are normalized once at enqueue;
+    this validates the persisted form before signing (defense-in-depth) and returns
+    it unchanged when valid. Idempotent: ``validate(normalize(x)) == normalize(x)``.
+    Raises ValueError on a malformed persisted payload.
+    """
+    if args is None:
+        return None
+    if not isinstance(args, dict):
+        raise ValueError("signed actuation args must be an object")
+    if action in ("pointer_move", "pointer_click"):
+        x = args.get("x")
+        y = args.get("y")
+        # Persisted pointer coords are integer micro-units in [0, _POINTER_MICRO_UNITS]
+        # (bool is an int subclass — exclude it explicitly).
+        if (
+            isinstance(x, bool)
+            or isinstance(y, bool)
+            or not isinstance(x, int)
+            or not isinstance(y, int)
+            or not (0 <= x <= _POINTER_MICRO_UNITS)
+            or not (0 <= y <= _POINTER_MICRO_UNITS)
+        ):
+            raise ValueError(
+                "pointer args must be integer micro-units in [0, 1_000_000]"
+            )
+        return {"x": x, "y": y}
+    if action == "keyboard_type":
+        text = args.get("text")
+        if not isinstance(text, str) or not text or len(text) > 256:
+            raise ValueError("keyboard_type text must be a non-empty string of <= 256 chars")
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+            raise ValueError("keyboard_type text must not contain control characters")
+        return {"text": text}
+    if action == "keyboard_key_chord":
+        keys = args.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not keys
+            or len(keys) > 5
+            or not all(isinstance(k, str) and re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in keys)
+        ):
+            raise ValueError("keyboard_key_chord keys must be normalized [a-z0-9_+-] tokens")
+        if _normalize_chord(keys) not in _KEYBOARD_CHORD_ALLOWLIST:
+            raise ValueError("keyboard_key_chord not in the safe-chord allowlist")
+        return {"keys": list(keys)}
+    return None
+
+
 def _build_signed_command_envelope(
     command: DesktopCommand,
     *,
@@ -1449,6 +1609,22 @@ def _build_signed_command_envelope(
     target_payload = _envelope_target_payload(target, observed_at=issued_at)
     if target_payload is not None:
         envelope["target"] = target_payload
+    # Phase 5: sign the action-specific actuation args (coords / text / keys) so
+    # the client actuates exactly what the server authorized. The args were
+    # normalized once at enqueue (issuer fraction -> integer micro-units for
+    # pointer); here we VALIDATE the persisted form (idempotent — never re-run the
+    # fraction normalization, which is not idempotent on micro-units). Canary
+    # commands carry no `args` (None) and are unaffected.
+    #
+    # Wire-format note (deploy ordering): pointer coords are signed as integer
+    # micro-units. A client built BEFORE that change parsed coords as floats, so it
+    # would mis-read a micro-unit arg — DEPLOY THE SERVER AND CLIENT AS A WAVE and do
+    # not issue ARG-bearing pointer commands until the updated client is installed.
+    # The canary path (no args) is immune, and a stale client fails closed (out of
+    # [0,1] bounds) for all but the two near-corner micro values 0/1.
+    args = _validate_signed_actuation_args(action, (command.payload or {}).get("args"))
+    if args is not None:
+        envelope["args"] = args
     envelope["signature"] = _sign_envelope_payload(envelope, algorithm)
     return envelope, _envelope_hash(envelope)
 
