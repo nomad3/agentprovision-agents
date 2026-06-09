@@ -153,6 +153,12 @@ configMap:
     # Default-empty fail-closed native-control canary allowlist. Operators must
     # explicitly stamp bundle ids before native-control grants can persist.
     DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
+    # Desktop-command envelope signing. Defaults are fail-closed (HMAC + no key =
+    # native control disabled). Native control (Phase 3 pointer canary) requires
+    # Ed25519: set the algorithm + provide the private key via the secret. The
+    # key id must match the Luna client's default key id.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "HMAC-SHA256"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: "agentprovision-desktop-command-ed25519-v1"
 
 # External Secrets - pulls from GCP Secret Manager
 externalSecret:
