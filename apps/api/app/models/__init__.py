@@ -22,6 +22,7 @@ from .desktop_command import DesktopCommand
 from .desktop_command_approval_grant import DesktopCommandApprovalGrant
 from .desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from .desktop_command_event import DesktopCommandEvent
+from .perception_artifact import PerceptionArtifact
 from .connector import Connector
 from .data_pipeline import DataPipeline
 from .data_source import DataSource
@@ -107,6 +108,7 @@ __all__ = [
     "ChannelAccount", "ChannelEvent", "WhatsappSessionBackup",
     "ChatSession", "ChatMessage",
     "DesktopCommand", "DesktopCommandApprovalGrant", "DesktopCommandEnvelopeNonce", "DesktopCommandEvent",
+    "PerceptionArtifact",
     "Connector",
     "DataPipeline", "DataSource", "Dataset", "DatasetGroup",
     "Deployment", "ExecutionTrace",

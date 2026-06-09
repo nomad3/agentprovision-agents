@@ -10,7 +10,17 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
 
@@ -33,6 +43,7 @@ from app.services.desktop_control_service import (
     preempt_desktop_commands_for_stop,
     record_local_observation_event,
     record_mcp_observation_request,
+    record_observation_artifact,
     run_desktop_preflight,
 )
 
@@ -370,6 +381,63 @@ def create_local_observation_event(
     )
     return LocalObservationEventOut(
         desktop_event_id=event.id,
+        session_event_id=session_event.get("event_id") if session_event else None,
+        session_seq_no=session_event.get("seq_no") if session_event else None,
+    )
+
+
+class ObservationArtifactOut(BaseModel):
+    artifact_id: uuid.UUID
+    expires_at: str
+    redaction_status: str
+    size_bytes: int
+    session_event_id: str | None = None
+    session_seq_no: int | None = None
+
+
+@router.post(
+    "/observations",
+    response_model=ObservationArtifactOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("120/minute")
+async def upload_observation(
+    request: Request,
+    file: UploadFile = File(...),
+    session_id: uuid.UUID = Form(...),
+    shell_id: str = Form(...),
+    source_window_bundle_id: str | None = Form(None),
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+    x_device_token: str | None = Header(None, alias="X-Device-Token"),
+):
+    """Phase 5.2 governed perception transport — the Luna client uploads a
+    captured, window-scoped, redacted screenshot. The bytes land in an API-only
+    quarantine under a hard TTL; a BYTE-FREE reference is emitted on the single
+    session SSE. There is intentionally NO endpoint that returns the bytes —
+    nothing reads them in P5.2 (transport only, until the P5.3 validator/redactor).
+    """
+    content_type = (file.content_type or "").lower()
+    if content_type not in ("image/png", "application/octet-stream"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported observation media type: {file.content_type}. Must be PNG.",
+        )
+    data = await file.read()
+    artifact, session_event = record_observation_artifact(
+        db,
+        user=current_user,
+        device_token=x_device_token,
+        session_id=session_id,
+        shell_id=shell_id,
+        data=data,
+        source_window_bundle_id=source_window_bundle_id,
+    )
+    return ObservationArtifactOut(
+        artifact_id=artifact.id,
+        expires_at=artifact.expires_at.isoformat(),
+        redaction_status=artifact.redaction_status,
+        size_bytes=artifact.size_bytes,
         session_event_id=session_event.get("event_id") if session_event else None,
         session_seq_no=session_event.get("seq_no") if session_event else None,
     )

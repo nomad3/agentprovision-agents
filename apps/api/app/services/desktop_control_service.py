@@ -30,9 +30,11 @@ from app.models.desktop_command_approval_grant import DesktopCommandApprovalGran
 from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
+from app.models.tenant_features import TenantFeatures
 from app.models.user import User
 from app.services.collaboration_events import publish_session_event
 from app.services import luna_presence_service
+from app.services import perception_storage
 from app.services.desktop_control_codes import code_for_reason
 
 logger = logging.getLogger(__name__)
@@ -2115,6 +2117,85 @@ def record_local_observation_event(
         )
 
     return event, session_event
+
+
+def _ensure_desktop_control_enabled(db: Session, tenant_id: uuid.UUID) -> None:
+    """Master capability gate (Luna L-N2: also gates observation). Fail-closed:
+    no TenantFeatures row, or the flag false/absent → denied. P5.2 is the first
+    enforcer of this flag (it is inert today; PR4b will enforce it across the
+    actuation path too — same flag, no drift)."""
+    features = (
+        db.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant_id)
+        .first()
+    )
+    if not features or not bool(getattr(features, "desktop_control_enabled", False)):
+        raise HTTPException(
+            status_code=403,
+            detail="Desktop control is not enabled for this tenant",
+        )
+
+
+def record_observation_artifact(
+    db: Session,
+    *,
+    user: User,
+    device_token: str | None,
+    session_id: uuid.UUID,
+    shell_id: str,
+    data: bytes,
+    source_window_bundle_id: str | None = None,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Phase 5.2 governed perception transport — store a captured screenshot in
+    the API-only quarantine and emit a BYTE-FREE reference on the single session
+    SSE. Fail-closed at every gate. There is intentionally NO retrieval path:
+    nothing reads the bytes back until the P5.3 validator + redactor land.
+
+    `redaction_status` is server-set to ``not_planner_safe`` regardless of any
+    client claim — the client is not trusted to assert "redacted".
+    """
+    # 1. master capability gate (also gates observation)
+    _ensure_desktop_control_enabled(db, user.tenant_id)
+    # 2. session ownership (the user must own the chat session this binds to)
+    _ensure_session_owned_by_user(db, session_id, user.tenant_id, user.id)
+    # 3. device-token + shell binding (same proof as command claim/complete)
+    device_id = _device_for_user_shell(
+        db, user=user, shell_id=shell_id, device_token=device_token
+    )
+
+    # 4. store to the API-only quarantine (fail-closed on empty/oversized/write)
+    try:
+        artifact = perception_storage.save_observation_artifact(
+            db,
+            tenant_id=user.tenant_id,
+            session_id=session_id,
+            shell_id=shell_id,
+            device_id=device_id,
+            data=data,
+            source_window_bundle_id=source_window_bundle_id,
+        )
+    except perception_storage.PerceptionStorageError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # 5. byte-free reference on the single SSE (resource_id, hash, size, status,
+    #    expiry — never bytes; no download_url, no retrieval route exists).
+    session_event = _publish_display_safe_session_event(
+        session_id,
+        "resource_referenced",
+        {
+            "resource_type": "screenshot",
+            "resource_id": str(artifact.id),
+            "hash": artifact.sha256,
+            "size_bytes": artifact.size_bytes,
+            "redaction_status": artifact.redaction_status,
+            "expires_at": artifact.expires_at.isoformat(),
+            "source_window_bundle_id": artifact.source_window_bundle_id,
+            "shell_id": shell_id,
+        },
+        tenant_id=user.tenant_id,
+    )
+    db.commit()
+    return artifact, session_event
 
 
 def create_desktop_approval_grant(
