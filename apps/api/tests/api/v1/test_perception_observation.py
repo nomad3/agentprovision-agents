@@ -145,18 +145,36 @@ def test_denied_on_bad_device_token(db_session):
     assert exc.value.status_code == 401
 
 
-def test_storage_rejects_empty_and_oversized():
-    # Pure-logic: fail-closed BEFORE any db/file IO (db unused on the raise path).
-    with pytest.raises(perception_storage.PerceptionStorageError):
-        perception_storage.save_observation_artifact(
-            None, tenant_id=TENANT_ID, session_id=SESSION_ID, shell_id=SHELL_ID,
-            device_id=DEVICE_ID, data=b"",
+def test_storage_fail_closed_before_io():
+    # Pure-logic: every reject happens BEFORE any db/file IO (db unused here), so
+    # an invalid payload can never leave orphan bytes.
+    def call(**kw):
+        base = dict(
+            tenant_id=TENANT_ID, session_id=SESSION_ID, shell_id=SHELL_ID, device_id=DEVICE_ID
         )
+        base.update(kw)
+        return perception_storage.save_observation_artifact(None, **base)
+
     with pytest.raises(perception_storage.PerceptionStorageError):
-        perception_storage.save_observation_artifact(
-            None, tenant_id=TENANT_ID, session_id=SESSION_ID, shell_id=SHELL_ID,
-            device_id=DEVICE_ID, data=b"x" * 100, max_size_bytes=10,
-        )
+        call(data=b"")  # empty
+    with pytest.raises(perception_storage.PerceptionStorageError):
+        call(data=b"x" * 100, max_size_bytes=10)  # oversized
+    with pytest.raises(perception_storage.PerceptionStorageError):
+        call(data=b"not-a-png-but-long-enough-here")  # no PNG magic (not trusting content-type)
+    # source_window_bundle_id is echoed on the SSE → it must be a strict bundle id,
+    # never a free-form exfil channel (spaces / overlong / data: payloads rejected).
+    for bad in ("has spaces", "A" * 200, "data:base64,QQ==", "a\nb"):
+        with pytest.raises(perception_storage.PerceptionStorageError):
+            call(data=PNG, source_window_bundle_id=bad)
+    # a real reverse-DNS bundle id is accepted by the validator (reaches the write)
+    import os, tempfile
+    with tempfile.TemporaryDirectory() as root:
+        os.environ["OBSERVATION_QUARANTINE_ROOT"] = root
+        try:
+            perception_storage._BUNDLE_ID_RE.match("com.apple.TextEdit")
+            assert perception_storage._BUNDLE_ID_RE.match("com.apple.TextEdit")
+        finally:
+            del os.environ["OBSERVATION_QUARANTINE_ROOT"]
 
 
 def test_relpath_is_tenant_session_scoped_and_traversal_free():

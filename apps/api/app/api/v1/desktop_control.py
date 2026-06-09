@@ -417,13 +417,30 @@ async def upload_observation(
     session SSE. There is intentionally NO endpoint that returns the bytes —
     nothing reads them in P5.2 (transport only, until the P5.3 validator/redactor).
     """
+    from app.services.perception_storage import MAX_SCREENSHOT_SIZE
+
     content_type = (file.content_type or "").lower()
     if content_type not in ("image/png", "application/octet-stream"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported observation media type: {file.content_type}. Must be PNG.",
         )
-    data = await file.read()
+    # Reject an oversized DECLARED body early, then BOUND the actual read so a
+    # spoofed/absent Content-Length can't make us buffer an unbounded body. The
+    # PNG magic + the final size are re-checked authoritatively in
+    # perception_storage (content-type is never trusted as the gate).
+    declared = request.headers.get("content-length")
+    if declared is not None and declared.isdigit() and int(declared) > MAX_SCREENSHOT_SIZE + 4096:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Observation too large",
+        )
+    data = await file.read(MAX_SCREENSHOT_SIZE + 1)
+    if len(data) > MAX_SCREENSHOT_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Observation too large",
+        )
     artifact, session_event = record_observation_artifact(
         db,
         user=current_user,

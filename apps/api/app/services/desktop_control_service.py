@@ -2194,7 +2194,13 @@ def record_observation_artifact(
         },
         tenant_id=user.tenant_id,
     )
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        # No orphan bytes if the commit fails after the file + row were staged.
+        perception_storage.unlink_artifact_bytes(artifact)
+        db.rollback()
+        raise
     return artifact, session_event
 
 

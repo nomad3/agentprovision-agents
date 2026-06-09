@@ -14,12 +14,23 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
 from app.models.perception_artifact import PerceptionArtifact
+
+# A macOS bundle id is reverse-DNS. Constrain it HARD: it is echoed onto the
+# byte-free SSE reference, so a free-form value would be an exfil channel (a
+# compromised renderer could smuggle base64/OCR chunks through it). The cap also
+# keeps it well under the column width so an insert can never fail post-write.
+_BUNDLE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+# PNG signature — the only accepted observation byte format (verified on the
+# actual bytes, never trusting the client content-type).
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 # API-only quarantine root. Overridable per env (compose / Helm); the default is
 # a path that is intentionally NOT the workspaces volume.
@@ -73,12 +84,18 @@ def save_observation_artifact(
     Fail-closed: empty/oversized payloads raise before anything is written; a
     write failure raises and persists no row.
     """
+    # Validate EVERYTHING that could otherwise fail the insert post-write, BEFORE
+    # touching the disk (no orphan bytes), and reject the exfil channel.
     size = len(data)
     cap = max_size_bytes if max_size_bytes is not None else MAX_SCREENSHOT_SIZE
     if size == 0:
         raise PerceptionStorageError("empty observation payload")
     if size > cap:
         raise PerceptionStorageError(f"observation too large ({size} > {cap})")
+    if not data.startswith(PNG_MAGIC):
+        raise PerceptionStorageError("observation is not a PNG")
+    if source_window_bundle_id is not None and not _BUNDLE_ID_RE.match(source_window_bundle_id):
+        raise PerceptionStorageError("invalid source_window_bundle_id")
 
     artifact_id = uuid.uuid4()
     abspath = artifact_abspath(tenant_id, session_id, artifact_id)
@@ -110,9 +127,27 @@ def save_observation_artifact(
         source_window_bundle_id=source_window_bundle_id,
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=ttl),
     )
-    db.add(artifact)
-    db.flush()
+    try:
+        db.add(artifact)
+        db.flush()
+    except Exception:
+        # No untracked bytes: unlink the just-written file if the row fails.
+        _unlink_quiet(abspath)
+        raise
     return artifact
+
+
+def _unlink_quiet(abspath: str) -> None:
+    try:
+        os.remove(abspath)
+    except OSError:
+        pass
+
+
+def unlink_artifact_bytes(artifact: PerceptionArtifact, *, root: str | None = None) -> None:
+    """Best-effort unlink of an artifact's bytes (no DB write). Used to avoid
+    orphan bytes when the surrounding transaction fails after the file write."""
+    _unlink_quiet(os.path.join(root or quarantine_root(), str(artifact.storage_path)))
 
 
 def expired_artifacts(db: Session, *, now: datetime | None = None, limit: int = 500):
