@@ -41,7 +41,7 @@ USERID="${LUNA_E2E_USER_ID:-577c1796-1ed6-4735-9b8e-83fd89f44182}"
 PUBKEY="${LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEY:-6jwnVWgGQGoMd3Ck84TzxixHj5oiC-74amrZIXe-V1U}"
 SHELL_ID_FILE="$HOME/Library/Application Support/com.agentprovision.luna/desktop-shell-id"
 CANARY="com.agentprovision.luna"
-NONALLOW="com.apple.TextEdit"   # deliberately NOT in the canary allowlist
+NONALLOW="${LUNA_E2E_NONALLOWED_BUNDLE:-com.apple.Safari}"   # deliberately NOT in the canary allowlist
 BASE="http://localhost:8000/api/v1/desktop-control/internal"
 
 KEY="${API_INTERNAL_KEY:-$(grep -E '^API_INTERNAL_KEY=' apps/api/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')}"
