@@ -1810,12 +1810,22 @@ async fn control_get_safety_state() -> Result<ControlSafetyState, String> {
     Ok(current_control_safety_state().await)
 }
 
+/// Pointer coords are SIGNED as integer micro-units (parts-per-million) in
+/// [0, 1_000_000] — never raw floats. Python `json.dumps` and Rust `serde_json`
+/// do not serialize every float to identical bytes (sci-notation threshold /
+/// exponent padding in (0, 1e-4); 17-significant-digit parser rounding), so a
+/// signed float coord could canonicalize differently on the two sides and fail
+/// Ed25519 verification for a value-dependent class of coords. Integers serialize
+/// identically everywhere. Mirrors the server `_POINTER_MICRO_UNITS`.
+const POINTER_MICRO_UNITS: i64 = 1_000_000;
+
 /// Phase 5: action-specific actuation args parsed from the VERIFIED
 /// (signature-checked) command envelope. Fail-closed — any missing/mistyped
 /// field yields `None` (never a `serde_json::Value` index panic on attacker
 /// JSON). Actuation uses ONLY these server-signed values, never renderer-
 /// supplied ones (design v2 §3 injection defense). Bounds (coord range, text
 /// length, chord allowlist) are re-enforced by the actuate fns + keyboard_bounds.
+/// The stored x/y are the normalized [0,1] f64 (micro-units already divided out).
 #[derive(Debug, Clone, PartialEq)]
 enum VerifiedActuationArgs {
     PointerMove { x: f64, y: f64 },
@@ -1839,16 +1849,25 @@ fn parse_verified_actuation_args(
         return Ok(None);
     };
     let obj = value.as_object().ok_or(())?;
-    // Every declared coordinate must be present AND a number — no defaulting.
-    let req_f64 = |k: &str| obj.get(k).and_then(serde_json::Value::as_f64).ok_or(());
+    // Pointer coords are signed as integer micro-units (see POINTER_MICRO_UNITS).
+    // Require an INTEGER in [0, 1_000_000] (a float — e.g. a stale-server raw coord
+    // — fails as_i64 and is rejected), then convert to the normalized [0,1] f64 the
+    // actuation path uses. Fail-closed: no defaulting, no silent coercion.
+    let req_micro_norm = |k: &str| -> Result<f64, ()> {
+        let micro = obj.get(k).and_then(serde_json::Value::as_i64).ok_or(())?;
+        if !(0..=POINTER_MICRO_UNITS).contains(&micro) {
+            return Err(());
+        }
+        Ok(micro as f64 / POINTER_MICRO_UNITS as f64)
+    };
     let parsed = match action {
         "pointer_move" => VerifiedActuationArgs::PointerMove {
-            x: req_f64("x")?,
-            y: req_f64("y")?,
+            x: req_micro_norm("x")?,
+            y: req_micro_norm("y")?,
         },
         "pointer_click" => VerifiedActuationArgs::PointerClick {
-            x: req_f64("x")?,
-            y: req_f64("y")?,
+            x: req_micro_norm("x")?,
+            y: req_micro_norm("y")?,
             // `button` is optional, but if present it MUST be a string (a non-string
             // is malformed, not "default to left").
             button: match obj.get("button") {
@@ -1888,11 +1907,19 @@ mod verified_actuation_args_tests {
     use serde_json::json;
 
     #[test]
-    fn parses_pointer_move() {
-        let a = json!({"x": 0.3, "y": 0.4});
+    fn parses_pointer_move_from_integer_micro_units() {
+        // Server signs coords as integer micro-units (0..1_000_000); the client
+        // divides by 1e6 to the normalized [0,1] f64.
+        let a = json!({"x": 300000, "y": 400000});
         assert_eq!(
             parse_verified_actuation_args("pointer_move", Some(&a)),
             Ok(Some(VerifiedActuationArgs::PointerMove { x: 0.3, y: 0.4 }))
+        );
+        // Range endpoints: 0 -> 0.0, 1_000_000 -> 1.0.
+        let edges = json!({"x": 0, "y": 1000000});
+        assert_eq!(
+            parse_verified_actuation_args("pointer_move", Some(&edges)),
+            Ok(Some(VerifiedActuationArgs::PointerMove { x: 0.0, y: 1.0 }))
         );
     }
 
@@ -1909,7 +1936,7 @@ mod verified_actuation_args_tests {
             Ok(Some(VerifiedActuationArgs::KeyboardChord { keys: vec!["shift".into(), "right".into()] }))
         );
         // pointer_click with no `button` is valid (defaults to None / left).
-        let click = json!({"x": 0.1, "y": 0.2});
+        let click = json!({"x": 100000, "y": 200000});
         assert_eq!(
             parse_verified_actuation_args("pointer_click", Some(&click)),
             Ok(Some(VerifiedActuationArgs::PointerClick { x: 0.1, y: 0.2, button: None }))
@@ -1928,15 +1955,21 @@ mod verified_actuation_args_tests {
         // present-but-invalid args -> Err (deny the command), NEVER Ok(None) — a bad
         // `args` must not be mistaken for "no args" and degrade to the canary.
         // missing field / wrong type / wrong shape:
-        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 0.5}))), Err(()));
-        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": "a", "y": 0.5}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 300000}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": "a", "y": 400000}))), Err(()));
         assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!([1, 2]))), Err(()));
         assert_eq!(parse_verified_actuation_args("keyboard_type", Some(&json!({"text": 5}))), Err(()));
         assert_eq!(parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": []}))), Err(()));
-        assert_eq!(parse_verified_actuation_args("unknown_action", Some(&json!({"x": 0.5, "y": 0.5}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("unknown_action", Some(&json!({"x": 5, "y": 5}))), Err(()));
+        // FLOAT coords are now invalid — the wire is integer micro-units, so a raw
+        // fractional coord (e.g. from a stale server) fails as_i64 and is rejected:
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 0.3, "y": 0.4}))), Err(()));
+        // out-of-range micro-units (> 1_000_000 or < 0) are rejected:
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 1000001, "y": 0}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("pointer_click", Some(&json!({"x": -1, "y": 0}))), Err(()));
         // non-string `button` is malformed, not "default to left":
         assert_eq!(
-            parse_verified_actuation_args("pointer_click", Some(&json!({"x": 0.1, "y": 0.2, "button": 5}))),
+            parse_verified_actuation_args("pointer_click", Some(&json!({"x": 100000, "y": 200000, "button": 5}))),
             Err(())
         );
         // ANY non-string chord element invalidates the whole chord (no silent drop):
@@ -1947,6 +1980,55 @@ mod verified_actuation_args_tests {
         assert_eq!(
             parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": ["left", null]}))),
             Err(())
+        );
+    }
+}
+
+#[cfg(test)]
+mod cross_language_canonicalization_tests {
+    use super::*;
+
+    // A REAL Python-signed envelope: the server's json.dumps(sort_keys, separators,
+    // ensure_ascii) canonicalization + Ed25519 over an args-bearing payload with
+    // INTEGER micro-unit coords, incl. edge values (x=1 => 1e-6 of the screen,
+    // y=1_000_000 => 1.0) that diverged across the Python and Rust JSON encoders
+    // under the prior raw-FLOAT signing scheme (the canonicalization BLOCKER). The
+    // Rust verifier re-canonicalizes the received envelope (stripping only
+    // 'signature') and checks the signature — so this passing proves the two
+    // canonical serializations are byte-identical for the `args` field. If they
+    // ever drift again, this fails. Fixture generated by the live api signer.
+    const PY_SIGNED_ENVELOPE: &str = r#"{"schema": "agentprovision.desktop_command_envelope.v1", "signed": true, "signature_alg": "Ed25519", "key_id": "agentprovision-desktop-command-ed25519-v1", "policy_version": 2, "issuer": "agentprovision-api", "nonce": "fixture-nonce", "expires_at_ms": 1700000000000, "action": "pointer_click", "capability": "pointer_control", "args": {"x": 1, "y": 1000000, "button": "left"}, "signature": "ams1n0hWWz2nSF8BMsCNKDPdBNUD2ytYwK1UJ4URzlGtHzd8jp8R4nBujTxuUByAABcAjiXKxUflFkmK+UMMBA=="}"#;
+    const PY_PUBKEY_B64: &str = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
+
+    #[test]
+    fn rust_verifies_python_signed_integer_args_envelope() {
+        let envelope: serde_json::Value = serde_json::from_str(PY_SIGNED_ENVELOPE).unwrap();
+        assert!(
+            verify_native_control_boundary_envelope_signature_with_public_key(
+                &envelope,
+                PY_PUBKEY_B64,
+            )
+            .is_ok(),
+            "Rust must verify the Python-signed integer-args envelope — canonical JSON must match byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn tampering_a_signed_coord_fails_verification() {
+        let mut envelope: serde_json::Value = serde_json::from_str(PY_SIGNED_ENVELOPE).unwrap();
+        envelope
+            .get_mut("args")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("x".to_string(), serde_json::json!(2));
+        assert!(
+            verify_native_control_boundary_envelope_signature_with_public_key(
+                &envelope,
+                PY_PUBKEY_B64,
+            )
+            .is_err(),
+            "a tampered signed coord must fail Ed25519 verification"
         );
     }
 }
