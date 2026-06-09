@@ -9,9 +9,15 @@ import pytest
 from app.services.desktop_control_service import _normalize_native_control_args as norm
 
 
-def test_pointer_args_normalized():
-    assert norm("pointer_move", {"x": 0.3, "y": 0.4}) == {"x": 0.3, "y": 0.4}
-    assert norm("pointer_click", {"x": 0.0, "y": 1.0}) == {"x": 0.0, "y": 1.0}
+def test_pointer_args_normalized_to_integer_micro_units():
+    # Coords are signed as integer micro-units (0..1_000_000), NOT floats, so the
+    # signed payload is byte-stable across the Python signer and the Rust verifier.
+    assert norm("pointer_move", {"x": 0.3, "y": 0.4}) == {"x": 300000, "y": 400000}
+    assert norm("pointer_click", {"x": 0.0, "y": 1.0}) == {"x": 0, "y": 1_000_000}
+    # The output values are Python ints (json.dumps emits "300000", no decimal).
+    out = norm("pointer_move", {"x": 0.7, "y": 0.123456})
+    assert isinstance(out["x"], int) and isinstance(out["y"], int)
+    assert out == {"x": 700000, "y": 123456}
 
 
 def test_pointer_args_none_is_canary_compatible():
