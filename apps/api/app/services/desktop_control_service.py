@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -725,6 +726,11 @@ def _enqueue_native_control_command(
     # native_control grant for this exact target.
     raw_target = request.payload.get("target") if isinstance(request.payload, dict) else None
     target = _require_native_control_target_binding(raw_target, action=request.action)
+    # Phase 5: validate + persist the action-specific actuation args at enqueue
+    # (fail-fast) so they reach _build_signed_command_envelope and get SIGNED.
+    # Canary commands carry no args -> None -> omitted (envelope unchanged).
+    raw_args = request.payload.get("args") if isinstance(request.payload, dict) else None
+    actuation_args = _normalize_native_control_args(request.action, raw_args)
 
     now = _utcnow()
     command = DesktopCommand(
@@ -745,6 +751,7 @@ def _enqueue_native_control_command(
             "risk_tier": "native_control",
             "target": target,
             "request": _safe_request_metadata(request.payload),
+            **({"args": actuation_args} if actuation_args is not None else {}),
         },
         created_at=now,
         updated_at=now,
@@ -1427,6 +1434,8 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
         text = raw.get("text")
         if not isinstance(text, str) or not text or len(text) > 256:
             raise ValueError("keyboard_type text must be a non-empty string of <= 256 chars")
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+            raise ValueError("keyboard_type text must not contain control characters")
         return {"text": text}
     if action == "keyboard_key_chord":
         if not isinstance(raw, dict):
@@ -1439,7 +1448,12 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
             or not all(isinstance(k, str) and k.strip() for k in keys)
         ):
             raise ValueError("keyboard_key_chord keys must be a non-empty list of <= 5 strings")
-        return {"keys": [k.strip().lower() for k in keys]}
+        normalized = [k.strip().lower() for k in keys]
+        # Server-side FORMAT floor (short identifier tokens); the client's
+        # keyboard_bounds enforces the actual safe-chord allowlist.
+        if not all(re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in normalized):
+            raise ValueError("keyboard_key_chord keys must be short [a-z0-9_+-] tokens")
+        return {"keys": normalized}
     return None
 
 

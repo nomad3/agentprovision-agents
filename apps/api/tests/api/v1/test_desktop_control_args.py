@@ -30,8 +30,12 @@ def test_keyboard_type_text_bounded():
     assert norm("keyboard_type", {"text": "hello luna"}) == {"text": "hello luna"}
 
 
-@pytest.mark.parametrize("bad", [{"text": ""}, {"text": "x" * 257}, {"text": 5}, {}])
+@pytest.mark.parametrize(
+    "bad",
+    [{"text": ""}, {"text": "x" * 257}, {"text": 5}, {}, {"text": "hi\x00there"}, {"text": "a\nb"}],
+)
 def test_keyboard_type_invalid_rejected(bad):
+    # incl. control characters (null, newline) — no injection of control bytes
     with pytest.raises(ValueError):
         norm("keyboard_type", bad)
 
@@ -40,7 +44,18 @@ def test_keyboard_chord_normalized():
     assert norm("keyboard_key_chord", {"keys": ["Cmd", "A"]}) == {"keys": ["cmd", "a"]}
 
 
-@pytest.mark.parametrize("bad", [{"keys": []}, {"keys": ["a"] * 6}, {"keys": "a"}, {"keys": [1]}])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"keys": []},
+        {"keys": ["a"] * 6},
+        {"keys": "a"},
+        {"keys": [1]},
+        {"keys": ["cmd shift"]},  # space -> not a single token
+        {"keys": ["thiskeyiswaytoolong"]},  # > 16 chars
+        {"keys": ["a", "b;rm -rf"]},  # injection-y string
+    ],
+)
 def test_keyboard_chord_invalid_rejected(bad):
     with pytest.raises(ValueError):
         norm("keyboard_key_chord", bad)
