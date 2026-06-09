@@ -41,45 +41,24 @@ const ACTION_CAPABILITIES = {
   keyboard_key_chord: 'keyboard_control',
 };
 
-// Once the boundary proof is ALLOWED, the actuation runs through these Tauri
-// commands (themselves flag-gated + lease-checked + Stop/frontmost re-checked,
-// and for keyboard secure-input + bounds re-checked, Rust-side). The canary
-// values are fixed, deterministic, safe, and reversible — real targeting/content
-// arrives in a later phase.
-const POINTER_ACTUATION_COMMANDS = {
-  pointer_move: 'control_pointer_move',
-  pointer_click: 'control_pointer_click',
-};
-const POINTER_CANARY_POINT = { x: 0.5, y: 0.5 };
-
-// Phase 4 keyboard canary: a fixed bounded plain-text string + a single safe
-// navigation chord (the Rust side re-enforces the length cap + chord allowlist).
-const KEYBOARD_ACTUATION_COMMANDS = {
-  keyboard_type: 'control_keyboard_type',
-  keyboard_key_chord: 'control_keyboard_key_chord',
-};
-const KEYBOARD_CANARY_TEXT = 'luna canary';
-const KEYBOARD_CANARY_CHORD = ['right'];
-
-// Resolve the actuation command + its args for an allowed native-control action.
-// Returns null for an action with no actuation path.
-function nativeActuationInvocation(action) {
-  if (POINTER_ACTUATION_COMMANDS[action]) {
-    return {
-      command: POINTER_ACTUATION_COMMANDS[action],
-      args: { x: POINTER_CANARY_POINT.x, y: POINTER_CANARY_POINT.y },
-    };
+// Phase 5: actuation is no longer a separate renderer-driven Tauri call. The
+// boundary proof (`control_prove_native_command_boundary`) now BOTH verifies the
+// signed envelope AND actuates — using ONLY the server-signed envelope args (or a
+// fixed Rust-side canary fallback when the envelope carries none). The renderer
+// supplies no coordinates/text, so a compromised renderer cannot drive the
+// cursor/keyboard. The proof result carries the final actuation outcome, which we
+// map straight to a command completion status here.
+function nativeActuationStatus(outcome) {
+  switch (outcome) {
+    case 'actuated':
+      return 'succeeded';
+    case 'preempted':
+      return 'preempted';
+    case 'denied':
+      return 'denied';
+    default:
+      return 'failed';
   }
-  if (KEYBOARD_ACTUATION_COMMANDS[action]) {
-    return {
-      command: KEYBOARD_ACTUATION_COMMANDS[action],
-      args:
-        action === 'keyboard_type'
-          ? { text: KEYBOARD_CANARY_TEXT }
-          : { keys: KEYBOARD_CANARY_CHORD },
-    };
-  }
-  return null;
 }
 
 function commandId(command) {
@@ -252,9 +231,9 @@ function isSupportedEnvelopeSignatureAlg(signatureAlg, action) {
 }
 
 function nativeBoundaryCompletion(action, proof, fallbackMode = null) {
-  const reason = proof?.allowed
-    ? `desktop native control disabled; ${action} denied`
-    : (proof?.reason || `desktop native control disabled; ${action} denied`);
+  // Only ever called on a NOT-allowed proof (both callers guard on `!proof.allowed`),
+  // so surface the boundary's denial reason directly.
+  const reason = proof?.reason || `desktop native control disabled; ${action} denied`;
   return {
     status: reason.toLowerCase().includes('stopped') ? 'preempted' : 'denied',
     reason,
@@ -589,96 +568,20 @@ export async function executeClaimedDesktopCommand(
       return;
     }
 
-    // Proof allowed → actuate (pointer = Phase 3, keyboard = Phase 4). An action
-    // with no actuation path is reported denied rather than executed.
-    const invocation = nativeActuationInvocation(action);
-    if (!invocation) {
-      await completeCommand(
-        command,
-        shellId,
-        deviceToken,
-        'denied',
-        `desktop native control disabled; ${action} denied`,
-        {
-          control_mode: proof?.mode || safety?.mode || null,
-          native_boundary_audit_event_id: proof?.audit_event_id || null,
-          native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
-          result_kind: 'native_boundary_denial',
-        },
-        timeouts,
-      );
-      return;
-    }
-
-    try {
-      await invokeWithArgsTimeout(
-        invoke,
-        invocation.command,
-        invocation.args,
-        timeouts.nativeTimeoutMs,
-      );
-    } catch (error) {
-      // The actuation command fails closed on every gate it re-checks
-      // (flag/Stop/Observe/lease/frontmost/bounds). A 'stop'/'preempt' reason is
-      // a preemption; any other gate denial is a denial; everything else failed.
-      const reason = reasonText(error) || `desktop ${action} actuation failed`;
-      const lowered = reason.toLowerCase();
-      let status = 'failed';
-      if (lowered.includes('stop') || lowered.includes('preempt')) {
-        status = 'preempted';
-      } else if (
-        lowered.includes('disabled') ||
-        lowered.includes('drift') ||
-        lowered.includes('locked') ||
-        lowered.includes('rate_capped') ||
-        lowered.includes('denied') ||
-        lowered.includes('claim_required') ||
-        lowered.includes('approval_')
-      ) {
-        status = 'denied';
-      }
-      await completeCommand(
-        command,
-        shellId,
-        deviceToken,
-        status,
-        reason,
-        {
-          control_mode: safety?.mode || null,
-          native_boundary_audit_event_id: proof?.audit_event_id || null,
-          native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
-          result_kind: 'native_actuation_error',
-        },
-        timeouts,
-      );
-      return;
-    }
-
-    // Re-read safety: a Stop landing during actuation is reported as preemption.
-    let postSafety = null;
-    try {
-      postSafety = await invokeWithTimeout(
-        invoke,
-        'control_get_safety_state',
-        timeouts.safetyTimeoutMs,
-      );
-    } catch (_error) {
-      postSafety = null;
-    }
-    const preempted = postSafety?.mode === 'stopped';
+    // Proof allowed → the Rust proof flow already actuated (single actuation site,
+    // server-signed args only). Complete from the proof's actuation outcome; the
+    // renderer no longer invokes any actuation command.
     await completeCommand(
       command,
       shellId,
       deviceToken,
-      preempted ? 'preempted' : 'succeeded',
-      preempted
-        ? `desktop control stopped; ${action} preempted`
-        : `desktop ${action} actuated`,
+      nativeActuationStatus(proof?.outcome),
+      proof?.reason || `desktop ${action} ${proof?.outcome || 'actuated'}`,
       {
-        control_mode: postSafety?.mode || safety?.mode || null,
+        control_mode: proof?.mode || safety?.mode || null,
         native_boundary_audit_event_id: proof?.audit_event_id || null,
         native_boundary_capability: proof?.capability || ACTION_CAPABILITIES[action] || null,
-        result_kind: 'native_actuation',
+        result_kind: proof?.actuated ? 'native_actuation' : 'native_actuation_error',
       },
       timeouts,
     );
