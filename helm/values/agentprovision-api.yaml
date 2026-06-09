@@ -237,6 +237,19 @@ externalSecret:
     - secretKey: EMAIL_SMTP_PASSWORD
       remoteRef:
         key: agentprovision-email-smtp-password
+    # --- Luna desktop-control Ed25519 signing (Ed25519 path only) ---
+    # The non-secret knobs (algorithm, key id, allowlist) are in configMap
+    # above. When DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519, the API
+    # also needs the signing private key, and optionally a JWT_AGENT_TOKEN_SECRET
+    # distinct from SECRET_KEY for the HMAC fallback. PRE-SEED these GCP Secret
+    # Manager keys FIRST, then uncomment — otherwise external-secret sync spins
+    # on the missing remote keys (same caution as EMAIL_SMTP_* above).
+    # - secretKey: DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY
+    #   remoteRef:
+    #     key: agentprovision-desktop-command-ed25519-private-key
+    # - secretKey: JWT_AGENT_TOKEN_SECRET
+    #   remoteRef:
+    #     key: agentprovision-jwt-agent-token-secret
 
 # Additional environment variables
 env:
