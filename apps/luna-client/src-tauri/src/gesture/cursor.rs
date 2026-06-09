@@ -19,7 +19,7 @@ use once_cell::sync::Lazy;
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "macos")]
-use enigo::{Button, Coordinate, Direction, Enigo, Mouse, Settings};
+use enigo::{Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings};
 
 static GLOBAL_MODE: AtomicBool = AtomicBool::new(false);
 static ACCESSIBILITY_OK: AtomicBool = AtomicBool::new(false);
@@ -347,6 +347,84 @@ pub async fn canary_click() -> Result<(), String> {
             .map_err(|err| format!("enigo_click_failed: {err:?}")),
         None => Err("enigo_unavailable".to_string()),
     }
+}
+
+/// Type a bounded plain-text string (Phase 4 keyboard canary). Caller MUST have
+/// proven the boundary + lease + length bound + live Stop/frontmost/secure-input
+/// first; this performs the AX gate + the native text input.
+#[cfg(target_os = "macos")]
+pub async fn canary_type_text(text: &str) -> Result<(), String> {
+    if !crate::computer_use::permissions::accessibility_trusted() {
+        return Err("accessibility_denied".to_string());
+    }
+    let mut guard = ENIGO.lock().await;
+    if guard.is_none() {
+        *guard = Enigo::new(&Settings::default()).ok().map(SendEnigo);
+    }
+    match guard.as_mut() {
+        Some(e) => e
+            .text(text)
+            .map_err(|err| format!("enigo_text_failed: {err:?}")),
+        None => Err("enigo_unavailable".to_string()),
+    }
+}
+
+/// Send one allowlisted navigation/selection key chord (arrows + shift+arrows).
+/// Re-validates the allowlist as defense-in-depth even though the command path
+/// already checked it.
+#[cfg(target_os = "macos")]
+pub async fn canary_key_chord(keys: &[String]) -> Result<(), String> {
+    use crate::computer_use::keyboard_bounds;
+    if !crate::computer_use::permissions::accessibility_trusted() {
+        return Err("accessibility_denied".to_string());
+    }
+    if !keyboard_bounds::chord_allowed(keys) {
+        return Err("keyboard_chord_not_allowed".to_string());
+    }
+    let chord = keyboard_bounds::normalize_chord(keys);
+    let shift = chord.starts_with("shift+");
+    let Some(arrow) = arrow_key(chord.rsplit('+').next().unwrap_or("")) else {
+        return Err("keyboard_chord_not_allowed".to_string());
+    };
+    let mut guard = ENIGO.lock().await;
+    if guard.is_none() {
+        *guard = Enigo::new(&Settings::default()).ok().map(SendEnigo);
+    }
+    let Some(e) = guard.as_mut() else {
+        return Err("enigo_unavailable".to_string());
+    };
+    if shift {
+        e.key(Key::Shift, Direction::Press)
+            .map_err(|err| format!("enigo_key_failed: {err:?}"))?;
+    }
+    let click = e
+        .key(arrow, Direction::Click)
+        .map_err(|err| format!("enigo_key_failed: {err:?}"));
+    if shift {
+        let _ = e.key(Key::Shift, Direction::Release);
+    }
+    click
+}
+
+#[cfg(target_os = "macos")]
+fn arrow_key(name: &str) -> Option<Key> {
+    match name {
+        "left" => Some(Key::LeftArrow),
+        "right" => Some(Key::RightArrow),
+        "up" => Some(Key::UpArrow),
+        "down" => Some(Key::DownArrow),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn canary_type_text(_text: &str) -> Result<(), String> {
+    Err("unsupported_platform".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn canary_key_chord(_keys: &[String]) -> Result<(), String> {
+    Err("unsupported_platform".to_string())
 }
 
 #[cfg(not(target_os = "macos"))]
