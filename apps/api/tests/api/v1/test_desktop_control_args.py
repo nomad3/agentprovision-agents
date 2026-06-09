@@ -40,8 +40,11 @@ def test_keyboard_type_invalid_rejected(bad):
         norm("keyboard_type", bad)
 
 
-def test_keyboard_chord_normalized():
-    assert norm("keyboard_key_chord", {"keys": ["Cmd", "A"]}) == {"keys": ["cmd", "a"]}
+def test_keyboard_chord_allowlisted_normalized():
+    # only the safe-chord set (arrows + shift+arrows) is accepted
+    assert norm("keyboard_key_chord", {"keys": ["Left"]}) == {"keys": ["left"]}
+    assert norm("keyboard_key_chord", {"keys": ["Shift", "Right"]}) == {"keys": ["shift", "right"]}
+    assert norm("keyboard_key_chord", {"keys": ["ArrowUp"]}) == {"keys": ["arrowup"]}
 
 
 @pytest.mark.parametrize(
@@ -54,6 +57,10 @@ def test_keyboard_chord_normalized():
         {"keys": ["cmd shift"]},  # space -> not a single token
         {"keys": ["thiskeyiswaytoolong"]},  # > 16 chars
         {"keys": ["a", "b;rm -rf"]},  # injection-y string
+        {"keys": ["cmd", "a"]},  # not in the safe-chord allowlist
+        {"keys": ["shift", "x"]},  # shift+x not allowed
+        {"keys": ["a"]},  # bare 'a' is not an arrow
+        {"keys": ["shift"]},  # modifier only, no main key
     ],
 )
 def test_keyboard_chord_invalid_rejected(bad):

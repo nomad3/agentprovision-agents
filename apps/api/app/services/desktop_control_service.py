@@ -1407,6 +1407,34 @@ def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
     return False
 
 
+# Mirror of the client safe-chord allowlist (keyboard_bounds.rs) — the server
+# enforces the ACTUAL allowed chord set, not just a loose token format. Expands
+# in lockstep with the client when Phase 5 widens the safe set.
+_KEYBOARD_CHORD_ALLOWLIST = frozenset(
+    {"left", "right", "up", "down", "shift+left", "shift+right", "shift+up", "shift+down"}
+)
+_ARROW_ALIASES = {
+    "arrowleft": "left", "leftarrow": "left",
+    "arrowright": "right", "rightarrow": "right",
+    "arrowup": "up", "uparrow": "up",
+    "arrowdown": "down", "downarrow": "down",
+}
+
+
+def _normalize_chord(keys: list[str]) -> str:
+    """Canonical chord string (mirrors keyboard_bounds.rs normalize_chord):
+    modifiers (shift) first, exactly one main key, joined with '+'. Returns ''
+    for a malformed chord (no/multiple main keys)."""
+    mods: list[str] = []
+    main: list[str] = []
+    for raw in keys:
+        k = _ARROW_ALIASES.get(raw.strip().lower(), raw.strip().lower())
+        (mods if k == "shift" else main).append(k)
+    if len(main) != 1:
+        return ""
+    return "+".join(sorted(set(mods)) + main)
+
+
 def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | None:
     """Validate + normalize the action-specific actuation args that are SIGNED
     into the envelope, so the client actuates exactly what the server authorized
@@ -1449,10 +1477,12 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
         ):
             raise ValueError("keyboard_key_chord keys must be a non-empty list of <= 5 strings")
         normalized = [k.strip().lower() for k in keys]
-        # Server-side FORMAT floor (short identifier tokens); the client's
-        # keyboard_bounds enforces the actual safe-chord allowlist.
         if not all(re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in normalized):
             raise ValueError("keyboard_key_chord keys must be short [a-z0-9_+-] tokens")
+        # Server enforces the actual safe-chord allowlist (mirrors the client),
+        # not just the token format — don't rely on client re-validation alone.
+        if _normalize_chord(normalized) not in _KEYBOARD_CHORD_ALLOWLIST:
+            raise ValueError("keyboard_key_chord not in the safe-chord allowlist")
         return {"keys": normalized}
     return None
 
