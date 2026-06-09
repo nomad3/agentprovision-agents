@@ -1400,6 +1400,49 @@ def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
     return False
 
 
+def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | None:
+    """Validate + normalize the action-specific actuation args that are SIGNED
+    into the envelope, so the client actuates exactly what the server authorized
+    — never a client-chosen or screen-derived value (Phase 5 §3 injection
+    defense). Returns None for actions that carry no args (e.g. a click at the
+    current cursor — canary-compatible). Raises ValueError on invalid args.
+    Defense-in-depth: the client re-validates against its own bounds.
+    """
+    if raw is None:
+        return None
+    if action in ("pointer_move", "pointer_click"):
+        if not isinstance(raw, dict):
+            raise ValueError("pointer args must be an object")
+        try:
+            x = float(raw["x"])
+            y = float(raw["y"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("pointer args require numeric x and y")
+        if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+            raise ValueError("pointer x/y must be normalized in [0, 1]")
+        return {"x": x, "y": y}
+    if action == "keyboard_type":
+        if not isinstance(raw, dict):
+            raise ValueError("keyboard_type args must be an object")
+        text = raw.get("text")
+        if not isinstance(text, str) or not text or len(text) > 256:
+            raise ValueError("keyboard_type text must be a non-empty string of <= 256 chars")
+        return {"text": text}
+    if action == "keyboard_key_chord":
+        if not isinstance(raw, dict):
+            raise ValueError("keyboard_key_chord args must be an object")
+        keys = raw.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not keys
+            or len(keys) > 5
+            or not all(isinstance(k, str) and k.strip() for k in keys)
+        ):
+            raise ValueError("keyboard_key_chord keys must be a non-empty list of <= 5 strings")
+        return {"keys": [k.strip().lower() for k in keys]}
+    return None
+
+
 def _build_signed_command_envelope(
     command: DesktopCommand,
     *,
@@ -1449,6 +1492,12 @@ def _build_signed_command_envelope(
     target_payload = _envelope_target_payload(target, observed_at=issued_at)
     if target_payload is not None:
         envelope["target"] = target_payload
+    # Phase 5: sign the action-specific actuation args (coords / text / keys) so
+    # the client actuates exactly what the server authorized. Canary commands
+    # carry no `args` (None) and are unaffected.
+    args = _normalize_native_control_args(action, (command.payload or {}).get("args"))
+    if args is not None:
+        envelope["args"] = args
     envelope["signature"] = _sign_envelope_payload(envelope, algorithm)
     return envelope, _envelope_hash(envelope)
 
