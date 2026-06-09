@@ -1305,6 +1305,33 @@ def _validate_desktop_command_envelope_signing_config() -> str:
     return algorithm
 
 
+def run_desktop_preflight() -> dict[str, Any]:
+    """Validate the desktop-control envelope signing config without raising.
+
+    Global-config-only (no DB / per-tenant work) so it is cheap enough for a
+    readiness probe and the ``alpha desktop preflight run`` kernel verb. The
+    claim path keeps the raising
+    ``_validate_desktop_command_envelope_signing_config()`` as defense in depth.
+    """
+    algorithm = settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM
+    try:
+        algorithm = _validate_desktop_command_envelope_signing_config()
+        return {
+            "ok": True,
+            "algorithm": algorithm,
+            "checks": [{"name": "envelope_signing_config", "ok": True, "detail": f"algorithm={algorithm}"}],
+            "error": None,
+        }
+    except Exception as exc:  # RuntimeError on missing/invalid Ed25519 key or id
+        detail = str(exc)
+        return {
+            "ok": False,
+            "algorithm": algorithm,
+            "checks": [{"name": "envelope_signing_config", "ok": False, "detail": detail}],
+            "error": detail,
+        }
+
+
 def _desktop_command_envelope_ed25519_private_key() -> Ed25519PrivateKey:
     raw = _decode_envelope_key_material(settings.DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY or "")
     if len(raw) != 32:

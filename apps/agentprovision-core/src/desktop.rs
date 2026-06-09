@@ -287,6 +287,28 @@ pub struct DesktopCommandDenied {
     pub created_at: String,
 }
 
+/// One check in a desktop-control preflight result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopPreflightCheck {
+    pub name: String,
+    pub ok: bool,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// Result of `alpha desktop preflight run` — the API's
+/// `run_desktop_preflight()` projection: desktop-control envelope signing
+/// config validation. Control-plane data only; carries no key material.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DesktopPreflight {
+    pub ok: bool,
+    pub algorithm: String,
+    #[serde(default)]
+    pub checks: Vec<DesktopPreflightCheck>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
