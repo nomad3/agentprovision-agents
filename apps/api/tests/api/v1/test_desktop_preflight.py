@@ -48,3 +48,15 @@ def test_preflight_ok_for_ed25519_with_valid_key(monkeypatch):
     result = svc.run_desktop_preflight()
     assert result["ok"] is True, result["error"]
     assert result["algorithm"] == "Ed25519"
+
+
+def test_preflight_reports_normalized_algorithm_for_failfast(monkeypatch):
+    # A whitespace-padded algorithm must still report the canonical "Ed25519"
+    # so the readiness fail-fast comparison (== "Ed25519") holds and a
+    # misconfigured Ed25519 deploy fails fast rather than silently degrading.
+    monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM", " Ed25519 ", raising=False)
+    monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY", "", raising=False)
+    monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID", "k1", raising=False)
+    result = svc.run_desktop_preflight()
+    assert result["ok"] is False
+    assert result["algorithm"] == "Ed25519"

@@ -1313,7 +1313,11 @@ def run_desktop_preflight() -> dict[str, Any]:
     claim path keeps the raising
     ``_validate_desktop_command_envelope_signing_config()`` as defense in depth.
     """
-    algorithm = settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM
+    # Report the NORMALIZED (stripped) algorithm so the readiness fail-fast
+    # comparison against the canonical "Ed25519" holds even for a value like
+    # " Ed25519 " that the validator would normalize but that would otherwise
+    # be reported raw on the failure path.
+    algorithm = (settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM or "").strip()
     try:
         algorithm = _validate_desktop_command_envelope_signing_config()
         return {

@@ -37,23 +37,28 @@ async fn preflight_run(_args: PreflightRunArgs, ctx: Context) -> anyhow::Result<
     let resp = ctx.client.desktop_preflight().await?;
     if ctx.json {
         crate::output::emit(true, &resp, |_| {});
-        return Ok(());
-    }
-    if resp.ok {
-        output::ok(format!(
-            "[alpha] desktop preflight ok — algorithm={}",
-            resp.algorithm
-        ));
     } else {
-        output::warn(format!(
-            "[alpha] desktop preflight FAILED — algorithm={}: {}",
-            resp.algorithm,
-            resp.error.as_deref().unwrap_or("(no detail)"),
-        ));
+        if resp.ok {
+            output::ok(format!(
+                "[alpha] desktop preflight ok — algorithm={}",
+                resp.algorithm
+            ));
+        } else {
+            output::warn(format!(
+                "[alpha] desktop preflight FAILED — algorithm={}: {}",
+                resp.algorithm,
+                resp.error.as_deref().unwrap_or("(no detail)"),
+            ));
+        }
+        for c in &resp.checks {
+            let mark = if c.ok { "ok" } else { "FAIL" };
+            output::info(format!("  [{mark}] {}: {}", c.name, c.detail));
+        }
     }
-    for c in &resp.checks {
-        let mark = if c.ok { "ok" } else { "FAIL" };
-        output::info(format!("  [{mark}] {}: {}", c.name, c.detail));
+    // Non-zero exit on a failed preflight so scripts / readiness checks can
+    // detect it — the result was already emitted above.
+    if !resp.ok {
+        anyhow::bail!("desktop preflight failed (algorithm={})", resp.algorithm);
     }
     Ok(())
 }
