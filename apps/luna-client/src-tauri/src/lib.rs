@@ -1410,7 +1410,7 @@ impl PointerCanaryAction {
 /// Pure pre-lease gate for the pointer canary: the per-capability pointer flag
 /// must be enabled and the live control mode must be neither Stopped nor Observe.
 /// Read live and re-evaluated immediately before the native event (TOCTOU).
-fn pointer_canary_mode_gate(
+fn native_canary_mode_gate(
     pointer_flag_enabled: bool,
     mode: computer_use::DesktopControlMode,
 ) -> Option<computer_use::denial_codes::DenialCode> {
@@ -1426,10 +1426,10 @@ fn pointer_canary_mode_gate(
     }
 }
 
-/// Audit one pointer-canary boundary outcome (request → acceptance/denial →
-/// action → result). Display-safe: no coordinates beyond in/out-of-bounds, no
-/// screenshots, no window titles.
-fn emit_pointer_canary_audit(
+/// Audit one native-canary (pointer or keyboard) boundary outcome (request →
+/// acceptance/denial → action → result). Display-safe: no coordinates/typed
+/// text, no screenshots, no window titles.
+fn emit_native_canary_audit(
     app: &tauri::AppHandle,
     action: &str,
     outcome: &str,
@@ -1437,7 +1437,7 @@ fn emit_pointer_canary_audit(
     frontmost: Option<&str>,
 ) {
     log::info!(
-        "pointer_canary action={action} outcome={outcome} reason={reason} frontmost={frontmost:?}"
+        "native_canary action={action} outcome={outcome} reason={reason} frontmost={frontmost:?}"
     );
     let _ = app.emit(
         "desktop-native-actuation",
@@ -1451,11 +1451,13 @@ fn emit_pointer_canary_audit(
     );
 }
 
-/// Claim (or refresh) the live pointer actuation lease after an allowed proof.
-/// The lease target is the Rust-read live frontmost bundle that the boundary
-/// just validated against the signed envelope — never a JS-supplied value.
-async fn claim_pointer_actuation_lease(
+/// Claim (or refresh) the live actuation lease (pointer or keyboard) after an
+/// allowed proof. The lease target is the Rust-read live frontmost bundle that
+/// the boundary just validated against the signed envelope — never a JS-supplied
+/// value.
+async fn claim_actuation_lease(
     request: &NativeControlBoundaryProofRequest,
+    capability: computer_use::NativeControlCapability,
     now_ms: u64,
 ) {
     let Some(owner) = non_empty_text(&request.shell_id) else {
@@ -1472,7 +1474,7 @@ async fn claim_pointer_actuation_lease(
     let lease = computer_use::actuation_lease::ActuationLease {
         owner_shell_id: owner.to_string(),
         target_bundle_id: target.to_string(),
-        capability: computer_use::NativeControlCapability::Pointer,
+        capability,
         expires_at_ms,
         max_actions: ACTUATION_LEASE_MAX_ACTIONS,
         actions_used: 0,
@@ -1504,9 +1506,9 @@ async fn actuate_pointer_canary(
     let pointer_flag = desktop_control_allows_capability(NativeControlCapability::Pointer);
 
     // 1. Flag + live Stop/Observe gate.
-    if let Some(code) = pointer_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
+    if let Some(code) = native_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
         let reason = code.as_str().to_string();
-        emit_pointer_canary_audit(app, action_name, "denied", &reason, None);
+        emit_native_canary_audit(app, action_name, "denied", &reason, None);
         return Err(reason);
     }
 
@@ -1518,7 +1520,7 @@ async fn actuate_pointer_canary(
     {
         if !button.eq_ignore_ascii_case("left") {
             let reason = DenialCode::NativeControlActionUnsupported.as_str().to_string();
-            emit_pointer_canary_audit(app, action_name, "denied", &reason, None);
+            emit_native_canary_audit(app, action_name, "denied", &reason, None);
             return Err(reason);
         }
     }
@@ -1540,15 +1542,15 @@ async fn actuate_pointer_canary(
     };
     if let Some(code) = lease_actuation_decision(guard.as_ref(), &attempt) {
         let reason = code.as_str().to_string();
-        emit_pointer_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
+        emit_native_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
         return Err(reason);
     }
 
     // 3. Final live re-check immediately before the native event (Stop could have
     //    landed while we waited for the lease lock), then deny-by-default guard.
-    if let Some(code) = pointer_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
+    if let Some(code) = native_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
         let reason = code.as_str().to_string();
-        emit_pointer_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
         return Err(reason);
     }
     if !gesture::cursor::canary_pointer_actuation_allowed(
@@ -1556,7 +1558,7 @@ async fn actuate_pointer_canary(
         current_desktop_control_mode() == computer_use::DesktopControlMode::Stopped,
     ) {
         let reason = DenialCode::NativeControlDisabled.as_str().to_string();
-        emit_pointer_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
         return Err(reason);
     }
 
@@ -1574,11 +1576,130 @@ async fn actuate_pointer_canary(
                 lease.actions_used = lease.actions_used.saturating_add(1);
                 lease.last_action_at_ms = Some(now_ms);
             }
-            emit_pointer_canary_audit(app, action_name, "actuated", "ok", frontmost.as_deref());
+            emit_native_canary_audit(app, action_name, "actuated", "ok", frontmost.as_deref());
             Ok(())
         }
         Err(err) => {
-            emit_pointer_canary_audit(app, action_name, "failed", &err, frontmost.as_deref());
+            emit_native_canary_audit(app, action_name, "failed", &err, frontmost.as_deref());
+            Err(err)
+        }
+    }
+}
+
+// ── Phase 4 keyboard canary actuation ───────────────────────────────────────
+//
+// Mirrors the pointer canary but for bounded synthetic keyboard input. Actuates
+// ONLY when a prior boundary proof claimed a live keyboard lease AND the keyboard
+// flag (LUNA_ACTUATION_KEYBOARD_ENABLED, default off) is on AND a final live
+// re-check passes: Stop/Observe, macOS Secure Input (fail-closed — never type
+// into a password/secure field), the lease (capability/TTL/budget/pacing/
+// frontmost), and the input bounds (max text length / allowlisted chord).
+
+#[derive(Clone, Debug)]
+enum KeyboardCanaryAction {
+    Type { text: String },
+    Chord { keys: Vec<String> },
+}
+
+impl KeyboardCanaryAction {
+    fn action_name(&self) -> &'static str {
+        match self {
+            KeyboardCanaryAction::Type { .. } => "control_keyboard_type",
+            KeyboardCanaryAction::Chord { .. } => "control_keyboard_key_chord",
+        }
+    }
+}
+
+/// The keyboard-canary actuation boundary. Like the pointer one, plus a
+/// Secure-Input fail-closed check and per-action input bounds (max text length /
+/// allowlisted key chord).
+async fn actuate_keyboard_canary(
+    app: &tauri::AppHandle,
+    action: KeyboardCanaryAction,
+) -> Result<(), String> {
+    use computer_use::actuation_lease::{lease_actuation_decision, ActuationAttempt};
+    use computer_use::denial_codes::DenialCode;
+    use computer_use::keyboard_bounds;
+    use computer_use::NativeControlCapability;
+
+    let action_name = action.action_name();
+    let keyboard_flag = desktop_control_allows_capability(NativeControlCapability::Keyboard);
+
+    // 1. Flag + live Stop/Observe gate.
+    if let Some(code) = native_canary_mode_gate(keyboard_flag, current_desktop_control_mode()) {
+        let reason = code.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "denied", &reason, None);
+        return Err(reason);
+    }
+
+    // 2. Secure Input fail-closed: never synthesize keys while a password/secure
+    //    field is focused anywhere on the system.
+    if secure_input_is_active() {
+        let reason = DenialCode::SecureInputActive.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "denied", &reason, None);
+        return Err(reason);
+    }
+
+    // 3. Input bounds: max plain-text length / allowlisted navigation chord.
+    let bounded = match &action {
+        KeyboardCanaryAction::Type { text } => keyboard_bounds::text_within_bounds(text),
+        KeyboardCanaryAction::Chord { keys } => keyboard_bounds::chord_allowed(keys),
+    };
+    if !bounded {
+        let reason = DenialCode::NativeControlActionUnsupported.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "denied", &reason, None);
+        return Err(reason);
+    }
+
+    let now_ms = now_unix_ms();
+    let frontmost = frontmost_application_bundle_id();
+
+    // 4. Lease decision under the lease lock (keyboard capability; no coordinate
+    //    bound, so point_in_bounds is trivially true).
+    let mut guard = ACTUATION_LEASE.lock().await;
+    let attempt = ActuationAttempt {
+        capability: NativeControlCapability::Keyboard,
+        now_ms,
+        live_frontmost_bundle: frontmost.as_deref(),
+        point_in_bounds: true,
+        min_interval_ms: NATIVE_ACTION_MIN_INTERVAL_MS,
+    };
+    if let Some(code) = lease_actuation_decision(guard.as_ref(), &attempt) {
+        let reason = code.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+
+    // 5. Final live re-check immediately before the native event: mode + Secure
+    //    Input could have changed while we waited for the lease lock.
+    if let Some(code) = native_canary_mode_gate(keyboard_flag, current_desktop_control_mode()) {
+        let reason = code.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+    if secure_input_is_active() {
+        let reason = DenialCode::SecureInputActive.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+
+    // 6. The native event.
+    let result = match &action {
+        KeyboardCanaryAction::Type { text } => gesture::cursor::canary_type_text(text).await,
+        KeyboardCanaryAction::Chord { keys } => gesture::cursor::canary_key_chord(keys).await,
+    };
+
+    match result {
+        Ok(()) => {
+            if let Some(lease) = guard.as_mut() {
+                lease.actions_used = lease.actions_used.saturating_add(1);
+                lease.last_action_at_ms = Some(now_ms);
+            }
+            emit_native_canary_audit(app, action_name, "actuated", "ok", frontmost.as_deref());
+            Ok(())
+        }
+        Err(err) => {
+            emit_native_canary_audit(app, action_name, "failed", &err, frontmost.as_deref());
             Err(err)
         }
     }
@@ -1664,12 +1785,24 @@ async fn control_prove_native_command_boundary(
         &permissions,
     );
 
-    // An allowed pointer proof claims (or refreshes) the live actuation lease.
-    // Keyboard stays unreachable in Phase 3 — only pointer claims.
-    if decision.allowed
-        && decision.capability == computer_use::NativeControlCapability::Pointer.as_str()
-    {
-        claim_pointer_actuation_lease(&request, now_ms).await;
+    // An allowed proof claims (or refreshes) the live actuation lease for the
+    // proven capability (pointer = Phase 3, keyboard = Phase 4).
+    if decision.allowed {
+        if decision.capability == computer_use::NativeControlCapability::Pointer.as_str() {
+            claim_actuation_lease(
+                &request,
+                computer_use::NativeControlCapability::Pointer,
+                now_ms,
+            )
+            .await;
+        } else if decision.capability == computer_use::NativeControlCapability::Keyboard.as_str() {
+            claim_actuation_lease(
+                &request,
+                computer_use::NativeControlCapability::Keyboard,
+                now_ms,
+            )
+            .await;
+        }
     }
 
     Ok(NativeControlBoundaryProofResult {
@@ -2053,13 +2186,16 @@ async fn control_pointer_click(
 }
 
 #[tauri::command]
-async fn control_keyboard_type(_text: String) -> Result<(), String> {
-    ensure_desktop_control_allows_keyboard_actuation("control_keyboard_type")
+async fn control_keyboard_type(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    actuate_keyboard_canary(&app, KeyboardCanaryAction::Type { text }).await
 }
 
 #[tauri::command]
-async fn control_keyboard_key_chord(_keys: Vec<String>) -> Result<(), String> {
-    ensure_desktop_control_allows_keyboard_actuation("control_keyboard_key_chord")
+async fn control_keyboard_key_chord(
+    app: tauri::AppHandle,
+    keys: Vec<String>,
+) -> Result<(), String> {
+    actuate_keyboard_canary(&app, KeyboardCanaryAction::Chord { keys }).await
 }
 
 #[tauri::command]
@@ -3015,27 +3151,27 @@ mod tests {
     }
 
     #[test]
-    fn pointer_canary_mode_gate_denies_flag_off_and_unsafe_modes() {
+    fn native_canary_mode_gate_denies_flag_off_and_unsafe_modes() {
         use computer_use::denial_codes::DenialCode;
         use computer_use::DesktopControlMode;
 
         // Flag off denies before the mode is even consulted.
         assert_eq!(
-            pointer_canary_mode_gate(false, DesktopControlMode::ControlLocked),
+            native_canary_mode_gate(false, DesktopControlMode::ControlLocked),
             Some(DenialCode::NativeControlTierDisabled)
         );
         // Flag on, but Stop / Observe still veto the pointer canary.
         assert_eq!(
-            pointer_canary_mode_gate(true, DesktopControlMode::Stopped),
+            native_canary_mode_gate(true, DesktopControlMode::Stopped),
             Some(DenialCode::Stopped)
         );
         assert_eq!(
-            pointer_canary_mode_gate(true, DesktopControlMode::Observe),
+            native_canary_mode_gate(true, DesktopControlMode::Observe),
             Some(DenialCode::ObserveLocked)
         );
         // Only flag-on AND control-locked proceeds to the lease decision.
         assert_eq!(
-            pointer_canary_mode_gate(true, DesktopControlMode::ControlLocked),
+            native_canary_mode_gate(true, DesktopControlMode::ControlLocked),
             None
         );
     }
@@ -3815,18 +3951,35 @@ mod tests {
     }
 
     #[test]
-    fn native_boundary_keeps_keyboard_denied_even_with_flag_on() {
-        // Keyboard actuation stays denied (Phase 4) even if its flag is set and
-        // Accessibility is granted — the policy gate refuses keyboard.
-        let request = native_boundary_request("keyboard_type", "keyboard-still-denied");
+    fn native_boundary_allows_keyboard_when_flag_on_and_ax_granted() {
+        // Phase 4: with the keyboard flag on, ControlLocked, Accessibility granted
+        // (native_boundary_permissions), no active Secure Input, and a valid signed
+        // envelope + matching frontmost, the boundary ALLOWS keyboard actuation.
+        let request = native_boundary_request("keyboard_type", "valid-allowed-keyboard");
         let decision = native_boundary_decision_with_flags(
             &request,
             computer_use::DesktopControlMode::ControlLocked,
             None,
             Some("true"),
         );
-        assert!(!decision.allowed);
+        assert!(decision.allowed, "expected allow, got: {}", decision.reason);
         assert_eq!(decision.capability, "keyboard_control");
+    }
+
+    #[test]
+    fn native_boundary_denies_keyboard_when_flag_off() {
+        // With the keyboard flag OFF (default), keyboard is denied at the tier gate.
+        let request = native_boundary_request("keyboard_type", "keyboard-flag-off");
+        let decision = native_boundary_decision_with_flags(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            None,
+            None,
+        );
+        assert!(!decision.allowed);
+        assert!(decision
+            .reason
+            .contains("desktop native control tier disabled"));
     }
 
     #[test]

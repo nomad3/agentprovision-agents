@@ -6,6 +6,7 @@
 
 pub mod actuation_lease;
 pub mod denial_codes;
+pub mod keyboard_bounds;
 pub mod permissions;
 pub mod policy;
 pub mod stop_state;
