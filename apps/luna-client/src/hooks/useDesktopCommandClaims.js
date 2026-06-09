@@ -41,17 +41,46 @@ const ACTION_CAPABILITIES = {
   keyboard_key_chord: 'keyboard_control',
 };
 
-// Phase 3 pointer canary: once the boundary proof is ALLOWED, the actuation
-// runs through these Tauri commands (themselves flag-gated + lease-checked +
-// Stop/frontmost re-checked Rust-side). Keyboard has no actuation command yet
-// (Phase 4), so a keyboard proof never actuates. The canary actuates at the
-// centre of the active display — deterministic, safe, reversible; real
-// targeting arrives in a later phase.
+// Once the boundary proof is ALLOWED, the actuation runs through these Tauri
+// commands (themselves flag-gated + lease-checked + Stop/frontmost re-checked,
+// and for keyboard secure-input + bounds re-checked, Rust-side). The canary
+// values are fixed, deterministic, safe, and reversible — real targeting/content
+// arrives in a later phase.
 const POINTER_ACTUATION_COMMANDS = {
   pointer_move: 'control_pointer_move',
   pointer_click: 'control_pointer_click',
 };
 const POINTER_CANARY_POINT = { x: 0.5, y: 0.5 };
+
+// Phase 4 keyboard canary: a fixed bounded plain-text string + a single safe
+// navigation chord (the Rust side re-enforces the length cap + chord allowlist).
+const KEYBOARD_ACTUATION_COMMANDS = {
+  keyboard_type: 'control_keyboard_type',
+  keyboard_key_chord: 'control_keyboard_key_chord',
+};
+const KEYBOARD_CANARY_TEXT = 'luna canary';
+const KEYBOARD_CANARY_CHORD = ['right'];
+
+// Resolve the actuation command + its args for an allowed native-control action.
+// Returns null for an action with no actuation path.
+function nativeActuationInvocation(action) {
+  if (POINTER_ACTUATION_COMMANDS[action]) {
+    return {
+      command: POINTER_ACTUATION_COMMANDS[action],
+      args: { x: POINTER_CANARY_POINT.x, y: POINTER_CANARY_POINT.y },
+    };
+  }
+  if (KEYBOARD_ACTUATION_COMMANDS[action]) {
+    return {
+      command: KEYBOARD_ACTUATION_COMMANDS[action],
+      args:
+        action === 'keyboard_type'
+          ? { text: KEYBOARD_CANARY_TEXT }
+          : { keys: KEYBOARD_CANARY_CHORD },
+    };
+  }
+  return null;
+}
 
 function commandId(command) {
   return command?.desktop_command_id || command?.id;
@@ -560,10 +589,10 @@ export async function executeClaimedDesktopCommand(
       return;
     }
 
-    // Proof allowed → actuate. Keyboard has no actuation command yet (Phase 4),
-    // so it is reported denied rather than executed.
-    const actuationCommand = POINTER_ACTUATION_COMMANDS[action];
-    if (!actuationCommand) {
+    // Proof allowed → actuate (pointer = Phase 3, keyboard = Phase 4). An action
+    // with no actuation path is reported denied rather than executed.
+    const invocation = nativeActuationInvocation(action);
+    if (!invocation) {
       await completeCommand(
         command,
         shellId,
@@ -584,8 +613,8 @@ export async function executeClaimedDesktopCommand(
     try {
       await invokeWithArgsTimeout(
         invoke,
-        actuationCommand,
-        { x: POINTER_CANARY_POINT.x, y: POINTER_CANARY_POINT.y },
+        invocation.command,
+        invocation.args,
         timeouts.nativeTimeoutMs,
       );
     } catch (error) {

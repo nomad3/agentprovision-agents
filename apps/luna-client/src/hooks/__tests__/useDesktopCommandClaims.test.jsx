@@ -551,6 +551,65 @@ describe('executeClaimedDesktopCommand', () => {
     expect(body.metadata.native_boundary_audit_event_id).toBe('native-audit-actuate');
   });
 
+  it('actuates the keyboard canary (type) when the boundary proof is allowed', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }) // pre-actuation safety
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID) // live frontmost
+      .mockResolvedValueOnce({
+        allowed: true,
+        outcome: 'allowed',
+        reason: '',
+        action: 'keyboard_type',
+        capability: 'keyboard_control',
+        audit_event_id: 'native-audit-kbd',
+        mode: 'control_locked',
+      }) // boundary proof
+      .mockResolvedValueOnce(undefined) // control_keyboard_type actuation
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false }); // post-actuation safety
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('keyboard_type'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_keyboard_type', { text: 'luna canary' });
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('succeeded');
+    expect(body.reason).toBe('desktop keyboard_type actuated');
+    expect(body.metadata.result_kind).toBe('native_actuation');
+  });
+
+  it('actuates the keyboard canary (chord) with the allowlisted navigation chord', async () => {
+    invokeMock
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
+      .mockResolvedValueOnce(CANARY_BUNDLE_ID)
+      .mockResolvedValueOnce({
+        allowed: true,
+        outcome: 'allowed',
+        reason: '',
+        action: 'keyboard_key_chord',
+        capability: 'keyboard_control',
+        audit_event_id: 'native-audit-chord',
+        mode: 'control_locked',
+      })
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ mode: 'control_locked', can_control: false });
+
+    await executeClaimedDesktopCommand(
+      claimedCommand('keyboard_key_chord'),
+      'desktop-44444444-4444-4444-4444-444444444444',
+      'device-token-test',
+      invokeMock,
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith('control_keyboard_key_chord', { keys: ['right'] });
+    const body = JSON.parse(completeCalls()[0][1].body);
+    expect(body.status).toBe('succeeded');
+    expect(body.metadata.result_kind).toBe('native_actuation');
+  });
+
   it('reports preempted when Stop lands during pointer actuation', async () => {
     invokeMock
       .mockResolvedValueOnce({ mode: 'control_locked', can_control: false })
