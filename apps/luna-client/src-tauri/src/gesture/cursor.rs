@@ -349,6 +349,37 @@ pub async fn canary_click() -> Result<(), String> {
     }
 }
 
+/// Move to normalized [0, 1] coordinates of the main display, then synthesize a
+/// single left click THERE. Phase 5: a signed `pointer_click` carries its own
+/// coordinates, so the click must land at the VERIFIED point — not wherever the
+/// cursor happens to be (`canary_click` is position-independent and would let a
+/// signed click land somewhere it was never authorized for). The move + click run
+/// under one Enigo lock so no other actuation can interleave between them. Caller
+/// MUST have proven the boundary + lease + live Stop/frontmost/bounds first; this
+/// performs the AX gate + bounds clamp + the native move-then-click.
+#[cfg(target_os = "macos")]
+pub async fn canary_click_norm(norm_x: f64, norm_y: f64) -> Result<(), String> {
+    if !crate::computer_use::permissions::accessibility_trusted() {
+        return Err("accessibility_denied".to_string());
+    }
+    let (dw, dh) = ensure_display_size();
+    let px = (norm_x.clamp(0.0, 1.0) * dw as f64) as i32;
+    let py = (norm_y.clamp(0.0, 1.0) * dh as f64) as i32;
+    let mut guard = ENIGO.lock().await;
+    if guard.is_none() {
+        *guard = Enigo::new(&Settings::default()).ok().map(SendEnigo);
+    }
+    match guard.as_mut() {
+        Some(e) => {
+            e.move_mouse(px, py, Coordinate::Abs)
+                .map_err(|err| format!("enigo_move_failed: {err:?}"))?;
+            e.button(Button::Left, Direction::Click)
+                .map_err(|err| format!("enigo_click_failed: {err:?}"))
+        }
+        None => Err("enigo_unavailable".to_string()),
+    }
+}
+
 /// Type a bounded plain-text string (Phase 4 keyboard canary). Caller MUST have
 /// proven the boundary + lease + length bound + live Stop/frontmost/secure-input
 /// first; this performs the AX gate + the native text input.
@@ -434,6 +465,11 @@ pub async fn canary_move_norm(_norm_x: f64, _norm_y: f64) -> Result<(), String> 
 
 #[cfg(not(target_os = "macos"))]
 pub async fn canary_click() -> Result<(), String> {
+    Err("unsupported_platform".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn canary_click_norm(_norm_x: f64, _norm_y: f64) -> Result<(), String> {
     Err("unsupported_platform".to_string())
 }
 

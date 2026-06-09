@@ -1112,6 +1112,13 @@ fn validate_native_control_boundary_envelope(
         return Err("desktop command envelope replayed");
     }
 
+    // The `args` field lives in the signature-covered canonical JSON, so it is
+    // authenticated by `verify_signature(envelope_value)?` above. Parse it
+    // fail-closed: `None` = canary path (no args); present-but-malformed denies the
+    // whole command rather than degrading to the canary.
+    let verified_args = parse_verified_actuation_args(action, envelope_value.get("args"))
+        .map_err(|()| "desktop command actuation args invalid")?;
+
     Ok(ValidNativeControlBoundaryEnvelope {
         envelope: computer_use::policy::NativeControlCommandEnvelope {
             signed: true,
@@ -1121,10 +1128,7 @@ fn validate_native_control_boundary_envelope(
             expires_at_ms,
         },
         target_bundle_id: envelope_target_bundle.to_string(),
-        // The `args` field lives in the signature-covered canonical JSON, so it is
-        // authenticated by `verify_signature(envelope_value)?` above. Parse it
-        // fail-closed into typed args; `None` here means the canary path (no args).
-        verified_args: parse_verified_actuation_args(action, envelope_value.get("args")),
+        verified_args,
     })
 }
 
@@ -1609,12 +1613,17 @@ async fn actuate_pointer_canary(
         return Err(reason);
     }
 
-    // 4. The native event.
+    // 4. The native event. A click actuates at its OWN verified coordinates
+    //    (canary_click_norm moves there + clicks under one lock) — never at the
+    //    incidental cursor position, so a signed pointer_click always lands at the
+    //    point the server authorized.
     let result = match &action {
         PointerCanaryAction::Move { norm_x, norm_y } => {
             gesture::cursor::canary_move_norm(*norm_x, *norm_y).await
         }
-        PointerCanaryAction::Click { .. } => gesture::cursor::canary_click().await,
+        PointerCanaryAction::Click { norm_x, norm_y, .. } => {
+            gesture::cursor::canary_click_norm(*norm_x, *norm_y).await
+        }
     };
 
     match result {
@@ -1815,42 +1824,62 @@ enum VerifiedActuationArgs {
     KeyboardChord { keys: Vec<String> },
 }
 
+/// `Ok(None)`  → the envelope carries NO `args` (the Phase 3/4 canary path); the
+///               caller falls back to the fixed canary values.
+/// `Ok(Some)`  → present and fully valid; actuate EXACTLY these.
+/// `Err(())`   → present but malformed/attacker-shaped → FAIL CLOSED. The boundary
+///               denies. A bad `args` must never be mistaken for "no args" and
+///               silently actuate the canary, and partial normalization (defaulting
+///               a bad field, dropping a bad element) is forbidden.
 fn parse_verified_actuation_args(
     action: &str,
     args: Option<&serde_json::Value>,
-) -> Option<VerifiedActuationArgs> {
-    let obj = args?.as_object()?;
-    let f = |k: &str| obj.get(k).and_then(serde_json::Value::as_f64);
-    match action {
-        "pointer_move" => Some(VerifiedActuationArgs::PointerMove {
-            x: f("x")?,
-            y: f("y")?,
-        }),
-        "pointer_click" => Some(VerifiedActuationArgs::PointerClick {
-            x: f("x")?,
-            y: f("y")?,
-            button: obj
-                .get("button")
+) -> Result<Option<VerifiedActuationArgs>, ()> {
+    let Some(value) = args else {
+        return Ok(None);
+    };
+    let obj = value.as_object().ok_or(())?;
+    // Every declared coordinate must be present AND a number — no defaulting.
+    let req_f64 = |k: &str| obj.get(k).and_then(serde_json::Value::as_f64).ok_or(());
+    let parsed = match action {
+        "pointer_move" => VerifiedActuationArgs::PointerMove {
+            x: req_f64("x")?,
+            y: req_f64("y")?,
+        },
+        "pointer_click" => VerifiedActuationArgs::PointerClick {
+            x: req_f64("x")?,
+            y: req_f64("y")?,
+            // `button` is optional, but if present it MUST be a string (a non-string
+            // is malformed, not "default to left").
+            button: match obj.get("button") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(serde_json::Value::String(s)) => Some(s.clone()),
+                Some(_) => return Err(()),
+            },
+        },
+        "keyboard_type" => VerifiedActuationArgs::KeyboardType {
+            text: obj
+                .get("text")
                 .and_then(serde_json::Value::as_str)
-                .map(String::from),
-        }),
-        "keyboard_type" => Some(VerifiedActuationArgs::KeyboardType {
-            text: obj.get("text")?.as_str()?.to_string(),
-        }),
+                .ok_or(())?
+                .to_string(),
+        },
         "keyboard_key_chord" => {
-            let keys: Vec<String> = obj
-                .get("keys")?
-                .as_array()?
-                .iter()
-                .filter_map(|k| k.as_str().map(String::from))
-                .collect();
-            if keys.is_empty() {
-                return None;
+            let array = obj.get("keys").and_then(serde_json::Value::as_array).ok_or(())?;
+            if array.is_empty() {
+                return Err(());
             }
-            Some(VerifiedActuationArgs::KeyboardChord { keys })
+            let mut keys = Vec::with_capacity(array.len());
+            for key in array {
+                // ANY non-string element invalidates the whole chord — never drop.
+                keys.push(key.as_str().ok_or(())?.to_string());
+            }
+            VerifiedActuationArgs::KeyboardChord { keys }
         }
-        _ => None,
-    }
+        // Present args for an action with no actuation-arg shape → invalid.
+        _ => return Err(()),
+    };
+    Ok(Some(parsed))
 }
 
 #[cfg(test)]
@@ -1863,7 +1892,7 @@ mod verified_actuation_args_tests {
         let a = json!({"x": 0.3, "y": 0.4});
         assert_eq!(
             parse_verified_actuation_args("pointer_move", Some(&a)),
-            Some(VerifiedActuationArgs::PointerMove { x: 0.3, y: 0.4 })
+            Ok(Some(VerifiedActuationArgs::PointerMove { x: 0.3, y: 0.4 }))
         );
     }
 
@@ -1872,30 +1901,53 @@ mod verified_actuation_args_tests {
         let t = json!({"text": "hello luna"});
         assert_eq!(
             parse_verified_actuation_args("keyboard_type", Some(&t)),
-            Some(VerifiedActuationArgs::KeyboardType { text: "hello luna".into() })
+            Ok(Some(VerifiedActuationArgs::KeyboardType { text: "hello luna".into() }))
         );
         let c = json!({"keys": ["shift", "right"]});
         assert_eq!(
             parse_verified_actuation_args("keyboard_key_chord", Some(&c)),
-            Some(VerifiedActuationArgs::KeyboardChord { keys: vec!["shift".into(), "right".into()] })
+            Ok(Some(VerifiedActuationArgs::KeyboardChord { keys: vec!["shift".into(), "right".into()] }))
+        );
+        // pointer_click with no `button` is valid (defaults to None / left).
+        let click = json!({"x": 0.1, "y": 0.2});
+        assert_eq!(
+            parse_verified_actuation_args("pointer_click", Some(&click)),
+            Ok(Some(VerifiedActuationArgs::PointerClick { x: 0.1, y: 0.2, button: None }))
         );
     }
 
     #[test]
-    fn canary_absent_args_is_none() {
-        // no args (canary) -> None; the caller falls back to the canary defaults
-        assert_eq!(parse_verified_actuation_args("pointer_move", None), None);
+    fn canary_absent_args_is_ok_none() {
+        // no args (canary) -> Ok(None); the caller falls back to the canary defaults
+        assert_eq!(parse_verified_actuation_args("pointer_move", None), Ok(None));
+        assert_eq!(parse_verified_actuation_args("keyboard_key_chord", None), Ok(None));
     }
 
     #[test]
-    fn fail_closed_on_malformed_or_attacker_shapes() {
-        // missing field, wrong type, wrong shape -> None, never a panic
-        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 0.5}))), None);
-        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": "a", "y": 0.5}))), None);
-        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!([1, 2]))), None);
-        assert_eq!(parse_verified_actuation_args("keyboard_type", Some(&json!({"text": 5}))), None);
-        assert_eq!(parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": []}))), None);
-        assert_eq!(parse_verified_actuation_args("unknown_action", Some(&json!({"x": 0.5, "y": 0.5}))), None);
+    fn present_but_malformed_fails_closed_not_canary() {
+        // present-but-invalid args -> Err (deny the command), NEVER Ok(None) — a bad
+        // `args` must not be mistaken for "no args" and degrade to the canary.
+        // missing field / wrong type / wrong shape:
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": 0.5}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!({"x": "a", "y": 0.5}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("pointer_move", Some(&json!([1, 2]))), Err(()));
+        assert_eq!(parse_verified_actuation_args("keyboard_type", Some(&json!({"text": 5}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": []}))), Err(()));
+        assert_eq!(parse_verified_actuation_args("unknown_action", Some(&json!({"x": 0.5, "y": 0.5}))), Err(()));
+        // non-string `button` is malformed, not "default to left":
+        assert_eq!(
+            parse_verified_actuation_args("pointer_click", Some(&json!({"x": 0.1, "y": 0.2, "button": 5}))),
+            Err(())
+        );
+        // ANY non-string chord element invalidates the whole chord (no silent drop):
+        assert_eq!(
+            parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": ["left", 5]}))),
+            Err(())
+        );
+        assert_eq!(
+            parse_verified_actuation_args("keyboard_key_chord", Some(&json!({"keys": ["left", null]}))),
+            Err(())
+        );
     }
 }
 
