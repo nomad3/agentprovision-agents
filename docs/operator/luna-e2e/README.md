@@ -37,7 +37,7 @@ proves both capabilities independently.
    ```bash
    docker compose up -d --force-recreate api
    ```
-   The relevant `.env` keys: `DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=ed25519`,
+   The relevant `.env` keys: `DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519`,
    `DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY`, `…_KEY_ID`,
    `DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST` (includes `com.agentprovision.luna`).
 3. **Luna launched with the per-capability flags** (the suite's `launch_luna`
