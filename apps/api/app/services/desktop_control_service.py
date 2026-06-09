@@ -97,12 +97,13 @@ _COMMAND_TOOL_ACTIONS = {
     "desktop_keyboard_key_chord": "keyboard_key_chord",
 }
 
-# Pointer is the Phase 3 canary: enabled (issued as a signed native-control
-# command, gated by an approval grant + allowlisted target). Keyboard stays
-# disabled until Phase 4 exits.
+# Pointer (Phase 3) and keyboard (Phase 4) are both enabled: issued as signed
+# native-control commands, gated by an approval grant + allowlisted target. The
+# client enforces the keyboard-specific input bounds (max text length, allowlisted
+# key chords). No native-control action is server-disabled now.
 _POINTER_CONTROL_ACTIONS = frozenset({"pointer_move", "pointer_click"})
 _KEYBOARD_CONTROL_ACTIONS = frozenset({"keyboard_type", "keyboard_key_chord"})
-_DISABLED_NATIVE_CONTROL_ACTIONS = _KEYBOARD_CONTROL_ACTIONS
+_DISABLED_NATIVE_CONTROL_ACTIONS: frozenset[str] = frozenset()
 
 _SAFE_METADATA_KEYS = {
     "can_observe",
@@ -2113,7 +2114,9 @@ def enqueue_desktop_command(
             shell_id=shell_id,
             device_id=device_id,
         )
-    if request.action in _POINTER_CONTROL_ACTIONS:
+    if request.action in _NATIVE_CONTROL_CAPABILITIES:
+        # Pointer (Phase 3) and keyboard (Phase 4) both issue a signed
+        # native-control command bound to an allowlisted target + approval grant.
         return _enqueue_native_control_command(
             db,
             tenant_id=tenant_id,
