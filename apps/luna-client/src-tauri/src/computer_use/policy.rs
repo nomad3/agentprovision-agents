@@ -161,7 +161,7 @@ pub fn evaluate_observation_policy(
 
 pub fn evaluate_native_control_policy(
     mode: DesktopControlMode,
-    _permissions: &DesktopPermissionReadiness,
+    permissions: &DesktopPermissionReadiness,
     capability: NativeControlCapability,
     action: &str,
 ) -> Result<(), NativeControlPolicyDenial> {
@@ -173,11 +173,39 @@ pub fn evaluate_native_control_policy(
         ));
     }
 
-    Err(native_control_denial(
-        action,
-        capability,
-        format!("desktop native control disabled; {action} denied"),
-    ))
+    // Observe-only sessions must never actuate.
+    if mode == DesktopControlMode::Observe {
+        return Err(native_control_denial(
+            action,
+            capability,
+            format!("desktop observe locked; {action} denied"),
+        ));
+    }
+
+    // Keyboard actuation is not enabled until Phase 4 exits — deny even if its
+    // per-capability flag were somehow set.
+    if capability == NativeControlCapability::Keyboard {
+        return Err(native_control_denial(
+            action,
+            capability,
+            format!("desktop native control disabled; {action} denied"),
+        ));
+    }
+
+    // Pointer actuation (Phase 3 canary) posts CGEvents, which macOS gates on
+    // Accessibility (AX) trust. The per-capability enablement flag is already
+    // checked upstream (`tier_enabled`); this is the final OS-permission gate.
+    // NOTE: this is `accessibility` (AXIsProcessTrusted), NOT
+    // `automation_system_events` — the canary needs AX, not Automation.
+    if permissions.accessibility.status != "granted" {
+        return Err(native_control_denial(
+            action,
+            capability,
+            format!("desktop accessibility permission required; {action} denied"),
+        ));
+    }
+
+    Ok(())
 }
 
 pub fn evaluate_native_control_command_policy(
@@ -402,19 +430,42 @@ mod tests {
     }
 
     #[test]
-    fn native_pointer_and_keyboard_control_stay_disabled() {
-        let ready = readiness("granted", "granted", "granted");
+    fn native_pointer_allowed_with_ax_keyboard_stays_disabled() {
+        let ready = readiness("granted", "granted", "granted"); // AX granted
 
-        let pointer = evaluate_native_control_policy(
+        // Phase 3: pointer in ControlLocked with Accessibility granted is ALLOWED.
+        assert!(evaluate_native_control_policy(
+            DesktopControlMode::ControlLocked,
+            &ready,
+            NativeControlCapability::Pointer,
+            "control_pointer_click",
+        )
+        .is_ok());
+
+        // Pointer is denied when Accessibility (AX) is not granted.
+        let no_ax = readiness("granted", "denied", "granted");
+        let pointer_no_ax = evaluate_native_control_policy(
+            DesktopControlMode::ControlLocked,
+            &no_ax,
+            NativeControlCapability::Pointer,
+            "control_pointer_click",
+        )
+        .expect_err("pointer requires Accessibility");
+        assert!(pointer_no_ax
+            .reason
+            .contains("accessibility permission required"));
+
+        // Pointer is denied in Observe mode (observe-locked, not actuation).
+        let pointer_observe = evaluate_native_control_policy(
             DesktopControlMode::Observe,
             &ready,
             NativeControlCapability::Pointer,
             "control_pointer_click",
         )
-        .expect_err("pointer control must remain disabled");
-        assert!(pointer.reason.contains("desktop native control disabled"));
-        assert_eq!(pointer.capability, NativeControlCapability::Pointer);
+        .expect_err("observe mode must not actuate");
+        assert!(pointer_observe.reason.contains("observe locked"));
 
+        // Keyboard stays fully disabled (Phase 4) even with AX granted.
         let keyboard = evaluate_native_control_policy(
             DesktopControlMode::ControlLocked,
             &ready,
@@ -547,17 +598,29 @@ mod tests {
     }
 
     #[test]
-    fn native_command_policy_still_denies_with_all_current_preconditions_met() {
-        let ready = readiness("granted", "granted", "granted");
+    fn native_command_policy_allows_pointer_when_all_preconditions_met() {
+        let ready = readiness("granted", "granted", "granted"); // AX granted
         let mut policy = command_policy(
-            DesktopControlMode::Observe,
+            DesktopControlMode::ControlLocked,
             NativeControlCapability::Pointer,
         );
         policy.tier_enabled = true;
 
-        let err = evaluate_native_control_command_policy(policy, &ready, "control_pointer_click")
-            .expect_err("native actuation remains disabled until future approval path ships");
+        // Phase 3: pointer actuation is allowed once flag + lease + signed/current
+        // envelope + ControlLocked + Accessibility all hold.
+        assert!(
+            evaluate_native_control_command_policy(policy, &ready, "control_pointer_click").is_ok()
+        );
 
-        assert!(err.reason.contains("desktop native control disabled"));
+        // ...but keyboard stays denied even with every precondition met (Phase 4).
+        let mut keyboard = command_policy(
+            DesktopControlMode::ControlLocked,
+            NativeControlCapability::Keyboard,
+        );
+        keyboard.tier_enabled = true;
+        let kb_err =
+            evaluate_native_control_command_policy(keyboard, &ready, "control_keyboard_type")
+                .expect_err("keyboard stays disabled until Phase 4");
+        assert!(kb_err.reason.contains("desktop native control disabled"));
     }
 }

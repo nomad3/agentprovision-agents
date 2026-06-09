@@ -350,15 +350,28 @@ fn screen_recording_readiness() -> PermissionProbe {
     PermissionProbe::not_required(&["screenshot"], "Screen Recording is macOS-specific.")
 }
 
+/// True when this process holds macOS Accessibility (AX) trust — the TCC
+/// permission that gates synthetic CGEvent pointer/keyboard actuation. Uses the
+/// real `AXIsProcessTrusted()` API, NOT an `osascript`/System Events probe (which
+/// reflects Automation, a different permission). This is the correct gate for
+/// the Phase 3 pointer canary.
 #[cfg(target_os = "macos")]
-fn accessibility_readiness() -> PermissionProbe {
+pub fn accessibility_trusted() -> bool {
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
     }
+    unsafe { AXIsProcessTrusted() }
+}
 
-    let granted = unsafe { AXIsProcessTrusted() };
-    if granted {
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_trusted() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn accessibility_readiness() -> PermissionProbe {
+    if accessibility_trusted() {
         PermissionProbe::granted(
             &["active app", "pointer control", "keyboard control"],
             "macOS Accessibility trust preflight is granted.",

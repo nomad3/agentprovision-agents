@@ -937,7 +937,11 @@ fn native_boundary_policy_decision(
             outcome: "allowed",
             reason: String::new(),
             action: action.to_string(),
-            capability: "native_control".to_string(),
+            // Carry the specific capability on allow too (the deny path already
+            // does), so an allowed decision/audit isn't ambiguously "native_control".
+            capability: native_control_capability_for_action(action)
+                .map(|capability| capability.as_str().to_string())
+                .unwrap_or_else(|| "native_control".to_string()),
         },
         Err(denial) => NativeControlBoundaryDecision {
             allowed: false,
@@ -2970,7 +2974,7 @@ mod tests {
 
     #[test]
     fn per_capability_actuation_gate_defaults_disabled_and_isolates_capabilities() {
-        let _env_lock = DESKTOP_COMMAND_ENVELOPE_ENV_LOCK.lock().expect("env lock");
+        let _env_lock = lock_actuation_env();
         let _pointer = EnvVarRestore::set("LUNA_ACTUATION_POINTER_ENABLED", None);
         let _keyboard = EnvVarRestore::set("LUNA_ACTUATION_KEYBOARD_ENABLED", None);
 
@@ -3167,6 +3171,16 @@ mod tests {
             .expect("envelope object")
     }
 
+    /// Poison-tolerant acquire of the actuation-env lock. Because the per-capability
+    /// flags are process-global env vars and tests run in parallel, every boundary
+    /// decision that reads them is serialized through this lock so one test's flag
+    /// state never leaks into another.
+    fn lock_actuation_env() -> std::sync::MutexGuard<'static, ()> {
+        DESKTOP_COMMAND_ENVELOPE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn native_boundary_decision(
         request: &NativeControlBoundaryProofRequest,
     ) -> NativeControlBoundaryDecision {
@@ -3180,6 +3194,23 @@ mod tests {
         request: &NativeControlBoundaryProofRequest,
         mode: computer_use::DesktopControlMode,
     ) -> NativeControlBoundaryDecision {
+        // Both actuation flags OFF — the default for the vast majority of boundary
+        // tests, which assert the tier-disabled denial.
+        native_boundary_decision_with_flags(request, mode, None, None)
+    }
+
+    /// Compute a boundary decision with the per-capability actuation flags pinned to
+    /// explicit values, under the env lock so the (process-global) flags can't leak
+    /// across parallel tests. Pass Some("true") to enable a capability.
+    fn native_boundary_decision_with_flags(
+        request: &NativeControlBoundaryProofRequest,
+        mode: computer_use::DesktopControlMode,
+        pointer_flag: Option<&str>,
+        keyboard_flag: Option<&str>,
+    ) -> NativeControlBoundaryDecision {
+        let _env_lock = lock_actuation_env();
+        let _pointer = EnvVarRestore::set("LUNA_ACTUATION_POINTER_ENABLED", pointer_flag);
+        let _keyboard = EnvVarRestore::set("LUNA_ACTUATION_KEYBOARD_ENABLED", keyboard_flag);
         let permissions = native_boundary_permissions();
         evaluate_native_control_boundary_request(
             request,
@@ -3764,6 +3795,38 @@ mod tests {
             .reason
             .contains("desktop native control tier disabled"));
         assert_eq!(decision.capability, "pointer_control");
+    }
+
+    #[test]
+    fn native_boundary_allows_pointer_when_flag_on_and_ax_granted() {
+        // The happy path: with the pointer flag enabled, a control-locked session,
+        // Accessibility granted (native_boundary_permissions), and a valid signed
+        // envelope + matching frontmost, the boundary ALLOWS — the case Phase 3's
+        // final policy gate must permit (its absence let the hard-deny ship).
+        let request = native_boundary_request("pointer_click", "valid-allowed-pointer");
+        let decision = native_boundary_decision_with_flags(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            Some("true"),
+            None,
+        );
+        assert!(decision.allowed, "expected allow, got: {}", decision.reason);
+        assert_eq!(decision.capability, "pointer_control");
+    }
+
+    #[test]
+    fn native_boundary_keeps_keyboard_denied_even_with_flag_on() {
+        // Keyboard actuation stays denied (Phase 4) even if its flag is set and
+        // Accessibility is granted — the policy gate refuses keyboard.
+        let request = native_boundary_request("keyboard_type", "keyboard-still-denied");
+        let decision = native_boundary_decision_with_flags(
+            &request,
+            computer_use::DesktopControlMode::ControlLocked,
+            None,
+            Some("true"),
+        );
+        assert!(!decision.allowed);
+        assert_eq!(decision.capability, "keyboard_control");
     }
 
     #[test]

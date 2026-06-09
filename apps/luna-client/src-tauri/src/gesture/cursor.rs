@@ -304,7 +304,11 @@ pub async fn click() {}
 /// first; this only performs the bounds clamp + the native move.
 #[cfg(target_os = "macos")]
 pub async fn canary_move_norm(norm_x: f64, norm_y: f64) -> Result<(), String> {
-    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
+    // Gate on real macOS Accessibility (AX) trust (AXIsProcessTrusted via the
+    // permissions module), NOT the osascript/System-Events-derived ACCESSIBILITY_OK
+    // — that reflects Automation, a different permission the pointer canary does
+    // not need (and which is often ungranted even when AX is).
+    if !crate::computer_use::permissions::accessibility_trusted() {
         return Err("accessibility_denied".to_string());
     }
     let (dw, dh) = ensure_display_size();
@@ -326,7 +330,11 @@ pub async fn canary_move_norm(norm_x: f64, norm_y: f64) -> Result<(), String> {
 /// allows left single-click only (no drag, no multi-click).
 #[cfg(target_os = "macos")]
 pub async fn canary_click() -> Result<(), String> {
-    if !ACCESSIBILITY_OK.load(Ordering::SeqCst) {
+    // Gate on real macOS Accessibility (AX) trust (AXIsProcessTrusted via the
+    // permissions module), NOT the osascript/System-Events-derived ACCESSIBILITY_OK
+    // — that reflects Automation, a different permission the pointer canary does
+    // not need (and which is often ungranted even when AX is).
+    if !crate::computer_use::permissions::accessibility_trusted() {
         return Err("accessibility_denied".to_string());
     }
     let mut guard = ENIGO.lock().await;
