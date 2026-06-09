@@ -128,6 +128,32 @@ class TenantFeatures(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 
+    # ── Luna macOS computer-use (desktop control) per-tenant gating ──────
+    # PR4 of the 2026-06-09 productionization plan. All default OFF / empty,
+    # fail-closed — native OS actuation is the highest-blast-radius capability
+    # on the platform and must never enable on accident. Superuser/operator-only
+    # (excluded from member-writable feature updates, enforced in PR4b). NOTHING
+    # reads these yet — enforcement + the governance tool-group split + the
+    # operator-tenant backfill land in PR4b. Migration 166.
+    desktop_control_enabled = Column(  # master kill-switch (also gates observation)
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    pointer_control_enabled = Column(  # Phase 3 pointer actuation
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    keyboard_control_enabled = Column(  # Phase 4 keyboard actuation
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    # Per-tenant bundle allowlist; effective list = per-tenant ∩ global platform
+    # floor (DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST), resolved in PR4b. No
+    # server_default (Python default=list only) — same as rl_settings — so SQLite
+    # Base.metadata.create_all in unit tests does not emit the Postgres-only
+    # `'[]'::jsonb` cast, which SQLite rejects. The DB-level default lives in
+    # migration 166 for Postgres prod.
+    native_control_target_allowlist = Column(
+        JSONB, nullable=False, default=list
+    )
+
     # CPA software export format for the Bookkeeper Agent's weekly
     # categorized output. AAHA stays canonical — the Bookkeeper still
     # categorizes against the AAHA chart of accounts; this just picks
