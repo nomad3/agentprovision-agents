@@ -231,9 +231,9 @@ function isSupportedEnvelopeSignatureAlg(signatureAlg, action) {
 }
 
 function nativeBoundaryCompletion(action, proof, fallbackMode = null) {
-  const reason = proof?.allowed
-    ? `desktop native control disabled; ${action} denied`
-    : (proof?.reason || `desktop native control disabled; ${action} denied`);
+  // Only ever called on a NOT-allowed proof (both callers guard on `!proof.allowed`),
+  // so surface the boundary's denial reason directly.
+  const reason = proof?.reason || `desktop native control disabled; ${action} denied`;
   return {
     status: reason.toLowerCase().includes('stopped') ? 'preempted' : 'denied',
     reason,
