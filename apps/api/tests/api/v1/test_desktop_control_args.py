@@ -7,6 +7,7 @@ server authorized (never a client-chosen or on-screen-derived value). Pure logic
 import pytest
 
 from app.services.desktop_control_service import _normalize_native_control_args as norm
+from app.services.desktop_control_service import _validate_signed_actuation_args as vsa
 
 
 def test_pointer_args_normalized_to_integer_micro_units():
@@ -77,3 +78,47 @@ def test_keyboard_chord_invalid_rejected(bad):
 def test_unknown_action_carries_no_args():
     assert norm("pointer_scroll", {"x": 0.5}) is None
     assert norm("capture_screenshot", {"foo": "bar"}) is None
+
+
+# ── _validate_signed_actuation_args: the build-path re-validator ──────────────
+# It must be IDEMPOTENT on already-normalized args (the normalizer is not, for
+# pointer), so the envelope-build step never re-converts persisted micro-units.
+
+
+@pytest.mark.parametrize(
+    "action,raw",
+    [
+        ("pointer_move", {"x": 0.3, "y": 0.4}),
+        ("pointer_click", {"x": 0.0, "y": 1.0}),
+        ("pointer_move", {"x": 1e-6, "y": 1.0}),
+        ("keyboard_type", {"text": "hi simon"}),
+        ("keyboard_key_chord", {"keys": ["Shift", "Left"]}),
+    ],
+)
+def test_validate_is_idempotent_on_normalized_args(action, raw):
+    # validate(normalize(fraction)) == normalize(fraction) — the build re-validation
+    # of the persisted form returns it unchanged (this is the bug the BLOCKER fixed:
+    # the old build path re-ran normalize and rejected/garbled the micro-units).
+    normalized = norm(action, raw)
+    assert vsa(action, normalized) == normalized
+
+
+def test_validate_none_is_none():
+    assert vsa("pointer_move", None) is None
+    assert vsa("keyboard_type", None) is None
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"x": 0.3, "y": 0.4},  # floats are NOT valid persisted micro-units
+        {"x": 300000},  # missing y
+        {"x": 1000001, "y": 0},  # out of micro-unit range
+        {"x": -1, "y": 0},
+        {"x": True, "y": 0},  # bool is not a coord
+        {"x": "300000", "y": 0},  # string is not an int
+    ],
+)
+def test_validate_rejects_malformed_persisted_pointer_args(bad):
+    with pytest.raises(ValueError):
+        vsa("pointer_move", bad)

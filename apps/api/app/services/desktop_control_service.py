@@ -1505,6 +1505,61 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
     return None
 
 
+def _validate_signed_actuation_args(action: str, args: Any) -> dict[str, Any] | None:
+    """Re-validate ALREADY-NORMALIZED actuation args at envelope-build time, WITHOUT
+    re-running the issuer-fraction normalization.
+
+    ``_normalize_native_control_args`` converts an issuer's [0, 1] fractional pointer
+    coord into integer micro-units, so it is NOT idempotent — re-applying it to the
+    persisted micro-unit value (e.g. 300000) would treat it as a fraction and reject
+    it (``float(300000)`` is outside [0, 1]). The args are normalized once at enqueue;
+    this validates the persisted form before signing (defense-in-depth) and returns
+    it unchanged when valid. Idempotent: ``validate(normalize(x)) == normalize(x)``.
+    Raises ValueError on a malformed persisted payload.
+    """
+    if args is None:
+        return None
+    if not isinstance(args, dict):
+        raise ValueError("signed actuation args must be an object")
+    if action in ("pointer_move", "pointer_click"):
+        x = args.get("x")
+        y = args.get("y")
+        # Persisted pointer coords are integer micro-units in [0, _POINTER_MICRO_UNITS]
+        # (bool is an int subclass — exclude it explicitly).
+        if (
+            isinstance(x, bool)
+            or isinstance(y, bool)
+            or not isinstance(x, int)
+            or not isinstance(y, int)
+            or not (0 <= x <= _POINTER_MICRO_UNITS)
+            or not (0 <= y <= _POINTER_MICRO_UNITS)
+        ):
+            raise ValueError(
+                "pointer args must be integer micro-units in [0, 1_000_000]"
+            )
+        return {"x": x, "y": y}
+    if action == "keyboard_type":
+        text = args.get("text")
+        if not isinstance(text, str) or not text or len(text) > 256:
+            raise ValueError("keyboard_type text must be a non-empty string of <= 256 chars")
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
+            raise ValueError("keyboard_type text must not contain control characters")
+        return {"text": text}
+    if action == "keyboard_key_chord":
+        keys = args.get("keys")
+        if (
+            not isinstance(keys, list)
+            or not keys
+            or len(keys) > 5
+            or not all(isinstance(k, str) and re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in keys)
+        ):
+            raise ValueError("keyboard_key_chord keys must be normalized [a-z0-9_+-] tokens")
+        if _normalize_chord(keys) not in _KEYBOARD_CHORD_ALLOWLIST:
+            raise ValueError("keyboard_key_chord not in the safe-chord allowlist")
+        return {"keys": list(keys)}
+    return None
+
+
 def _build_signed_command_envelope(
     command: DesktopCommand,
     *,
@@ -1555,9 +1610,19 @@ def _build_signed_command_envelope(
     if target_payload is not None:
         envelope["target"] = target_payload
     # Phase 5: sign the action-specific actuation args (coords / text / keys) so
-    # the client actuates exactly what the server authorized. Canary commands
-    # carry no `args` (None) and are unaffected.
-    args = _normalize_native_control_args(action, (command.payload or {}).get("args"))
+    # the client actuates exactly what the server authorized. The args were
+    # normalized once at enqueue (issuer fraction -> integer micro-units for
+    # pointer); here we VALIDATE the persisted form (idempotent — never re-run the
+    # fraction normalization, which is not idempotent on micro-units). Canary
+    # commands carry no `args` (None) and are unaffected.
+    #
+    # Wire-format note (deploy ordering): pointer coords are signed as integer
+    # micro-units. A client built BEFORE that change parsed coords as floats, so it
+    # would mis-read a micro-unit arg — DEPLOY THE SERVER AND CLIENT AS A WAVE and do
+    # not issue ARG-bearing pointer commands until the updated client is installed.
+    # The canary path (no args) is immune, and a stale client fails closed (out of
+    # [0,1] bounds) for all but the two near-corner micro values 0/1.
+    args = _validate_signed_actuation_args(action, (command.payload or {}).get("args"))
     if args is not None:
         envelope["args"] = args
     envelope["signature"] = _sign_envelope_payload(envelope, algorithm)
