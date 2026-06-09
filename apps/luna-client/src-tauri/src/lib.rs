@@ -1420,10 +1420,14 @@ enum PointerCanaryAction {
 }
 
 impl PointerCanaryAction {
+    // Audit label for the local `desktop-native-actuation` event. Matches the
+    // envelope/boundary action verb (`emit_native_control_audit` uses the same),
+    // so the two audit streams correlate. (The former `control_*` Tauri commands
+    // these once mirrored were removed in Phase 5.1.)
     fn action_name(&self) -> &'static str {
         match self {
-            PointerCanaryAction::Move { .. } => "control_pointer_move",
-            PointerCanaryAction::Click { .. } => "control_pointer_click",
+            PointerCanaryAction::Move { .. } => "pointer_move",
+            PointerCanaryAction::Click { .. } => "pointer_click",
         }
     }
 
@@ -1483,6 +1487,14 @@ fn emit_native_canary_audit(
 /// allowed proof. The lease target is the Rust-read live frontmost bundle that
 /// the boundary just validated against the signed envelope — never a JS-supplied
 /// value.
+///
+/// The `max_actions` budget is reset to a fresh count on every allowed proof
+/// (i.e. it is per-proof, not per-lease-lifetime). This is intended: each proof
+/// independently re-verifies a fresh signed + approved + nonce'd envelope, a
+/// different shell is rejected by the single-owner gate, and — since Phase 5.1 —
+/// actuation only ever happens inside the proof flow using that proof's verified
+/// args. So the budget bounds bursts within one grant; it is not a cap on how
+/// many separately-authorized actions a session may perform.
 async fn claim_actuation_lease(
     request: &NativeControlBoundaryProofRequest,
     capability: computer_use::NativeControlCapability,
@@ -1576,17 +1588,24 @@ async fn actuate_pointer_canary(
 
     // 3. Final live re-check immediately before the native event (Stop could have
     //    landed while we waited for the lease lock), then deny-by-default guard.
-    if let Some(code) = native_canary_mode_gate(pointer_flag, current_desktop_control_mode()) {
-        let reason = code.as_str().to_string();
+    //    Only a genuine Stop is a preemption; a flag-off / observe change is a
+    //    denial. Keep the audited outcome consistent with how the reason string
+    //    classifies downstream (`actuation_failure_outcome`), so the audit event
+    //    and the command completion never disagree.
+    let live_mode = current_desktop_control_mode();
+    if live_mode == computer_use::DesktopControlMode::Stopped {
+        let reason = DenialCode::Stopped.as_str().to_string();
         emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
         return Err(reason);
     }
-    if !gesture::cursor::canary_pointer_actuation_allowed(
-        pointer_flag,
-        current_desktop_control_mode() == computer_use::DesktopControlMode::Stopped,
-    ) {
+    if let Some(code) = native_canary_mode_gate(pointer_flag, live_mode) {
+        let reason = code.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+    if !gesture::cursor::canary_pointer_actuation_allowed(pointer_flag, false) {
         let reason = DenialCode::NativeControlDisabled.as_str().to_string();
-        emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        emit_native_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
         return Err(reason);
     }
 
@@ -1630,10 +1649,12 @@ enum KeyboardCanaryAction {
 }
 
 impl KeyboardCanaryAction {
+    // Audit label matching the envelope/boundary action verb (see the pointer
+    // note above). The `control_*` Tauri commands were removed in Phase 5.1.
     fn action_name(&self) -> &'static str {
         match self {
-            KeyboardCanaryAction::Type { .. } => "control_keyboard_type",
-            KeyboardCanaryAction::Chord { .. } => "control_keyboard_key_chord",
+            KeyboardCanaryAction::Type { .. } => "keyboard_type",
+            KeyboardCanaryAction::Chord { .. } => "keyboard_key_chord",
         }
     }
 }
@@ -1699,15 +1720,25 @@ async fn actuate_keyboard_canary(
     }
 
     // 5. Final live re-check immediately before the native event: mode + Secure
-    //    Input could have changed while we waited for the lease lock.
-    if let Some(code) = native_canary_mode_gate(keyboard_flag, current_desktop_control_mode()) {
-        let reason = code.as_str().to_string();
+    //    Input could have changed while we waited for the lease lock. Only a
+    //    genuine Stop is a preemption; a flag/observe change or a newly-active
+    //    Secure Input is a denial — keep the audited outcome consistent with the
+    //    reason's downstream classification (matches the initial Secure-Input
+    //    check at step 2, which already audits "denied").
+    let live_mode = current_desktop_control_mode();
+    if live_mode == computer_use::DesktopControlMode::Stopped {
+        let reason = DenialCode::Stopped.as_str().to_string();
         emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        return Err(reason);
+    }
+    if let Some(code) = native_canary_mode_gate(keyboard_flag, live_mode) {
+        let reason = code.as_str().to_string();
+        emit_native_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
         return Err(reason);
     }
     if secure_input_is_active() {
         let reason = DenialCode::SecureInputActive.as_str().to_string();
-        emit_native_canary_audit(app, action_name, "preempted", &reason, frontmost.as_deref());
+        emit_native_canary_audit(app, action_name, "denied", &reason, frontmost.as_deref());
         return Err(reason);
     }
 
