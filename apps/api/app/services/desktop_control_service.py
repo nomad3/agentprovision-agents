@@ -70,6 +70,15 @@ _NATIVE_CONTROL_CAPABILITIES = {
     "keyboard_key_chord": "keyboard_control",
 }
 
+# Per-action-class tenant flag for each native-control capability (PR4b). The
+# master `desktop_control_enabled` gates the whole desktop surface (incl.
+# observation); these gate ACTUATION by class. Both are re-checked at enqueue AND
+# at claim (the real boundary, Codex B1 / audit G10) — fail-closed.
+_CAPABILITY_TENANT_FLAG = {
+    "pointer_control": "pointer_control_enabled",
+    "keyboard_control": "keyboard_control_enabled",
+}
+
 _TERMINAL_COMMAND_STATUSES = {
     "succeeded",
     "failed",
@@ -723,6 +732,10 @@ def _enqueue_native_control_command(
     """
     if not bool(shell_capabilities.get("can_observe")):
         raise HTTPException(status_code=409, detail="Desktop shell cannot observe")
+    # PR4b: per-tenant actuation gate, fail-closed. Master desktop_control_enabled
+    # + the per-action-class flag (pointer/keyboard) must be ON. Re-checked at claim
+    # (the real boundary) so a mid-flight policy flip-off still denies.
+    _ensure_native_control_capability_enabled(db, tenant_id, capability)
     # Native control must target an allowlisted bundle. The approval grant is
     # enforced (and consumed) at claim time, like observe — a pending command
     # cannot be actuated until claim_next_desktop_command matches + consumes a
@@ -2135,9 +2148,9 @@ def record_local_observation_event(
 
 def _ensure_desktop_control_enabled(db: Session, tenant_id: uuid.UUID) -> None:
     """Master capability gate (Luna L-N2: also gates observation). Fail-closed:
-    no TenantFeatures row, or the flag false/absent → denied. P5.2 is the first
-    enforcer of this flag (it is inert today; PR4b will enforce it across the
-    actuation path too — same flag, no drift)."""
+    no TenantFeatures row, or the flag false/absent → denied. P5.2 perception and
+    (PR4b) the native-control actuation path both enforce this same flag — no
+    drift."""
     features = (
         db.query(TenantFeatures)
         .filter(TenantFeatures.tenant_id == tenant_id)
@@ -2147,6 +2160,36 @@ def _ensure_desktop_control_enabled(db: Session, tenant_id: uuid.UUID) -> None:
         raise HTTPException(
             status_code=403,
             detail="Desktop control is not enabled for this tenant",
+        )
+
+
+def _ensure_native_control_capability_enabled(
+    db: Session, tenant_id: uuid.UUID, capability: str
+) -> None:
+    """Fail-closed actuation gate (PR4b — closes audit G10 / Codex B1).
+
+    Native OS actuation requires BOTH the master ``desktop_control_enabled`` AND
+    the per-action-class flag (``pointer_control_enabled`` for pointer,
+    ``keyboard_control_enabled`` for keyboard). One TenantFeatures read covers
+    both. Enforced at enqueue and re-checked at claim — the master switch being on
+    (it now is, fleet-wide, for perception) must NOT imply actuation: that needs
+    the per-capability flag, which stays default-OFF. An unknown native capability
+    denies fail-closed so a newly-added action can never slip the gate."""
+    features = (
+        db.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant_id)
+        .first()
+    )
+    if not features or not bool(getattr(features, "desktop_control_enabled", False)):
+        raise HTTPException(
+            status_code=403,
+            detail="Desktop control is not enabled for this tenant",
+        )
+    flag_attr = _CAPABILITY_TENANT_FLAG.get(capability)
+    if flag_attr is None or not bool(getattr(features, flag_attr, False)):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Desktop {capability} is not enabled for this tenant",
         )
 
 
@@ -2565,7 +2608,37 @@ def claim_next_desktop_command(
         return None, None, None
 
     command_action = str((command.payload or {}).get("action") or "desktop_command")
-    if _risk_tier_for_action(command_action) == "native_control" and (
+    is_native_control = _risk_tier_for_action(command_action) == "native_control"
+    if is_native_control:
+        # Claim-time governance re-check (PR4b — the REAL boundary, audit G10 /
+        # Codex B1): the tenant's capability flag may have flipped OFF between
+        # enqueue and claim. Re-check master + per-action-class flag BEFORE any
+        # signed envelope is built/delivered; deny the pending command fail-closed
+        # (without breaking the claim channel) if the capability was revoked.
+        try:
+            _ensure_native_control_capability_enabled(
+                db, user.tenant_id, command.capability
+            )
+        except HTTPException:
+            # The event row carries capability/action as first-class columns. The
+            # "desktop native control disabled;" reason prefix is normalized by
+            # _safe_command_reason into the canonical display-safe reason and maps
+            # to the NATIVE_CONTROL_DISABLED denial code — stable server + client.
+            _denied_command, denied_event, denied_session_event = (
+                _deny_pending_command_for_envelope_configuration_failure(
+                    db,
+                    command,
+                    reason="desktop native control disabled; tenant capability not enabled",
+                )
+            )
+            for expired_event in expired_events:
+                _publish_display_safe_command_event(
+                    expired_event,
+                    status="expired",
+                    tenant_id=user.tenant_id,
+                )
+            return None, denied_event, denied_session_event
+    if is_native_control and (
         _desktop_command_envelope_algorithm() != DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM
     ):
         _denied_command, denied_event, denied_session_event = (

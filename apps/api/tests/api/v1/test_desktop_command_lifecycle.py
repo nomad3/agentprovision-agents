@@ -19,6 +19,7 @@ from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonc
 from app.models.desktop_command_event import DesktopCommandEvent
 from app.models.device_registry import DeviceRegistry
 from app.models.tenant import Tenant
+from app.models.tenant_features import TenantFeatures
 from app.models.user import User
 from app.services import desktop_control_service
 from app.services.desktop_control_service import (
@@ -92,7 +93,16 @@ def seeded_fixture(db_session: Session):
         capabilities=["can_observe"],
         config={"shell_id": SHELL_ID},
     )
-    db_session.add_all([tenant, user, session, device])
+    # PR4b: native-control actuation is gated by per-tenant capability flags. The
+    # seeded tenant is an ENABLED operator tenant (master + pointer + keyboard on);
+    # tests that exercise the gate flip these off explicitly.
+    features = TenantFeatures(
+        tenant_id=TENANT_ID,
+        desktop_control_enabled=True,
+        pointer_control_enabled=True,
+        keyboard_control_enabled=True,
+    )
+    db_session.add_all([tenant, user, session, device, features])
     db_session.commit()
     return user
 
@@ -1731,3 +1741,184 @@ def test_enqueue_nonce_is_tenant_scoped(db_session, seeded):
         DesktopCommand.nonce == "shared-cross-tenant",
     ).all()
     assert {command.tenant_id for command in commands} == {TENANT_ID, TENANT_ID_2}
+
+
+# ── PR4b: per-tenant capability enforcement (audit G10 / Codex B1) ────────────
+# Native actuation is fail-closed: master desktop_control_enabled AND the
+# per-action-class flag must be ON, re-checked at enqueue AND at claim (the real
+# boundary). The seeded tenant is fully enabled; these tests flip flags OFF.
+
+
+def _set_capability_flags(db, *, desktop=True, pointer=True, keyboard=True):
+    f = db.query(TenantFeatures).filter(TenantFeatures.tenant_id == TENANT_ID).one()
+    f.desktop_control_enabled = desktop
+    f.pointer_control_enabled = pointer
+    f.keyboard_control_enabled = keyboard
+    db.add(f)
+    db.commit()
+
+
+def _enqueue_pointer(db, *, nonce="p", action="pointer_move", tool="desktop_pointer_move"):
+    return enqueue_desktop_command(
+        db,
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        request=DesktopCommandEnqueue(
+            session_id=SESSION_ID,
+            action=action,
+            tool_name=tool,
+            shell_id=None,
+            nonce=nonce,
+            payload={"x": 100, "y": 200, "target": {"bundle_id": CANARY_BUNDLE_ID, "action": action}},
+        ),
+    )
+
+
+def test_native_control_enqueue_denied_when_master_disabled(db_session, seeded):
+    _set_capability_flags(db_session, desktop=False, pointer=True, keyboard=True)
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue_pointer(db_session, nonce="master-off")
+    assert exc.value.status_code == 403
+    # nothing queued — fail-closed BEFORE the command row is committed
+    assert db_session.query(DesktopCommand).filter(
+        DesktopCommand.capability == "pointer_control"
+    ).count() == 0
+
+
+def test_native_control_enqueue_denied_when_pointer_capability_disabled(db_session, seeded):
+    # master ON, perception works, but pointer actuation is OFF → pointer denied
+    _set_capability_flags(db_session, desktop=True, pointer=False, keyboard=True)
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue_pointer(db_session, nonce="pointer-off")
+    assert exc.value.status_code == 403
+
+
+def test_native_control_enqueue_denied_when_keyboard_capability_disabled(db_session, seeded):
+    # keyboard OFF denies keyboard even while pointer is ON (per-action-class gate)
+    _set_capability_flags(db_session, desktop=True, pointer=True, keyboard=False)
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            enqueue_desktop_command(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                request=DesktopCommandEnqueue(
+                    session_id=SESSION_ID,
+                    action="keyboard_type",
+                    tool_name="desktop_keyboard_type",
+                    shell_id=None,
+                    nonce="keyboard-off",
+                    payload={"text": "hi", "target": {"bundle_id": CANARY_BUNDLE_ID, "action": "keyboard_type"}},
+                ),
+            )
+    assert exc.value.status_code == 403
+    # pointer is still permitted in the same tenant (independent capability)
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, _e, _s = _enqueue_pointer(db_session, nonce="pointer-still-ok")
+    assert command.status == "pending"
+    assert command.capability == "pointer_control"
+
+
+def test_native_control_claim_denies_when_capability_revoked_midflight(db_session, seeded):
+    # The REAL boundary: enqueue with flags ON, then the tenant flag flips OFF
+    # before the shell claims. Claim must DENY fail-closed (no signed envelope),
+    # without breaking the claim channel.
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"},
+                expires_in_seconds=60,
+            ),
+        )
+        command, _e, _s = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="pointer_click",
+                tool_name="desktop_pointer_click",
+                shell_id=None,
+                nonce="revoke-midflight",
+                approval_id=grant.id,
+                payload={"target": {"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"}},
+            ),
+        )
+        # policy flips OFF after enqueue, before claim
+        _set_capability_flags(db_session, desktop=True, pointer=False, keyboard=True)
+        claimed, event, _cs = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None  # no signed envelope issued
+    refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert refreshed.status == "denied"
+    assert event is not None and event.outcome == "denied"
+    # canonical denial code for "the capability is off" (server + client parity)
+    assert (event.event_metadata or {}).get("denial_code") == "native_control_disabled"
+    # the denied command was the pointer command (capability carried on the row)
+    assert refreshed.capability == "pointer_control"
+
+
+def test_ensure_native_control_capability_enabled_gate_unit(db_session, seeded):
+    from app.services.desktop_control_service import _ensure_native_control_capability_enabled as gate
+
+    # fully enabled → both capabilities pass
+    gate(db_session, TENANT_ID, "pointer_control")
+    gate(db_session, TENANT_ID, "keyboard_control")
+
+    # master off → everything denied even if the per-capability flag is on
+    _set_capability_flags(db_session, desktop=False, pointer=True, keyboard=True)
+    for cap in ("pointer_control", "keyboard_control"):
+        with pytest.raises(HTTPException) as exc:
+            gate(db_session, TENANT_ID, cap)
+        assert exc.value.status_code == 403
+
+    # master on, only pointer enabled → pointer ok, keyboard denied
+    _set_capability_flags(db_session, desktop=True, pointer=True, keyboard=False)
+    gate(db_session, TENANT_ID, "pointer_control")
+    with pytest.raises(HTTPException):
+        gate(db_session, TENANT_ID, "keyboard_control")
+
+    # unknown native capability → fail-closed deny (a new action can't slip the gate)
+    _set_capability_flags(db_session, desktop=True, pointer=True, keyboard=True)
+    with pytest.raises(HTTPException) as exc:
+        gate(db_session, TENANT_ID, "some_future_capability")
+    assert exc.value.status_code == 403
+
+    # no TenantFeatures row at all → deny
+    db_session.query(TenantFeatures).filter(TenantFeatures.tenant_id == TENANT_ID).delete()
+    db_session.commit()
+    with pytest.raises(HTTPException):
+        gate(db_session, TENANT_ID, "pointer_control")
