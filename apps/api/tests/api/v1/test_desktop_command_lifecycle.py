@@ -1922,3 +1922,58 @@ def test_ensure_native_control_capability_enabled_gate_unit(db_session, seeded):
     db_session.commit()
     with pytest.raises(HTTPException):
         gate(db_session, TENANT_ID, "pointer_control")
+
+
+def test_native_control_claim_denies_on_action_capability_mismatch(db_session, seeded):
+    # Defense-in-depth (Codex review): the claim boundary derives the capability
+    # from the ACTION and rejects a persisted command whose capability column
+    # mismatches its action — even when BOTH capability flags are enabled — so a
+    # corrupted/forged row can't check the wrong flag and reach envelope build.
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"},
+                expires_in_seconds=60,
+            ),
+        )
+        command, _e, _s = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="pointer_click",
+                tool_name="desktop_pointer_click",
+                shell_id=None,
+                nonce="mismatch-row",
+                approval_id=grant.id,
+                payload={"target": {"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"}},
+            ),
+        )
+        # Corrupt the persisted capability to a DIFFERENT class than the action.
+        # Both flags are enabled (seeded), so only the action-derivation guard can
+        # catch this.
+        command.capability = "keyboard_control"
+        db_session.add(command)
+        db_session.commit()
+        claimed, event, _cs = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None  # mismatch denied before envelope build
+    refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert refreshed.status == "denied"
+    assert event is not None and event.outcome == "denied"

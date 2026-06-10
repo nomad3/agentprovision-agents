@@ -2164,7 +2164,7 @@ def _ensure_desktop_control_enabled(db: Session, tenant_id: uuid.UUID) -> None:
 
 
 def _ensure_native_control_capability_enabled(
-    db: Session, tenant_id: uuid.UUID, capability: str
+    db: Session, tenant_id: uuid.UUID, capability: str, *, lock: bool = False
 ) -> None:
     """Fail-closed actuation gate (PR4b — closes audit G10 / Codex B1).
 
@@ -2174,12 +2174,17 @@ def _ensure_native_control_capability_enabled(
     both. Enforced at enqueue and re-checked at claim — the master switch being on
     (it now is, fleet-wide, for perception) must NOT imply actuation: that needs
     the per-capability flag, which stays default-OFF. An unknown native capability
-    denies fail-closed so a newly-added action can never slip the gate."""
-    features = (
-        db.query(TenantFeatures)
-        .filter(TenantFeatures.tenant_id == tenant_id)
-        .first()
-    )
+    denies fail-closed so a newly-added action can never slip the gate.
+
+    ``lock=True`` (claim boundary) takes ``SELECT ... FOR UPDATE`` on the tenant's
+    feature row so a concurrent admin revoke serializes with envelope issuance: no
+    signed envelope can be built after the flag flips off within this claim
+    transaction (closes the claim-time TOCTOU — Codex BLOCKER). On SQLite the lock
+    is a harmless no-op; on Postgres it row-locks until the claim commits."""
+    query = db.query(TenantFeatures).filter(TenantFeatures.tenant_id == tenant_id)
+    if lock:
+        query = query.with_for_update()
+    features = query.first()
     if not features or not bool(getattr(features, "desktop_control_enabled", False)):
         raise HTTPException(
             status_code=403,
@@ -2615,9 +2620,19 @@ def claim_next_desktop_command(
         # enqueue and claim. Re-check master + per-action-class flag BEFORE any
         # signed envelope is built/delivered; deny the pending command fail-closed
         # (without breaking the claim channel) if the capability was revoked.
+        #
+        # Derive the capability from the ACTION (self-contained at the boundary —
+        # don't trust a persisted command.capability that could mismatch the
+        # action), and lock the feature row so a concurrent revoke serializes.
+        expected_capability = _NATIVE_CONTROL_CAPABILITIES.get(command_action)
         try:
+            if expected_capability is None or expected_capability != command.capability:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Desktop native control capability mismatch",
+                )
             _ensure_native_control_capability_enabled(
-                db, user.tenant_id, command.capability
+                db, user.tenant_id, expected_capability, lock=True
             )
         except HTTPException:
             # The event row carries capability/action as first-class columns. The

@@ -7,14 +7,23 @@
 -- tenant's flags" — preserve the canary in the SAME deploy as enforcement).
 --
 -- Data-derived (no hardcoded tenant UUID, drift-free): a tenant that has already
--- issued native-control (pointer/keyboard) commands IS, by definition, an
--- actuating operator tenant. Today that is exactly one tenant; every other tenant
--- stays fail-closed OFF. The global bundle allowlist (env floor) is unchanged, so
--- target scope is unaffected — only the capability flags flip for the operator.
+-- issued native-control commands IS, by definition, an actuating operator tenant.
+-- Today that is exactly one tenant; every other tenant stays fail-closed OFF.
+--
+-- Each flag is set from its OWN class of evidence (Codex/Luna review): a tenant
+-- that only ever issued pointer commands gets pointer enabled but NOT keyboard —
+-- we grant exactly what each tenant actually exercised, never more. The global
+-- bundle allowlist (env floor) is unchanged, so target scope is unaffected.
 
 UPDATE tenant_features tf
-SET pointer_control_enabled = true,
-    keyboard_control_enabled = true
+SET pointer_control_enabled = EXISTS (
+        SELECT 1 FROM desktop_commands dc
+        WHERE dc.tenant_id = tf.tenant_id AND dc.capability = 'pointer_control'
+    ),
+    keyboard_control_enabled = EXISTS (
+        SELECT 1 FROM desktop_commands dc
+        WHERE dc.tenant_id = tf.tenant_id AND dc.capability = 'keyboard_control'
+    )
 WHERE tf.tenant_id IN (
     SELECT DISTINCT dc.tenant_id
     FROM desktop_commands dc
