@@ -101,6 +101,11 @@ def seeded_fixture(db_session: Session):
         desktop_control_enabled=True,
         pointer_control_enabled=True,
         keyboard_control_enabled=True,
+        # PR4c: per-tenant target allowlist (effective = per-tenant ∩ floor). The
+        # seeded operator opts the canary bundle in so native-control tests (which
+        # patch the floor to [CANARY_BUNDLE_ID]) resolve effective=[CANARY];
+        # allowlist tests flip this to [] / a non-floor bundle explicitly.
+        native_control_target_allowlist=[CANARY_BUNDLE_ID],
     )
     db_session.add_all([tenant, user, session, device, features])
     db_session.commit()
@@ -401,6 +406,9 @@ def test_native_control_grant_persists_only_allowlisted_target(db_session, seede
 
 def test_native_control_claim_denies_target_binding_mismatch(db_session, seeded):
     encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
+    # both bundles allowlisted for this tenant — this test exercises the command↔
+    # grant target MISMATCH, not the per-tenant allowlist gate (covered separately).
+    _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID, OTHER_CANARY_BUNDLE_ID])
     command = _native_pending_command(db_session, nonce="nonce-native-target-mismatch")
     with patch.object(
         desktop_control_service.settings,
@@ -1758,6 +1766,13 @@ def _set_capability_flags(db, *, desktop=True, pointer=True, keyboard=True):
     db.commit()
 
 
+def _seed_tenant_allowlist(db, bundles):
+    f = db.query(TenantFeatures).filter(TenantFeatures.tenant_id == TENANT_ID).one()
+    f.native_control_target_allowlist = list(bundles)
+    db.add(f)
+    db.commit()
+
+
 def _enqueue_pointer(db, *, nonce="p", action="pointer_move", tool="desktop_pointer_move"):
     return enqueue_desktop_command(
         db,
@@ -1977,3 +1992,72 @@ def test_native_control_claim_denies_on_action_capability_mismatch(db_session, s
     refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
     assert refreshed.status == "denied"
     assert event is not None and event.outcome == "denied"
+
+
+# ── PR4c: per-tenant target allowlist (effective = per-tenant ∩ floor) ─────────
+# A native-control target is allowlisted only when the bundle is in BOTH the
+# per-tenant native_control_target_allowlist AND the global env floor. An empty
+# per-tenant list denies everything (fail-closed) even when the floor is non-empty.
+
+
+def test_allowlist_empty_per_tenant_denies_even_with_nonempty_floor(db_session, seeded):
+    _seed_tenant_allowlist(db_session, [])  # explicit opt-out
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue_pointer(db_session, nonce="empty-pt-denies")
+    assert exc.value.status_code == 422  # target not allowlisted
+
+
+def test_allowlist_per_tenant_bundle_not_in_floor_denies(db_session, seeded):
+    # tenant opts a bundle in, but it is NOT in the platform floor → effective
+    # excludes it (the floor is a hard ceiling) → deny.
+    _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID])
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [OTHER_CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue_pointer(db_session, nonce="not-in-floor-denies")
+    assert exc.value.status_code == 422
+
+
+def test_allowlist_intersection_allows(db_session, seeded):
+    # bundle in BOTH per-tenant list and floor → effective contains it → allowed
+    _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID, OTHER_CANARY_BUNDLE_ID])
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, _e, _s = _enqueue_pointer(db_session, nonce="intersection-allows")
+    assert command.status == "pending"
+    assert command.capability == "pointer_control"
+    assert command.payload["target"]["bundle_id"] == CANARY_BUNDLE_ID
+
+
+def test_allowlist_no_tenant_features_row_denies(db_session, seeded):
+    # belt-and-suspenders: with no TenantFeatures row the effective set is empty
+    db_session.query(TenantFeatures).filter(TenantFeatures.tenant_id == TENANT_ID).delete()
+    db_session.commit()
+    from app.services.desktop_control_service import _effective_native_control_allowlist as eff
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ):
+        assert eff(db_session, TENANT_ID) == set()
+
+
+def test_effective_allowlist_is_intersection_unit(db_session, seeded):
+    from app.services.desktop_control_service import _effective_native_control_allowlist as eff
+    _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID, "com.example.NotInFloor"])
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID, OTHER_CANARY_BUNDLE_ID],
+    ):
+        # only the bundle in BOTH survives
+        assert eff(db_session, TENANT_ID) == {CANARY_BUNDLE_ID}
