@@ -86,15 +86,25 @@ _UNSUPPORTED_KINDS = frozenset({"id_card", "face"})
 
 # Perception-specific secret shapes that the CLI-output `contains_secret` rules do
 # NOT cover (kept OUT of the shared `_RULES` so CLI-log redaction behaviour is
-# unchanged): `<SENSITIVE_ENV_KEY>=value` assignments, PEM private-key headers, AWS
-# access-key ids, and Slack/Google-style long tokens.
+# unchanged). Two env-assignment detectors: the exact SENSITIVE_ENV_KEYS names AND a
+# GENERIC `<NAME-ending-in-a-secret-word>=value` shape (catches AWS_SECRET_ACCESS_KEY,
+# any *_SECRET / *_TOKEN / *_PASSWORD / *_API_KEY, etc.). Plus PEM private-key headers,
+# AWS/Google/Slack cloud-key shapes.
 _ENV_ASSIGN_RE = re.compile(
     r"(?i)\b(" + "|".join(re.escape(k) for k in sorted(SENSITIVE_ENV_KEYS)) + r")\s*[:=]\s*\S",
 )
+_GENERIC_ASSIGN_RE = re.compile(
+    r"(?i)\b[A-Z0-9_]*(?:SECRET|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|"
+    r"SECRET[_-]?KEY|AUTH[_-]?TOKEN|ACCESS[_-]?TOKEN|REFRESH[_-]?TOKEN|"
+    r"PRIVATE[_-]?KEY|CREDENTIAL|CLIENT[_-]?SECRET)[A-Z0-9_]*\s*[:=]\s*\S",
+)
 _PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _AWS_AKIA_RE = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_GOOGLE_API_RE = re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b")
 _SLACK_RE = re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")
-_EXTRA_SECRET_RES = (_ENV_ASSIGN_RE, _PEM_RE, _AWS_AKIA_RE, _SLACK_RE)
+_EXTRA_SECRET_RES = (
+    _ENV_ASSIGN_RE, _GENERIC_ASSIGN_RE, _PEM_RE, _AWS_AKIA_RE, _GOOGLE_API_RE, _SLACK_RE,
+)
 
 
 def _utcnow() -> datetime:
@@ -348,17 +358,23 @@ def redact_artifact(
     artifact: PerceptionArtifact,
     engine: RedactorEngine,
     *,
-    worker_id: str | None = None,
+    worker_id: str,
     root: str | None = None,
     now: datetime | None = None,
 ) -> RedactionOutcome:
     """Redact one claimed artifact. Fail-closed end-to-end. On success: a clean
     redacted PNG is written + verified (re-detection finds no secret), the RAW is
-    hard-deleted (prerequisite), and the row flips to planner_safe."""
+    hard-deleted (prerequisite), and the row flips to planner_safe. ``worker_id`` is
+    required and fenced (the caller must own the claim)."""
     root = root or perception_storage.quarantine_root()
     now = now or _utcnow()
     artifact_id = artifact.id
-    raw_abspath = os.path.join(root, str(artifact.storage_path))
+    # Read the raw from the CANONICAL id-derived path, never the DB-stored
+    # storage_path — so a corrupted/traversed DB value can't read cross-tenant /
+    # out-of-jail bytes into this artifact's planner-safe output.
+    raw_abspath = perception_storage.artifact_abspath(
+        artifact.tenant_id, artifact.session_id, artifact.id, root=root
+    )
     redacted_rel = perception_storage.redacted_relpath(
         artifact.tenant_id, artifact.session_id, artifact.id
     )
@@ -384,25 +400,29 @@ def redact_artifact(
 
         redacted_bytes = _redact_png(img, result.redact_boxes)
 
-        # Re-detection pass on the REDACTED output: if a secret still surfaces (a
-        # mis-aligned/under-sized box, partial cover), the engine's geometry was
-        # wrong — withhold. This is what makes "candidate boxes only" safe even when
-        # the engine lies about geometry.
-        verify_regions = engine.detect(redacted_bytes, width=img.size[0], height=img.size[1])
-        if any(r.text and _floor_detects_secret(r.text) for r in verify_regions):
+        # Re-detection pass on the REDACTED output, run through the FULL classifier:
+        # the redacted bytes must classify as completely clean — no surviving secret
+        # text, no surviving qr/barcode/unsupported region, no unlocalizable match.
+        # A mis-aligned/under-sized box, a partial cover, or a non-text region the
+        # engine lied about → the secret survives → withhold. This is what makes
+        # "candidate boxes only" safe even when the engine's geometry is wrong.
+        verify_result = _classify_regions(
+            engine.detect(redacted_bytes, width=img.size[0], height=img.size[1])
+        )
+        if verify_result.withhold or verify_result.redact_boxes:
             perception_storage._unlink_quiet(redacted_abs)
             return _finish_withheld(db, artifact_id, result, reason_override="secret_survived_redaction")
 
-        _atomic_write(redacted_abs, redacted_bytes)
-
-        # Fence the worker: re-check we still own this claim (status + claimant)
-        # under a row lock before deleting raw / committing planner_safe — a
-        # reclaimed stale worker must not finish another worker's artifact.
+        # Fence the worker FIRST: lock the row + verify we still own the claim
+        # (status redacting + matching claimant) and HOLD the lock through the write
+        # + raw-delete + commit — so a reclaimed stale worker can neither overwrite
+        # the redacted file nor flip state. (Lock before any filesystem write.)
         locked = _lock_owned_redacting(db, artifact_id, worker_id)
         if locked is None:
             db.rollback()
-            perception_storage._unlink_quiet(redacted_abs)
             return RedactionOutcome(status="withheld", reasons=["lost_claim"])
+
+        _atomic_write(redacted_abs, redacted_bytes)
 
         # Raw hard-delete is a PREREQUISITE of planner_safe.
         if not perception_storage.delete_raw_bytes(locked, root=root):
@@ -438,9 +458,11 @@ def redact_artifact(
         return _finish_withheld(db, artifact_id, None, reason_override=f"error:{type(exc).__name__}")
 
 
-def _lock_owned_redacting(db: Session, artifact_id, worker_id: str | None):
-    """Row-lock the artifact and return it ONLY if it is still `redacting` and owned
-    by ``worker_id`` (when a worker id is supplied). Otherwise None (lost the claim)."""
+def _lock_owned_redacting(db: Session, artifact_id, worker_id: str):
+    """Row-lock the artifact and return it ONLY if it is still `redacting` AND owned
+    by exactly ``worker_id``. Otherwise None (lost the claim). The lock is held until
+    the caller commits/rolls back, fencing a reclaimed stale worker out of the
+    write+delete+commit window."""
     q = db.query(PerceptionArtifact).filter(PerceptionArtifact.id == artifact_id)
     try:
         q = q.with_for_update()
@@ -449,7 +471,7 @@ def _lock_owned_redacting(db: Session, artifact_id, worker_id: str | None):
     art = q.first()
     if art is None or art.redaction_status != STATUS_REDACTING:
         return None
-    if worker_id is not None and art.redact_claimed_by != worker_id:
+    if art.redact_claimed_by != worker_id:
         return None
     return art
 

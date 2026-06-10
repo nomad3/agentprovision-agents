@@ -212,12 +212,20 @@ def test_decode_guarded_accepts_valid_png():
 
 
 def test_floor_detects_env_assignment_pem_and_cloud_keys():
+    # exact SENSITIVE_ENV_KEYS names
     assert pr._floor_detects_secret("SECRET_KEY=abc123def456")
     assert pr._floor_detects_secret("JWT_AGENT_TOKEN_SECRET: deadbeefdeadbeef")
+    # GENERIC name-ending-in-secret-word (not in SENSITIVE_ENV_KEYS)
+    assert pr._floor_detects_secret("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG")
+    assert pr._floor_detects_secret("MY_CUSTOM_PASSWORD = hunter2hunter2")
+    # cloud-key shapes
     assert pr._floor_detects_secret("-----BEGIN RSA PRIVATE KEY-----")
     assert pr._floor_detects_secret("AKIAIOSFODNN7EXAMPLE")
+    assert pr._floor_detects_secret("AIza" + "B1c2d3e4f5g6h7i8j9k0lmnopqrstuvwxyz")  # AIza+35
     assert pr._floor_detects_secret("xoxb-123456789012-abcdefABCDEF")
+    # prose survives (no over-detection)
     assert not pr._floor_detects_secret("the secret garden was lovely")
+    assert not pr._floor_detects_secret("Submit your password to continue")
 
 
 def test_floor_withholds_uncoverable_tiny_box():
@@ -303,6 +311,19 @@ def test_redact_artifact_withholds_when_secret_survives_redaction(db_session):
     assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
     assert os.path.exists(raw_abs)  # raw preserved
     assert not os.path.exists(os.path.join(root, perception_storage.redacted_relpath(TENANT_ID, SESSION_ID, art.id)))
+
+
+def test_redact_artifact_withholds_when_nontext_region_survives(db_session):
+    # the re-OCR runs the FULL classifier — a qr/barcode region surviving in the
+    # redacted output (engine reported a wrong box) → withhold, not just text.
+    root = perception_storage.quarantine_root()
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
+    qr = pr.DetectedRegion(box=(0, 0, 20, 20), kind="qr")
+    out = pr.redact_artifact(
+        db_session, art, StubEngine([qr], verify_regions=[qr]), worker_id="w1", root=root
+    )
+    assert out.status == "withheld" and "secret_survived_redaction" in out.reasons
+    assert os.path.exists(raw_abs)
 
 
 def test_redact_artifact_fences_stale_worker(db_session):
