@@ -2061,3 +2061,93 @@ def test_effective_allowlist_is_intersection_unit(db_session, seeded):
     ):
         # only the bundle in BOTH survives
         assert eff(db_session, TENANT_ID) == {CANARY_BUNDLE_ID}
+
+
+def test_allowlist_revoked_after_enqueue_denies_at_claim(db_session, seeded):
+    # PR4c claim-time enforcement: a command enqueued while allowlisted cannot be
+    # claimed (no signed envelope) once the per-tenant allowlist is revoked — the
+    # grant-match allowlist check denies. Capability flags stay ON, so the ONLY
+    # thing denying here is the allowlist.
+    _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID])
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session, tenant_id=TENANT_ID, user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID, risk_tier="native_control", capability="pointer_control",
+                target_binding={"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"},
+                expires_in_seconds=60,
+            ),
+        )
+        command, _e, _s = enqueue_desktop_command(
+            db_session, tenant_id=TENANT_ID, user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID, action="pointer_click", tool_name="desktop_pointer_click",
+                shell_id=None, nonce="revoke-allowlist-after-enqueue", approval_id=grant.id,
+                payload={"target": {"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"}},
+            ),
+        )
+        # revoke the per-tenant allowlist AFTER enqueue, BEFORE claim
+        _seed_tenant_allowlist(db_session, [])
+        claimed, _event, _cs = claim_next_desktop_command(
+            db_session, user=seeded, device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+    assert claimed is None  # no signed envelope issued — allowlist revoked
+    refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert refreshed.status != "claimed"  # never reached envelope issuance
+
+
+def test_allowlist_revoked_after_claim_does_not_corrupt_completion(db_session, seeded):
+    # Codex IMPORTANT: completion verifies the IMMUTABLE signed envelope binding,
+    # NOT the mutable current allowlist. Revoking the allowlist AFTER the envelope
+    # was issued must NOT mis-record an already-authorized actuation as denied.
+    encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
+    _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID])
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch.object(
+        desktop_control_service.settings, "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM", "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY", encoded_private_key,
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session, tenant_id=TENANT_ID, user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID, risk_tier="native_control", capability="pointer_control",
+                target_binding={"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"},
+                expires_in_seconds=60,
+            ),
+        )
+        command, _e, _s = enqueue_desktop_command(
+            db_session, tenant_id=TENANT_ID, user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID, action="pointer_click", tool_name="desktop_pointer_click",
+                shell_id=None, nonce="revoke-allowlist-after-claim", approval_id=grant.id,
+                payload={"target": {"bundle_id": CANARY_BUNDLE_ID, "action": "pointer_click"}},
+            ),
+        )
+        claimed, _event, _cs = claim_next_desktop_command(
+            db_session, user=seeded, device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+        assert claimed is not None  # envelope issued while allowlisted
+        envelope = claimed.payload["command_envelope"]
+        # revoke the per-tenant allowlist AFTER the envelope was issued
+        _seed_tenant_allowlist(db_session, [])
+        completed, complete_event, _ccs, idempotent = complete_desktop_command(
+            db_session, user=seeded, device_token=DEVICE_TOKEN,
+            completion=DesktopCommandCompletion(
+                command_id=command.id, shell_id=SHELL_ID, status="succeeded",
+                metadata={"envelope_nonce": envelope["nonce"]},
+            ),
+        )
+    # completion trusts the signed envelope binding — NOT denied by the revoke
+    assert completed.status == "succeeded"
+    assert complete_event.event_type == "desktop_command_completed"
+    assert idempotent is False

@@ -1858,12 +1858,16 @@ def _consume_command_envelope_or_deny(
             metadata=metadata,
         )
     if expected["approval_risk_tier"] == "native_control":
+        # Completion is POST-actuation reporting — verify the IMMUTABLE signed
+        # envelope binds to the command's target, NOT the mutable current allowlist
+        # (Codex review). The allowlist is enforced at the authorization points
+        # (enqueue + claim/grant-match, where the envelope is issued); re-consulting
+        # it here would only mis-record an already-authorized actuation as denied if
+        # an operator narrowed the allowlist mid-lease. The signed envelope target
+        # binding below is the authoritative, tamper-proof check.
         expected_target = _native_control_target_from_command(command)
         if (
             not expected_target
-            or not _native_control_target_is_allowlisted(
-                expected_target, db=db, tenant_id=command.tenant_id
-            )
             or envelope.get("target") is None
             or envelope.get("target", {}).get("bundle_id") != expected_target.get("bundle_id")
         ):
