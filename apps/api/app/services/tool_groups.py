@@ -225,10 +225,30 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "commitment_scan_red_flags",
         "learning_artifact_write",
     ],
-    "desktop_control": [
+    # Luna macOS computer-use — agent-governance split (audit L-B2, PR4d).
+    # `desktop_observe` = the read-only perception MCP tools an agent may call to
+    # SEE the desktop. `desktop_control` = the actuation surface (move/click/type).
+    # An agent granted only `desktop_observe` can perceive but never actuate.
+    "desktop_observe": [
         "desktop_observe_screen",
         "desktop_get_active_app",
         "desktop_read_clipboard",
+    ],
+    # Forward-declared for the P5.4 agent-driven actuation loop. Actuation is
+    # API-native TODAY (the enqueue/claim/complete HTTP path, user-JWT + device
+    # token, gated by the per-tenant capability flags [PR4b] + target allowlist
+    # [PR4c] + signed Ed25519 envelopes) — NOT yet MCP tools, so no agent token can
+    # reach it. These names mirror desktop_control_service._COMMAND_TOOL_ACTIONS so
+    # that when P5.4 registers agent-driven actuation tools they are scoped to this
+    # group out of the box. The names DO enter a granting agent's resolved scope
+    # list, but are inert until the matching MCP tools exist: scope is enforced
+    # against the actually-invoked tool_name (tool_audit.py), so a scoped name with
+    # no registered tool can never be called.
+    "desktop_control": [
+        "desktop_pointer_move",
+        "desktop_pointer_click",
+        "desktop_keyboard_type",
+        "desktop_keyboard_key_chord",
     ],
     # Platform introspection — answers "what's on this tenant?" questions like
     # "list my agents", "what workflows do I have", "which MCP servers are
