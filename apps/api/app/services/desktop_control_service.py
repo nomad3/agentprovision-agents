@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import re
 import uuid
 from dataclasses import dataclass
@@ -895,10 +896,23 @@ def _normalize_native_control_target_binding(
         normalized["display_id"] = max(0, display_id)
 
     bounds = raw.get("bounds")
-    if isinstance(bounds, list) and len(bounds) == 4 and all(
-        isinstance(item, (int, float)) for item in bounds
+    if (
+        isinstance(bounds, list)
+        and len(bounds) == 4
+        and all(
+            isinstance(item, (int, float)) and not isinstance(item, bool) for item in bounds
+        )
+        and all(math.isfinite(item) for item in bounds)
     ):
-        normalized["bounds"] = [float(item) for item in bounds]
+        # Quantize to INTEGERS before bounds enters the Ed25519-signed envelope.
+        # bounds is a screen-point rect; rounding to int makes Python json.dumps
+        # emit integer literals (e.g. "[120,80,800,600]") that the Rust client's
+        # serde_json canonicalizer serializes byte-identically. Raw floats diverge
+        # Python↔Rust (CPython repr vs Rust ryu) and would silently fail signature
+        # verification — the same canonicalization class fixed for pointer coords
+        # (see _POINTER_MICRO_UNITS). Non-finite / bool values are rejected above
+        # so round() can never raise and `NaN`/`Infinity` can never reach the JSON.
+        normalized["bounds"] = [round(item) for item in bounds]
 
     return normalized
 

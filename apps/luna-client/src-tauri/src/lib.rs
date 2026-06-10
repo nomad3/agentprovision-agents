@@ -2031,6 +2031,37 @@ mod cross_language_canonicalization_tests {
             "a tampered signed coord must fail Ed25519 verification"
         );
     }
+
+    // target_binding.bounds rides into the signed payload as a screen-point rect.
+    // The Python signer quantizes it to INTEGERS (desktop_control_service
+    // _normalize_native_control_target_binding) precisely because floats diverge
+    // across the two JSON encoders (CPython repr vs Rust ryu) and silently break
+    // the signature. This guards the Rust side of that contract: an integer bounds
+    // array canonicalizes to integer literals (no `.0`), byte-identically to what
+    // Python's json.dumps emits — so a future serde number-format change can't
+    // reintroduce the divergence unnoticed.
+    #[test]
+    fn integer_bounds_canonicalizes_to_integer_literals() {
+        let envelope = serde_json::json!({
+            "schema": "agentprovision.desktop_command_envelope.v1",
+            "action": "pointer_click",
+            "target": {
+                "bundle_id": "com.apple.TextEdit",
+                "bounds": [120, 80, 800, 600],
+            },
+            "signature": "ignored",
+        });
+        let canonical =
+            String::from_utf8(canonical_envelope_payload_json(&envelope).unwrap()).unwrap();
+        assert!(
+            canonical.contains("\"bounds\":[120,80,800,600]"),
+            "integer bounds must serialize as integer literals, got: {canonical}"
+        );
+        assert!(
+            !canonical.contains("120.0") && !canonical.contains("800.0"),
+            "no float repr may reach the signed bytes: {canonical}"
+        );
+    }
 }
 
 // Canary fallback actuation values, used ONLY when the verified envelope carries
