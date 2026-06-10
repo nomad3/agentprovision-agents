@@ -4,9 +4,16 @@
 that get SIGNED into the command envelope, so the client actuates exactly what the
 server authorized (never a client-chosen or on-screen-derived value). Pure logic.
 """
+import json
+
 import pytest
 
+from app.services.desktop_control_service import _canonical_json
+from app.services.desktop_control_service import _envelope_target_payload
 from app.services.desktop_control_service import _normalize_native_control_args as norm
+from app.services.desktop_control_service import (
+    _normalize_native_control_target_binding as norm_target,
+)
 from app.services.desktop_control_service import _validate_signed_actuation_args as vsa
 
 
@@ -122,3 +129,56 @@ def test_validate_none_is_none():
 def test_validate_rejects_malformed_persisted_pointer_args(bad):
     with pytest.raises(ValueError):
         vsa("pointer_move", bad)
+
+
+# ── target_binding.bounds: integer canonicalization (cross-language signature) ──
+# bounds rides INTO the Ed25519-signed envelope (via _envelope_target_payload). It
+# must serialize byte-identically Python↔Rust or the client silently fails the
+# signature. Floats diverge (CPython repr vs Rust ryu); integers do not — so the
+# normalizer quantizes bounds to int. (Same class as the pointer micro-unit fix.)
+
+
+def test_target_bounds_quantized_to_int():
+    t = norm_target(
+        {"bundle_id": "com.apple.TextEdit", "action": "pointer_click",
+         "bounds": [120.7, 80.2, 800.0, 600.9]},
+        action="pointer_click",
+    )
+    assert t["bounds"] == [121, 80, 800, 601]
+    assert all(isinstance(v, int) and not isinstance(v, bool) for v in t["bounds"])
+
+
+def test_target_bounds_canonical_json_has_integer_literals():
+    from datetime import datetime, timezone
+
+    t = norm_target(
+        {"bundle_id": "com.apple.TextEdit", "action": "pointer_click",
+         "bounds": [120.0, 80.0, 800.0, 600.0]},
+        action="pointer_click",
+    )
+    payload = _envelope_target_payload(t, observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    blob = _canonical_json(payload).decode()
+    # integer literals only — no float repr (".0") would reach the signed bytes
+    assert '"bounds":[120,80,800,600]' in blob
+    assert "120.0" not in blob and "800.0" not in blob
+    # and the canonical bytes round-trip to ints (what the Rust verifier re-serializes)
+    assert json.loads(blob)["bounds"] == [120, 80, 800, 600]
+
+
+@pytest.mark.parametrize(
+    "bad_bounds",
+    [
+        [float("nan"), 0, 0, 0],      # non-finite would emit invalid `NaN` JSON
+        [float("inf"), 0, 0, 0],      # non-finite would emit `Infinity`
+        [1, 2, 3],                    # wrong arity
+        [True, 1, 2, 3],              # bool is not a coord
+        "120,80,800,600",            # not a list
+    ],
+)
+def test_target_bounds_invalid_dropped(bad_bounds):
+    t = norm_target(
+        {"bundle_id": "com.apple.TextEdit", "action": "pointer_click", "bounds": bad_bounds},
+        action="pointer_click",
+    )
+    # invalid bounds is dropped (fail-closed), never carried as a divergent value
+    assert "bounds" not in t
