@@ -159,6 +159,24 @@ async def startup_desktop_control_preflight():
 
 
 @app.on_event("startup")
+async def startup_perception_cleanup():
+    """Spawn the api-internal governed-perception quarantine sweeper (P5.2 PR4).
+
+    The quarantine volume is api-only ("no-read by construction"), so the TTL
+    cleanup must run in-process here — a worker Temporal job has no access to the
+    bytes. Fire-and-forget; the loop does a startup catch-up then sweeps on an
+    interval, hard-deleting expired artifacts and emitting ``resource_expired``.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+    try:
+        from app.services.perception_cleanup import cleanup_loop
+        _asyncio.create_task(cleanup_loop())
+    except Exception as exc:  # never block startup on the sweeper
+        _logging.getLogger(__name__).warning("perception cleanup startup skipped: %s", exc)
+
+
+@app.on_event("startup")
 async def startup_skill_manager():
     """Scan and load all file-based skill definitions."""
     import logging as _logging

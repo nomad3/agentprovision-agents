@@ -13,6 +13,7 @@ only writes + indexes them; nothing in P5.2 reads them back.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import uuid
@@ -21,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 
 from app.models.perception_artifact import PerceptionArtifact
+
+logger = logging.getLogger(__name__)
 
 # A macOS bundle id is reverse-DNS. Constrain it HARD: it is echoed onto the
 # byte-free SSE reference, so a free-form value would be an exfil channel (a
@@ -140,8 +143,13 @@ def save_observation_artifact(
 def _unlink_quiet(abspath: str) -> None:
     try:
         os.remove(abspath)
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError as exc:
+        # Don't fail the caller, but make orphan bytes operator-visible (e.g. a
+        # readonly fs / NFS stale handle) — silently swallowing leaves untracked
+        # bytes that the "no untracked bytes" contract claims can't exist.
+        logger.warning("perception storage: could not unlink orphan bytes at %s: %s", abspath, exc)
 
 
 def unlink_artifact_bytes(artifact: PerceptionArtifact, *, root: str | None = None) -> None:
