@@ -240,7 +240,10 @@ TOOL_GROUPS: dict[str, list[str]] = {
     # [PR4c] + signed Ed25519 envelopes) — NOT yet MCP tools, so no agent token can
     # reach it. These names mirror desktop_control_service._COMMAND_TOOL_ACTIONS so
     # that when P5.4 registers agent-driven actuation tools they are scoped to this
-    # group out of the box (resolve_tool_names ignores not-yet-registered names).
+    # group out of the box. The names DO enter a granting agent's resolved scope
+    # list, but are inert until the matching MCP tools exist: scope is enforced
+    # against the actually-invoked tool_name (tool_audit.py), so a scoped name with
+    # no registered tool can never be called.
     "desktop_control": [
         "desktop_pointer_move",
         "desktop_pointer_click",

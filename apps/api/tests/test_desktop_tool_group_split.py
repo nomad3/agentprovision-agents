@@ -18,7 +18,8 @@ CONTROL_TOOLS = {
 def test_observe_and_control_groups_exist_and_are_distinct():
     assert "desktop_observe" in TOOL_GROUPS
     assert "desktop_control" in TOOL_GROUPS
-    # the old monolithic group name is gone (it was observe-only, now renamed)
+    # the old observe-only MEANING of `desktop_control` is gone: `desktop_observe`
+    # now holds the perception tools, and `desktop_control` is the actuation group.
     assert set(TOOL_GROUPS["desktop_observe"]) == OBSERVE_TOOLS
     assert set(TOOL_GROUPS["desktop_control"]) == CONTROL_TOOLS
 
