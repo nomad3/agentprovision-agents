@@ -39,6 +39,7 @@ from app.models.desktop_command import DesktopCommand  # noqa: F401
 from app.models.desktop_command_approval_grant import DesktopCommandApprovalGrant  # noqa: F401
 from app.models.desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce  # noqa: F401
 from app.models.desktop_command_event import DesktopCommandEvent  # noqa: F401
+from app.models.perception_artifact import PerceptionArtifact  # noqa: F401
 # AgentPermission and IntegrationCredential are already imported via
 # app.models.__init__ — duplicating here was redundant.
 

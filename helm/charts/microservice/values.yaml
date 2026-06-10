@@ -191,6 +191,19 @@ workspaces:
   # workspaces PVC. Empty → the chart creates its own PVC.
   existingClaim: ""
 
+# Luna P5.2 governed-perception quarantine volume. API-ONLY by design: ONLY the
+# api chart sets enabled=true. The code-worker chart MUST leave this false so
+# captured screenshot bytes are unreachable from any agent runtime
+# ("no-read by construction"). Not shared (no existingClaim).
+observations:
+  enabled: false
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  mountPath: /var/agentprovision/observations
+  annotations: {}
+
 # Extra volumes
 volumes: []
 volumeMounts: []

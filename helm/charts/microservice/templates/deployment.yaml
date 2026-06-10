@@ -173,6 +173,10 @@ spec:
             - name: workspaces
               mountPath: {{ .Values.workspaces.mountPath | default "/var/agentprovision/workspaces" }}
             {{- end }}
+            {{- if .Values.observations.enabled }}
+            - name: observations
+              mountPath: {{ .Values.observations.mountPath | default "/var/agentprovision/observations" }}
+            {{- end }}
             {{- if .Values.nginxConfig.enabled }}
             - name: nginx-config
               mountPath: /etc/nginx/conf.d/default.conf
@@ -202,6 +206,15 @@ spec:
             # claim; the code-worker chart references it so both pods
             # mount the same RWX volume.
             claimName: {{ default (printf "%s-workspaces" (include "microservice.fullname" .)) .Values.workspaces.existingClaim }}
+        {{- end }}
+        {{- if .Values.observations.enabled }}
+        - name: observations
+          # Luna P5.2 governed-perception quarantine — API-ONLY. This PVC is
+          # created + mounted by the api chart ONLY. The code-worker chart must
+          # NOT set observations.enabled, so agent runtimes never mount it
+          # ("no-read by construction"). NOT shared (no existingClaim).
+          persistentVolumeClaim:
+            claimName: {{ include "microservice.fullname" . }}-observations
         {{- end }}
         {{- if .Values.nginxConfig.enabled }}
         - name: nginx-config

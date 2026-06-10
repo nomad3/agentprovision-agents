@@ -57,6 +57,11 @@ services:
       # apps/api/app/api/v1/workspace.py. Mirrored in Helm as a PVC
       # (helm/charts/microservice/templates/workspaces-pvc.yaml).
       - workspaces:/var/agentprovision/workspaces
+      # Luna Phase 5.2 governed-perception quarantine. API-ONLY by design: this
+      # volume is mounted on `api` and NOWHERE else (NOT code-worker / CLI), so
+      # captured screenshot bytes are unreachable from any agent runtime —
+      # "no-read by construction". See desktop perception design + perception_storage.py.
+      - observations:/var/agentprovision/observations
       # Shared Claude Code credential volume (same one the code-worker mounts
       # at /home/codeworker/.claude). The web "Connect with Anthropic" flow
       # (apps/api/app/api/v1/claude_auth.py) runs `claude auth login` and drops
@@ -382,6 +387,9 @@ volumes:
   db_data:
   claude_sessions:
   hf_cache:
+  # Luna P5.2 governed-perception quarantine — mounted ONLY on `api` (see the
+  # api service volumes). Never mount this on code-worker / CLI runtimes.
+  observations:
   workspaces:
     # Compose services keep using the logical `workspaces` key, but the
     # physical Docker volume name intentionally avoids `_work`. Luna's release

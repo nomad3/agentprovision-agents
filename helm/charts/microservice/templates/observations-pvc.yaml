@@ -1,0 +1,32 @@
+{{- /*
+Luna Phase 5.2 — governed-perception quarantine PVC. API-ONLY: created and
+mounted by the api chart ONLY (observations.enabled=true). The code-worker chart
+must leave observations.enabled=false, so captured screenshot bytes are
+unreachable from any agent runtime — "no-read by construction". Unlike the
+shared `workspaces` PVC, this is never shared (no existingClaim) and may be
+ReadWriteOnce.
+
+Mirrored in docker-compose.yml as a named `observations:` volume mounted only
+on the api service.
+*/}}
+{{- if .Values.observations.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "microservice.fullname" . }}-observations
+  labels:
+    {{- include "microservice.labels" . | nindent 4 }}
+  {{- with .Values.observations.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.observations.accessModes | nindent 4 }}
+  {{- if .Values.observations.storageClass }}
+  storageClassName: {{ .Values.observations.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.observations.size }}
+{{- end }}

@@ -333,6 +333,18 @@ workspaces:
   size: 10Gi
   mountPath: /var/agentprovision/workspaces
 
+# Luna P5.2 governed-perception quarantine — API-ONLY. Enabled here (api) and
+# NOWHERE else. The code-worker chart must NOT enable this, so captured
+# screenshot bytes stay unreachable from agent runtimes ("no-read by
+# construction"). ReadWriteOnce is fine — only the api pod mounts it.
+observations:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  mountPath: /var/agentprovision/observations
+
 # Temporary directories
 tmpDirs:
   - /tmp
