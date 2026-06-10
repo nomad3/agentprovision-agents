@@ -234,3 +234,73 @@ def test_observations_quarantine_volume_is_api_only():
         assert not mounts_observations(agent), (
             f"{agent} must NOT mount the observations quarantine (no-read invariant)"
         )
+
+
+def test_observations_not_enabled_on_agent_helm_values():
+    """No-leak invariant (Helm side): the agent charts must NOT enable the
+    observations quarantine PVC — only the api chart does."""
+    import yaml
+
+    checked = 0
+    for rel in (
+        "helm/values/agentprovision-code-worker.yaml",
+        "helm/values/agentprovision-orchestration-worker.yaml",
+    ):
+        path = _find_repo_file(rel)
+        if path is None:
+            continue
+        checked += 1
+        with open(path) as fh:
+            data = yaml.safe_load(fh) or {}
+        obs = data.get("observations") or {}
+        assert not obs.get("enabled", False), (
+            f"{rel} must NOT enable the observations quarantine (no-read invariant)"
+        )
+    if checked == 0:
+        pytest.skip("agent helm values not in this checkout")
+
+
+# ── PR4: TTL cleanup sweeper ──────────────────────────────────────────────────
+
+
+def test_cleanup_deletes_expired_and_emits_resource_expired(db_session):
+    import os
+    from datetime import datetime, timedelta, timezone
+    from app.services import perception_cleanup
+
+    user = _seed(db_session, control_enabled=True)
+    with patch.object(svc, "publish_session_event", return_value=None):
+        artifact, _ = _record(db_session, user)
+    abspath = os.path.join(perception_storage.quarantine_root(), artifact.storage_path)
+    assert os.path.exists(abspath)
+
+    # backdate the TTL so the sweeper considers it expired
+    artifact.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db_session.add(artifact)
+    db_session.commit()
+
+    emitted = []
+    with patch.object(
+        perception_cleanup,
+        "publish_session_event",
+        side_effect=lambda sid, et, payload, **kw: emitted.append((et, payload)),
+    ):
+        deleted = perception_cleanup.run_cleanup_once(db_session)
+
+    assert deleted == 1
+    assert not os.path.exists(abspath)  # bytes hard-deleted
+    row = db_session.query(PerceptionArtifact).filter(PerceptionArtifact.id == artifact.id).first()
+    assert row.deleted_at is not None
+    # a byte-free resource_expired audit was emitted
+    assert emitted and emitted[0][0] == "resource_expired"
+    assert emitted[0][1]["resource_id"] == str(artifact.id)
+    assert "PNG" not in json.dumps(emitted[0][1])
+
+
+def test_cleanup_noop_when_nothing_expired(db_session):
+    from app.services import perception_cleanup
+
+    user = _seed(db_session, control_enabled=True)
+    with patch.object(svc, "publish_session_event", return_value=None):
+        _record(db_session, user)  # fresh 15-min TTL — not expired
+    assert perception_cleanup.run_cleanup_once(db_session) == 0
