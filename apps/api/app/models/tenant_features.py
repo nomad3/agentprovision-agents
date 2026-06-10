@@ -150,12 +150,15 @@ class TenantFeatures(Base):
     keyboard_control_enabled = Column(  # Phase 4 keyboard actuation
         Boolean, nullable=False, default=False, server_default=text("false")
     )
-    # Per-tenant bundle allowlist; effective list = per-tenant ∩ global platform
-    # floor (DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST), resolved in PR4b. No
-    # server_default (Python default=list only) — same as rl_settings — so SQLite
-    # Base.metadata.create_all in unit tests does not emit the Postgres-only
-    # `'[]'::jsonb` cast, which SQLite rejects. The DB-level default lives in
-    # migration 166 for Postgres prod.
+    # Per-tenant bundle allowlist; the intended effective list = per-tenant ∩
+    # global platform floor (DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST). NOTE: this
+    # column is INERT on the actuation path today — PR4b enforces the per-capability
+    # flags only and still uses the env floor (_desktop_control_canary_bundle_
+    # allowlist); the per-tenant ∩ floor resolution lands in a later PR4 step
+    # (PR4c). No server_default (Python default=list only) — same as rl_settings —
+    # so SQLite Base.metadata.create_all in unit tests does not emit the
+    # Postgres-only `'[]'::jsonb` cast, which SQLite rejects. The DB-level default
+    # lives in migration 166 for Postgres prod.
     native_control_target_allowlist = Column(
         JSONB, nullable=False, default=list
     )
