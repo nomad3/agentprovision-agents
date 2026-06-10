@@ -53,11 +53,17 @@ def _make_png(w=64, h=48, *, text_meta=None) -> bytes:
 
 
 class StubEngine:
-    def __init__(self, regions):
+    """Returns ``regions`` on the FIRST detect (raw), ``verify_regions`` on the
+    re-OCR pass over the redacted output (default [] = secret successfully removed)."""
+
+    def __init__(self, regions, verify_regions=None):
         self._regions = regions
+        self._verify = verify_regions if verify_regions is not None else []
+        self._calls = 0
 
     def detect(self, image_bytes, *, width, height):
-        return list(self._regions)
+        self._calls += 1
+        return list(self._regions if self._calls == 1 else self._verify)
 
 
 class RaisingEngine:
@@ -79,7 +85,7 @@ def _quarantine_root(tmp_path, monkeypatch):
     monkeypatch.setenv("OBSERVATION_QUARANTINE_ROOT", str(tmp_path / "obs"))
 
 
-def _seed_artifact(db, *, root):
+def _seed_artifact(db, *, root, claimed_by=None, png=None):
     db.add_all([
         Tenant(id=TENANT_ID, name="Redactor Tenant"),
         User(id=USER_ID, tenant_id=TENANT_ID, email="r@example.test", hashed_password="x"),
@@ -89,13 +95,19 @@ def _seed_artifact(db, *, root):
     rel = perception_storage.artifact_relpath(TENANT_ID, SESSION_ID, artifact_id)
     abspath = os.path.join(root, rel)
     os.makedirs(os.path.dirname(abspath), mode=0o700, exist_ok=True)
-    png = _make_png()
+    png = png if png is not None else _make_png()
     with open(abspath, "wb") as fh:
         fh.write(png)
     art = PerceptionArtifact(
         id=artifact_id, tenant_id=TENANT_ID, session_id=SESSION_ID, shell_id=SHELL_ID,
         device_id=None, artifact_type="screenshot", storage_path=rel,
-        sha256="0" * 64, size_bytes=len(png), redaction_status=pr.STATUS_NOT_PLANNER_SAFE,
+        sha256="0" * 64, size_bytes=len(png),
+        # redact_artifact requires a claimed (redacting) row owned by the worker;
+        # the claim tests seed not_planner_safe and call claim_next_for_redaction.
+        redaction_status=pr.STATUS_REDACTING if claimed_by else pr.STATUS_NOT_PLANNER_SAFE,
+        redact_claimed_by=claimed_by,
+        redact_claimed_at=_utc(0) if claimed_by else None,
+        redact_attempts=1 if claimed_by else 0,
         expires_at=_utc(15), created_at=_utc(0),
     )
     db.add(art)
@@ -113,7 +125,6 @@ def test_floor_redacts_secret_region_and_passes():
     ])
     assert not res.withhold
     assert res.redact_boxes == [(10, 10, 50, 12)]  # only the secret box
-    assert res.localized_secret
 
 
 def test_floor_withholds_low_confidence_secret():
@@ -134,7 +145,6 @@ def test_floor_withholds_unlocalizable_secret():
     ])
     assert res.withhold
     assert "unlocalizable_secret" in res.reasons
-    assert not res.localized_secret
 
 
 def test_floor_withholds_unsupported_class():
@@ -198,29 +208,79 @@ def test_decode_guarded_accepts_valid_png():
     assert img.size == (40, 30)
 
 
-# ── redact_artifact: fail-closed atomic transition ───────────────────────────
+# ── floor: extra secret patterns (env-assignment / PEM / cloud keys) ─────────
+
+
+def test_floor_detects_env_assignment_pem_and_cloud_keys():
+    assert pr._floor_detects_secret("SECRET_KEY=abc123def456")
+    assert pr._floor_detects_secret("JWT_AGENT_TOKEN_SECRET: deadbeefdeadbeef")
+    assert pr._floor_detects_secret("-----BEGIN RSA PRIVATE KEY-----")
+    assert pr._floor_detects_secret("AKIAIOSFODNN7EXAMPLE")
+    assert pr._floor_detects_secret("xoxb-123456789012-abcdefABCDEF")
+    assert not pr._floor_detects_secret("the secret garden was lovely")
+
+
+def test_floor_withholds_uncoverable_tiny_box():
+    # a real secret the engine boxed at 1px — we can't cover it ⇒ withhold
+    res = pr._classify_regions([pr.DetectedRegion(box=(0, 0, 1, 1), text=SECRET, confidence=0.9)])
+    assert res.withhold and "uncoverable_secret_box" in res.reasons
+
+
+# ── alpha-flatten does not reveal hidden pixels ──────────────────────────────
+
+
+def test_flatten_opaque_hides_transparent_pixels():
+    from PIL import Image
+
+    # a fully-transparent RED pixel — convert('RGB') would reveal red; flatten must
+    # composite it to the black background instead.
+    img = Image.new("RGBA", (4, 4), (255, 0, 0, 0))
+    flat = pr._flatten_opaque(img)
+    assert flat.mode == "RGB"
+    assert flat.getpixel((0, 0)) == (0, 0, 0)  # hidden red NOT revealed
+
+
+def test_decode_guarded_rejects_multiframe(monkeypatch):
+    # simulate an APNG: patch n_frames>1 onto the opened image
+    class _MultiFrame:
+        size = (10, 10)
+        n_frames = 2
+        info = {}
+
+        def load(self):
+            return None
+
+    from PIL import Image
+    monkeypatch.setattr(Image, "open", lambda *a, **k: _MultiFrame())
+    with pytest.raises(pr.RedactionError):
+        pr._decode_guarded(_make_png(10, 10))
+
+
+# ── redact_artifact: fail-closed atomic transition (claimed flow) ────────────
 
 
 def test_redact_artifact_clean_image_becomes_planner_safe(db_session):
     root = perception_storage.quarantine_root()
-    art, raw_abs = _seed_artifact(db_session, root=root)
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
     out = pr.redact_artifact(
-        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]), root=root
+        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]),
+        worker_id="w1", root=root,
     )
     assert out.status == "planner_safe"
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_PLANNER_SAFE
     assert art.redacted_storage_path and art.redacted_at and art.raw_deleted_at
-    # raw is GONE (hard-delete prerequisite), redacted EXISTS
     assert not os.path.exists(raw_abs)
     assert os.path.exists(os.path.join(root, art.redacted_storage_path))
 
 
 def test_redact_artifact_redacts_secret_region(db_session):
     root = perception_storage.quarantine_root()
-    art, raw_abs = _seed_artifact(db_session, root=root)
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
     out = pr.redact_artifact(
-        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 20, 12), text=SECRET, confidence=0.9)]), root=root
+        db_session, art,
+        StubEngine([pr.DetectedRegion(box=(0, 0, 20, 12), text=SECRET, confidence=0.9)]),
+        worker_id="w1", root=root,
     )
     assert out.status == "planner_safe" and out.redact_count == 1
     db_session.refresh(art)
@@ -228,42 +288,74 @@ def test_redact_artifact_redacts_secret_region(db_session):
     assert not os.path.exists(raw_abs)
 
 
+def test_redact_artifact_withholds_when_secret_survives_redaction(db_session):
+    # the re-OCR safety net: the engine boxed a secret but it's STILL detectable in
+    # the redacted output (a mis-aligned box) ⇒ withhold, raw preserved.
+    root = perception_storage.quarantine_root()
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
+    secret_region = pr.DetectedRegion(box=(0, 0, 20, 12), text=SECRET, confidence=0.9)
+    out = pr.redact_artifact(
+        db_session, art, StubEngine([secret_region], verify_regions=[secret_region]),
+        worker_id="w1", root=root,
+    )
+    assert out.status == "withheld" and "secret_survived_redaction" in out.reasons
+    db_session.refresh(art)
+    assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
+    assert os.path.exists(raw_abs)  # raw preserved
+    assert not os.path.exists(os.path.join(root, perception_storage.redacted_relpath(TENANT_ID, SESSION_ID, art.id)))
+
+
+def test_redact_artifact_fences_stale_worker(db_session):
+    # a reclaimed stale worker (claim owned by w1) must not finish under w2.
+    root = perception_storage.quarantine_root()
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
+    out = pr.redact_artifact(
+        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]),
+        worker_id="w2", root=root,  # wrong owner
+    )
+    assert out.status == "withheld" and "lost_claim" in out.reasons
+    db_session.refresh(art)
+    assert os.path.exists(raw_abs)  # raw NOT deleted — fence held
+    assert art.raw_deleted_at is None
+
+
 def test_redact_artifact_withholds_on_unsupported_class(db_session):
     root = perception_storage.quarantine_root()
-    art, raw_abs = _seed_artifact(db_session, root=root)
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
     out = pr.redact_artifact(
-        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), kind="id_card")]), root=root
+        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), kind="id_card")]),
+        worker_id="w1", root=root,
     )
     assert out.status == "withheld"
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
     assert art.redacted_storage_path is None and art.raw_deleted_at is None
-    assert os.path.exists(raw_abs)  # raw NOT deleted on withhold
+    assert os.path.exists(raw_abs)
     assert not os.path.exists(os.path.join(root, perception_storage.redacted_relpath(TENANT_ID, SESSION_ID, art.id)))
 
 
 def test_redact_artifact_fail_closed_on_engine_error(db_session):
     root = perception_storage.quarantine_root()
-    art, raw_abs = _seed_artifact(db_session, root=root)
-    out = pr.redact_artifact(db_session, art, RaisingEngine(), root=root)
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
+    out = pr.redact_artifact(db_session, art, RaisingEngine(), worker_id="w1", root=root)
     assert out.status == "withheld"
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
-    assert os.path.exists(raw_abs)  # raw preserved on failure
+    assert os.path.exists(raw_abs)
 
 
 def test_redact_artifact_raw_delete_failure_withholds_and_cleans(db_session, monkeypatch):
     root = perception_storage.quarantine_root()
-    art, raw_abs = _seed_artifact(db_session, root=root)
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
     monkeypatch.setattr(perception_storage, "delete_raw_bytes", lambda *a, **k: False)
     out = pr.redact_artifact(
-        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]), root=root
+        db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]),
+        worker_id="w1", root=root,
     )
     assert out.status == "withheld"
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
     assert art.raw_deleted_at is None
-    # the redacted copy we wrote was cleaned up (no orphan), raw still present
     assert not os.path.exists(os.path.join(root, perception_storage.redacted_relpath(TENANT_ID, SESSION_ID, art.id)))
     assert os.path.exists(raw_abs)
 
@@ -319,9 +411,9 @@ def test_cleanup_hard_delete_reaps_redacted_copy(db_session):
     from app.services import perception_cleanup
 
     root = perception_storage.quarantine_root()
-    art, raw_abs = _seed_artifact(db_session, root=root)
+    art, raw_abs = _seed_artifact(db_session, root=root, claimed_by="w1")
     # redact it (raw gone, redacted written, planner_safe)
-    pr.redact_artifact(db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]), root=root)
+    pr.redact_artifact(db_session, art, StubEngine([pr.DetectedRegion(box=(0, 0, 5, 5), text=CLEAN)]), worker_id="w1", root=root)
     db_session.refresh(art)
     redacted_abs = os.path.join(root, art.redacted_storage_path)
     assert os.path.exists(redacted_abs)

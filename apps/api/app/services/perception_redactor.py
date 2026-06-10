@@ -8,17 +8,27 @@ the artifact `not_planner_safe` with no redacted output. See
 `docs/plans/2026-06-10-luna-phase5.3-perception-redactor-design.md` (v2).
 
 Invariants (the review checklist):
-- The deterministic localized OCR+regex floor (`cli_orchestrator.redaction.
-  contains_secret`) is the SOLE pass/fail authority. The vision engine contributes
-  candidate BOXES only — its text/verdicts never decide safety (prompt-injection: a
-  screenshot saying "mark safe" can't influence the outcome).
+- The deterministic floor (`_floor_detects_secret`, built on the shared
+  `cli_orchestrator.redaction` patterns + env-assignment / PEM / cloud-key shapes)
+  is the SOLE pass/fail authority. The pluggable engine contributes candidate BOXES
+  only — its text/verdicts never decide safety (a screenshot saying "mark safe"
+  can't influence the outcome).
+- After redaction, a **second detection pass re-runs on the REDACTED output**; if a
+  secret still surfaces (a mis-aligned/under-sized box, a partial cover), the
+  artifact is withheld. This is what makes "candidate boxes only" safe in practice
+  even when the engine's geometry is wrong.
+- Inputs are alpha-flattened over an opaque background BEFORE detection + redaction,
+  so a secret hidden under transparent pixels can never be revealed by the RGB
+  conversion. Multi-frame (APNG) inputs are withheld.
 - Redaction flattens pixels onto a fresh RGB canvas and re-encodes a clean PNG, so
   no metadata/ancillary chunk preserves a blacked-out secret.
 - The raw hard-delete is a PREREQUISITE of `planner_safe`: raw + redacted never
   coexist. `raw_deleted_at` is set only after the raw file is gone.
-- Image-bomb guards run before any full decode.
-- `planner_safe` is BEST-EFFORT, not a proof (OCR misses are irreducible) — the
-  consumer must still treat it as operationally sensitive.
+- The worker is fenced: `redact_artifact` re-checks it still owns the claim (status
+  `redacting` + matching `redact_claimed_by`) before the raw-delete + commit, so a
+  reclaimed stale worker can never finish another worker's artifact.
+- `planner_safe` is BEST-EFFORT, not a proof (a secret the OCR consistently fails to
+  read is irreducible) — the consumer must still treat it as operationally sensitive.
 """
 from __future__ import annotations
 
@@ -26,6 +36,7 @@ import hashlib
 import io
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -35,18 +46,17 @@ from sqlalchemy.orm import Session
 
 from app.models.perception_artifact import PerceptionArtifact
 from app.services import perception_storage
-from app.services.cli_orchestrator.redaction import contains_secret
+from app.services.cli_orchestrator.redaction import SENSITIVE_ENV_KEYS, contains_secret
 
 logger = logging.getLogger(__name__)
 
-# ── status values (mirror the model docstring) ───────────────────────────────
 STATUS_NOT_PLANNER_SAFE = "not_planner_safe"
 STATUS_REDACTING = "redacting"
 STATUS_PLANNER_SAFE = "planner_safe"
 
 REDACTOR_VERSION = "p5.3a-1"
 
-# ── tunables (env-overridable) ───────────────────────────────────────────────
+
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
@@ -61,20 +71,30 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-# Image-bomb guards — reject before a full decode. A capture is a single screen.
 MAX_INPUT_BYTES = _int_env("PERCEPTION_REDACTOR_MAX_INPUT_BYTES", 8 * 1024 * 1024)
-MAX_DIM = _int_env("PERCEPTION_REDACTOR_MAX_DIM", 16384)          # px per side
-MAX_PIXELS = _int_env("PERCEPTION_REDACTOR_MAX_PIXELS", 50_000_000)  # ~7000x7000
-# OCR confidence below which a secret match is "uncertain" ⇒ withhold (don't trust
-# the bounds we'd redact). Uncertainty is never treated as safety.
+MAX_DIM = _int_env("PERCEPTION_REDACTOR_MAX_DIM", 16384)
+MAX_PIXELS = _int_env("PERCEPTION_REDACTOR_MAX_PIXELS", 50_000_000)
 OCR_CONFIDENCE_THRESHOLD = _float_env("PERCEPTION_REDACTOR_OCR_CONFIDENCE", 0.55)
-# Worker lease: a 'redacting' row older than this is reclaimable (crashed worker).
 LEASE_TIMEOUT_SECONDS = _int_env("PERCEPTION_REDACTOR_LEASE_TIMEOUT_SECONDS", 120)
 MAX_ATTEMPTS = _int_env("PERCEPTION_REDACTOR_MAX_ATTEMPTS", 3)
+# A secret region whose box is smaller than this many px on either side is treated
+# as un-coverable (mis-detected geometry) ⇒ withhold rather than emit a tiny mark.
+MIN_SECRET_BOX_PX = _int_env("PERCEPTION_REDACTOR_MIN_SECRET_BOX_PX", 4)
 
-# Engine region kinds.
-_NONTEXT_SENSITIVE_KINDS = frozenset({"qr", "barcode"})       # redact the box
-_UNSUPPORTED_KINDS = frozenset({"id_card", "face"})           # can't clear ⇒ withhold
+_NONTEXT_SENSITIVE_KINDS = frozenset({"qr", "barcode"})
+_UNSUPPORTED_KINDS = frozenset({"id_card", "face"})
+
+# Perception-specific secret shapes that the CLI-output `contains_secret` rules do
+# NOT cover (kept OUT of the shared `_RULES` so CLI-log redaction behaviour is
+# unchanged): `<SENSITIVE_ENV_KEY>=value` assignments, PEM private-key headers, AWS
+# access-key ids, and Slack/Google-style long tokens.
+_ENV_ASSIGN_RE = re.compile(
+    r"(?i)\b(" + "|".join(re.escape(k) for k in sorted(SENSITIVE_ENV_KEYS)) + r")\s*[:=]\s*\S",
+)
+_PEM_RE = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
+_AWS_AKIA_RE = re.compile(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")
+_SLACK_RE = re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")
+_EXTRA_SECRET_RES = (_ENV_ASSIGN_RE, _PEM_RE, _AWS_AKIA_RE, _SLACK_RE)
 
 
 def _utcnow() -> datetime:
@@ -87,14 +107,22 @@ def redactor_enabled() -> bool:
     }
 
 
+def _floor_detects_secret(text: str | None) -> bool:
+    """The authoritative secret detector: the shared CLI redaction patterns PLUS the
+    perception-specific env-assignment / PEM / cloud-key shapes."""
+    if not text:
+        return False
+    if contains_secret(text):
+        return True
+    return any(rx.search(text) for rx in _EXTRA_SECRET_RES)
+
+
 class RedactionError(Exception):
     """Any condition that forces a fail-closed withhold."""
 
 
 @dataclass(frozen=True)
 class DetectedRegion:
-    """One region the engine surfaced. ``text`` is OCR'd content ("" for non-text
-    detections); ``box`` is ``(x, y, w, h)`` in pixels; ``kind`` drives policy."""
     box: tuple[int, int, int, int]
     text: str = ""
     confidence: float = 1.0
@@ -102,11 +130,6 @@ class DetectedRegion:
 
 
 class RedactorEngine(Protocol):
-    """Pluggable detector (Tesseract / local vision model / a test stub). It returns
-    candidate regions ONLY — it never returns a verdict. The deterministic floor
-    below decides pass/fail, so a hostile screenshot can't talk the engine into
-    green-lighting itself."""
-
     def detect(self, image_bytes: bytes, *, width: int, height: int) -> list[DetectedRegion]:
         ...
 
@@ -117,22 +140,22 @@ class _ClassifyResult:
     withhold: bool = False
     reasons: list[str] = field(default_factory=list)
     region_count: int = 0
-    localized_secret: bool = False
 
 
 @dataclass
 class RedactionOutcome:
-    status: str                       # planner_safe | withheld | gone
+    status: str  # planner_safe | withheld | gone
     reasons: list[str] = field(default_factory=list)
     redact_count: int = 0
 
 
-# ── image-bomb-guarded decode ────────────────────────────────────────────────
+# ── alpha-safe, image-bomb-guarded decode ────────────────────────────────────
 
 def _decode_guarded(raw: bytes):
-    """Decode the PNG behind hard caps. Dimensions are checked from the header
-    BEFORE the full pixel decode, so a decompression bomb is rejected cheaply."""
-    from PIL import Image  # local import: Pillow is a heavy dep, only the redactor needs it
+    """Decode behind hard caps, reject multi-frame inputs, and alpha-flatten over an
+    opaque background. Dimensions are checked from the header BEFORE the full pixel
+    decode, so a decompression bomb is rejected cheaply. Returns an opaque RGB image."""
+    from PIL import Image
 
     if not raw:
         raise RedactionError("empty image")
@@ -141,27 +164,44 @@ def _decode_guarded(raw: bytes):
     try:
         img = Image.open(io.BytesIO(raw))
         width, height = img.size  # header-only; no full decode yet
-    except Exception as exc:  # noqa: BLE001 — any open failure is fail-closed
+    except Exception as exc:  # noqa: BLE001
         raise RedactionError(f"image open failed: {exc}") from exc
     if width <= 0 or height <= 0 or width > MAX_DIM or height > MAX_DIM:
         raise RedactionError(f"image dimensions out of range: {width}x{height}")
     if width * height > MAX_PIXELS:
         raise RedactionError(f"image pixel count too large: {width}x{height}")
+    if getattr(img, "n_frames", 1) > 1:
+        # APNG / multi-frame: we only redact frame 0 — a secret on a later frame
+        # would survive. Fail-closed (screencaptures are single-frame).
+        raise RedactionError("multi-frame image not supported")
     try:
-        img.load()  # decode now that the dimensions are bounded
+        img.load()
     except Exception as exc:  # noqa: BLE001
         raise RedactionError(f"image decode failed: {exc}") from exc
-    return img
+    return _flatten_opaque(img)
+
+
+def _flatten_opaque(img):
+    """Composite onto an opaque black background, dropping any alpha. Crucially this
+    does NOT use ``convert('RGB')`` directly — that keeps the RGB of fully
+    transparent pixels and could REVEAL a secret hidden under transparency. Alpha
+    compositing renders exactly what was visible (transparent ⇒ background)."""
+    from PIL import Image
+
+    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGBA", rgba.size, (0, 0, 0, 255))
+        return Image.alpha_composite(bg, rgba).convert("RGB")
+    return img.convert("RGB")
 
 
 # ── deterministic floor (authoritative) ──────────────────────────────────────
 
 def _classify_regions(regions: list[DetectedRegion]) -> _ClassifyResult:
-    """Decide which boxes to redact and whether to withhold. The
-    ``contains_secret`` pattern set is the sole authority; the engine only proposes
-    regions. Uncertainty (low-confidence match, unlocalizable secret, unsupported
-    sensitive class) ⇒ withhold."""
+    """Decide which boxes to redact and whether to withhold. The floor patterns are
+    the sole authority; the engine only proposes regions. Uncertainty ⇒ withhold."""
     out = _ClassifyResult(region_count=len(regions))
+    localized_secret_count = 0
     for r in regions:
         if r.kind in _UNSUPPORTED_KINDS:
             out.withhold = True
@@ -170,31 +210,49 @@ def _classify_regions(regions: list[DetectedRegion]) -> _ClassifyResult:
         if r.kind in _NONTEXT_SENSITIVE_KINDS:
             out.redact_boxes.append(r.box)
             continue
-        # text region
-        if r.text and contains_secret(r.text):
+        if r.text and _floor_detects_secret(r.text):
+            x, y, w, h = r.box
+            if int(w) < MIN_SECRET_BOX_PX or int(h) < MIN_SECRET_BOX_PX:
+                # A secret we can't box (degenerate geometry) ⇒ can't cover it.
+                out.withhold = True
+                out.reasons.append("uncoverable_secret_box")
+                continue
             out.redact_boxes.append(r.box)
-            out.localized_secret = True
+            localized_secret_count += 1
             if r.confidence < OCR_CONFIDENCE_THRESHOLD:
                 out.withhold = True
                 out.reasons.append("low_confidence_secret")
-    # A secret the OCR can read but that no single region localizes ⇒ we can't box
-    # it ⇒ withhold. Join with spaces so cross-region concatenation can't *create*
-    # a spurious match (most secret shapes break on whitespace).
+    # Unlocalizable backstop: every secret pattern detectable in the space-joined
+    # text must have been localized to a box. If the join surfaces MORE secret
+    # matches than we localized, at least one spans regions we couldn't box ⇒
+    # withhold. (Counting fixes the prior bug where one localized secret suppressed
+    # the check for a second, cross-region one.)
     full_text = " ".join(r.text for r in regions if r.text)
-    if contains_secret(full_text) and not out.localized_secret:
+    if _count_secret_matches(full_text) > localized_secret_count:
         out.withhold = True
         out.reasons.append("unlocalizable_secret")
     return out
 
 
+def _count_secret_matches(text: str) -> int:
+    """Number of distinct secret matches across all floor patterns (lower bound)."""
+    if not text:
+        return 0
+    from app.services.cli_orchestrator.redaction import _RULES
+
+    total = 0
+    for pattern, _replacement in _RULES:
+        total += len(pattern.findall(text))
+    for rx in _EXTRA_SECRET_RES:
+        total += len(rx.findall(text))
+    return total
+
+
 # ── PNG redaction (flatten + strip metadata) ─────────────────────────────────
 
 def _redact_png(image, boxes: list[tuple[int, int, int, int]]) -> bytes:
-    """Burn opaque rectangles over ``boxes`` and re-encode a CLEAN PNG. Pixels are
-    flattened onto a brand-new RGB canvas (drops alpha + every ancillary chunk /
-    metadata block from the source) so a blacked-out secret cannot survive in PNG
-    text chunks, an alpha channel, or source metadata — only visible pixels remain,
-    minus the redacted regions."""
+    """Burn opaque rectangles over ``boxes`` and re-encode a CLEAN PNG on a fresh RGB
+    canvas (drops alpha + every ancillary chunk / metadata block)."""
     from PIL import Image, ImageDraw
 
     width, height = image.size
@@ -209,22 +267,35 @@ def _redact_png(image, boxes: list[tuple[int, int, int, int]]) -> bytes:
         if x1 > x0 and y1 > y0:
             draw.rectangle([x0, y0, x1, y1], fill=(0, 0, 0))
     buf = io.BytesIO()
-    flat.save(buf, format="PNG")  # no pnginfo => no tEXt/zTXt carried over
+    flat.save(buf, format="PNG")
     return buf.getvalue()
 
 
 def _atomic_write(abspath: str, data: bytes) -> None:
-    """Write 0600 to a temp file, fsync, then atomically rename into place — so a
-    half-written redacted file is never visible at ``abspath``."""
-    os.makedirs(os.path.dirname(abspath), mode=0o700, exist_ok=True)
+    """Write 0600 to a temp file, fsync, atomically rename, fsync the parent dir.
+    On ANY failure the temp file is unlinked so no half-written orphan is left."""
+    parent = os.path.dirname(abspath)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
     tmp = f"{abspath}.tmp.{uuid.uuid4().hex}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, data)
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, abspath)  # atomic on the same filesystem
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, abspath)
+        try:
+            dfd = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except OSError:
+            pass  # dir fsync is best-effort (some filesystems disallow)
+    except Exception:
+        perception_storage._unlink_quiet(tmp)
+        raise
 
 
 # ── transition + claim ───────────────────────────────────────────────────────
@@ -236,9 +307,10 @@ def _finish_withheld(
     *,
     reason_override: str | None = None,
 ) -> RedactionOutcome:
-    """Fail-closed terminal for a single attempt: revert to not_planner_safe,
-    release the claim, record a byte-free withhold audit. Re-loads the row after a
-    rollback so a broken session can't poison the write."""
+    """Fail-closed terminal for one attempt: revert to not_planner_safe, clear all
+    redacted fields, release the claim, record a byte-free withhold audit. Re-loads
+    the row after rollback. If the row is ALREADY planner_safe (a prior commit
+    actually succeeded under an ambiguous error), it is left untouched."""
     db.rollback()
     art = (
         db.query(PerceptionArtifact)
@@ -247,10 +319,17 @@ def _finish_withheld(
     )
     if art is None:
         return RedactionOutcome(status="gone")
+    if art.redaction_status == STATUS_PLANNER_SAFE:
+        # A commit succeeded server-side despite an ambiguous client error — do not
+        # revert a finalized planner-safe artifact.
+        return RedactionOutcome(status="planner_safe")
     reasons = list(result.reasons) if result else []
     if reason_override:
         reasons.append(reason_override)
     art.redaction_status = STATUS_NOT_PLANNER_SAFE
+    art.redacted_storage_path = None
+    art.redacted_at = None
+    art.raw_deleted_at = None
     art.redact_claimed_at = None
     art.redact_claimed_by = None
     art.redaction_meta = {
@@ -269,12 +348,13 @@ def redact_artifact(
     artifact: PerceptionArtifact,
     engine: RedactorEngine,
     *,
+    worker_id: str | None = None,
     root: str | None = None,
     now: datetime | None = None,
 ) -> RedactionOutcome:
     """Redact one claimed artifact. Fail-closed end-to-end. On success: a clean
-    redacted PNG is written, the RAW is hard-deleted (prerequisite), and the row
-    flips to planner_safe with raw_deleted_at set."""
+    redacted PNG is written + verified (re-detection finds no secret), the RAW is
+    hard-deleted (prerequisite), and the row flips to planner_safe."""
     root = root or perception_storage.quarantine_root()
     now = now or _utcnow()
     artifact_id = artifact.id
@@ -285,8 +365,17 @@ def redact_artifact(
     redacted_abs = perception_storage.redacted_abspath(redacted_rel, root=root)
 
     try:
+        # Bounded read: cap before pulling the whole file into memory.
+        try:
+            if os.path.getsize(raw_abspath) > MAX_INPUT_BYTES:
+                raise RedactionError("raw file exceeds size cap")
+        except OSError as exc:
+            raise RedactionError(f"raw file unreadable: {exc}") from exc
         with open(raw_abspath, "rb") as fh:
-            raw = fh.read()
+            raw = fh.read(MAX_INPUT_BYTES + 1)
+        if len(raw) > MAX_INPUT_BYTES:
+            raise RedactionError("raw file exceeds size cap")
+
         img = _decode_guarded(raw)
         regions = engine.detect(raw, width=img.size[0], height=img.size[1])
         result = _classify_regions(regions)
@@ -294,42 +383,75 @@ def redact_artifact(
             return _finish_withheld(db, artifact_id, result)
 
         redacted_bytes = _redact_png(img, result.redact_boxes)
+
+        # Re-detection pass on the REDACTED output: if a secret still surfaces (a
+        # mis-aligned/under-sized box, partial cover), the engine's geometry was
+        # wrong — withhold. This is what makes "candidate boxes only" safe even when
+        # the engine lies about geometry.
+        verify_regions = engine.detect(redacted_bytes, width=img.size[0], height=img.size[1])
+        if any(r.text and _floor_detects_secret(r.text) for r in verify_regions):
+            perception_storage._unlink_quiet(redacted_abs)
+            return _finish_withheld(db, artifact_id, result, reason_override="secret_survived_redaction")
+
         _atomic_write(redacted_abs, redacted_bytes)
 
-        # Raw hard-delete is a PREREQUISITE of planner_safe (raw + redacted never
-        # coexist). If it fails, drop the redacted copy and stay not_planner_safe.
-        if not perception_storage.delete_raw_bytes(artifact, root=root):
+        # Fence the worker: re-check we still own this claim (status + claimant)
+        # under a row lock before deleting raw / committing planner_safe — a
+        # reclaimed stale worker must not finish another worker's artifact.
+        locked = _lock_owned_redacting(db, artifact_id, worker_id)
+        if locked is None:
+            db.rollback()
+            perception_storage._unlink_quiet(redacted_abs)
+            return RedactionOutcome(status="withheld", reasons=["lost_claim"])
+
+        # Raw hard-delete is a PREREQUISITE of planner_safe.
+        if not perception_storage.delete_raw_bytes(locked, root=root):
+            db.rollback()
             perception_storage._unlink_quiet(redacted_abs)
             return _finish_withheld(db, artifact_id, result, reason_override="raw_delete_failed")
 
-        artifact.redaction_status = STATUS_PLANNER_SAFE
-        artifact.redacted_storage_path = redacted_rel
-        artifact.redacted_at = now
-        artifact.raw_deleted_at = now
-        artifact.redact_claimed_at = None
-        artifact.redact_claimed_by = None
-        artifact.sha256 = hashlib.sha256(redacted_bytes).hexdigest()
-        artifact.size_bytes = len(redacted_bytes)
-        artifact.redaction_meta = {
+        locked.redaction_status = STATUS_PLANNER_SAFE
+        locked.redacted_storage_path = redacted_rel
+        locked.redacted_at = now
+        locked.raw_deleted_at = now
+        locked.redact_claimed_at = None
+        locked.redact_claimed_by = None
+        locked.sha256 = hashlib.sha256(redacted_bytes).hexdigest()
+        locked.size_bytes = len(redacted_bytes)
+        locked.redaction_meta = {
             "verdict": "planner_safe",
             "region_count": result.region_count,
             "redact_count": len(result.redact_boxes),
             "redactor_version": REDACTOR_VERSION,
             "engine": type(engine).__name__,
         }
-        db.add(artifact)
+        db.add(locked)
         db.commit()
-        db.refresh(artifact)
+        db.refresh(locked)
         return RedactionOutcome(status="planner_safe", redact_count=len(result.redact_boxes))
     except RedactionError as exc:
         perception_storage._unlink_quiet(redacted_abs)
-        return _finish_withheld(db, artifact_id, None, reason_override=f"redaction_error:{exc}")
+        return _finish_withheld(db, artifact_id, None, reason_override=f"redaction_error:{exc.__class__.__name__}")
     except Exception as exc:  # noqa: BLE001 — ANY failure is fail-closed
         logger.exception("perception redactor: unexpected failure on %s", artifact_id)
         perception_storage._unlink_quiet(redacted_abs)
-        return _finish_withheld(
-            db, artifact_id, None, reason_override=f"error:{type(exc).__name__}"
-        )
+        return _finish_withheld(db, artifact_id, None, reason_override=f"error:{type(exc).__name__}")
+
+
+def _lock_owned_redacting(db: Session, artifact_id, worker_id: str | None):
+    """Row-lock the artifact and return it ONLY if it is still `redacting` and owned
+    by ``worker_id`` (when a worker id is supplied). Otherwise None (lost the claim)."""
+    q = db.query(PerceptionArtifact).filter(PerceptionArtifact.id == artifact_id)
+    try:
+        q = q.with_for_update()
+    except Exception:  # pragma: no cover — sqlite
+        pass
+    art = q.first()
+    if art is None or art.redaction_status != STATUS_REDACTING:
+        return None
+    if worker_id is not None and art.redact_claimed_by != worker_id:
+        return None
+    return art
 
 
 def claim_next_for_redaction(
@@ -340,11 +462,9 @@ def claim_next_for_redaction(
     lease_timeout_seconds: int | None = None,
     max_attempts: int | None = None,
 ) -> PerceptionArtifact | None:
-    """Claim the oldest redactable artifact: a fresh not_planner_safe row, or a
-    'redacting' row whose lease has expired (crashed worker). Uses ``FOR UPDATE SKIP
-    LOCKED`` on Postgres so concurrent workers never double-claim; on SQLite the
-    lock is a no-op but the single-row claim still holds. Returns the claimed row
-    (status set to 'redacting') or None."""
+    """Claim the oldest redactable artifact (fresh not_planner_safe, or a stale
+    'redacting' row whose lease expired) with ``FOR UPDATE SKIP LOCKED``. Returns the
+    claimed row (status 'redacting') or None."""
     now = now or _utcnow()
     timeout = lease_timeout_seconds if lease_timeout_seconds is not None else LEASE_TIMEOUT_SECONDS
     attempts_cap = max_attempts if max_attempts is not None else MAX_ATTEMPTS
@@ -369,7 +489,7 @@ def claim_next_for_redaction(
     )
     try:
         q = q.with_for_update(skip_locked=True)
-    except Exception:  # pragma: no cover — dialects without SKIP LOCKED (sqlite)
+    except Exception:  # pragma: no cover — sqlite
         pass
     artifact = q.first()
     if artifact is None:
