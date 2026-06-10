@@ -1569,7 +1569,10 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
             or not all(isinstance(k, str) and k.strip() for k in keys)
         ):
             raise ValueError("keyboard_key_chord keys must be a non-empty list of <= 5 strings")
-        normalized = [k.strip().lower() for k in keys]
+        # Fold every key token to its CANONICAL form (return→enter, arrowleft→left)
+        # so the SIGNED keys are canonical — `["enter"]` and `["return"]` produce
+        # identical signed bytes for the same chord (one wire representation).
+        normalized = [_KEY_ALIASES.get(k.strip().lower(), k.strip().lower()) for k in keys]
         if not all(re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in normalized):
             raise ValueError("keyboard_key_chord keys must be short [a-z0-9_+-] tokens")
         # Server enforces the actual safe-chord allowlist (mirrors the client),

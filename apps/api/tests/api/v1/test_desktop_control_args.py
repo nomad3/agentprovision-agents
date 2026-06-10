@@ -58,7 +58,8 @@ def test_keyboard_chord_allowlisted_normalized():
     # only the safe-chord set (arrows + shift+arrows) is accepted
     assert norm("keyboard_key_chord", {"keys": ["Left"]}) == {"keys": ["left"]}
     assert norm("keyboard_key_chord", {"keys": ["Shift", "Right"]}) == {"keys": ["shift", "right"]}
-    assert norm("keyboard_key_chord", {"keys": ["ArrowUp"]}) == {"keys": ["arrowup"]}
+    # aliases fold to the CANONICAL token in the signed keys (arrowup→up)
+    assert norm("keyboard_key_chord", {"keys": ["ArrowUp"]}) == {"keys": ["up"]}
 
 
 @pytest.mark.parametrize(
@@ -190,7 +191,8 @@ def test_target_bounds_invalid_dropped(bad_bounds):
 def test_keyboard_chord_enter_send_key_accepted():
     # bare enter is allowlisted (the send/submit key); 'return' folds to enter
     assert norm("keyboard_key_chord", {"keys": ["enter"]}) == {"keys": ["enter"]}
-    assert norm("keyboard_key_chord", {"keys": ["Return"]}) == {"keys": ["return"]}
+    # the 'return' alias folds to the canonical 'enter' in the signed keys
+    assert norm("keyboard_key_chord", {"keys": ["Return"]}) == {"keys": ["enter"]}
 
 
 @pytest.mark.parametrize("bad", [["shift", "enter"], ["cmd", "enter"], ["enter", "left"]])
