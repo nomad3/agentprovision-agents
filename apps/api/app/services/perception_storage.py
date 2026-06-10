@@ -56,6 +56,19 @@ def quarantine_root() -> str:
     return os.environ.get(_QUARANTINE_ROOT_ENV, _DEFAULT_QUARANTINE_ROOT)
 
 
+def _jailed_abspath(base: str, relpath: str) -> str | None:
+    """Resolve ``base/relpath`` and return it ONLY if it stays under ``base`` — so a
+    corrupted/absolute/``..`` DB path can never make a delete escape the quarantine.
+    Returns None if the path would escape (caller treats as "nothing to delete")."""
+    if not relpath or os.path.isabs(str(relpath)):
+        return None
+    base_real = os.path.realpath(base)
+    candidate = os.path.realpath(os.path.join(base_real, str(relpath)))
+    if candidate == base_real or candidate.startswith(base_real + os.sep):
+        return candidate
+    return None
+
+
 def artifact_relpath(tenant_id, session_id, artifact_id) -> str:
     """Tenant+session-scoped relative path. Pure (no IO) for unit testing.
 
@@ -158,6 +171,40 @@ def unlink_artifact_bytes(artifact: PerceptionArtifact, *, root: str | None = No
     _unlink_quiet(os.path.join(root or quarantine_root(), str(artifact.storage_path)))
 
 
+# ── P5.3 redactor paths (the planner-safe copy lives in the same API-only root) ──
+
+def redacted_relpath(tenant_id, session_id, artifact_id) -> str:
+    """Tenant+session-scoped relative path for the REDACTED copy. Pure (no IO).
+    Distinct suffix so it never collides with the raw ``<id>.png``."""
+    return os.path.join(str(tenant_id), str(session_id), f"{artifact_id}.redacted.png")
+
+
+def redacted_abspath(relpath: str, *, root: str | None = None) -> str:
+    return os.path.join(root or quarantine_root(), relpath)
+
+
+def delete_raw_bytes(artifact: PerceptionArtifact, *, root: str | None = None) -> bool:
+    """Hard-delete an artifact's RAW bytes (``storage_path``) without a DB write.
+    Returns True iff the file is gone afterwards (missing counts as gone). The
+    redactor makes this a PREREQUISITE of flipping to planner_safe — so raw and
+    redacted never coexist. Deletes the CANONICAL id-derived path (the same path the
+    redactor reads), NOT the DB-stored ``storage_path`` — so a stale/missing DB path
+    can never let the delete "succeed" while the real raw file survives."""
+    rel = artifact_relpath(artifact.tenant_id, artifact.session_id, artifact.id)
+    abspath = _jailed_abspath(root or quarantine_root(), rel)
+    if abspath is None:
+        logger.warning("perception storage: refusing raw delete of out-of-jail path %r", rel)
+        return False
+    try:
+        os.remove(abspath)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        logger.warning("perception storage: raw hard-delete failed at %s: %s", abspath, exc)
+        return False
+    return True
+
+
 def expired_artifacts(db: Session, *, now: datetime | None = None, limit: int = 500):
     """Live (not-yet-deleted) artifacts past TTL — the PR4 cleanup scan."""
     cutoff = now or datetime.now(timezone.utc)
@@ -173,14 +220,26 @@ def expired_artifacts(db: Session, *, now: datetime | None = None, limit: int = 
 
 
 def hard_delete_artifact(db: Session, artifact: PerceptionArtifact, *, root: str | None = None) -> bool:
-    """Unlink the bytes + mark the row deleted. Idempotent; best-effort unlink."""
-    abspath = os.path.join(root or quarantine_root(), str(artifact.storage_path))
-    try:
-        os.remove(abspath)
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return False
+    """Unlink BOTH the raw and the redacted (P5.3) bytes + mark the row deleted.
+    Idempotent; best-effort unlink. Returns False only if the raw byte unlink hit
+    a real error (not a missing file)."""
+    base = root or quarantine_root()
+    abspath = _jailed_abspath(base, str(artifact.storage_path))
+    if abspath is not None:
+        try:
+            os.remove(abspath)
+        except FileNotFoundError:
+            pass  # already gone (e.g. raw hard-deleted by the redactor)
+        except OSError:
+            return False
+    # Reap the redacted copy by the CONVENTIONAL (id-derived, jail-safe) path —
+    # which also catches a redacted file orphaned before redacted_storage_path was
+    # persisted. We never trust the DB-stored path for a filesystem delete.
+    redacted = _jailed_abspath(
+        base, redacted_relpath(artifact.tenant_id, artifact.session_id, artifact.id)
+    )
+    if redacted is not None:
+        _unlink_quiet(redacted)
     artifact.deleted_at = datetime.now(timezone.utc)
     db.add(artifact)
     return True

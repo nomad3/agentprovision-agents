@@ -75,6 +75,11 @@ SENSITIVE_ENV_KEYS: frozenset[str] = frozenset({
     "COPILOT_GITHUB_TOKEN",
     "CODEX_AUTH_JSON",
     "GEMINI_CLI_TOKEN",
+    # Luna desktop computer-use signing secrets (PR2 durability added these to
+    # skill_manager._SENSITIVE_ENV_KEYS; mirrored here so the redaction boundary
+    # actually strips them from subprocess env — the symmetry test pins this).
+    "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+    "JWT_AGENT_TOKEN_SECRET",
     # Wave 2d N1 — provider keys flowing through goose's subprocess env
     # for whichever LLM provider the tenant picked. Each one is the
     # documented upstream env var for that provider.
@@ -203,6 +208,17 @@ def redact(text: str | None) -> str:
     for pattern, replacement in _RULES:
         out = pattern.sub(replacement, out)
     return out
+
+
+def contains_secret(text: str | None) -> bool:
+    """True if ``text`` matches any secret pattern (the same priority-ordered
+    ``_RULES`` ``redact`` applies). Public so other governed boundaries — notably
+    the Luna Phase 5.3 perception redactor's OCR floor — can DETECT a secret in
+    extracted text without re-implementing (or importing the private) pattern set.
+    Detection only; the caller decides redact-vs-withhold."""
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern, _replacement in _RULES)
 
 
 def redact_json_structural(payload: Any) -> Any:

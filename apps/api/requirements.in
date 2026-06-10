@@ -69,3 +69,7 @@ slowapi>=0.1.9
 # MCP client SDK — used by external_agent_adapter._dispatch_mcp_sse to talk
 # to remote MCP servers (Claude Code / Gemini / Cursor skills) over SSE.
 mcp>=1.0.0
+# Phase 5.3 perception redactor — PNG decode/draw/re-encode + image-bomb dimension
+# guards. Already resolved transitively in requirements.lock (pillow==12.2.0);
+# declared here as the redactor's DIRECT dependency. No lock change needed.
+Pillow
