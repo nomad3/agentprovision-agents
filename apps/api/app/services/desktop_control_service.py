@@ -1472,8 +1472,18 @@ def _verify_envelope_signature(envelope: dict[str, Any]) -> bool:
 # Mirror of the client safe-chord allowlist (keyboard_bounds.rs) — the server
 # enforces the ACTUAL allowed chord set, not just a loose token format. Expands
 # in lockstep with the client when Phase 5 widens the safe set.
+#
+# `enter` (the SEND / submit key) is included so Luna can complete a "type a
+# message + send" flow in an allowlisted app (e.g. WhatsApp). It is still bounded
+# by every actuation gate (allowlisted target, approval grant, signed envelope,
+# frontmost/target-window, secure-input) — it only fires against the one allowed,
+# frontmost app. Deliberately still NO Cmd/Ctrl/Alt app-command chords.
 _KEYBOARD_CHORD_ALLOWLIST = frozenset(
-    {"left", "right", "up", "down", "shift+left", "shift+right", "shift+up", "shift+down"}
+    {
+        "left", "right", "up", "down",
+        "shift+left", "shift+right", "shift+up", "shift+down",
+        "enter",
+    }
 )
 
 # Pointer coords are SIGNED as integer micro-units (parts-per-million) in
@@ -1486,11 +1496,14 @@ _KEYBOARD_CHORD_ALLOWLIST = frozenset(
 # payload is byte-stable cross-language. The client divides back by 1e6 after
 # verifying. 1e-6 granularity is ~0.004 px on a 4K display — far finer than needed.
 _POINTER_MICRO_UNITS = 1_000_000
-_ARROW_ALIASES = {
+# Key-token aliases folded to the canonical token (mirror keyboard_bounds.rs
+# fold_key_alias) — arrow spellings + `return`→`enter`.
+_KEY_ALIASES = {
     "arrowleft": "left", "leftarrow": "left",
     "arrowright": "right", "rightarrow": "right",
     "arrowup": "up", "uparrow": "up",
     "arrowdown": "down", "downarrow": "down",
+    "return": "enter",
 }
 
 
@@ -1501,7 +1514,7 @@ def _normalize_chord(keys: list[str]) -> str:
     mods: list[str] = []
     main: list[str] = []
     for raw in keys:
-        k = _ARROW_ALIASES.get(raw.strip().lower(), raw.strip().lower())
+        k = _KEY_ALIASES.get(raw.strip().lower(), raw.strip().lower())
         (mods if k == "shift" else main).append(k)
     if len(main) != 1:
         return ""
@@ -1556,7 +1569,10 @@ def _normalize_native_control_args(action: str, raw: Any) -> dict[str, Any] | No
             or not all(isinstance(k, str) and k.strip() for k in keys)
         ):
             raise ValueError("keyboard_key_chord keys must be a non-empty list of <= 5 strings")
-        normalized = [k.strip().lower() for k in keys]
+        # Fold every key token to its CANONICAL form (return→enter, arrowleft→left)
+        # so the SIGNED keys are canonical — `["enter"]` and `["return"]` produce
+        # identical signed bytes for the same chord (one wire representation).
+        normalized = [_KEY_ALIASES.get(k.strip().lower(), k.strip().lower()) for k in keys]
         if not all(re.fullmatch(r"[a-z0-9_+-]{1,16}", k) for k in normalized):
             raise ValueError("keyboard_key_chord keys must be short [a-z0-9_+-] tokens")
         # Server enforces the actual safe-chord allowlist (mirrors the client),

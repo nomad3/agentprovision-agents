@@ -22,6 +22,11 @@ pub const KEYBOARD_CHORD_ALLOWLIST: &[&str] = &[
     "shift+right",
     "shift+up",
     "shift+down",
+    // The SEND / submit key — lets Luna complete a "type a message + send" flow in
+    // an allowlisted app (e.g. WhatsApp). Still bounded by every actuation gate
+    // (allowlisted target + approval grant + signed envelope + frontmost/target-
+    // window + secure-input). Mirrors the server _KEYBOARD_CHORD_ALLOWLIST.
+    "enter",
 ];
 
 /// A typed string is in-bounds when it is non-empty, within the length cap, and
@@ -75,6 +80,7 @@ fn fold_key_alias(key: &str) -> String {
         "arrowright" | "rightarrow" => "right".to_string(),
         "arrowup" | "uparrow" => "up".to_string(),
         "arrowdown" | "downarrow" => "down".to_string(),
+        "return" | "enter" => "enter".to_string(),
         other => other.to_string(),
     }
 }
@@ -118,16 +124,25 @@ mod tests {
     }
 
     #[test]
-    fn chord_allowlist_accepts_navigation_rejects_commands() {
+    fn chord_allowlist_accepts_navigation_and_send_rejects_commands() {
         assert!(chord_allowed(&v(&["left"])));
         assert!(chord_allowed(&v(&["shift", "right"])));
         assert!(chord_allowed(&v(&["ArrowDown"])));
+        // The SEND key — bare enter (and the `return` alias) is allowlisted.
+        assert!(chord_allowed(&v(&["enter"])));
+        assert!(chord_allowed(&v(&["Return"])));
         // App/destructive command chords are rejected.
         assert!(!chord_allowed(&v(&["cmd", "q"]))); // quit
         assert!(!chord_allowed(&v(&["cmd", "w"]))); // close
         assert!(!chord_allowed(&v(&["ctrl", "c"])));
         assert!(!chord_allowed(&v(&["cmd", "left"]))); // cmd+arrow not allowlisted
-        assert!(!chord_allowed(&v(&["enter"])));
+        assert!(!chord_allowed(&v(&["shift", "enter"]))); // newline, not send — rejected
         assert!(!chord_allowed(&v(&["shift"]))); // no main key
+    }
+
+    #[test]
+    fn normalize_folds_return_to_enter() {
+        assert_eq!(normalize_chord(&v(&["enter"])), "enter");
+        assert_eq!(normalize_chord(&v(&["Return"])), "enter");
     }
 }
