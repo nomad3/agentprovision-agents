@@ -158,6 +158,34 @@ def unlink_artifact_bytes(artifact: PerceptionArtifact, *, root: str | None = No
     _unlink_quiet(os.path.join(root or quarantine_root(), str(artifact.storage_path)))
 
 
+# ── P5.3 redactor paths (the planner-safe copy lives in the same API-only root) ──
+
+def redacted_relpath(tenant_id, session_id, artifact_id) -> str:
+    """Tenant+session-scoped relative path for the REDACTED copy. Pure (no IO).
+    Distinct suffix so it never collides with the raw ``<id>.png``."""
+    return os.path.join(str(tenant_id), str(session_id), f"{artifact_id}.redacted.png")
+
+
+def redacted_abspath(relpath: str, *, root: str | None = None) -> str:
+    return os.path.join(root or quarantine_root(), relpath)
+
+
+def delete_raw_bytes(artifact: PerceptionArtifact, *, root: str | None = None) -> bool:
+    """Hard-delete an artifact's RAW bytes (``storage_path``) without a DB write.
+    Returns True iff the file is gone afterwards (missing counts as gone). The
+    redactor makes this a PREREQUISITE of flipping to planner_safe — so raw and
+    redacted never coexist."""
+    abspath = os.path.join(root or quarantine_root(), str(artifact.storage_path))
+    try:
+        os.remove(abspath)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        logger.warning("perception storage: raw hard-delete failed at %s: %s", abspath, exc)
+        return False
+    return True
+
+
 def expired_artifacts(db: Session, *, now: datetime | None = None, limit: int = 500):
     """Live (not-yet-deleted) artifacts past TTL — the PR4 cleanup scan."""
     cutoff = now or datetime.now(timezone.utc)
@@ -173,14 +201,28 @@ def expired_artifacts(db: Session, *, now: datetime | None = None, limit: int = 
 
 
 def hard_delete_artifact(db: Session, artifact: PerceptionArtifact, *, root: str | None = None) -> bool:
-    """Unlink the bytes + mark the row deleted. Idempotent; best-effort unlink."""
-    abspath = os.path.join(root or quarantine_root(), str(artifact.storage_path))
+    """Unlink BOTH the raw and the redacted (P5.3) bytes + mark the row deleted.
+    Idempotent; best-effort unlink. Returns False only if the raw byte unlink hit
+    a real error (not a missing file)."""
+    base = root or quarantine_root()
+    abspath = os.path.join(base, str(artifact.storage_path))
     try:
         os.remove(abspath)
     except FileNotFoundError:
-        pass
+        pass  # already gone (e.g. raw hard-deleted by the redactor)
     except OSError:
         return False
+    # Reap the redacted copy: the tracked path if set, plus the conventional path
+    # defensively (catches a redacted file orphaned by a commit-failure edge where
+    # redacted_storage_path was never persisted).
+    if artifact.redacted_storage_path:
+        _unlink_quiet(os.path.join(base, str(artifact.redacted_storage_path)))
+    try:
+        _unlink_quiet(
+            os.path.join(base, redacted_relpath(artifact.tenant_id, artifact.session_id, artifact.id))
+        )
+    except Exception:  # noqa: BLE001 — defensive orphan reap must never abort the sweep
+        pass
     artifact.deleted_at = datetime.now(timezone.utc)
     db.add(artifact)
     return True

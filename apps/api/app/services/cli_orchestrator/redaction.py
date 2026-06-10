@@ -9,6 +9,7 @@ from cli_orchestrator.redaction import (  # noqa: F401
     _STRUCTURAL_KEY_RE,
     SENSITIVE_ENV_KEYS,
     cleanup_codex_home,
+    contains_secret,
     redact,
     redact_json_structural,
 )
