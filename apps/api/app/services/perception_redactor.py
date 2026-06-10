@@ -366,6 +366,8 @@ def redact_artifact(
     redacted PNG is written + verified (re-detection finds no secret), the RAW is
     hard-deleted (prerequisite), and the row flips to planner_safe. ``worker_id`` is
     required and fenced (the caller must own the claim)."""
+    if not worker_id or not str(worker_id).strip():
+        raise ValueError("redact_artifact requires a non-empty worker_id")
     root = root or perception_storage.quarantine_root()
     now = now or _utcnow()
     artifact_id = artifact.id
@@ -471,7 +473,9 @@ def _lock_owned_redacting(db: Session, artifact_id, worker_id: str):
     art = q.first()
     if art is None or art.redaction_status != STATUS_REDACTING:
         return None
-    if art.redact_claimed_by != worker_id:
+    # Reject an absent/empty claimant too — two stale workers must not both "match"
+    # on a None/"" id.
+    if not art.redact_claimed_by or art.redact_claimed_by != worker_id:
         return None
     return art
 
@@ -487,6 +491,8 @@ def claim_next_for_redaction(
     """Claim the oldest redactable artifact (fresh not_planner_safe, or a stale
     'redacting' row whose lease expired) with ``FOR UPDATE SKIP LOCKED``. Returns the
     claimed row (status 'redacting') or None."""
+    if not worker_id or not str(worker_id).strip():
+        raise ValueError("claim_next_for_redaction requires a non-empty worker_id")
     now = now or _utcnow()
     timeout = lease_timeout_seconds if lease_timeout_seconds is not None else LEASE_TIMEOUT_SECONDS
     attempts_cap = max_attempts if max_attempts is not None else MAX_ATTEMPTS

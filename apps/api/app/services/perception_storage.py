@@ -187,10 +187,13 @@ def delete_raw_bytes(artifact: PerceptionArtifact, *, root: str | None = None) -
     """Hard-delete an artifact's RAW bytes (``storage_path``) without a DB write.
     Returns True iff the file is gone afterwards (missing counts as gone). The
     redactor makes this a PREREQUISITE of flipping to planner_safe — so raw and
-    redacted never coexist."""
-    abspath = _jailed_abspath(root or quarantine_root(), str(artifact.storage_path))
+    redacted never coexist. Deletes the CANONICAL id-derived path (the same path the
+    redactor reads), NOT the DB-stored ``storage_path`` — so a stale/missing DB path
+    can never let the delete "succeed" while the real raw file survives."""
+    rel = artifact_relpath(artifact.tenant_id, artifact.session_id, artifact.id)
+    abspath = _jailed_abspath(root or quarantine_root(), rel)
     if abspath is None:
-        logger.warning("perception storage: refusing raw delete of out-of-jail path %r", artifact.storage_path)
+        logger.warning("perception storage: refusing raw delete of out-of-jail path %r", rel)
         return False
     try:
         os.remove(abspath)

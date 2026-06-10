@@ -447,3 +447,12 @@ def test_cleanup_hard_delete_reaps_redacted_copy(db_session):
         deleted = perception_cleanup.run_cleanup_once(db_session)
     assert deleted == 1
     assert not os.path.exists(redacted_abs)  # redacted bytes reaped
+
+
+def test_worker_id_is_required(db_session):
+    root = perception_storage.quarantine_root()
+    art, _ = _seed_artifact(db_session, root=root, claimed_by="w1")
+    with pytest.raises(ValueError):
+        pr.redact_artifact(db_session, art, StubEngine([]), worker_id="", root=root)
+    with pytest.raises(ValueError):
+        pr.claim_next_for_redaction(db_session, worker_id="  ")
