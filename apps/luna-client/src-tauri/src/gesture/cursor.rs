@@ -414,7 +414,7 @@ pub async fn canary_key_chord(keys: &[String]) -> Result<(), String> {
     }
     let chord = keyboard_bounds::normalize_chord(keys);
     let shift = chord.starts_with("shift+");
-    let Some(arrow) = arrow_key(chord.rsplit('+').next().unwrap_or("")) else {
+    let Some(main_key) = chord_key(chord.rsplit('+').next().unwrap_or("")) else {
         return Err("keyboard_chord_not_allowed".to_string());
     };
     let mut guard = ENIGO.lock().await;
@@ -429,7 +429,7 @@ pub async fn canary_key_chord(keys: &[String]) -> Result<(), String> {
             .map_err(|err| format!("enigo_key_failed: {err:?}"))?;
     }
     let click = e
-        .key(arrow, Direction::Click)
+        .key(main_key, Direction::Click)
         .map_err(|err| format!("enigo_key_failed: {err:?}"));
     if shift {
         let _ = e.key(Key::Shift, Direction::Release);
@@ -437,13 +437,16 @@ pub async fn canary_key_chord(keys: &[String]) -> Result<(), String> {
     click
 }
 
+/// Map a normalized chord main-key token to its enigo Key. Only the safe set
+/// (arrows + the send/submit `enter`); `chord_allowed` has already gated the chord.
 #[cfg(target_os = "macos")]
-fn arrow_key(name: &str) -> Option<Key> {
+fn chord_key(name: &str) -> Option<Key> {
     match name {
         "left" => Some(Key::LeftArrow),
         "right" => Some(Key::RightArrow),
         "up" => Some(Key::UpArrow),
         "down" => Some(Key::DownArrow),
+        "enter" => Some(Key::Return),
         _ => None,
     }
 }

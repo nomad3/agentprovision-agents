@@ -182,3 +182,20 @@ def test_target_bounds_invalid_dropped(bad_bounds):
     )
     # invalid bounds is dropped (fail-closed), never carried as a divergent value
     assert "bounds" not in t
+
+
+# ── keyboard SEND key (enter) — the "type a message + send" enabler ──────────
+
+
+def test_keyboard_chord_enter_send_key_accepted():
+    # bare enter is allowlisted (the send/submit key); 'return' folds to enter
+    assert norm("keyboard_key_chord", {"keys": ["enter"]}) == {"keys": ["enter"]}
+    assert norm("keyboard_key_chord", {"keys": ["Return"]}) == {"keys": ["return"]}
+
+
+@pytest.mark.parametrize("bad", [["shift", "enter"], ["cmd", "enter"], ["enter", "left"]])
+def test_keyboard_chord_enter_with_modifier_or_extra_key_rejected(bad):
+    # ONLY bare enter is allowed — shift+enter (newline), cmd+enter, and multi-key
+    # chords are not in the safe-chord allowlist.
+    with pytest.raises(ValueError):
+        norm("keyboard_key_chord", {"keys": bad})
