@@ -741,7 +741,9 @@ def _enqueue_native_control_command(
     # cannot be actuated until claim_next_desktop_command matches + consumes a
     # native_control grant for this exact target.
     raw_target = request.payload.get("target") if isinstance(request.payload, dict) else None
-    target = _require_native_control_target_binding(raw_target, action=request.action)
+    target = _require_native_control_target_binding(
+        raw_target, action=request.action, db=db, tenant_id=tenant_id
+    )
     # Phase 5: validate + persist the action-specific actuation args at enqueue
     # (fail-fast) so they reach _build_signed_command_envelope and get SIGNED.
     # Canary commands carry no args -> None -> omitted (envelope unchanged).
@@ -930,22 +932,51 @@ def _normalize_native_control_target_binding(
     return normalized
 
 
-def _native_control_target_is_allowlisted(target: dict[str, Any] | None) -> bool:
+def _effective_native_control_allowlist(db: Session, tenant_id: uuid.UUID) -> set[str]:
+    """Effective desktop target allowlist for a tenant (PR4c — audit G4).
+
+    effective = (per-tenant ``tenant_features.native_control_target_allowlist``)
+    ∩ (global env floor ``DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST``). The platform
+    floor is a hard ceiling — a per-tenant entry not in the floor is dropped. An
+    EMPTY (or absent) per-tenant list yields the empty set ⇒ **deny-all**,
+    fail-closed: a tenant must explicitly opt a bundle in (today only the operator
+    is seeded, migration 170). No "inherit the floor" fallback — that would be a
+    fail-open surprise for every un-seeded tenant."""
+    floor = _desktop_control_canary_bundle_allowlist()
+    features = (
+        db.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant_id)
+        .first()
+    )
+    if not features:
+        return set()
+    raw = getattr(features, "native_control_target_allowlist", None) or []
+    if not isinstance(raw, (list, tuple, set)):
+        return set()
+    per_tenant = {item.strip() for item in raw if isinstance(item, str) and item.strip()}
+    return per_tenant & floor
+
+
+def _native_control_target_is_allowlisted(
+    target: dict[str, Any] | None, *, db: Session, tenant_id: uuid.UUID
+) -> bool:
     if not target:
         return False
     bundle_id = _non_empty_string(target.get("bundle_id"))
     if not bundle_id:
         return False
-    return bundle_id in _desktop_control_canary_bundle_allowlist()
+    return bundle_id in _effective_native_control_allowlist(db, tenant_id)
 
 
 def _require_native_control_target_binding(
     raw: dict[str, Any] | None,
     *,
     action: str | None = None,
+    db: Session,
+    tenant_id: uuid.UUID,
 ) -> dict[str, Any]:
     target = _normalize_native_control_target_binding(raw, action=action)
-    if not _native_control_target_is_allowlisted(target):
+    if not _native_control_target_is_allowlisted(target, db=db, tenant_id=tenant_id):
         raise HTTPException(status_code=422, detail="Desktop command target not allowlisted")
     if not _non_empty_string(target.get("action")):
         raise HTTPException(status_code=422, detail="Desktop native-control target action is required")
@@ -1162,7 +1193,9 @@ def _matching_approval_grant(
             grant.target_binding or {},
             action=action,
         )
-        if not _native_control_target_is_allowlisted(grant_target):
+        if not _native_control_target_is_allowlisted(
+            grant_target, db=db, tenant_id=command.tenant_id
+        ):
             return None
         if not _native_control_targets_match(command_target, grant_target):
             return None
@@ -1825,10 +1858,16 @@ def _consume_command_envelope_or_deny(
             metadata=metadata,
         )
     if expected["approval_risk_tier"] == "native_control":
+        # Completion is POST-actuation reporting — verify the IMMUTABLE signed
+        # envelope binds to the command's target, NOT the mutable current allowlist
+        # (Codex review). The allowlist is enforced at the authorization points
+        # (enqueue + claim/grant-match, where the envelope is issued); re-consulting
+        # it here would only mis-record an already-authorized actuation as denied if
+        # an operator narrowed the allowlist mid-lease. The signed envelope target
+        # binding below is the authoritative, tamper-proof check.
         expected_target = _native_control_target_from_command(command)
         if (
             not expected_target
-            or not _native_control_target_is_allowlisted(expected_target)
             or envelope.get("target") is None
             or envelope.get("target", {}).get("bundle_id") != expected_target.get("bundle_id")
         ):
@@ -2316,6 +2355,8 @@ def create_desktop_approval_grant(
         target_binding = _require_native_control_target_binding(
             target_binding,
             action=command_action,
+            db=db,
+            tenant_id=tenant_id,
         )
         if command is not None:
             command_target = _native_control_target_from_command(command)
