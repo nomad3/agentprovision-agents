@@ -2583,6 +2583,164 @@ async fn capture_screenshot(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
+#[derive(Clone, serde::Serialize)]
+struct GovernedCaptureResult {
+    image_base64: String,
+    source_window_bundle_id: String,
+}
+
+/// Parse a System-Events window rect ("x,y,w,h") into validated integers. Pure
+/// (no IO) for unit testing. Rejects malformed input + non-positive width/height
+/// (a degenerate/minimized window) — fail-closed so we never capture a bad rect.
+fn parse_window_region(raw: &str) -> Option<(i64, i64, i64, i64)> {
+    let parts: Vec<&str> = raw.trim().split(',').map(str::trim).collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let x = parts[0].parse::<i64>().ok()?;
+    let y = parts[1].parse::<i64>().ok()?;
+    let w = parts[2].parse::<i64>().ok()?;
+    let h = parts[3].parse::<i64>().ok()?;
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    Some((x, y, w, h))
+}
+
+/// Phase 5.2 GOVERNED perception capture — distinct from `capture_screenshot`
+/// (full-screen, chat-facing). This captures ONLY the frontmost app's window
+/// region and FAIL-CLOSES on the privacy gates: never while macOS Secure Input
+/// is active (a password field is focused), never Luna's own window, never an
+/// unresolvable/degenerate window. The returned bytes are intended ONLY for the
+/// governed quarantine upload (`POST /desktop-control/observations`) — they must
+/// NOT be sent to the chat upload path (which feeds a planner).
+#[tauri::command]
+async fn governed_capture_observation(
+    app: tauri::AppHandle,
+) -> Result<GovernedCaptureResult, String> {
+    let audit = begin_observation_audit(
+        &app,
+        "governed_capture",
+        computer_use::ObservationCapability::Screenshot,
+    )?;
+
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+
+        // 1. Secure-input fail-closed: never screenshot a focused password field.
+        if secure_input_is_active() {
+            let reason = "secure_input_active".to_string();
+            fail_observation_audit(&app, &audit, &reason);
+            return Err(reason);
+        }
+
+        // 2. Own-window exclusion + a resolvable target app.
+        let bundle = match frontmost_application_bundle_id() {
+            Some(b) => b,
+            None => {
+                let reason = "frontmost_window_unresolved".to_string();
+                fail_observation_audit(&app, &audit, &reason);
+                return Err(reason);
+            }
+        };
+        if bundle == "com.agentprovision.luna" {
+            let reason = "own_window_excluded".to_string();
+            fail_observation_audit(&app, &audit, &reason);
+            return Err(reason);
+        }
+
+        // 3. Frontmost window bounds via System Events (the get_active_app path).
+        let bounds_script = "tell application \"System Events\"\n\
+            set p to first application process whose frontmost is true\n\
+            set w to first window of p\n\
+            set {x, y} to position of w\n\
+            set {ww, hh} to size of w\n\
+            return (x as integer) & \",\" & (y as integer) & \",\" & (ww as integer) & \",\" & (hh as integer)\n\
+            end tell";
+        let bounds = match Command::new("osascript").args(["-e", bounds_script]).output() {
+            Ok(o) if o.status.success() => {
+                String::from_utf8_lossy(&o.stdout).trim().to_string()
+            }
+            _ => {
+                let reason = "frontmost_window_no_bounds".to_string();
+                fail_observation_audit(&app, &audit, &reason);
+                return Err(reason);
+            }
+        };
+        let Some((x, y, w, h)) = parse_window_region(&bounds) else {
+            let reason = "frontmost_window_bounds_invalid".to_string();
+            fail_observation_audit(&app, &audit, &reason);
+            return Err(reason);
+        };
+        let region = format!("{x},{y},{w},{h}");
+
+        // 4. Window-scoped capture — the frontmost window's region ONLY (not the
+        //    whole desktop), to a temp file we read + delete immediately.
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros())
+            .unwrap_or(0);
+        let path = format!("/tmp/luna-observation-{stamp}.png");
+        let output = Command::new("screencapture")
+            .args(["-x", &format!("-R{region}"), &path])
+            .output()
+            .map_err(|e| {
+                let reason = format!("capture_failed: {e}");
+                fail_observation_audit(&app, &audit, &reason);
+                reason
+            })?;
+        if !output.status.success() {
+            let reason = "capture_failed".to_string();
+            fail_observation_audit(&app, &audit, &reason);
+            return Err(reason);
+        }
+        let bytes = std::fs::read(&path).map_err(|e| {
+            let reason = format!("read_failed: {e}");
+            fail_observation_audit(&app, &audit, &reason);
+            reason
+        })?;
+        let _ = std::fs::remove_file(&path);
+
+        complete_observation_audit(&app, &audit);
+        return Ok(GovernedCaptureResult {
+            image_base64: base64_encode(&bytes),
+            source_window_bundle_id: bundle,
+        });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let reason = "governed_capture_unsupported_platform".to_string();
+        fail_observation_audit(&app, &audit, &reason);
+        Err(reason)
+    }
+}
+
+#[cfg(test)]
+mod governed_capture_tests {
+    use super::parse_window_region;
+
+    #[test]
+    fn parses_valid_window_rect() {
+        assert_eq!(parse_window_region("100,200,800,600"), Some((100, 200, 800, 600)));
+        assert_eq!(parse_window_region(" 0, 0 , 1440 , 900 "), Some((0, 0, 1440, 900)));
+        // Negative origin (window on a secondary display to the left) is valid.
+        assert_eq!(parse_window_region("-1920,0,1920,1080"), Some((-1920, 0, 1920, 1080)));
+    }
+
+    #[test]
+    fn rejects_malformed_or_degenerate_rect() {
+        // fail-closed: bad shape, non-numeric, or non-positive width/height
+        assert_eq!(parse_window_region("100,200,800"), None);
+        assert_eq!(parse_window_region("a,b,c,d"), None);
+        assert_eq!(parse_window_region("0,0,0,600"), None); // zero width
+        assert_eq!(parse_window_region("0,0,800,-1"), None); // negative height
+        assert_eq!(parse_window_region(""), None);
+        assert_eq!(parse_window_region("1,2,3,4,5"), None);
+    }
+}
+
 /// Haptic feedback trigger — mobile only, no-op on desktop.
 #[tauri::command]
 async fn haptic_feedback(style: String) -> Result<(), String> {
@@ -3507,6 +3665,7 @@ pub fn run() {
             control_clear_stop,
             control_open_permission_setup,
             capture_screenshot,
+            governed_capture_observation,
             get_active_app,
             read_clipboard,
             haptic_feedback,
