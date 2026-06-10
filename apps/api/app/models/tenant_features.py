@@ -129,15 +129,21 @@ class TenantFeatures(Base):
     )
 
     # ── Luna macOS computer-use (desktop control) per-tenant gating ──────
-    # PR4 of the 2026-06-09 productionization plan. All default OFF / empty,
-    # fail-closed — native OS actuation is the highest-blast-radius capability
-    # on the platform and must never enable on accident. Superuser/operator-only
-    # (excluded from member-writable feature updates, enforced in PR4b). NOTHING
-    # reads these yet — enforcement + the governance tool-group split + the
-    # operator-tenant backfill land in PR4b. Migration 166.
-    desktop_control_enabled = Column(  # master kill-switch (also gates observation)
-        Boolean, nullable=False, default=False, server_default=text("false")
+    # PR4 of the 2026-06-09 productionization plan. Superuser/operator-only
+    # (excluded from member-writable feature updates, enforced in PR4b).
+    #
+    # `desktop_control_enabled` is the master switch that ALSO gates observation
+    # (Luna L-N2) and is the flag enforced by the P5.2 governed-perception upload
+    # (record_observation_artifact). Migration 168 enables it across the
+    # environment — this turns on PERCEPTION (screenshot capture → quarantine),
+    # NOT actuation. Actuation still requires the per-capability flags below
+    # (left fail-closed OFF) + the client LUNA_ACTUATION_* env flags + signed
+    # Ed25519 envelopes + approval grants, and PR4b wires those flags into the
+    # claim boundary. Migrations 166 (create) + 168 (enable master).
+    desktop_control_enabled = Column(  # master switch (also gates observation)
+        Boolean, nullable=False, default=True, server_default=text("true")
     )
+    # Actuation stays fail-closed OFF — PR4b wires these into the claim boundary.
     pointer_control_enabled = Column(  # Phase 3 pointer actuation
         Boolean, nullable=False, default=False, server_default=text("false")
     )
