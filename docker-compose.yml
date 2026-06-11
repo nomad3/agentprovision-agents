@@ -101,14 +101,12 @@ services:
       - EXPLORATION_RATE=${EXPLORATION_RATE:-0.0}
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
-      - DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST=${DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST:-}
-      # Desktop-command envelope signing. Defaults stay HMAC + no key (native
-      # control disabled); set these in the root .env to enable the Phase 3
-      # pointer canary (native control requires Ed25519). The KEY_ID must match
-      # the Luna client's default key id.
-      - DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=${DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM:-HMAC-SHA256}
-      - DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY=${DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY:-}
-      - DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID=${DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID:-agentprovision-desktop-command-ed25519-v1}
+      # Desktop-control DESKTOP_* config (signing algorithm, Ed25519 private key,
+      # key id, canary floor allowlist) is intentionally NOT set here (M-3). It now
+      # comes from the env_file (apps/api/.env) so an operator can actually set it:
+      # a compose `environment:` entry with `${VAR:-default}` ALWAYS materializes
+      # and overrides env_file, which silently downgraded an Ed25519 apps/api/.env
+      # back to HMAC. See the DESKTOP_* keys in apps/api/.env.example.
       # Kill-switch (2026-06-01): skip the per-tenant monitor auto-launch on API
       # startup (startup_proactive_workflows) — they starved the orchestration
       # queue. =1 while monitors are reworked onto a dedicated queue.
@@ -199,14 +197,10 @@ services:
       - HF_HUB_DISABLE_XET=1
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
-      - DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST=${DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST:-}
-      # Desktop-command envelope signing. Defaults stay HMAC + no key (native
-      # control disabled); set these in the root .env to enable the Phase 3
-      # pointer canary (native control requires Ed25519). The KEY_ID must match
-      # the Luna client's default key id.
-      - DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=${DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM:-HMAC-SHA256}
-      - DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY=${DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY:-}
-      - DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID=${DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID:-agentprovision-desktop-command-ed25519-v1}
+      # Desktop-control DESKTOP_* config is intentionally NOT set here (M-3). The
+      # code-worker does NOT sign desktop envelopes (only the api does), so the
+      # signing private key must never be on the worker. Anything DESKTOP_* the
+      # worker legitimately needs comes from its env_file (apps/api/.env).
       # Kill-switch for the self-perpetuating monitor loops (inbox/competitor/
       # autonomous-learning) — they continue_as_new on the shared orchestration
       # queue and starved PostChatMemory. =1 makes each chain EXIT as it wakes

@@ -58,6 +58,25 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
 
+@pytest.fixture(autouse=True)
+def _default_hmac_envelope_signing(monkeypatch):
+    """Pin HMAC-SHA256 envelope signing for this lifecycle suite.
+
+    The global default flipped to Ed25519 (M-11 step 1), which fail-closes (no
+    `command_envelope` issued) without a private key. These tests exercise the
+    generic command lifecycle (claim / complete / nonce / replay / lease) and use
+    HMAC-SHA256 as the no-key signer that still produces a signed envelope. Tests
+    that specifically exercise the Ed25519 path override this locally via
+    `patch.object(... "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM", "Ed25519")`.
+    """
+    monkeypatch.setattr(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM",
+        "HMAC-SHA256",
+        raising=False,
+    )
+
+
 @pytest.fixture(name="db_session")
 def db_session_fixture():
     Base.metadata.create_all(bind=engine)
