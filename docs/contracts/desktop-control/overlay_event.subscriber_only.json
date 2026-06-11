@@ -1,0 +1,19 @@
+{
+  "contract": "agentprovision.desktop_control.v1",
+  "kind": "overlay_event",
+  "event_type": "background_control_overlay",
+  "_note": "SP1.5 overlay/HUD event. Display-only: the overlay SUBSCRIBES to command/lease/HUD state and may request Stop via the local kill path. It can never generate, mutate, approve, replay, extend, resume, or unlock a command — authoritative is false and allowed_intents excludes every authority-granting intent.",
+  "desktop_command_id": "00000000-0000-4000-8000-000000000201",
+  "session_id": "00000000-0000-4000-8000-0000000002d0",
+  "shell_id": "desktop-0a0a0a0a-0b0b-4c0c-8d0d-0e0e0e0e0e0e",
+  "authoritative": false,
+  "allowed_intents": ["subscribe", "display", "hud_update", "stop_request"],
+  "hud": {
+    "target_app": "net.whatsapp.WhatsApp",
+    "action": "ax_set_value",
+    "state": "acting",
+    "degraded": false,
+    "stop_visible": true
+  },
+  "created_at": "2026-06-11T00:00:01Z"
+}
