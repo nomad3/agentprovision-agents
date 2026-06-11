@@ -197,10 +197,12 @@ services:
       - HF_HUB_DISABLE_XET=1
       - USE_MEMORY_V2=true
       - USE_MEMORY_V2_TENANT_ALLOWLIST=["752626d9-8b2c-4aa2-87ef-c458d48bd38a"]
-      # Desktop-control DESKTOP_* config is intentionally NOT set here (M-3). The
-      # code-worker does NOT sign desktop envelopes (only the api does), so the
-      # signing private key must never be on the worker. Anything DESKTOP_* the
-      # worker legitimately needs comes from its env_file (apps/api/.env).
+      # API is the ONLY desktop-command signing boundary. This worker loads the
+      # shared apps/api/.env (legacy config plumbing), so after the operator moves
+      # the Ed25519 signing key there (M-3) it would otherwise inherit it. Pin the
+      # signing boundary fail-closed here — Ed25519 + empty key = cannot sign.
+      - DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519
+      - DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY=
       # Kill-switch for the self-perpetuating monitor loops (inbox/competitor/
       # autonomous-learning) — they continue_as_new on the shared orchestration
       # queue and starved PostChatMemory. =1 makes each chain EXIT as it wakes
@@ -236,6 +238,11 @@ services:
       - API_BASE_URL=http://api:8000
       # 4h cache for BrightLocal rank pulls (and any future MCP tool that opts in)
       - REDIS_URL=redis://redis:6379/0
+      # API is the ONLY desktop-command signing boundary. mcp-tools loads the
+      # shared apps/api/.env (legacy config plumbing) but must never sign desktop
+      # envelopes — pin Ed25519 + empty key so it is fail-closed (cannot sign).
+      - DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519
+      - DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY=
     depends_on:
       - db
       - redis
@@ -265,6 +272,11 @@ services:
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - API_BASE_URL=http://api:8000
+      # API is the ONLY desktop-command signing boundary. The code-worker loads the
+      # shared apps/api/.env (legacy config plumbing) but must never sign desktop
+      # envelopes — pin Ed25519 + empty key so it is fail-closed (cannot sign).
+      - DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519
+      - DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY=
       - CLAUDE_CODE_MODEL=${CLAUDE_CODE_MODEL:-sonnet}
       # Codex CLI MCP opt-in for the experimental Rust MCP client.
       # Required for SSE / streamable_http MCP servers to be honoured.
