@@ -241,7 +241,14 @@ def _seed_second_tenant(db_session: Session):
         capabilities=["can_observe"],
         config={"shell_id": SHELL_ID},
     )
-    db_session.add_all([tenant, user, session, device])
+    features = TenantFeatures(
+        tenant_id=TENANT_ID_2,
+        desktop_control_enabled=True,
+        pointer_control_enabled=False,
+        keyboard_control_enabled=False,
+        native_control_target_allowlist=[],
+    )
+    db_session.add_all([tenant, user, session, device, features])
     db_session.commit()
     return user
 
@@ -1789,6 +1796,79 @@ def _enqueue_pointer(db, *, nonce="p", action="pointer_move", tool="desktop_poin
     )
 
 
+def test_observe_enqueue_denied_when_master_disabled(db_session, seeded):
+    _set_capability_flags(db_session, desktop=False, pointer=True, keyboard=True)
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue(db_session, nonce="observe-master-off", grant=False)
+    assert exc.value.status_code == 403
+    assert db_session.query(DesktopCommand).filter(
+        DesktopCommand.nonce == "observe-master-off",
+    ).count() == 0
+
+
+def test_observe_approval_grant_denied_when_master_disabled(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="observe-grant-master-off", grant=False)
+
+    _set_capability_flags(db_session, desktop=False, pointer=True, keyboard=True)
+    with pytest.raises(HTTPException) as exc:
+        create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                desktop_command_id=command.id,
+                risk_tier="observe",
+                capability=command.capability,
+                expires_in_seconds=60,
+            ),
+        )
+
+    assert exc.value.status_code == 403
+    assert db_session.query(DesktopCommandApprovalGrant).filter(
+        DesktopCommandApprovalGrant.desktop_command_id == command.id,
+    ).count() == 0
+
+
+def test_observe_claim_denies_when_master_revoked_midflight(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="observe-claim-master-off", grant=True)
+        grant = db_session.query(DesktopCommandApprovalGrant).filter(
+            DesktopCommandApprovalGrant.desktop_command_id == command.id,
+        ).one()
+
+        _set_capability_flags(db_session, desktop=False, pointer=True, keyboard=True)
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is None
+    refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert refreshed.status == "denied"
+    assert event is not None
+    assert event.event_type == "desktop_command_envelope_denied"
+    assert event.outcome == "denied"
+    assert event.reason == "desktop observation denied; capture_screenshot denied"
+    assert (event.event_metadata or {}).get("denial_code") == "observation_denied"
+    db_session.refresh(grant)
+    assert grant.status == "active"
+    assert grant.remaining_actions == 1
+
+
 def test_native_control_enqueue_denied_when_master_disabled(db_session, seeded):
     _set_capability_flags(db_session, desktop=False, pointer=True, keyboard=True)
     with patch.object(
@@ -2068,9 +2148,14 @@ def test_allowlist_revoked_after_enqueue_denies_at_claim(db_session, seeded):
     # claimed (no signed envelope) once the per-tenant allowlist is revoked — the
     # grant-match allowlist check denies. Capability flags stay ON, so the ONLY
     # thing denying here is the allowlist.
+    encoded_private_key = _b64url(ED25519_PRIVATE_KEY_BYTES)
     _seed_tenant_allowlist(db_session, [CANARY_BUNDLE_ID])
     with patch.object(
         desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch.object(
+        desktop_control_service.settings, "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM", "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY", encoded_private_key,
     ), patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
     ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
@@ -2092,13 +2177,19 @@ def test_allowlist_revoked_after_enqueue_denies_at_claim(db_session, seeded):
         )
         # revoke the per-tenant allowlist AFTER enqueue, BEFORE claim
         _seed_tenant_allowlist(db_session, [])
-        claimed, _event, _cs = claim_next_desktop_command(
+        claimed, event, _cs = claim_next_desktop_command(
             db_session, user=seeded, device_token=DEVICE_TOKEN,
             claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
         )
     assert claimed is None  # no signed envelope issued — allowlist revoked
     refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
-    assert refreshed.status != "claimed"  # never reached envelope issuance
+    assert refreshed.status == "denied"
+    assert event is not None
+    assert event.event_type == "desktop_command_approval_denied"
+    assert event.outcome == "denied"
+    assert event.reason == "desktop command approval grant binding mismatch"
+    assert (event.event_metadata or {}).get("denial_code") == "approval_binding_mismatch"
+    assert "command_envelope" not in (refreshed.payload or {})  # never reached envelope issuance
 
 
 def test_allowlist_revoked_after_claim_does_not_corrupt_completion(db_session, seeded):

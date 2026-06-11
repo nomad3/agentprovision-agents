@@ -418,6 +418,8 @@ def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str |
         return f"desktop observe locked; {action} denied"
     if normalized.startswith("desktop native control disabled;"):
         return f"desktop native control disabled; {action} denied"
+    if normalized.startswith("desktop observation denied;"):
+        return f"desktop observation denied; {action} denied"
     if normalized.startswith("desktop observation permission "):
         return f"desktop observation permission denied; {action} denied"
     if normalized.startswith("unsupported desktop command action:"):
@@ -907,7 +909,7 @@ def _normalize_native_control_target_binding(
         normalized["window_title_pattern"] = window_title_pattern[:256]
 
     display_id = raw.get("display_id")
-    if isinstance(display_id, int):
+    if isinstance(display_id, int) and not isinstance(display_id, bool):
         normalized["display_id"] = max(0, display_id)
 
     bounds = raw.get("bounds")
@@ -2201,16 +2203,20 @@ def record_local_observation_event(
     return event, session_event
 
 
-def _ensure_desktop_control_enabled(db: Session, tenant_id: uuid.UUID) -> None:
+def _ensure_desktop_control_enabled(
+    db: Session, tenant_id: uuid.UUID, *, lock: bool = False
+) -> None:
     """Master capability gate (Luna L-N2: also gates observation). Fail-closed:
     no TenantFeatures row, or the flag false/absent → denied. P5.2 perception and
-    (PR4b) the native-control actuation path both enforce this same flag — no
-    drift."""
-    features = (
-        db.query(TenantFeatures)
-        .filter(TenantFeatures.tenant_id == tenant_id)
-        .first()
-    )
+    (PR4b) the native-control actuation path both enforce this same flag.
+
+    ``lock=True`` is used at claim time so an observe envelope cannot be issued
+    concurrently with a tenant-level desktop-control revoke.
+    """
+    query = db.query(TenantFeatures).filter(TenantFeatures.tenant_id == tenant_id)
+    if lock:
+        query = query.with_for_update()
+    features = query.first()
     if not features or not bool(getattr(features, "desktop_control_enabled", False)):
         raise HTTPException(
             status_code=403,
@@ -2334,6 +2340,7 @@ def create_desktop_approval_grant(
         raise HTTPException(status_code=422, detail="Unsupported desktop approval risk tier")
     if not _capability_matches_risk_tier(request.capability, request.risk_tier):
         raise HTTPException(status_code=422, detail="Desktop approval capability does not match risk tier")
+    _ensure_desktop_control_enabled(db, tenant_id)
     max_actions = max(1, min(int(request.max_actions), 20))
     expires_in_seconds = max(5, min(int(request.expires_in_seconds), 600))
     now = _utcnow()
@@ -2542,6 +2549,7 @@ def enqueue_desktop_command(
         )
 
     required_capability = "can_observe"
+    _ensure_desktop_control_enabled(db, tenant_id)
     if not bool(shell_capabilities.get(required_capability)):
         raise HTTPException(status_code=409, detail="Desktop shell cannot observe")
 
@@ -2671,6 +2679,24 @@ def claim_next_desktop_command(
 
     command_action = str((command.payload or {}).get("action") or "desktop_command")
     is_native_control = _risk_tier_for_action(command_action) == "native_control"
+    if not is_native_control:
+        try:
+            _ensure_desktop_control_enabled(db, user.tenant_id, lock=True)
+        except HTTPException:
+            _denied_command, denied_event, denied_session_event = (
+                _deny_pending_command_for_envelope_configuration_failure(
+                    db,
+                    command,
+                    reason="desktop observation denied; tenant desktop control not enabled",
+                )
+            )
+            for expired_event in expired_events:
+                _publish_display_safe_command_event(
+                    expired_event,
+                    status="expired",
+                    tenant_id=user.tenant_id,
+                )
+            return None, denied_event, denied_session_event
     if is_native_control:
         # Claim-time governance re-check (PR4b — the REAL boundary, audit G10 /
         # Codex B1): the tenant's capability flag may have flipped OFF between
