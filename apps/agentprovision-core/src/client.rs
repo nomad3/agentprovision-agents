@@ -17,9 +17,9 @@ use url::Url;
 
 use crate::desktop::{
     DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
-    DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
-    DesktopObservationRequestAck, DesktopObservationRequestBody, DesktopPreflight,
-    PerceptionArtifactStatus,
+    DesktopCommandStopRequest, DesktopCommandStopResponse, DesktopControlAllowlistUpdate,
+    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopObservationRequestAck,
+    DesktopObservationRequestBody, DesktopPreflight, PerceptionArtifactStatus,
 };
 use crate::error::{Error, Result};
 use crate::models::{
@@ -999,6 +999,16 @@ impl ApiClient {
             None => format!("/api/v1/desktop-control/commands/{command_id}"),
         };
         self.get_json(&path).await
+    }
+
+    /// `POST /api/v1/desktop-control/commands/stop` — preempt queued/running
+    /// desktop work and revoke active grants for one owned session/shell.
+    pub async fn desktop_command_stop(
+        &self,
+        body: &DesktopCommandStopRequest,
+    ) -> Result<DesktopCommandStopResponse> {
+        self.post_json("/api/v1/desktop-control/commands/stop", body)
+            .await
     }
 
     /// `POST /api/v1/desktop-control/observations/request` — the

@@ -112,6 +112,12 @@ pub enum DesktopCommandStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum DesktopCommandStopStatus {
+    Preempted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DesktopRiskTier {
     Observe,
     NativeControl,
@@ -476,6 +482,27 @@ pub struct DesktopCommandStatusSnapshot {
     pub terminal: bool,
 }
 
+/// `POST /api/v1/desktop-control/commands/stop` request body. This is a
+/// safety/preemption command: it revokes active grants and preempts queued or
+/// running desktop commands for one owned session and one connected shell.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCommandStopRequest {
+    pub session_id: String,
+    pub shell_id: String,
+    pub reason: String,
+}
+
+/// Display-safe response for a desktop Stop/preempt request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCommandStopResponse {
+    pub status: DesktopCommandStopStatus,
+    pub preempted_count: u64,
+    #[serde(default)]
+    pub desktop_event_ids: Vec<String>,
+}
+
 // ── P5.3b planner-safe observation delivery (`alpha desktop observe`) ─────
 
 /// Perception artifact redaction state. Unknown values fail closed.
@@ -682,6 +709,25 @@ mod tests {
         serde_json::from_value::<DesktopCommandStatusSnapshot>(status.clone()).unwrap();
         status["command"]["payload"] = serde_json::json!({"args": {"text": "SECRET"}});
         assert!(serde_json::from_value::<DesktopCommandStatusSnapshot>(status).is_err());
+    }
+
+    #[test]
+    fn command_stop_response_is_display_safe_and_closed() {
+        let mut response = serde_json::json!({
+            "status": "preempted",
+            "preempted_count": 2,
+            "desktop_event_ids": [
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+            ]
+        });
+        let decoded: DesktopCommandStopResponse =
+            serde_json::from_value(response.clone()).expect("stop response decode");
+        assert_eq!(decoded.status, DesktopCommandStopStatus::Preempted);
+        assert_eq!(decoded.preempted_count, 2);
+
+        response["payload"] = serde_json::json!({"args": {"text": "SECRET"}});
+        assert!(serde_json::from_value::<DesktopCommandStopResponse>(response).is_err());
     }
 
     #[test]

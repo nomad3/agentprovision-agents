@@ -11,8 +11,9 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use agentprovision_core::desktop::{
     DesktopActionKind, DesktopBackgroundDryRunRequest, DesktopBackgroundDryRunTarget,
-    DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
-    DesktopObservationRequestBody, DesktopObserveAction, PerceptionFetchDenial,
+    DesktopCommandStopRequest, DesktopControlAllowlistUpdate, DesktopControlEnablement,
+    DesktopControlEnablementUpdate, DesktopObservationRequestBody, DesktopObserveAction,
+    PerceptionFetchDenial,
 };
 use agentprovision_core::Error as CoreError;
 use serde::Serialize;
@@ -86,6 +87,8 @@ pub struct DryRunRequestArgs {
 pub enum CommandLifecycleCommand {
     /// Read the display-safe status snapshot for a queued command.
     Status(CommandStatusArgs),
+    /// Preempt queued/running desktop work for a session and shell.
+    Stop(CommandStopArgs),
 }
 
 #[derive(Debug, Args)]
@@ -95,6 +98,19 @@ pub struct CommandStatusArgs {
     /// Optional chat/session UUID to tighten the status lookup.
     #[arg(long)]
     pub session: Option<Uuid>,
+}
+
+#[derive(Debug, Args)]
+pub struct CommandStopArgs {
+    /// Chat/session UUID whose desktop work should stop.
+    #[arg(long)]
+    pub session: Uuid,
+    /// Connected Luna desktop shell id to stop.
+    #[arg(long)]
+    pub shell_id: String,
+    /// Display-safe stop reason. Raw app content must not be included.
+    #[arg(long, default_value = "desktop control stopped")]
+    pub reason: String,
 }
 
 #[derive(Debug, Subcommand)]
@@ -206,6 +222,7 @@ pub async fn dispatch(cmd: DesktopCommand, ctx: Context) -> anyhow::Result<()> {
         DesktopCommand::Preflight(PreflightCommand::Run(a)) => preflight_run(a, ctx).await,
         DesktopCommand::DryRun(DryRunCommand::Request(a)) => dry_run_request(a, ctx).await,
         DesktopCommand::Command(CommandLifecycleCommand::Status(a)) => command_status(a, ctx).await,
+        DesktopCommand::Command(CommandLifecycleCommand::Stop(a)) => command_stop(a, ctx).await,
         DesktopCommand::Observe(ObserveCommand::Request(a)) => observe_request(a, ctx).await,
         DesktopCommand::Observe(ObserveCommand::Status(a)) => observe_status(a, ctx).await,
         DesktopCommand::Observe(ObserveCommand::Fetch(a)) => observe_fetch(a, ctx).await,
@@ -309,6 +326,29 @@ async fn command_status(args: CommandStatusArgs, ctx: Context) -> anyhow::Result
                 line.push_str(&format!(" code={}", json_string(code)));
             }
             output::info(line);
+        }
+    });
+    Ok(())
+}
+
+async fn command_stop(args: CommandStopArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopCommandStopRequest {
+        session_id: args.session.to_string(),
+        shell_id: args.shell_id,
+        reason: args.reason,
+    };
+    let resp = ctx.client.desktop_command_stop(&body).await?;
+    output::emit(ctx.json, &resp, |resp| {
+        output::ok(format!(
+            "[alpha] desktop stop status={} preempted_count={}",
+            json_string(&resp.status),
+            resp.preempted_count,
+        ));
+        if !resp.desktop_event_ids.is_empty() {
+            output::info(format!(
+                "desktop_event_ids={}",
+                resp.desktop_event_ids.join(",")
+            ));
         }
     });
     Ok(())
@@ -606,6 +646,39 @@ mod tests {
                 );
             }
             _ => panic!("expected desktop command status"),
+        }
+    }
+
+    #[test]
+    fn parses_command_stop() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "command",
+            "stop",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--shell-id",
+            "desktop-44444444-4444-4444-4444-444444444444",
+            "--reason",
+            "operator Stop",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Command(CommandLifecycleCommand::Stop(args)),
+            } => {
+                assert_eq!(
+                    args.session.to_string(),
+                    "33333333-3333-3333-3333-333333333333"
+                );
+                assert_eq!(
+                    args.shell_id,
+                    "desktop-44444444-4444-4444-4444-444444444444"
+                );
+                assert_eq!(args.reason, "operator Stop");
+            }
+            _ => panic!("expected desktop command stop"),
         }
     }
 

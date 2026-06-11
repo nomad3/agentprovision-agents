@@ -236,6 +236,69 @@ async def _get_command_status(
     return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
 
 
+async def _stop_commands(
+    *,
+    session_id: str,
+    shell_id: str,
+    reason: str = "desktop control stopped",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    tid = resolve_tenant_id(ctx, tenant_id)
+    if not tid:
+        return {"status": "error", "error": "tenant_id required"}
+
+    user_id = resolve_user_id(ctx)
+    if not user_id:
+        return {"status": "error", "error": "X-User-Id required for desktop control"}
+
+    body = {
+        "session_id": session_id,
+        "shell_id": shell_id,
+        "reason": reason,
+    }
+    headers = {
+        "X-Internal-Key": API_INTERNAL_KEY,
+        "X-Tenant-Id": tid,
+        "X-User-Id": user_id,
+    }
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/commands/stop"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning(
+            "desktop_stop_commands: HTTP transport error session=%s err=%s",
+            session_id,
+            exc,
+        )
+        return {"status": "error", "error": f"transport: {exc}"}
+
+    if resp.status_code == 200:
+        payload = resp.json()
+        return {
+            **payload,
+            "message": (
+                "Desktop work was stopped for this session/shell. This safety "
+                "tool revokes active grants and preempts queued/running commands; "
+                "it never returns command payloads, screen bytes, signed envelopes, "
+                "or native actuation args."
+            ),
+        }
+    if resp.status_code == 401:
+        return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code == 403:
+        return {"status": "error", "error": f"desktop stop denied: {resp.text[:200]}"}
+    if resp.status_code == 404:
+        return {"status": "error", "error": "session or user not found"}
+    if resp.status_code == 409:
+        return {"status": "error", "error": f"desktop shell unavailable: {resp.text[:200]}"}
+    if resp.status_code in (400, 422):
+        return {"status": "error", "error": f"bad request: {resp.text[:200]}"}
+    return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
+
+
 @mcp.tool()
 async def desktop_observe_screen(
     session_id: str,
@@ -438,6 +501,30 @@ async def desktop_command_status(
     )
 
 
+@mcp.tool()
+async def desktop_stop_commands(
+    session_id: str,
+    shell_id: str,
+    reason: str = "desktop control stopped",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Stop queued/running desktop work for one Luna session and shell.
+
+    This is a safety/preemption tool, not an actuator. It revokes active
+    approval grants and preempts pending/claimed/running commands without
+    returning raw command payloads, screen bytes, signed envelopes, or native
+    actuation args.
+    """
+    return await _stop_commands(
+        session_id=session_id,
+        shell_id=shell_id,
+        reason=reason,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+
+
 __all__ = [
     "desktop_observe_screen",
     "desktop_get_active_app",
@@ -445,4 +532,5 @@ __all__ = [
     "desktop_fetch_observation",
     "desktop_background_app_control_dry_run",
     "desktop_command_status",
+    "desktop_stop_commands",
 ]
