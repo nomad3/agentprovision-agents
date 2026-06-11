@@ -396,10 +396,16 @@ def generate_cli_instructions(
                 "  4. Poll `desktop_command_status(command_id)` to its terminal status."
             )
             lines.append(
-                "- Report back display-safe facts only: action class, capability, "
-                "outcome/status, denial code, command id, and audit/event references. "
-                "Never quote OCR text, window titles, contact names, clipboard values, "
-                "typed text, or raw screen content."
+                "- Report back only this allowlisted desktop-control summary: action "
+                "class, capability, outcome/status, denial code, command id, desktop "
+                "event id, session event id, and audit/event references. Do not copy "
+                "any other desktop tool output field into the final answer."
+            )
+            lines.append(
+                "- Never quote OCR text, window titles, contact names, clipboard "
+                "values, typed text, raw screen content, request reasons, action args, "
+                "`text`, `value`, `title`, `page_text`, or `ax_tree`. If such content "
+                "is relevant, say only that observed content was redacted."
             )
             lines.append(
                 "- `desktop_stop_commands` cancels in-flight work; a Stop revokes the "

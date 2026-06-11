@@ -74,10 +74,81 @@ def test_desktop_control_section_describes_governed_approval_loop():
     assert "cannot approve your own request" in out
     assert "approval_required" in out
     # display-safe report-back contract
+    assert "Report back only this allowlisted desktop-control summary" in out
+    for allowed in (
+        "action class",
+        "capability",
+        "outcome/status",
+        "denial code",
+        "command id",
+        "desktop event id",
+        "session event id",
+        "audit/event references",
+    ):
+        assert allowed in out
     assert "Never quote OCR text" in out
     # Stop semantics
     assert "desktop_stop_commands" in out
     assert "revokes the" in out
+
+
+def test_desktop_report_back_policy_names_every_raw_leak_source():
+    out = generate_cli_instructions(
+        **_base_kwargs(),
+        agent_tool_groups=["desktop_control"],
+        desktop_context={
+            "session_id": "4c96cdbd-a326-48a2-b9ba-016e83a948f4",
+            "default_target_bundle_id": "com.agentprovision.luna",
+        },
+    )
+
+    forbidden_guidance = [
+        "OCR text",
+        "window titles",
+        "contact names",
+        "clipboard values",
+        "typed text",
+        "raw screen content",
+        "request reasons",
+        "action args",
+        "`text`",
+        "`value`",
+        "`title`",
+        "`page_text`",
+        "`ax_tree`",
+    ]
+    for term in forbidden_guidance:
+        assert term in out
+    assert "observed content was redacted" in out
+
+
+def test_desktop_context_raw_fields_are_not_rendered_in_prompt():
+    leak_values = {
+        "ocr_text": "LEAK_OCR_BANK_BALANCE_123",
+        "window_title": "LEAK_WINDOW_TITLE_PRIVATE_CHAT",
+        "contact_name": "LEAK_CONTACT_PATIENT_NAME",
+        "clipboard_text": "LEAK_CLIPBOARD_SECRET",
+        "typed_text": "LEAK_TYPED_MESSAGE_BODY",
+        "raw_screen_content": "LEAK_RAW_SCREEN_CONTENT",
+        "action_args": {"text": "LEAK_ACTION_ARG_TEXT"},
+        "ax_tree": "LEAK_AX_TREE_NODE",
+    }
+    out = generate_cli_instructions(
+        **_base_kwargs(),
+        agent_tool_groups=["desktop_control"],
+        desktop_context={
+            "session_id": "4c96cdbd-a326-48a2-b9ba-016e83a948f4",
+            "default_target_bundle_id": "com.agentprovision.luna",
+            **leak_values,
+        },
+    )
+
+    for value in leak_values.values():
+        if isinstance(value, dict):
+            value = value["text"]
+        assert value not in out
+    assert "com.agentprovision.luna" in out
+    assert "4c96cdbd-a326-48a2-b9ba-016e83a948f4" in out
 
 
 def test_desktop_observe_only_section_does_not_suggest_control_tool():
