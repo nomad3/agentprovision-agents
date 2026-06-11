@@ -3,7 +3,8 @@
 Date: 2026-06-11
 Status: implementation in progress; P5.3 planner-safe substrate merged through
 PR #892; P5.4 dry-run/status/Stop/pending-request substrate merged through
-PR #895; P5.5 human approval surface merged through PR #896
+PR #895; P5.5 human approval surface merged through PR #896; P5.4c
+chat-triggered act loop merged through PR #899
 Inputs: `docs/report/2026-06-11-luna-computer-use-fable-review.md`, `docs/plans/2026-06-09-luna-phase5-general-app-control-design.md`, `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
 
 ## Goal
@@ -119,6 +120,13 @@ Merged:
   pending request into exactly one bounded active grant or terminal denial. It
   is user-authenticated only, has no internal-key/MCP grant-minting twin, and
   still does not enqueue or actuate.
+- P5.4b desktop actuate / PR #898: grant-gated `desktop_actuate` merged at
+  `1daefa51`. It consumes an existing bounded active grant, enqueues through the
+  shared lifecycle, and creates no grant/envelope/native actuation by itself.
+- P5.4c chat loop / PR #899: owner-scoped approved request status now returns
+  the `grant_id` handle, and the Luna planner prompt describes the governed
+  request -> human approval -> act -> poll -> display-safe report loop. Merged
+  at `937da96a`.
 
 Current deployed proof:
 
@@ -459,10 +467,11 @@ Implementation scope:
   `rl_experience.state`, action fields, embeddings, or free-form metadata.
 - Start with operator-only apps already in the global floor: Luna, TextEdit,
   WhatsApp.
-- Until `desktop_actuate` and the chat coordinator are merged, this coordinator
-  may run only in dry-run, denied/no-op, pending-approval, or pre-granted test
-  harness mode. It must not use internal-key-only approval grants to turn chat
-  prompts into native actuation.
+- `desktop_actuate` and the chat-loop prompt are merged. Chat-originated native
+  actions still require a human-minted grant, live shell/device readiness,
+  default-off capability flags, allowlist, claim-time envelope gates, Stop/Lock,
+  and client native-boundary checks. The chat path must not use internal-key-only
+  approval grants to turn prompts into native actuation.
 - Before enqueue, the coordinator must request a fresh Luna client
   permission-readiness probe for the target shell/device. Missing, stale, or
   denied permissions produce `permission_not_ready` and no command row is queued.
@@ -499,8 +508,9 @@ Implementation scope:
   an existing active grant and enqueues through the shared lifecycle. Missing
   grant -> `approval_required`, no command; wrong owner/session/expired/revoked
   -> structured deny; no mint path, no native flag flip.
-- Status 2026-06-11: P5.4c chat-loop slice (this branch,
-  `docs/plans/2026-06-11-luna-p54c-chat-desktop-loop-design.md`). The chat
+- Status 2026-06-11: PR #899 (`claude/luna-p54c-chat-desktop-loop`, merge
+  `937da96a`) landed the P5.4c chat-loop slice
+  (`docs/plans/2026-06-11-luna-p54c-chat-desktop-loop-design.md`). The chat
   "coordinator" is the planner prompt over the merged tools (the chat turn is a
   single CLI subprocess; the CLI drives the MCP loop — no server workflow). Two
   changes close the loop: (1) `desktop_act._display_safe_request` now reflects
@@ -512,15 +522,23 @@ Implementation scope:
   request -> human approval -> actuate -> poll -> report loop (no self-approval,
   display-safe report-back, Stop). No grant minting from MCP/internal, no native
   flag flips, no allowlist change, no native actuation added.
+- Status 2026-06-11: current branch
+  `codex/luna-p54d-permission-readiness` implements the next P5.4d rung:
+  Luna shell registration carries sanitized permission-readiness statuses from
+  `control_get_safety_state`; server presence stores them with a server-side
+  `observed_at`; native-control enqueue checks fresh readiness before creating
+  a command row. Missing, stale, denied, or unknown required permissions return
+  structured `permission_not_ready` and queue no command. This does not grant
+  macOS permissions, change TCC settings, flip tenant flags, sign envelopes, or
+  enable native actuation.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
   approval-request -> user approval -> bounded grant.
-- Land the P5.4c chat-loop slice (grant_id-on-approved-status + planner loop
-  prompt), then the remaining rungs in dependency order: a
-  `permission_not_ready` Luna-client readiness probe before enqueue; byte-free
-  `rl_experience` per desktop decision/denial; report-back leak fixtures.
+- Land P5.4d permission readiness, then the remaining rungs in dependency
+  order: byte-free `rl_experience` per desktop decision/denial; report-back leak
+  fixtures; then the broader P5.5 chat approval UX/report-back polish.
 
 Tests:
 
@@ -538,6 +556,10 @@ Tests:
   `rl_experience` rows and embeddings receive only byte-free decision fields.
 - Permission-readiness test proving stale or denied preflight returns
   `permission_not_ready` before enqueue and before any claim/native boundary.
+  Status: current branch adds API tests for missing, denied, and stale
+  readiness; Tauri/core/CLI denial-code parity tests include
+  `permission_not_ready`; Luna JS shell-presence test asserts sanitized
+  readiness is sent with registration.
 
 Exit criteria:
 

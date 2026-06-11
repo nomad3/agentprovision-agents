@@ -43,6 +43,11 @@ function lastRegisteredCapabilities() {
   return JSON.parse(call[1].body).capabilities;
 }
 
+function lastRegisteredPermissionReadiness() {
+  const call = registerCalls().at(-1);
+  return JSON.parse(call[1].body).permission_readiness;
+}
+
 function lastRegisterCall() {
   return registerCalls().at(-1);
 }
@@ -78,6 +83,11 @@ describe('useShellPresence', () => {
       can_observe: false,
       can_control_pointer: false,
       can_control_keyboard: false,
+      permissions: {
+        screen_recording: { status: 'granted', reason: 'ok' },
+        accessibility: { status: 'denied', reason: 'not ok' },
+        automation_system_events: { status: 'unknown', reason: 'not checked' },
+      },
     });
 
     renderHook(() => useShellPresence());
@@ -92,6 +102,11 @@ describe('useShellPresence', () => {
     });
     expect(JSON.parse(lastRegisterCall()[1].body).device_id).toBe('tenant-desktop-test');
     expect(lastRegisterCall()[1].headers['X-Device-Token']).toBe('device-token-test');
+    expect(lastRegisteredPermissionReadiness()).toEqual({
+      screen_recording: { status: 'granted' },
+      accessibility: { status: 'denied' },
+      automation_system_events: { status: 'unknown' },
+    });
   });
 
   it('re-registers when local safety state changes', async () => {

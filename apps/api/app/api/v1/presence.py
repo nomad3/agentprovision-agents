@@ -64,6 +64,7 @@ def register_shell(
         capabilities=body.capabilities,
         device_registry_id=device_registry_id,
         device_id=body.device_id,
+        permission_readiness=body.permission_readiness,
     )
 
 

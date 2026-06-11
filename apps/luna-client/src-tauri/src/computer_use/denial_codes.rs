@@ -17,6 +17,7 @@ pub enum DenialCode {
     NativeControlDisabled,
     NativeControlTierDisabled,
     NativeControlActionUnsupported,
+    PermissionNotReady,
     ObservationPermissionDenied,
     ObservationDenied,
     ObservationFailed,
@@ -58,12 +59,13 @@ pub enum DenialCode {
 
 impl DenialCode {
     /// Every variant, for exhaustive validation/iteration.
-    pub const ALL: [DenialCode; 42] = [
+    pub const ALL: [DenialCode; 43] = [
         DenialCode::Stopped,
         DenialCode::ObserveLocked,
         DenialCode::NativeControlDisabled,
         DenialCode::NativeControlTierDisabled,
         DenialCode::NativeControlActionUnsupported,
+        DenialCode::PermissionNotReady,
         DenialCode::ObservationPermissionDenied,
         DenialCode::ObservationDenied,
         DenialCode::ObservationFailed,
@@ -110,6 +112,7 @@ impl DenialCode {
             DenialCode::NativeControlDisabled => "native_control_disabled",
             DenialCode::NativeControlTierDisabled => "native_control_tier_disabled",
             DenialCode::NativeControlActionUnsupported => "native_control_action_unsupported",
+            DenialCode::PermissionNotReady => "permission_not_ready",
             DenialCode::ObservationPermissionDenied => "observation_permission_denied",
             DenialCode::ObservationDenied => "observation_denied",
             DenialCode::ObservationFailed => "observation_failed",
@@ -170,6 +173,10 @@ const REASON_PREFIXES: &[(&str, DenialCode)] = &[
     (
         "desktop native control disabled",
         DenialCode::NativeControlDisabled,
+    ),
+    (
+        "desktop permission readiness",
+        DenialCode::PermissionNotReady,
     ),
     (
         "desktop observation permission",
@@ -440,6 +447,10 @@ mod tests {
         assert_eq!(
             code_for_reason("desktop native control disabled; pointer_click denied"),
             DenialCode::NativeControlDisabled
+        );
+        assert_eq!(
+            code_for_reason("desktop permission readiness stale; keyboard_type denied"),
+            DenialCode::PermissionNotReady
         );
         assert_eq!(
             code_for_reason("desktop command envelope signature invalid"),

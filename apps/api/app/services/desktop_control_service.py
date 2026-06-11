@@ -36,7 +36,7 @@ from app.models.user import User
 from app.services.collaboration_events import publish_session_event
 from app.services import luna_presence_service
 from app.services import perception_storage
-from app.services.desktop_control_codes import code_for_reason
+from app.services.desktop_control_codes import DesktopDenialCode, code_for_reason
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,14 @@ _PERMISSION_STATUS_FIELDS = (
     ("accessibility", "accessibility_status"),
     ("automation_system_events", "automation_system_events_status"),
 )
+
+_PERMISSION_READINESS_TTL_SECONDS = 30
+
+_NATIVE_CONTROL_REQUIRED_PERMISSIONS = {
+    "pointer_control": ("screen_recording", "accessibility"),
+    "keyboard_control": ("screen_recording", "accessibility"),
+    "background_control": ("accessibility",),
+}
 
 _OBSERVATION_CAPABILITIES = {
     "capture_screenshot": "screenshot",
@@ -337,6 +345,62 @@ def _select_connected_shell(
     }
     device_id = _bound_device_for_shell(snapshot, selected)
     return selected, capabilities, device_id
+
+
+def _permission_not_ready(reason: str, *, action: str) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": DesktopDenialCode.PERMISSION_NOT_READY.value,
+            "reason": f"{reason}; {action} denied",
+        },
+    )
+
+
+def _permission_probe_status(readiness: dict[str, Any], permission: str) -> str | None:
+    probe = readiness.get(permission)
+    if isinstance(probe, dict):
+        status = probe.get("status")
+    else:
+        status = probe
+    return status if isinstance(status, str) else None
+
+
+def _ensure_native_permission_readiness(
+    tenant_id: uuid.UUID,
+    *,
+    shell_id: str,
+    capability: str,
+    action: str,
+) -> None:
+    """Require a fresh Luna-client TCC readiness heartbeat before enqueue.
+
+    This is an API-side pre-enqueue gate only: it never grants permissions and
+    never touches native APIs. Missing/stale/non-granted readiness denies before
+    a command row can be queued.
+    """
+    required = _NATIVE_CONTROL_REQUIRED_PERMISSIONS.get(capability, ())
+    if not required:
+        return
+
+    snapshot = _presence_for_tenant(tenant_id)
+    if shell_id not in set(snapshot.get("connected_shells") or []):
+        _permission_not_ready("desktop permission readiness shell disconnected", action=action)
+
+    readiness = (snapshot.get("shell_permission_readiness") or {}).get(shell_id)
+    if not isinstance(readiness, dict):
+        _permission_not_ready("desktop permission readiness missing", action=action)
+
+    observed_at = _as_aware_utc(_parse_iso_datetime(readiness.get("observed_at")))
+    now = _utcnow()
+    if observed_at is None:
+        _permission_not_ready("desktop permission readiness missing timestamp", action=action)
+    if (now - observed_at).total_seconds() > _PERMISSION_READINESS_TTL_SECONDS:
+        _permission_not_ready("desktop permission readiness stale", action=action)
+
+    for permission in required:
+        if _permission_probe_status(readiness, permission) != "granted":
+            _permission_not_ready("desktop permission readiness not granted", action=action)
 
 
 def _utcnow() -> datetime:
@@ -900,6 +964,10 @@ def _device_for_user_shell(
 
 def _risk_tier_for_action(action: str) -> Literal["observe", "native_control"]:
     return "native_control" if action in _NATIVE_CONTROL_CAPABILITIES else "observe"
+
+
+def _requires_native_permission_readiness(action: str) -> bool:
+    return action in _NATIVE_CONTROL_CAPABILITIES and action not in _BACKGROUND_CONTROL_DRY_RUN_ACTIONS
 
 
 def _capability_matches_risk_tier(capability: str, risk_tier: str) -> bool:
@@ -2756,6 +2824,13 @@ def enqueue_desktop_command(
 
     shell_id, shell_capabilities, device_id = _select_connected_shell(tenant_id, request.shell_id)
     capability = _COMMAND_ACTION_CAPABILITIES[request.action]
+    if _requires_native_permission_readiness(request.action):
+        _ensure_native_permission_readiness(
+            tenant_id,
+            shell_id=shell_id,
+            capability=capability,
+            action=request.action,
+        )
     if request.action in _DISABLED_NATIVE_CONTROL_ACTIONS:
         return _enqueue_disabled_native_control_command(
             db,

@@ -17,18 +17,41 @@ const BASE_CAPABILITIES = {
   can_control_keyboard: false,
 };
 
-async function controlAwareCapabilities() {
+const PERMISSION_READINESS_FIELDS = [
+  'screen_recording',
+  'accessibility',
+  'automation_system_events',
+  'input_monitoring',
+  'camera',
+  'microphone',
+];
+
+function permissionReadinessFromSafetyState(state) {
+  const permissions = state?.permissions;
+  if (!permissions || typeof permissions !== 'object') return null;
+  const readiness = {};
+  PERMISSION_READINESS_FIELDS.forEach((field) => {
+    const probe = permissions[field];
+    if (!probe || typeof probe !== 'object' || typeof probe.status !== 'string') return;
+    readiness[field] = { status: probe.status };
+  });
+  return Object.keys(readiness).length > 0 ? readiness : null;
+}
+
+async function controlAwareShellState() {
   const capabilities = { ...BASE_CAPABILITIES };
+  let permissionReadiness = null;
   try {
     const { invoke } = await import('@tauri-apps/api/core');
     const state = await invoke('control_get_safety_state');
     capabilities.can_observe = Boolean(state?.can_observe);
     capabilities.can_control_pointer = Boolean(state?.can_control_pointer);
     capabilities.can_control_keyboard = Boolean(state?.can_control_keyboard);
+    permissionReadiness = permissionReadinessFromSafetyState(state);
   } catch {
     // Browser/PWA/test fallback uses conservative defaults.
   }
-  return capabilities;
+  return { capabilities, permissionReadiness };
 }
 
 export function useShellPresence() {
@@ -40,7 +63,7 @@ export function useShellPresence() {
   const register = useCallback(async () => {
     if (!shellId) return;
     try {
-      const capabilities = await controlAwareCapabilities();
+      const { capabilities, permissionReadiness } = await controlAwareShellState();
       const device = await enrollDesktopDevice(shellId, capabilities);
       const res = await apiFetch('/api/v1/presence/shell/register', {
         method: 'POST',
@@ -49,6 +72,7 @@ export function useShellPresence() {
           shell: shellId,
           capabilities,
           device_id: device.device_id,
+          permission_readiness: permissionReadiness,
         }),
       });
       registered.current = true;

@@ -9,7 +9,7 @@ is still thinking).
 """
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import threading
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,16 @@ VALID_STATES = {"idle", "listening", "thinking", "responding", "focused", "alert
 VALID_MOODS = {"calm", "warm", "playful", "serious", "empathetic", "neutral"}
 VALID_PRIVACY = {"open", "passive", "muted", "camera_off", "mic_off", "private"}
 VALID_TOOL_STATUS = {"idle", "running", "waiting", "error"}
+VALID_PERMISSION_STATUS = {"granted", "denied", "unknown", "not_required"}
+
+_PERMISSION_READINESS_FIELDS = (
+    "screen_recording",
+    "accessibility",
+    "automation_system_events",
+    "input_monitoring",
+    "camera",
+    "microphone",
+)
 
 # States that are "active" — idle transitions should only fire if the
 # current owner session matches, to avoid clobbering concurrent work.
@@ -46,6 +56,7 @@ def _default_presence() -> dict:
         "shell_capabilities": {},  # {shell_name: {cap: bool, ...}}
         "shell_devices": {},  # {shell_name: device_registry UUID string}
         "shell_device_ids": {},  # {shell_name: stable external device_id}
+        "shell_permission_readiness": {},  # {shell_name: {permission: {status}, observed_at}}
         "shell_heartbeats": {},  # {shell_name: iso_timestamp}
         "tool_status": "idle",
         "attention_target": None,
@@ -73,15 +84,32 @@ def _prune_dead_shells(p: dict) -> None:
     caps = p.get("shell_capabilities", {})
     devices = p.get("shell_devices", {})
     device_ids = p.get("shell_device_ids", {})
+    permission_readiness = p.get("shell_permission_readiness", {})
     for name in dead:
         if name in shells:
             shells.remove(name)
         caps.pop(name, None)
         devices.pop(name, None)
         device_ids.pop(name, None)
+        permission_readiness.pop(name, None)
         heartbeats.pop(name, None)
         if p.get("active_shell") == name:
             p["active_shell"] = shells[0] if shells else None
+
+
+def _sanitize_permission_readiness(raw: Any, *, observed_at: str) -> dict | None:
+    """Keep only display-safe permission readiness statuses from the Luna app."""
+    if not isinstance(raw, dict):
+        return None
+    sanitized: dict[str, dict[str, str]] = {}
+    for field in _PERMISSION_READINESS_FIELDS:
+        probe = raw.get(field)
+        status = probe.get("status") if isinstance(probe, dict) else probe
+        if isinstance(status, str) and status in VALID_PERMISSION_STATUS:
+            sanitized[field] = {"status": status}
+    if not sanitized:
+        return None
+    return {**sanitized, "observed_at": observed_at}
 
 
 def get_presence(tenant_id) -> dict:
@@ -98,6 +126,7 @@ def get_presence(tenant_id) -> dict:
         snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
         snap["shell_devices"] = dict(snap.get("shell_devices", {}))
         snap["shell_device_ids"] = dict(snap.get("shell_device_ids", {}))
+        snap["shell_permission_readiness"] = dict(snap.get("shell_permission_readiness", {}))
 
     # Staleness: if last real update is old and state is active, force idle
     # Handoff clears after 30s. After 30 min of idle, transition to sleep.
@@ -180,6 +209,7 @@ def register_shell(
     capabilities: Optional[dict] = None,
     device_registry_id: Optional[str] = None,
     device_id: Optional[str] = None,
+    permission_readiness: Optional[dict] = None,
 ) -> dict:
     tid = str(tenant_id)
     now = datetime.now(timezone.utc).isoformat()
@@ -208,11 +238,21 @@ def register_shell(
             p.setdefault("shell_devices", {})[shell_name] = device_registry_id
         if device_id:
             p.setdefault("shell_device_ids", {})[shell_name] = device_id
+        sanitized_permissions = _sanitize_permission_readiness(
+            permission_readiness,
+            observed_at=now,
+        )
+        readiness_by_shell = p.setdefault("shell_permission_readiness", {})
+        if sanitized_permissions:
+            readiness_by_shell[shell_name] = sanitized_permissions
+        else:
+            readiness_by_shell.pop(shell_name, None)
         snap = dict(p)
         snap["connected_shells"] = list(shells)
         snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
         snap["shell_devices"] = dict(snap.get("shell_devices", {}))
         snap["shell_device_ids"] = dict(snap.get("shell_device_ids", {}))
+        snap["shell_permission_readiness"] = dict(snap.get("shell_permission_readiness", {}))
         snap.pop("shell_heartbeats", None)
         return snap
 
@@ -233,6 +273,7 @@ def deregister_shell(tenant_id, shell_name: str) -> dict:
         p.get("shell_capabilities", {}).pop(shell_name, None)
         p.get("shell_devices", {}).pop(shell_name, None)
         p.get("shell_device_ids", {}).pop(shell_name, None)
+        p.get("shell_permission_readiness", {}).pop(shell_name, None)
         p.get("shell_heartbeats", {}).pop(shell_name, None)
         p["updated_at"] = now
         snap = dict(p)
@@ -240,5 +281,6 @@ def deregister_shell(tenant_id, shell_name: str) -> dict:
         snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
         snap["shell_devices"] = dict(snap.get("shell_devices", {}))
         snap["shell_device_ids"] = dict(snap.get("shell_device_ids", {}))
+        snap["shell_permission_readiness"] = dict(snap.get("shell_permission_readiness", {}))
         snap.pop("shell_heartbeats", None)
         return snap
