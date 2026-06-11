@@ -60,7 +60,9 @@ before any non-operator tenant receives actuation.
     reach native macOS actuation through internal-key-only grants.
 11. Until PR5 binds tenant/user identity into per-tenant Ed25519 signing keys,
     exactly one operator tenant may have actuation flags, the global floor, and
-    agent tool groups enabled for native control.
+    agent tool groups enabled for native control. This is a data-seeded
+    operational invariant over `tenant_features`, allowlists, and migrations
+    169/170/172; it is not a runtime fleet-wide guard until PR5.
 
 ## Current Gate State
 
@@ -196,17 +198,21 @@ Implementation scope:
 - Define a first-class server-recognized dry-run/no-op command mode before
   canary execution. The claim path must refuse to wrap this mode in a native
   envelope, and API/session events must make it distinguishable from a denied
-  real actuation.
+  real actuation. The dry-run lifecycle is claimable and Stop-preemptible
+  (`pending -> claimed -> running -> no-op`); it is not modeled as an
+  immediate-terminal denied row.
 - Use the SP1.5 contract/security fixtures as executable denial vocabulary.
 - Prove global cursor functions are not called by background-control commands.
 
 Tests:
 
 - Contract tests for target resolver, target drift, app quit, revoked allowlist,
-  flag-off, Stop/Lock, and secure-input denial (`secure_input`) before
+  flag-off, Stop/Lock, and secure-input denial (`secure_input_active`) before
   any native call.
 - Dry-run/no-op tests proving the command status is explicit, audit-visible, and
   the native envelope path is unreachable.
+- Stop-during-dry-run test proving the no-op lifecycle uses the same
+  status-based Stop/preempt path as native-capable commands.
 - Native-boundary tests proving the operator cursor is not moved by the
   background actuator.
 - Overlay/HUD tests proving it can request Stop but cannot approve, resume,
@@ -306,14 +312,14 @@ Implementation scope:
   only: denial code, action class, capability, outcome, command id, and audit
   refs. Do not persist OCR text, window titles, contact names, clipboard values,
   typed text, or planner-safe artifact text in `rl_experience.state_text`,
-  action fields, embeddings, or free-form metadata.
+  `rl_experience.state`, action fields, embeddings, or free-form metadata.
 - Start with operator-only apps already in the global floor: Luna, TextEdit,
   WhatsApp.
 - Before P5.5 lands, this coordinator may run only in dry-run, denied/no-op, or
   pre-granted test harness mode. It must not use internal-key-only approval
   grants to turn chat prompts into native actuation.
-- Before enqueue, the coordinator must request a fresh Luna
-  `run_desktop_preflight` result for the target shell/device. Missing, stale, or
+- Before enqueue, the coordinator must request a fresh Luna client
+  permission-readiness probe for the target shell/device. Missing, stale, or
   denied permissions produce `permission_not_ready` and no command row is queued.
 - Report-back from this coordinator is constrained to action summaries,
   outcome/status, denial codes, and audit refs. It must not quote planner-safe
@@ -423,6 +429,8 @@ Each PR must include:
 Before marking the feature E2E complete:
 
 - Pull/install the latest Luna release build locally.
+- Verify exactly one operator tenant has pointer/keyboard actuation flags,
+  allowlist entries, and Luna `desktop_control` tool groups enabled until PR5.
 - Verify TCC panel state and permission modal with Computer Use.
 - Verify Chrome/live tenant chat trigger.
 - Verify Luna Tauri chat trigger.
