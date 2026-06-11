@@ -15,7 +15,10 @@ use std::time::Duration;
 use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
-use crate::desktop::DesktopPreflight;
+use crate::desktop::{
+    DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
+    DesktopPreflight,
+};
 use crate::error::{Error, Result};
 use crate::models::{
     Agent, ChatJobSnapshot, ChatJobStart, ChatMessage, ChatMessageRequest, ChatSession, ChatTurn,
@@ -900,6 +903,33 @@ impl ApiClient {
     /// Superuser-only server-side; returns control-plane status, no key material.
     pub async fn desktop_preflight(&self) -> Result<DesktopPreflight> {
         self.get_json("/api/v1/desktop-control/preflight").await
+    }
+
+    /// `POST /api/v1/desktop-control/commands/background-dry-run` — queue a
+    /// user-scoped background-control dry-run command. This is the narrow
+    /// Alpha/Luna bridge for proving the loop before native actuation exists.
+    pub async fn desktop_background_dry_run(
+        &self,
+        body: &DesktopBackgroundDryRunRequest,
+    ) -> Result<DesktopCommandResponse> {
+        self.post_json("/api/v1/desktop-control/commands/background-dry-run", body)
+            .await
+    }
+
+    /// `GET /api/v1/desktop-control/commands/{command_id}` — fetch the
+    /// display-safe status snapshot for a queued command.
+    pub async fn desktop_command_status(
+        &self,
+        command_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<DesktopCommandStatusSnapshot> {
+        let path = match session_id {
+            Some(session_id) => {
+                format!("/api/v1/desktop-control/commands/{command_id}?session_id={session_id}")
+            }
+            None => format!("/api/v1/desktop-control/commands/{command_id}"),
+        };
+        self.get_json(&path).await
     }
 }
 

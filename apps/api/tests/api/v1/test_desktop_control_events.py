@@ -851,6 +851,73 @@ def test_command_enqueue_endpoint_accepts_background_control_dry_run():
     assert saved_request.tool_name == "desktop_background_app_control_dry_run"
 
 
+def test_user_background_dry_run_endpoint_fixes_action_and_user_scope():
+    user = _user()
+    client, _db = _client_for_endpoint(user)
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.enqueue_desktop_command",
+        return_value=(
+            _command(
+                status="pending",
+                capability="background_control",
+                payload={
+                    "action": "background_app_control_dry_run",
+                    "mode": "background_control_dry_run",
+                    "dry_run": {"native_envelope": False},
+                },
+            ),
+            event,
+            {"event_id": "session-event-background", "seq_no": 13},
+        ),
+    ) as enqueue:
+        response = client.post(
+            "/api/v1/desktop-control/commands/background-dry-run",
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "target": {
+                    "bundle_id": "com.example.LunaCanaryTarget",
+                    "window_title_pattern": "Luna Canary",
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["status"] == "pending"
+    assert body["capability"] == "background_control"
+    assert enqueue.call_args.kwargs["tenant_id"] == user.tenant_id
+    assert enqueue.call_args.kwargs["user_id"] == user.id
+    saved_request = enqueue.call_args.kwargs["request"]
+    assert saved_request.action == "background_app_control_dry_run"
+    assert saved_request.tool_name == "desktop_background_app_control_dry_run"
+    assert saved_request.approval_id is None
+    assert saved_request.payload == {
+        "target": {
+            "bundle_id": "com.example.LunaCanaryTarget",
+            "action": "background_app_control_dry_run",
+            "window_title_pattern": "Luna Canary",
+        },
+        "dry_run": True,
+    }
+
+
+def test_user_background_dry_run_endpoint_rejects_arbitrary_payload():
+    client, _db = _client_for_endpoint(_user())
+
+    response = client.post(
+        "/api/v1/desktop-control/commands/background-dry-run",
+        json={
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "target": {"bundle_id": "com.example.LunaCanaryTarget"},
+            "payload": {"args": {"text": "must-not-be-accepted"}},
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def _display_safe_status():
     return {
         "command": {
