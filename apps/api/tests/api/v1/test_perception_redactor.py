@@ -71,6 +71,15 @@ class RaisingEngine:
         raise RuntimeError("engine boom")
 
 
+class RecordingEngine:
+    def __init__(self):
+        self.calls = []
+
+    def detect(self, image_bytes, *, width, height):
+        self.calls.append(image_bytes)
+        return []
+
+
 @pytest.fixture(name="db_session")
 def db_session_fixture():
     Base.metadata.create_all(bind=db_engine)
@@ -116,6 +125,91 @@ def _seed_artifact(db, *, root, claimed_by=None, png=None):
 
 
 # ── deterministic floor (authoritative) ──────────────────────────────────────
+
+
+def test_tesseract_tsv_groups_words_into_line_regions():
+    tsv = (
+        "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        "5\t1\t1\t1\t1\t1\t10\t20\t120\t12\t96\tAWS_SECRET_ACCESS_KEY\n"
+        "5\t1\t1\t1\t1\t2\t135\t20\t8\t12\t95\t=\n"
+        "5\t1\t1\t1\t1\t3\t150\t20\t160\t12\t94\tAKIAIOSFODNN7EXAMPLE\n"
+        "5\t1\t1\t1\t2\t1\t10\t50\t60\t12\t90\tSubmit\n"
+    )
+
+    regions = pr._parse_tesseract_tsv(tsv)
+
+    assert len(regions) == 2
+    secret_line = regions[0]
+    assert secret_line.box == (10, 20, 300, 12)
+    assert secret_line.text == "AWS_SECRET_ACCESS_KEY = AKIAIOSFODNN7EXAMPLE"
+    assert secret_line.confidence == pytest.approx(0.95)
+    classified = pr._classify_regions(regions)
+    assert not classified.withhold
+    assert classified.redact_boxes == [(10, 20, 300, 12)]
+
+
+def test_load_engine_tesseract_requires_binary(monkeypatch):
+    monkeypatch.setenv("PERCEPTION_REDACTOR_ENGINE", "tesseract")
+    monkeypatch.setattr(pr.shutil, "which", lambda _binary: None)
+
+    assert pr._load_engine() is None
+
+
+def test_load_engine_tesseract_constructs_engine(monkeypatch):
+    monkeypatch.setenv("PERCEPTION_REDACTOR_ENGINE", "tesseract")
+    monkeypatch.setenv("PERCEPTION_REDACTOR_TESSERACT_BIN", "custom-tesseract")
+    monkeypatch.setenv("PERCEPTION_REDACTOR_TESSERACT_LANG", "eng")
+    monkeypatch.setenv("PERCEPTION_REDACTOR_TESSERACT_PSM", "11")
+    monkeypatch.setattr(pr.shutil, "which", lambda _binary: "/usr/bin/tesseract")
+
+    engine = pr._load_engine()
+
+    assert isinstance(engine, pr.TesseractCliRedactorEngine)
+    assert engine.binary == "custom-tesseract"
+    assert engine.lang == "eng"
+    assert engine.psm == "11"
+
+
+def test_tesseract_engine_invokes_cli_and_parses(monkeypatch):
+    tsv = (
+        "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        "5\t1\t1\t1\t1\t1\t1\t2\t3\t4\t88\tSubmit\n"
+    )
+    calls = []
+
+    class _Proc:
+        returncode = 0
+        stdout = tsv
+        stderr = ""
+
+    def _run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return _Proc()
+
+    monkeypatch.setattr(pr.shutil, "which", lambda _binary: "/usr/bin/tesseract")
+    monkeypatch.setattr(pr.subprocess, "run", _run)
+
+    regions = pr.TesseractCliRedactorEngine(binary="tesseract").detect(
+        _make_png(), width=64, height=48
+    )
+
+    assert calls
+    assert calls[0][0][0] == "/usr/bin/tesseract"
+    assert calls[0][0][-3:] == ["--psm", "6", "tsv"]
+    assert calls[0][1]["check"] is False
+    assert calls[0][1]["capture_output"] is True
+    assert regions == [pr.DetectedRegion(box=(1, 2, 3, 4), text="Submit", confidence=0.88)]
+
+
+def test_tesseract_engine_timeout_fails_closed(monkeypatch):
+    def _timeout(*_args, **_kwargs):
+        raise pr.subprocess.TimeoutExpired(cmd="tesseract", timeout=1)
+
+    monkeypatch.setattr(pr.shutil, "which", lambda _binary: "/usr/bin/tesseract")
+    monkeypatch.setattr(pr.subprocess, "run", _timeout)
+
+    with pytest.raises(pr.RedactionError, match="tesseract timeout"):
+        pr.TesseractCliRedactorEngine(binary="tesseract").detect(_make_png(), width=64, height=48)
 
 
 def test_floor_redacts_secret_region_and_passes():
@@ -294,6 +388,24 @@ def test_redact_artifact_redacts_secret_region(db_session):
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_PLANNER_SAFE
     assert not os.path.exists(raw_abs)
+
+
+def test_redact_artifact_sends_flattened_metadata_free_bytes_to_engine(db_session):
+    root = perception_storage.quarantine_root()
+    art, _ = _seed_artifact(
+        db_session,
+        root=root,
+        claimed_by="w1",
+        png=_make_png(text_meta={"Comment": SECRET}),
+    )
+    engine = RecordingEngine()
+
+    out = pr.redact_artifact(db_session, art, engine, worker_id="w1", root=root)
+
+    assert out.status == "planner_safe"
+    assert len(engine.calls) == 2  # initial detection + redacted verification
+    assert SECRET.encode() not in engine.calls[0]
+    assert engine.calls[0].startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_redact_artifact_withholds_when_secret_survives_redaction(db_session):
