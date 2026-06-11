@@ -7,7 +7,10 @@
 //!
 //! Scope: contract/parity only. No native actuation; no `alpha desktop` command.
 
-use agentprovision_core::desktop::{DesktopCommandClaim, DesktopCommandDenied, DesktopDenialCode};
+use agentprovision_core::desktop::{
+    DesktopCommandClaim, DesktopCommandDenied, DesktopDenialCode, PerceptionArtifactStatus,
+    PerceptionFetchDenial, PerceptionFetchDenialCode, PerceptionRedactionStatus,
+};
 
 const CLAIM: &str =
     include_str!("../../../docs/contracts/desktop-control/pointer_command_claim.display_safe.json");
@@ -15,6 +18,10 @@ const DENY_BUNDLE: &str =
     include_str!("../../../docs/contracts/desktop-control/deny.missing_target_bundle_id.json");
 const DENY_CAP: &str =
     include_str!("../../../docs/contracts/desktop-control/deny.capability_mismatch.json");
+const OBSERVATION_STATUS: &str =
+    include_str!("../../../docs/contracts/desktop-control/observation_status.planner_safe.json");
+const OBSERVATION_FETCH_DENIED: &str =
+    include_str!("../../../docs/contracts/desktop-control/observation_fetch.denied.json");
 
 #[test]
 fn cli_deserializes_fixtures_via_core_types() {
@@ -37,4 +44,39 @@ fn cli_rejects_raw_content_via_core_types() {
         serde_json::from_str::<DesktopCommandClaim>(&s).is_err(),
         "raw screenshot must be rejected by the core display-safe type"
     );
+}
+
+#[test]
+fn cli_deserializes_observation_fixtures_via_core_types() {
+    // P5.3b planner-safe delivery: the status fixture parses through the core
+    // type, and the denial fixture parses through the typed denial helper.
+    let status: PerceptionArtifactStatus =
+        serde_json::from_str(OBSERVATION_STATUS).expect("core observation status type");
+    assert_eq!(
+        status.redaction_status,
+        PerceptionRedactionStatus::PlannerSafe
+    );
+    assert!(status.redacted_available && status.raw_deleted);
+
+    let denial = PerceptionFetchDenial::from_error_body(OBSERVATION_FETCH_DENIED)
+        .expect("typed fetch denial");
+    assert_eq!(
+        denial.code,
+        PerceptionFetchDenialCode::ArtifactNotPlannerSafe
+    );
+}
+
+#[test]
+fn cli_rejects_storage_paths_in_observation_status() {
+    // Raw storage paths are not part of the observe contract — a server (or
+    // MITM) response that includes one must fail to deserialize.
+    for key in ["storage_path", "redacted_storage_path", "ocr_text"] {
+        let mut v: serde_json::Value = serde_json::from_str(OBSERVATION_STATUS).unwrap();
+        v[key] = serde_json::json!("tenant/session/artifact.png");
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(
+            serde_json::from_str::<PerceptionArtifactStatus>(&s).is_err(),
+            "{key} must be rejected by the core observation status type"
+        );
+    }
 }

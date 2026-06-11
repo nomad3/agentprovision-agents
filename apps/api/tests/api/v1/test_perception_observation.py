@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import uuid
 from unittest.mock import patch
 
@@ -167,7 +169,6 @@ def test_storage_fail_closed_before_io():
         with pytest.raises(perception_storage.PerceptionStorageError):
             call(data=PNG, source_window_bundle_id=bad)
     # a real reverse-DNS bundle id is accepted by the validator (reaches the write)
-    import os, tempfile
     with tempfile.TemporaryDirectory() as root:
         os.environ["OBSERVATION_QUARANTINE_ROOT"] = root
         try:
@@ -183,16 +184,28 @@ def test_relpath_is_tenant_session_scoped_and_traversal_free():
     assert ".." not in rel
 
 
-def test_no_byte_retrieval_route_exists():
-    # No-read by construction: there must be NO route that returns observation
-    # bytes (no GET on the observations resource).
+def test_only_planner_safe_retrieval_routes_exist():
+    # P5.2 shipped with NO byte-retrieval route. P5.3b adds exactly one delivery
+    # surface — the planner-safe REDACTED content (+ byte-free status) — which
+    # reads only the redacted derivative via the canonical id-derived jailed
+    # path (see perception_delivery). RAW observation bytes still have no
+    # retrieval route. Any new GET on the observations resource must be added
+    # here deliberately.
+    allowed_get_routes = {
+        "/desktop-control/observations/{artifact_id}/status",
+        "/desktop-control/observations/{artifact_id}/content",
+        "/desktop-control/internal/observations/{artifact_id}/content",
+    }
     from app.api.v1 import desktop_control
     for route in desktop_control.router.routes:
         path = getattr(route, "path", "")
         methods = getattr(route, "methods", set()) or set()
-        if "observations" in path and path != "/internal/observations/request":
+        if "observations" not in path:
+            continue
+        if "GET" in methods:
+            assert path in allowed_get_routes, f"unexpected GET route on {path}"
+        else:
             assert methods == {"POST"}, f"unexpected method on {path}: {methods}"
-            assert "GET" not in methods
 
 
 def _find_repo_file(name: str) -> str | None:

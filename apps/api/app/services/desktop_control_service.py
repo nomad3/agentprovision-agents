@@ -2650,6 +2650,7 @@ def record_mcp_observation_request(
     tenant_id: uuid.UUID,
     user_id: uuid.UUID,
     request: McpObservationRequest,
+    source: str = "mcp",
 ) -> tuple[DesktopCommandEvent, dict[str, Any] | None]:
     """Record an MCP/API-governed observation request.
 
@@ -2678,7 +2679,7 @@ def record_mcp_observation_request(
         user_id=user_id,
         session_id=request.session_id,
         event_type="desktop_observation_denied",
-        source="mcp",
+        source=source,
         action=request.action,
         capability=capability,
         outcome="denied",

@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "artifact_not_planner_safe",
+    "reason": "perception artifact is not planner-safe"
+  }
+}

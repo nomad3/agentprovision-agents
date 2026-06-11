@@ -304,6 +304,95 @@ async def desktop_background_app_control_dry_run(
     )
 
 
+async def _fetch_observation(
+    *,
+    artifact_id: str,
+    session_id: str,
+    shell_id: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    tid = resolve_tenant_id(ctx, tenant_id)
+    if not tid:
+        return {"status": "error", "error": "tenant_id required"}
+
+    user_id = resolve_user_id(ctx)
+    if not user_id:
+        return {"status": "error", "error": "X-User-Id required for desktop observation"}
+
+    headers = {
+        "X-Internal-Key": API_INTERNAL_KEY,
+        "X-Tenant-Id": tid,
+        "X-User-Id": user_id,
+    }
+    params = {"session_id": session_id}
+    if shell_id:
+        params["shell_id"] = shell_id
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/observations/{artifact_id}/content"
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, params=params, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning(
+            "desktop_fetch_observation: HTTP transport error artifact=%s err=%s",
+            artifact_id,
+            exc,
+        )
+        return {"status": "error", "error": f"transport: {exc}"}
+
+    if resp.status_code == 200:
+        payload = resp.json()
+        return {
+            **payload,
+            "message": (
+                "Planner-safe redacted observation delivered. `content_base64` "
+                "is the reviewed redacted PNG; raw capture bytes were hard-"
+                "deleted before this artifact became fetchable."
+            ),
+        }
+    if resp.status_code == 401:
+        return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code in (403, 404, 409, 410):
+        # Display-safe structured denial from the delivery service
+        # ({"detail": {"code": ..., "reason": ...}}) — surface it as-is.
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        if isinstance(detail, dict) and "code" in detail:
+            return {"status": "denied", **detail}
+        return {"status": "error", "error": f"denied {resp.status_code}: {resp.text[:200]}"}
+    if resp.status_code in (400, 422):
+        return {"status": "error", "error": f"bad request: {resp.text[:200]}"}
+    return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
+
+
+@mcp.tool()
+async def desktop_fetch_observation(
+    artifact_id: str,
+    session_id: str,
+    shell_id: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Fetch the planner-safe REDACTED content of a perception artifact.
+
+    Delivery is fail-closed: the API serves only the redacted derivative of an
+    artifact whose raw bytes were already hard-deleted (`redaction_status ==
+    planner_safe` and `raw_deleted_at` set), scoped to this tenant/session and
+    re-checked against the master desktop-control flag. Raw screenshots, paths,
+    OCR text, window titles, and clipboard content are never returned.
+    """
+    return await _fetch_observation(
+        artifact_id=artifact_id,
+        session_id=session_id,
+        shell_id=shell_id,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+
+
 @mcp.tool()
 async def desktop_command_status(
     command_id: str,
@@ -328,6 +417,7 @@ __all__ = [
     "desktop_observe_screen",
     "desktop_get_active_app",
     "desktop_read_clipboard",
+    "desktop_fetch_observation",
     "desktop_background_app_control_dry_run",
     "desktop_command_status",
 ]

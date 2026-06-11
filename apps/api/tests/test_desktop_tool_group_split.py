@@ -6,7 +6,13 @@ without ever being granted actuation. Pure logic over the static registry.
 """
 from app.services.tool_groups import TOOL_GROUPS, resolve_tool_names
 
-OBSERVE_TOOLS = {"desktop_observe_screen", "desktop_get_active_app", "desktop_read_clipboard"}
+OBSERVE_TOOLS = {
+    "desktop_observe_screen",
+    "desktop_get_active_app",
+    "desktop_read_clipboard",
+    # P5.3b planner-safe delivery — read-only perception, never actuation.
+    "desktop_fetch_observation",
+}
 CONTROL_TOOLS = {
     "desktop_pointer_move",
     "desktop_pointer_click",

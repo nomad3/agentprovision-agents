@@ -5,12 +5,16 @@
 //! (`GET /api/v1/desktop-control/...`) and the same service entrypoints the
 //! web/Tauri viewports call — they never actuate input locally.
 
-use clap::{Args, Subcommand};
+use std::path::PathBuf;
+
+use clap::{Args, Subcommand, ValueEnum};
 
 use agentprovision_core::desktop::{
     DesktopActionKind, DesktopBackgroundDryRunRequest, DesktopBackgroundDryRunTarget,
     DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
+    DesktopObservationRequestBody, DesktopObserveAction, PerceptionFetchDenial,
 };
+use agentprovision_core::Error as CoreError;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -29,6 +33,10 @@ pub enum DesktopCommand {
     /// Inspect a queued desktop command.
     #[command(subcommand)]
     Command(CommandLifecycleCommand),
+    /// Governed observation verbs (P5.3b): request an observation, inspect a
+    /// perception artifact, and fetch ONLY its planner-safe redacted content.
+    #[command(subcommand)]
+    Observe(ObserveCommand),
     /// Inspect or update the current tenant's desktop-control bootstrap gates.
     #[command(subcommand)]
     Enablement(EnablementCommand),
@@ -90,6 +98,74 @@ pub struct CommandStatusArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ObserveCommand {
+    /// Request a governed observation (records a display-safe audit event;
+    /// content delivery happens via `fetch` once an artifact is planner-safe).
+    Request(ObserveRequestArgs),
+    /// Read the display-safe status of a perception artifact.
+    Status(ObserveStatusArgs),
+    /// Download the planner-safe REDACTED content of a perception artifact.
+    Fetch(ObserveFetchArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ObserveActionArg {
+    Screenshot,
+    ActiveApp,
+    Clipboard,
+}
+
+impl From<ObserveActionArg> for DesktopObserveAction {
+    fn from(value: ObserveActionArg) -> Self {
+        match value {
+            ObserveActionArg::Screenshot => DesktopObserveAction::CaptureScreenshot,
+            ObserveActionArg::ActiveApp => DesktopObserveAction::GetActiveApp,
+            ObserveActionArg::Clipboard => DesktopObserveAction::ReadClipboard,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct ObserveRequestArgs {
+    /// Chat/session UUID the observation binds to.
+    #[arg(long)]
+    pub session: Uuid,
+    /// Observation kind (default: screenshot).
+    #[arg(long, value_enum, default_value = "screenshot")]
+    pub action: ObserveActionArg,
+    /// Optional desktop shell id when the caller has one.
+    #[arg(long)]
+    pub shell_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ObserveStatusArgs {
+    /// Perception artifact UUID.
+    pub artifact_id: Uuid,
+    /// Chat/session UUID that owns the artifact (scope check).
+    #[arg(long)]
+    pub session: Uuid,
+    /// Optional desktop shell id to tighten the scope check.
+    #[arg(long)]
+    pub shell_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct ObserveFetchArgs {
+    /// Perception artifact UUID.
+    pub artifact_id: Uuid,
+    /// Chat/session UUID that owns the artifact (scope check).
+    #[arg(long)]
+    pub session: Uuid,
+    /// File path the redacted PNG is written to (bytes never go to stdout).
+    #[arg(long)]
+    pub out: PathBuf,
+    /// Optional desktop shell id to tighten the scope check.
+    #[arg(long)]
+    pub shell_id: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum EnablementCommand {
     /// Read the current tenant's desktop-control bootstrap gates.
     Get(EnablementGetArgs),
@@ -130,6 +206,9 @@ pub async fn dispatch(cmd: DesktopCommand, ctx: Context) -> anyhow::Result<()> {
         DesktopCommand::Preflight(PreflightCommand::Run(a)) => preflight_run(a, ctx).await,
         DesktopCommand::DryRun(DryRunCommand::Request(a)) => dry_run_request(a, ctx).await,
         DesktopCommand::Command(CommandLifecycleCommand::Status(a)) => command_status(a, ctx).await,
+        DesktopCommand::Observe(ObserveCommand::Request(a)) => observe_request(a, ctx).await,
+        DesktopCommand::Observe(ObserveCommand::Status(a)) => observe_status(a, ctx).await,
+        DesktopCommand::Observe(ObserveCommand::Fetch(a)) => observe_fetch(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Get(a)) => enablement_get(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Set(a)) => enablement_set(a, ctx).await,
         DesktopCommand::Allowlist(AllowlistCommand::Get(a)) => allowlist_get(a, ctx).await,
@@ -231,6 +310,130 @@ async fn command_status(args: CommandStatusArgs, ctx: Context) -> anyhow::Result
             }
             output::info(line);
         }
+    });
+    Ok(())
+}
+
+async fn observe_request(args: ObserveRequestArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopObservationRequestBody {
+        session_id: args.session.to_string(),
+        shell_id: args.shell_id,
+        action: args.action.into(),
+    };
+    let resp = ctx.client.desktop_observe_request(&body).await?;
+    output::emit(ctx.json, &resp, |resp| {
+        output::ok(format!(
+            "[alpha] desktop observe requested action={} capability={} shell_id={}",
+            json_string(&resp.action),
+            json_string(&resp.capability),
+            resp.shell_id,
+        ));
+        output::info(format!(
+            "down_channel_available={} event={}",
+            resp.down_channel_available, resp.desktop_event_id,
+        ));
+        if let Some(reason) = &resp.reason {
+            output::info(format!("reason={reason}"));
+        }
+    });
+    Ok(())
+}
+
+/// Map an API error into the typed planner-safe fetch denial when it is one,
+/// keeping the CLI message display-safe and stable.
+fn observe_denial_message(err: &anyhow::Error) -> Option<String> {
+    let core = err.downcast_ref::<CoreError>()?;
+    if let CoreError::Api { body, .. } = core {
+        let denial = PerceptionFetchDenial::from_error_body(body)?;
+        return Some(format!(
+            "denied code={} reason={}",
+            json_string(&denial.code),
+            denial.reason,
+        ));
+    }
+    None
+}
+
+async fn observe_status(args: ObserveStatusArgs, ctx: Context) -> anyhow::Result<()> {
+    let resp = ctx
+        .client
+        .desktop_observation_status(
+            &args.artifact_id.to_string(),
+            &args.session.to_string(),
+            args.shell_id.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            let err = anyhow::Error::new(e);
+            match observe_denial_message(&err) {
+                Some(msg) => err.context(format!("[alpha] desktop observe status {msg}")),
+                None => err,
+            }
+        })?;
+    output::emit(ctx.json, &resp, |resp| {
+        output::ok(format!(
+            "[alpha] observation {} status={} redacted_available={}",
+            resp.artifact_id,
+            json_string(&resp.redaction_status),
+            resp.redacted_available,
+        ));
+        output::info(format!(
+            "raw_deleted={} expired={} size_bytes={} sha256={}",
+            resp.raw_deleted, resp.expired, resp.size_bytes, resp.sha256,
+        ));
+        if let Some(expires_at) = &resp.expires_at {
+            output::info(format!("expires_at={expires_at}"));
+        }
+        if let Some(verdict) = &resp.redaction_verdict {
+            output::info(format!("redaction_verdict={verdict}"));
+        }
+    });
+    Ok(())
+}
+
+async fn observe_fetch(args: ObserveFetchArgs, ctx: Context) -> anyhow::Result<()> {
+    let data = ctx
+        .client
+        .desktop_observation_fetch(
+            &args.artifact_id.to_string(),
+            &args.session.to_string(),
+            args.shell_id.as_deref(),
+        )
+        .await
+        .map_err(|e| {
+            let err = anyhow::Error::new(e);
+            match observe_denial_message(&err) {
+                Some(msg) => err.context(format!("[alpha] desktop observe fetch {msg}")),
+                None => err,
+            }
+        })?;
+    let sha256 = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    std::fs::write(&args.out, &data)?;
+    // Display-safe summary only — the planner-safe bytes go to the file, never
+    // to stdout/JSON output.
+    let summary = serde_json::json!({
+        "artifact_id": args.artifact_id.to_string(),
+        "out": args.out.display().to_string(),
+        "size_bytes": data.len(),
+        "sha256": sha256,
+    });
+    output::emit(ctx.json, &summary, |_| {
+        output::ok(format!(
+            "[alpha] planner-safe observation {} written to {} ({} bytes, sha256={})",
+            args.artifact_id,
+            args.out.display(),
+            data.len(),
+            sha256,
+        ));
     });
     Ok(())
 }
@@ -472,5 +675,122 @@ mod tests {
     fn rejects_unknown_desktop_subcommand() {
         let cli = TestCli::try_parse_from(["t", "desktop", "bogus"]);
         assert!(cli.is_err(), "unknown desktop subcommand should fail clap");
+    }
+
+    #[test]
+    fn parses_observe_request_with_default_action() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "observe",
+            "request",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Observe(ObserveCommand::Request(args)),
+            } => {
+                assert_eq!(
+                    args.session.to_string(),
+                    "33333333-3333-3333-3333-333333333333"
+                );
+                assert_eq!(args.action, ObserveActionArg::Screenshot);
+                assert!(args.shell_id.is_none());
+            }
+            _ => panic!("expected desktop observe request"),
+        }
+    }
+
+    #[test]
+    fn parses_observe_status() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "observe",
+            "status",
+            "77777777-7777-7777-7777-777777777777",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--shell-id",
+            "desktop-44444444-4444-4444-4444-444444444444",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Observe(ObserveCommand::Status(args)),
+            } => {
+                assert_eq!(
+                    args.artifact_id.to_string(),
+                    "77777777-7777-7777-7777-777777777777"
+                );
+                assert_eq!(
+                    args.session.to_string(),
+                    "33333333-3333-3333-3333-333333333333"
+                );
+                assert_eq!(
+                    args.shell_id.as_deref(),
+                    Some("desktop-44444444-4444-4444-4444-444444444444")
+                );
+            }
+            _ => panic!("expected desktop observe status"),
+        }
+    }
+
+    #[test]
+    fn parses_observe_fetch_and_requires_out() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "observe",
+            "fetch",
+            "77777777-7777-7777-7777-777777777777",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--out",
+            "/tmp/redacted.png",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Observe(ObserveCommand::Fetch(args)),
+            } => {
+                assert_eq!(
+                    args.artifact_id.to_string(),
+                    "77777777-7777-7777-7777-777777777777"
+                );
+                assert_eq!(args.out, PathBuf::from("/tmp/redacted.png"));
+            }
+            _ => panic!("expected desktop observe fetch"),
+        }
+
+        // --out is required: the planner-safe bytes must go to a file, never stdout.
+        let missing_out = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "observe",
+            "fetch",
+            "77777777-7777-7777-7777-777777777777",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+        ]);
+        assert!(missing_out.is_err(), "observe fetch must require --out");
+    }
+
+    #[test]
+    fn observe_denial_maps_typed_fetch_denials_only() {
+        let api_err = anyhow::Error::new(CoreError::Api {
+            status: 409,
+            body: r#"{"detail": {"code": "artifact_not_planner_safe", "reason": "perception artifact is not planner-safe"}}"#.to_string(),
+        });
+        let msg = observe_denial_message(&api_err).expect("typed denial");
+        assert!(msg.contains("artifact_not_planner_safe"));
+
+        let other_err = anyhow::Error::new(CoreError::Api {
+            status: 404,
+            body: r#"{"detail": "Session not found"}"#.to_string(),
+        });
+        assert!(observe_denial_message(&other_err).is_none());
     }
 }

@@ -234,6 +234,9 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "desktop_observe_screen",
         "desktop_get_active_app",
         "desktop_read_clipboard",
+        # P5.3b: planner-safe redacted artifact delivery (metadata + redacted
+        # content only; raw capture bytes are unreachable by construction).
+        "desktop_fetch_observation",
     ],
     # Agent-driven actuation surface. Pointer/keyboard remain API-native until
     # their MCP wrappers ship; the background dry-run tool is registered now and

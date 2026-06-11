@@ -17,6 +17,7 @@ def test_desktop_control_module_exports_registered_tools():
         "desktop_observe_screen",
         "desktop_get_active_app",
         "desktop_read_clipboard",
+        "desktop_fetch_observation",
         "desktop_background_app_control_dry_run",
         "desktop_command_status",
     }
@@ -300,3 +301,128 @@ async def test_desktop_tools_transport_error_returns_error(monkeypatch):
 
     assert out["status"] == "error"
     assert "transport" in out["error"]
+
+
+# ── P5.3b: desktop_fetch_observation (planner-safe redacted delivery) ─────────
+
+
+@pytest.mark.asyncio
+async def test_desktop_fetch_observation_delivers_planner_safe_payload(patch_httpx):
+    client = patch_httpx(
+        default_status=200,
+        default_json={
+            "artifact_id": "77777777-7777-7777-7777-777777777777",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "redaction_status": "planner_safe",
+            "size_bytes": 42,
+            "sha256": "ab" * 32,
+            "expires_at": "2026-06-11T13:00:00+00:00",
+            "content_base64": "aGVsbG8=",
+        },
+    )
+
+    out = await dc.desktop_fetch_observation(
+        artifact_id="77777777-7777-7777-7777-777777777777",
+        session_id="33333333-3333-3333-3333-333333333333",
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["redaction_status"] == "planner_safe"
+    assert out["content_base64"] == "aGVsbG8="
+    assert "planner-safe" in out["message"].lower()
+    # no raw-content fields can appear in the envelope
+    assert "screenshot" not in out
+    assert "storage_path" not in out
+    assert "ocr_text" not in out
+
+    call = client.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith(
+        "/api/v1/desktop-control/internal/observations/"
+        "77777777-7777-7777-7777-777777777777/content"
+    )
+    assert call["params"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+    }
+    assert call["headers"]["X-Tenant-Id"] == "11111111-1111-1111-1111-111111111111"
+    assert call["headers"]["X-User-Id"] == "22222222-2222-2222-2222-222222222222"
+    assert call["headers"]["X-Internal-Key"]
+
+
+@pytest.mark.asyncio
+async def test_desktop_fetch_observation_requires_tenant():
+    out = await dc.desktop_fetch_observation(
+        artifact_id="77777777-7777-7777-7777-777777777777",
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out == {"status": "error", "error": "tenant_id required"}
+
+
+@pytest.mark.asyncio
+async def test_desktop_fetch_observation_requires_user():
+    out = await dc.desktop_fetch_observation(
+        artifact_id="77777777-7777-7777-7777-777777777777",
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=SimpleNamespace(request_context={}),
+    )
+
+    assert out["status"] == "error"
+    assert "X-User-Id required" in out["error"]
+
+
+@pytest.mark.asyncio
+async def test_desktop_fetch_observation_surfaces_display_safe_denial(patch_httpx):
+    patch_httpx(
+        default_status=409,
+        default_json={
+            "detail": {
+                "code": "artifact_not_planner_safe",
+                "reason": "perception artifact is not planner-safe",
+            }
+        },
+    )
+
+    out = await dc.desktop_fetch_observation(
+        artifact_id="77777777-7777-7777-7777-777777777777",
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "denied"
+    assert out["code"] == "artifact_not_planner_safe"
+    assert "content_base64" not in out
+
+
+@pytest.mark.asyncio
+async def test_desktop_fetch_observation_omits_empty_shell_id(patch_httpx):
+    client = patch_httpx(
+        default_status=200,
+        default_json={
+            "artifact_id": "77777777-7777-7777-7777-777777777777",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "redaction_status": "planner_safe",
+            "size_bytes": 42,
+            "sha256": "ab" * 32,
+            "expires_at": "2026-06-11T13:00:00+00:00",
+            "content_base64": "aGVsbG8=",
+        },
+    )
+
+    await dc.desktop_fetch_observation(
+        artifact_id="77777777-7777-7777-7777-777777777777",
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert client.calls[0]["params"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+    }
