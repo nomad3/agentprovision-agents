@@ -162,6 +162,14 @@ configMap:
     # stays fail-closed (disabled). Key id must match the Luna client default.
     DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: "agentprovision-desktop-command-ed25519-v1"
+    # Planner-safe screenshot redactor wiring. This only selects the local OCR
+    # engine; PERCEPTION_REDACTOR_ENABLED remains operator-controlled and must
+    # be true before OCR/redaction work runs.
+    PERCEPTION_REDACTOR_ENGINE: "tesseract"
+    PERCEPTION_REDACTOR_TESSERACT_BIN: "tesseract"
+    PERCEPTION_REDACTOR_TESSERACT_LANG: ""
+    PERCEPTION_REDACTOR_TESSERACT_PSM: "6"
+    PERCEPTION_REDACTOR_TESSERACT_TIMEOUT_SECONDS: "8"
 
 # External Secrets - pulls from GCP Secret Manager
 externalSecret:

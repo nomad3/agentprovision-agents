@@ -32,11 +32,15 @@ Invariants (the review checklist):
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import io
 import logging
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -80,6 +84,7 @@ MAX_ATTEMPTS = _int_env("PERCEPTION_REDACTOR_MAX_ATTEMPTS", 3)
 # A secret region whose box is smaller than this many px on either side is treated
 # as un-coverable (mis-detected geometry) ⇒ withhold rather than emit a tiny mark.
 MIN_SECRET_BOX_PX = _int_env("PERCEPTION_REDACTOR_MIN_SECRET_BOX_PX", 4)
+TESSERACT_TIMEOUT_SECONDS = _float_env("PERCEPTION_REDACTOR_TESSERACT_TIMEOUT_SECONDS", 8.0)
 
 _NONTEXT_SENSITIVE_KINDS = frozenset({"qr", "barcode"})
 _UNSUPPORTED_KINDS = frozenset({"id_card", "face"})
@@ -148,6 +153,61 @@ class RedactorEngine(Protocol):
         ...
 
 
+class TesseractCliRedactorEngine:
+    """Localized OCR engine backed by the `tesseract` CLI.
+
+    The engine is intentionally only a source of candidate text boxes. The
+    deterministic redaction floor below remains the sole safety authority.
+    """
+
+    def __init__(
+        self,
+        *,
+        binary: str = "tesseract",
+        lang: str | None = None,
+        psm: str = "6",
+        timeout_seconds: float = TESSERACT_TIMEOUT_SECONDS,
+    ) -> None:
+        self.binary = binary
+        self.lang = lang
+        self.psm = psm
+        self.timeout_seconds = timeout_seconds
+
+    def detect(self, image_bytes: bytes, *, width: int, height: int) -> list[DetectedRegion]:
+        binary = shutil.which(self.binary)
+        if not binary:
+            raise RedactionError("tesseract binary unavailable")
+
+        tmp_name = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="ap-redactor-", suffix=".png", delete=False) as fh:
+                fh.write(image_bytes)
+                tmp_name = fh.name
+            cmd = [binary, tmp_name, "stdout", "--psm", str(self.psm), "tsv"]
+            if self.lang:
+                cmd[3:3] = ["-l", self.lang]
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=max(1.0, float(self.timeout_seconds)),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RedactionError("tesseract timeout") from exc
+        except OSError as exc:
+            raise RedactionError("tesseract execution failed") from exc
+        finally:
+            if tmp_name:
+                perception_storage._unlink_quiet(tmp_name)
+
+        if proc.returncode != 0:
+            logger.warning("tesseract redactor failed rc=%s stderr=%s", proc.returncode, proc.stderr[:200])
+            raise RedactionError("tesseract returned non-zero")
+        return _parse_tesseract_tsv(proc.stdout)
+
+
 @dataclass
 class _ClassifyResult:
     redact_boxes: list[tuple[int, int, int, int]] = field(default_factory=list)
@@ -161,6 +221,70 @@ class RedactionOutcome:
     status: str  # planner_safe | withheld | gone
     reasons: list[str] = field(default_factory=list)
     redact_count: int = 0
+
+
+def _parse_tesseract_tsv(tsv: str) -> list[DetectedRegion]:
+    """Parse Tesseract TSV into line-level regions.
+
+    Tesseract emits word rows. Grouping by line makes multi-token secrets like
+    `AWS_SECRET_ACCESS_KEY = ...` localizable; if a secret still spans more than
+    one line, the deterministic floor withholds it as unlocalizable.
+    """
+    if not tsv.strip():
+        return []
+
+    def _num(value: str | None) -> int | None:
+        try:
+            return int(float(str(value or "").strip()))
+        except (TypeError, ValueError):
+            return None
+
+    def _conf(value: str | None) -> float | None:
+        try:
+            raw = float(str(value or "").strip())
+        except (TypeError, ValueError):
+            return None
+        if raw < 0:
+            return None
+        return max(0.0, min(1.0, raw / 100.0 if raw > 1.0 else raw))
+
+    groups: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    for row in csv.DictReader(io.StringIO(tsv), delimiter="\t"):
+        text = (row.get("text") or "").strip()
+        if not text:
+            continue
+        x, y, w, h = (_num(row.get(k)) for k in ("left", "top", "width", "height"))
+        if x is None or y is None or w is None or h is None or w <= 0 or h <= 0:
+            continue
+        key = tuple(row.get(k, "") for k in ("page_num", "block_num", "par_num", "line_num"))
+        g = groups.setdefault(
+            key,
+            {"x0": x, "y0": y, "x1": x + w, "y1": y + h, "texts": [], "confs": []},
+        )
+        g["x0"] = min(int(g["x0"]), x)
+        g["y0"] = min(int(g["y0"]), y)
+        g["x1"] = max(int(g["x1"]), x + w)
+        g["y1"] = max(int(g["y1"]), y + h)
+        g["texts"].append(text)  # type: ignore[union-attr]
+        conf = _conf(row.get("conf"))
+        if conf is not None:
+            g["confs"].append(conf)  # type: ignore[union-attr]
+
+    regions: list[DetectedRegion] = []
+    for g in groups.values():
+        text = " ".join(g["texts"])  # type: ignore[arg-type]
+        confs = g["confs"]  # type: ignore[assignment]
+        confidence = sum(confs) / len(confs) if confs else 1.0
+        x0, y0, x1, y1 = int(g["x0"]), int(g["y0"]), int(g["x1"]), int(g["y1"])
+        regions.append(
+            DetectedRegion(
+                box=(x0, y0, max(0, x1 - x0), max(0, y1 - y0)),
+                text=text,
+                confidence=confidence,
+                kind="text",
+            )
+        )
+    return regions
 
 
 # ── alpha-safe, image-bomb-guarded decode ────────────────────────────────────
@@ -215,7 +339,7 @@ def _classify_regions(regions: list[DetectedRegion]) -> _ClassifyResult:
     """Decide which boxes to redact and whether to withhold. The floor patterns are
     the sole authority; the engine only proposes regions. Uncertainty ⇒ withhold."""
     out = _ClassifyResult(region_count=len(regions))
-    localized_secret_count = 0
+    localized_secret_match_count = 0
     for r in regions:
         if r.kind in _UNSUPPORTED_KINDS:
             out.withhold = True
@@ -240,17 +364,17 @@ def _classify_regions(regions: list[DetectedRegion]) -> _ClassifyResult:
                 out.reasons.append("uncoverable_secret_box")
                 continue
             out.redact_boxes.append(r.box)
-            localized_secret_count += 1
+            localized_secret_match_count += max(1, _count_secret_matches(r.text))
             if r.confidence < OCR_CONFIDENCE_THRESHOLD:
                 out.withhold = True
                 out.reasons.append("low_confidence_secret")
     # Unlocalizable backstop: every secret pattern detectable in the space-joined
     # text must have been localized to a box. If the join surfaces MORE secret
-    # matches than we localized, at least one spans regions we couldn't box ⇒
-    # withhold. (Counting fixes the prior bug where one localized secret suppressed
-    # the check for a second, cross-region one.)
+    # matches than we localized inside individual boxed regions, at least one spans
+    # regions we couldn't box ⇒ withhold. A single region may contain multiple
+    # secret matches; one redaction box is enough when all matches are local to it.
     full_text = " ".join(r.text for r in regions if r.text)
-    if _count_secret_matches(full_text) > localized_secret_count:
+    if _count_secret_matches(full_text) > localized_secret_match_count:
         out.withhold = True
         out.reasons.append("unlocalizable_secret")
     return out
@@ -423,7 +547,11 @@ def redact_artifact(
             raise RedactionError("raw file exceeds size cap")
 
         img = _decode_guarded(raw)
-        regions = engine.detect(raw, width=img.size[0], height=img.size[1])
+        # The engine must see the same visible, metadata-free pixels we redact.
+        # Never pass raw bytes through: PNG ancillary chunks or transparent pixels
+        # could otherwise influence OCR differently from the planner-safe output.
+        detection_bytes = _redact_png(img, [])
+        regions = engine.detect(detection_bytes, width=img.size[0], height=img.size[1])
         result = _classify_regions(regions)
         if result.withhold:
             return _finish_withheld(db, artifact_id, result)
@@ -741,10 +869,28 @@ def run_redactor_once(
 
 
 def _load_engine() -> RedactorEngine | None:
-    """The production redactor engine, or None when none is wired. The real local
-    OCR/vision engine lands in a later slice; until then the driver is fail-closed
-    DORMANT (no planner-safe artifacts) even if the flag is on — design §202."""
-    return None
+    """The production redactor engine, or None when none is wired.
+
+    `none` is the default so existing deployments stay dormant. `tesseract` (or
+    `auto`, when the binary is present) wires the local OCR engine; if the binary
+    is missing, return None so the driver remains fail-closed with `no_engine`.
+    """
+    mode = os.environ.get("PERCEPTION_REDACTOR_ENGINE", "none").strip().lower()
+    if mode in {"", "none", "off", "disabled"}:
+        return None
+    if mode not in {"auto", "tesseract"}:
+        logger.warning("unknown PERCEPTION_REDACTOR_ENGINE=%r; redactor dormant", mode)
+        return None
+    binary = os.environ.get("PERCEPTION_REDACTOR_TESSERACT_BIN", "tesseract").strip() or "tesseract"
+    if shutil.which(binary) is None:
+        if mode == "tesseract":
+            logger.warning("PERCEPTION_REDACTOR_ENGINE=tesseract but binary %r is unavailable", binary)
+        return None
+    return TesseractCliRedactorEngine(
+        binary=binary,
+        lang=os.environ.get("PERCEPTION_REDACTOR_TESSERACT_LANG") or None,
+        psm=os.environ.get("PERCEPTION_REDACTOR_TESSERACT_PSM", "6").strip() or "6",
+    )
 
 
 async def redactor_loop(

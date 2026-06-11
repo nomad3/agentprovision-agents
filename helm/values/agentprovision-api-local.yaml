@@ -77,6 +77,13 @@ configMap:
     DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
     DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: "agentprovision-desktop-command-ed25519-v1"
+    # Select the local OCR engine, but keep the perception redactor dormant
+    # unless PERCEPTION_REDACTOR_ENABLED is provided by the local secret/env.
+    PERCEPTION_REDACTOR_ENGINE: "tesseract"
+    PERCEPTION_REDACTOR_TESSERACT_BIN: "tesseract"
+    PERCEPTION_REDACTOR_TESSERACT_LANG: ""
+    PERCEPTION_REDACTOR_TESSERACT_PSM: "6"
+    PERCEPTION_REDACTOR_TESSERACT_TIMEOUT_SECONDS: "8"
 
 # Load secrets from k8s secret (created from apps/api/.env)
 envFrom:
