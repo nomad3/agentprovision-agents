@@ -5,6 +5,13 @@ Luna computer-use P5.5.
 Builds on: P5.4b pending request `desktop_approval_requests` (#895), grant
 substrate `create_desktop_approval_grant` (internal), Stop/preempt (#893).
 
+Update 2026-06-11: current branch `codex/luna-p55-report-back` adds the Luna
+desktop app inbox for these existing user-JWT routes. The app may list the
+authenticated user's active-session pending requests and call approve/deny with
+bounded defaults; it must not mint grants locally, approve through MCP/internal
+auth, expose request reasons or raw observed content, or touch native-control
+flags.
+
 ## Why / what
 
 #895 lets an agent record a **pending** `desktop_approval_requests` row and poll

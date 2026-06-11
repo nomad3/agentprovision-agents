@@ -391,6 +391,231 @@
   gap: 8px;
 }
 
+.desktop-approval-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.desktop-approval-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.05);
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.desktop-approval-trigger:hover,
+.desktop-approval-trigger.has-pending {
+  border-color: rgba(99,210,151,0.58);
+  background: rgba(99,210,151,0.16);
+}
+
+.desktop-approval-trigger:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.desktop-approval-icon {
+  color: #63d297;
+  font-weight: 900;
+}
+
+.desktop-approval-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: start center;
+  padding: 88px 16px 24px;
+  background: rgba(5,10,18,0.62);
+  z-index: 2550;
+}
+
+.desktop-approval-panel {
+  display: grid;
+  gap: 10px;
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - 120px));
+  padding: 14px;
+  border: 1px solid rgba(130,160,204,0.48);
+  border-radius: 8px;
+  background: #0d1624;
+  box-shadow: 0 22px 54px rgba(0,0,0,0.64);
+  overflow: auto;
+}
+
+.desktop-approval-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(130,160,204,0.24);
+}
+
+.desktop-approval-title {
+  color: #f2f7ff;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.desktop-approval-count {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(99,210,151,0.16);
+  color: #92f0bd;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 26px;
+  text-align: center;
+}
+
+.desktop-approval-close {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(130,160,204,0.38);
+  border-radius: 6px;
+  background: #162234;
+  color: #f2f7ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.desktop-approval-close:hover {
+  border-color: rgba(130,160,204,0.64);
+  background: #1d2c42;
+}
+
+.desktop-approval-empty,
+.desktop-approval-error {
+  padding: 16px 12px;
+  border: 1px solid rgba(130,160,204,0.24);
+  border-radius: 7px;
+  background: #162234;
+  color: #dbe7f8;
+  font-size: 13px;
+}
+
+.desktop-approval-error {
+  border-color: rgba(255,143,143,0.44);
+  color: #ffb0b0;
+}
+
+.desktop-approval-list {
+  display: grid;
+  gap: 8px;
+}
+
+.desktop-approval-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid rgba(130,160,204,0.24);
+  border-radius: 7px;
+  background: #162234;
+}
+
+.desktop-approval-main {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.desktop-approval-row,
+.desktop-approval-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.desktop-approval-action {
+  color: #f6f9ff;
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.desktop-approval-status {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(99,210,151,0.16);
+  color: #92f0bd;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.desktop-approval-meta {
+  color: #aab9d6;
+  font-size: 12px;
+}
+
+.desktop-approval-meta span {
+  overflow-wrap: anywhere;
+}
+
+.desktop-approval-ref {
+  color: #8290ad;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.desktop-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.desktop-approval-approve,
+.desktop-approval-deny {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.desktop-approval-approve {
+  border: 1px solid rgba(99,210,151,0.54);
+  background: #1d6b4a;
+  color: #effff5;
+}
+
+.desktop-approval-deny {
+  border: 1px solid rgba(255,143,143,0.5);
+  background: #57272f;
+  color: #ffe7e7;
+}
+
+.desktop-approval-approve:disabled,
+.desktop-approval-deny:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .desktop-approval-item {
+    grid-template-columns: 1fr;
+  }
+
+  .desktop-approval-actions {
+    justify-content: flex-end;
+  }
+}
+
 .control-safety {
   display: inline-flex;
   align-items: center;

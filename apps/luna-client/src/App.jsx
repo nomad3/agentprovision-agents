@@ -6,6 +6,7 @@ import LoginForm from './components/LoginForm';
 import NotificationBell from './components/NotificationBell';
 import TrustBadge from './components/TrustBadge';
 import ActionApproval from './components/ActionApproval';
+import DesktopApprovalInbox from './components/DesktopApprovalInbox';
 import ControlSafetyStrip from './components/ControlSafetyStrip';
 import CommandPalette from './components/CommandPalette';
 import ClipboardToast from './components/ClipboardToast';
@@ -228,6 +229,7 @@ function AuthenticatedApp() {
           <button className="theme-toggle" onClick={() => setSuggestionsOpen(!suggestionsOpen)} title="Workflow suggestions">
             {'\u26A1'}
           </button>
+          <DesktopApprovalInbox sessionId={activeSessionId} />
           <NotificationBell />
           <button className="luna-btn luna-btn-sm" onClick={logout}>Logout</button>
         </div>

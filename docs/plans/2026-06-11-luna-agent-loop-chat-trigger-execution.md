@@ -522,8 +522,8 @@ Implementation scope:
   request -> human approval -> actuate -> poll -> report loop (no self-approval,
   display-safe report-back, Stop). No grant minting from MCP/internal, no native
   flag flips, no allowlist change, no native actuation added.
-- Status 2026-06-11: current branch
-  `codex/luna-p54d-permission-readiness` implements the next P5.4d rung:
+- Status 2026-06-11: PR #900 (`codex/luna-p54d-permission-readiness`, merge
+  `ac63f264`) landed the P5.4d rung:
   Luna shell registration carries sanitized permission-readiness statuses from
   `control_get_safety_state`; server presence stores them with a server-side
   `observed_at`; native-control enqueue checks fresh readiness before creating
@@ -531,14 +531,28 @@ Implementation scope:
   structured `permission_not_ready` and queue no command. This does not grant
   macOS permissions, change TCC settings, flip tenant flags, sign envelopes, or
   enable native actuation.
+- Status 2026-06-11: current branch `codex/luna-p55-report-back` starts the
+  P5.5 app-facing approval UX rung. The target is the smallest useful Luna app
+  bridge over the already-merged user-JWT approval routes: show active-session
+  pending desktop approval requests, approve/deny with bounded defaults, then
+  let the existing agent loop poll `desktop_request_status` for `grant_id` and
+  continue. This branch must not create a new grant path, touch native flags,
+  alter the allowlist, mutate TCC settings, or expose raw screen/OCR/window
+  content in the UI.
+  Luna review found one release blocker: stale requests from the previous active
+  chat could remain visible during a session switch. The branch now filters
+  rendered requests by `request.session_id === activeSessionId`, clears local
+  request state on session change, refuses approve/deny for mismatched sessions,
+  and has a regression proving a stale request cannot be approved after a switch.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
   approval-request -> user approval -> bounded grant.
-- Land P5.4d permission readiness, then the remaining rungs in dependency
-  order: byte-free `rl_experience` per desktop decision/denial; report-back leak
-  fixtures; then the broader P5.5 chat approval UX/report-back polish.
+- P5.4d permission readiness is landed. Continue with the remaining feature
+  rungs in dependency order: Luna app approval inbox / P5.5 approval UX, report-
+  back leak fixtures, byte-free `rl_experience` per desktop decision/denial, then
+  broader chat trigger/report-back polish.
 
 Tests:
 
