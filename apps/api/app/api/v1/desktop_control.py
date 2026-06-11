@@ -297,6 +297,7 @@ class DesktopApprovalGrantOut(BaseModel):
     status: str
     remaining_actions: int
     expires_at: str
+    expires_at_ms: int
 
 
 class DesktopCommandStopOut(BaseModel):
@@ -524,6 +525,7 @@ def create_approval_grant(
         status=grant.status,
         remaining_actions=grant.remaining_actions,
         expires_at=grant.expires_at.isoformat(),
+        expires_at_ms=int(grant.expires_at.timestamp() * 1000),
     )
 
 

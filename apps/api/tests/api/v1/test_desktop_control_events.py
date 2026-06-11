@@ -751,6 +751,7 @@ def test_approval_grant_endpoint_returns_explicit_grant():
         "status": "active",
         "remaining_actions": 1,
         "expires_at": "2026-06-06T17:00:00+00:00",
+        "expires_at_ms": 1780765200000,
     }
     saved_request = create_grant.call_args.kwargs["request"]
     assert saved_request.risk_tier == "observe"

@@ -103,10 +103,13 @@ fn alpha_kernel_status() -> AlphaKernelStatus {
 }
 
 fn now_unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    unix_ms_or_fail_closed(std::time::SystemTime::now())
+}
+
+fn unix_ms_or_fail_closed(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .unwrap_or(u64::MAX)
 }
 
 fn executable_file_exists(path: &std::path::Path) -> bool {
@@ -1515,6 +1518,18 @@ async fn claim_actuation_lease(
     if let Some(approval_expiry) = request.approval.as_ref().and_then(|a| a.expires_at_ms) {
         expires_at_ms = expires_at_ms.min(approval_expiry);
     }
+    let mut guard = ACTUATION_LEASE.lock().await;
+    let last_action_at_ms = guard.as_ref().and_then(|lease| {
+        if lease.is_live(now_ms)
+            && lease.owner_shell_id == owner
+            && lease.target_bundle_id == target
+            && lease.capability == capability
+        {
+            lease.last_action_at_ms
+        } else {
+            None
+        }
+    });
     let lease = computer_use::actuation_lease::ActuationLease {
         owner_shell_id: owner.to_string(),
         target_bundle_id: target.to_string(),
@@ -1522,9 +1537,9 @@ async fn claim_actuation_lease(
         expires_at_ms,
         max_actions: ACTUATION_LEASE_MAX_ACTIONS,
         actions_used: 0,
-        last_action_at_ms: None,
+        last_action_at_ms,
     };
-    *ACTUATION_LEASE.lock().await = Some(lease);
+    *guard = Some(lease);
 }
 
 /// Drop any live actuation lease — called by Stop / Lock / Resume so a latched
@@ -3737,6 +3752,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     static DESKTOP_COMMAND_ENVELOPE_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static ACTUATION_LEASE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     struct EnvVarRestore {
         key: &'static str,
@@ -3761,6 +3777,12 @@ mod tests {
                 None => std::env::remove_var(self.key),
             }
         }
+    }
+
+    #[test]
+    fn pre_epoch_clock_failure_fails_closed() {
+        let before_epoch = std::time::UNIX_EPOCH - std::time::Duration::from_millis(1);
+        assert_eq!(unix_ms_or_fail_closed(before_epoch), u64::MAX);
     }
 
     #[test]
@@ -3949,6 +3971,74 @@ mod tests {
                 revoked: Some(false),
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn same_owner_lease_refresh_preserves_pacing_timestamp() {
+        let _lease_lock = ACTUATION_LEASE_TEST_LOCK.lock().await;
+        let mut request = native_boundary_request("pointer_move", "lease-refresh-same-owner");
+        request.live_frontmost_bundle_id = Some("com.example.LunaCanaryTarget".to_string());
+        {
+            let mut guard = ACTUATION_LEASE.lock().await;
+            *guard = Some(computer_use::actuation_lease::ActuationLease {
+                owner_shell_id: "desktop-44444444-4444-4444-4444-444444444444".to_string(),
+                target_bundle_id: "com.example.LunaCanaryTarget".to_string(),
+                capability: computer_use::NativeControlCapability::Pointer,
+                expires_at_ms: 5_000,
+                max_actions: 8,
+                actions_used: 3,
+                last_action_at_ms: Some(900),
+            });
+        }
+
+        claim_actuation_lease(
+            &request,
+            computer_use::NativeControlCapability::Pointer,
+            1_000,
+        )
+        .await;
+
+        let guard = ACTUATION_LEASE.lock().await;
+        let lease = guard.as_ref().expect("lease");
+        assert_eq!(lease.last_action_at_ms, Some(900));
+        assert_eq!(lease.actions_used, 0);
+        assert_eq!(lease.max_actions, ACTUATION_LEASE_MAX_ACTIONS);
+        drop(guard);
+        release_actuation_lease().await;
+    }
+
+    #[tokio::test]
+    async fn lease_refresh_drops_pacing_timestamp_for_different_owner() {
+        let _lease_lock = ACTUATION_LEASE_TEST_LOCK.lock().await;
+        let mut request = native_boundary_request("pointer_move", "lease-refresh-new-owner");
+        request.shell_id = Some("desktop-different-owner".to_string());
+        request.live_frontmost_bundle_id = Some("com.example.LunaCanaryTarget".to_string());
+        {
+            let mut guard = ACTUATION_LEASE.lock().await;
+            *guard = Some(computer_use::actuation_lease::ActuationLease {
+                owner_shell_id: "desktop-44444444-4444-4444-4444-444444444444".to_string(),
+                target_bundle_id: "com.example.LunaCanaryTarget".to_string(),
+                capability: computer_use::NativeControlCapability::Pointer,
+                expires_at_ms: 5_000,
+                max_actions: 8,
+                actions_used: 1,
+                last_action_at_ms: Some(900),
+            });
+        }
+
+        claim_actuation_lease(
+            &request,
+            computer_use::NativeControlCapability::Pointer,
+            1_000,
+        )
+        .await;
+
+        let guard = ACTUATION_LEASE.lock().await;
+        let lease = guard.as_ref().expect("lease");
+        assert_eq!(lease.last_action_at_ms, None);
+        assert_eq!(lease.owner_shell_id, "desktop-different-owner");
+        drop(guard);
+        release_actuation_lease().await;
     }
 
     fn native_boundary_envelope_mut(
