@@ -3,12 +3,13 @@
 //!
 //! Per the Alpha CLI kernel principle these delegate to the internal API
 //! (`GET /api/v1/desktop-control/...`) and the same service entrypoints the
-//! web/Tauri viewports call — they never actuate input or flip a capability.
+//! web/Tauri viewports call — they never actuate input locally.
 
 use clap::{Args, Subcommand};
 
 use agentprovision_core::desktop::{
     DesktopActionKind, DesktopBackgroundDryRunRequest, DesktopBackgroundDryRunTarget,
+    DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
 };
 use serde::Serialize;
 use uuid::Uuid;
@@ -28,6 +29,12 @@ pub enum DesktopCommand {
     /// Inspect a queued desktop command.
     #[command(subcommand)]
     Command(CommandLifecycleCommand),
+    /// Inspect or update the current tenant's desktop-control bootstrap gates.
+    #[command(subcommand)]
+    Enablement(EnablementCommand),
+    /// Inspect or replace the current tenant's native-control target allowlist.
+    #[command(subcommand)]
+    Allowlist(AllowlistCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -82,11 +89,51 @@ pub struct CommandStatusArgs {
     pub session: Option<Uuid>,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum EnablementCommand {
+    /// Read the current tenant's desktop-control bootstrap gates.
+    Get(EnablementGetArgs),
+    /// Update one or more desktop-control bootstrap gates. Superuser-only.
+    Set(EnablementSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct EnablementGetArgs {}
+
+#[derive(Debug, Args)]
+pub struct EnablementSetArgs {
+    /// Background app-control dry-run gate.
+    #[arg(long, value_name = "BOOL")]
+    pub background_control: Option<bool>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AllowlistCommand {
+    /// Read the current tenant's native-control target allowlist and platform floor.
+    Get(AllowlistGetArgs),
+    /// Replace the current tenant target allowlist. Superuser-only.
+    Set(AllowlistSetArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct AllowlistGetArgs {}
+
+#[derive(Debug, Args)]
+pub struct AllowlistSetArgs {
+    /// Bundle id to include. Repeat for multiple bundles.
+    #[arg(long = "bundle-id", required = true)]
+    pub bundle_ids: Vec<String>,
+}
+
 pub async fn dispatch(cmd: DesktopCommand, ctx: Context) -> anyhow::Result<()> {
     match cmd {
         DesktopCommand::Preflight(PreflightCommand::Run(a)) => preflight_run(a, ctx).await,
         DesktopCommand::DryRun(DryRunCommand::Request(a)) => dry_run_request(a, ctx).await,
         DesktopCommand::Command(CommandLifecycleCommand::Status(a)) => command_status(a, ctx).await,
+        DesktopCommand::Enablement(EnablementCommand::Get(a)) => enablement_get(a, ctx).await,
+        DesktopCommand::Enablement(EnablementCommand::Set(a)) => enablement_set(a, ctx).await,
+        DesktopCommand::Allowlist(AllowlistCommand::Get(a)) => allowlist_get(a, ctx).await,
+        DesktopCommand::Allowlist(AllowlistCommand::Set(a)) => allowlist_set(a, ctx).await,
     }
 }
 
@@ -186,6 +233,71 @@ async fn command_status(args: CommandStatusArgs, ctx: Context) -> anyhow::Result
         }
     });
     Ok(())
+}
+
+async fn enablement_get(_args: EnablementGetArgs, ctx: Context) -> anyhow::Result<()> {
+    let resp = ctx.client.desktop_enablement().await?;
+    emit_enablement(&ctx, &resp);
+    Ok(())
+}
+
+async fn enablement_set(args: EnablementSetArgs, ctx: Context) -> anyhow::Result<()> {
+    if args.background_control.is_none() {
+        anyhow::bail!("pass --background-control true|false");
+    }
+    let body = DesktopControlEnablementUpdate {
+        background_control_enabled: args.background_control,
+    };
+    let resp = ctx.client.update_desktop_enablement(&body).await?;
+    emit_enablement(&ctx, &resp);
+    Ok(())
+}
+
+async fn allowlist_get(_args: AllowlistGetArgs, ctx: Context) -> anyhow::Result<()> {
+    let resp = ctx.client.desktop_allowlist().await?;
+    emit_enablement(&ctx, &resp);
+    Ok(())
+}
+
+async fn allowlist_set(args: AllowlistSetArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopControlAllowlistUpdate {
+        bundle_ids: args.bundle_ids,
+    };
+    let resp = ctx.client.update_desktop_allowlist(&body).await?;
+    emit_enablement(&ctx, &resp);
+    Ok(())
+}
+
+fn emit_enablement(ctx: &Context, resp: &DesktopControlEnablement) {
+    output::emit(ctx.json, resp, |resp| {
+        output::ok(format!(
+            "[alpha] desktop enablement desktop={} pointer={} keyboard={} background={}",
+            resp.desktop_control_enabled,
+            resp.pointer_control_enabled,
+            resp.keyboard_control_enabled,
+            resp.background_control_enabled,
+        ));
+        output::info(format!(
+            "tenant_allowlist={}",
+            list_or_empty(&resp.native_control_target_allowlist)
+        ));
+        output::info(format!(
+            "platform_floor={}",
+            list_or_empty(&resp.platform_bundle_allowlist)
+        ));
+        output::info(format!(
+            "effective_allowlist={}",
+            list_or_empty(&resp.effective_native_control_allowlist)
+        ));
+    });
+}
+
+fn list_or_empty(values: &[String]) -> String {
+    if values.is_empty() {
+        "[]".to_string()
+    } else {
+        values.join(",")
+    }
 }
 
 fn json_string<T>(value: &T) -> String
@@ -291,6 +403,68 @@ mod tests {
                 );
             }
             _ => panic!("expected desktop command status"),
+        }
+    }
+
+    #[test]
+    fn parses_enablement_get() {
+        let cli =
+            TestCli::try_parse_from(["t", "desktop", "enablement", "get"]).expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Enablement(EnablementCommand::Get(_)),
+            } => {}
+            _ => panic!("expected desktop enablement get"),
+        }
+    }
+
+    #[test]
+    fn parses_enablement_set() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "enablement",
+            "set",
+            "--background-control",
+            "true",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Enablement(EnablementCommand::Set(args)),
+            } => {
+                assert_eq!(args.background_control, Some(true));
+            }
+            _ => panic!("expected desktop enablement set"),
+        }
+    }
+
+    #[test]
+    fn parses_allowlist_set() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "allowlist",
+            "set",
+            "--bundle-id",
+            "com.agentprovision.luna",
+            "--bundle-id",
+            "com.apple.TextEdit",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Allowlist(AllowlistCommand::Set(args)),
+            } => {
+                assert_eq!(
+                    args.bundle_ids,
+                    vec![
+                        "com.agentprovision.luna".to_string(),
+                        "com.apple.TextEdit".to_string()
+                    ]
+                );
+            }
+            _ => panic!("expected desktop allowlist set"),
         }
     }
 

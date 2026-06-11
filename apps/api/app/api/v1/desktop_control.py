@@ -39,6 +39,7 @@ from app.services.desktop_control_service import (
     claim_next_desktop_command,
     complete_desktop_command,
     create_desktop_approval_grant,
+    desktop_control_enablement_snapshot,
     display_safe_command_status,
     enqueue_desktop_command,
     get_desktop_command_status_snapshot,
@@ -47,6 +48,8 @@ from app.services.desktop_control_service import (
     record_mcp_observation_request,
     record_observation_artifact,
     run_desktop_preflight,
+    update_desktop_control_enablement,
+    update_desktop_control_target_allowlist,
 )
 
 router = APIRouter(prefix="/desktop-control", tags=["desktop-control"])
@@ -224,6 +227,30 @@ class DesktopBackgroundDryRunIn(BaseModel):
     target: DesktopBackgroundDryRunTargetIn
 
 
+class DesktopControlEnablementPatchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    background_control_enabled: bool | None = None
+
+
+class DesktopControlAllowlistIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bundle_ids: list[str] = Field(default_factory=list, max_length=32)
+
+
+class DesktopControlEnablementOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    desktop_control_enabled: bool
+    pointer_control_enabled: bool
+    keyboard_control_enabled: bool
+    background_control_enabled: bool
+    native_control_target_allowlist: list[str]
+    platform_bundle_allowlist: list[str]
+    effective_native_control_allowlist: list[str]
+
+
 class DesktopCommandOut(BaseModel):
     desktop_command_id: uuid.UUID
     desktop_event_id: uuid.UUID | None = None
@@ -399,6 +426,56 @@ def desktop_control_preflight(
     delegation to ``run_desktop_preflight`` with no business logic in the route.
     """
     return run_desktop_preflight()
+
+
+@router.get("/enablement", response_model=DesktopControlEnablementOut)
+def get_desktop_control_enablement(
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.require_superuser),
+) -> DesktopControlEnablementOut:
+    return DesktopControlEnablementOut(
+        **desktop_control_enablement_snapshot(db, current_user.tenant_id)
+    )
+
+
+@router.patch("/enablement", response_model=DesktopControlEnablementOut)
+def patch_desktop_control_enablement(
+    payload: DesktopControlEnablementPatchIn,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.require_superuser),
+) -> DesktopControlEnablementOut:
+    return DesktopControlEnablementOut(
+        **update_desktop_control_enablement(
+            db,
+            current_user.tenant_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+    )
+
+
+@router.get("/allowlist", response_model=DesktopControlEnablementOut)
+def get_desktop_control_allowlist(
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.require_superuser),
+) -> DesktopControlEnablementOut:
+    return DesktopControlEnablementOut(
+        **desktop_control_enablement_snapshot(db, current_user.tenant_id)
+    )
+
+
+@router.put("/allowlist", response_model=DesktopControlEnablementOut)
+def put_desktop_control_allowlist(
+    payload: DesktopControlAllowlistIn,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.require_superuser),
+) -> DesktopControlEnablementOut:
+    return DesktopControlEnablementOut(
+        **update_desktop_control_target_allowlist(
+            db,
+            current_user.tenant_id,
+            bundle_ids=payload.bundle_ids,
+        )
+    )
 
 
 @router.post(

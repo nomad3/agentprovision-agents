@@ -306,6 +306,17 @@ Implementation scope:
   target metadata, rejects arbitrary payload bags, and queues only
   `background_app_control_dry_run` no-op commands. It still does not mint
   grants, call macOS APIs, or enable pointer/keyboard/native actuation.
+- Status 2026-06-11: after PR #882 deployed, live Alpha validation reached the
+  production route and shell presence, but the operator tenant denied all floor
+  bundles (`com.agentprovision.luna`, `com.apple.TextEdit`,
+  `net.whatsapp.WhatsApp`) with `Desktop command target not allowlisted`. Branch
+  `codex/luna-p54d-desktop-bootstrap` is the smallest unblocker: superuser-only
+  `GET/PATCH /desktop-control/enablement`, `GET/PUT /desktop-control/allowlist`,
+  typed core models, and `alpha desktop enablement/allowlist get|set`. The
+  enablement writer is narrowed to the background-control dry-run gate only, and
+  the allowlist writer is still bounded by the deployment floor
+  `DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST`; together they only let the operator
+  tenant enter the fail-closed lane required for the dry-run proof.
 
 Tests:
 

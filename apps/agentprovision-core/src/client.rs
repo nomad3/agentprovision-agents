@@ -17,6 +17,7 @@ use url::Url;
 
 use crate::desktop::{
     DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
+    DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
     DesktopPreflight,
 };
 use crate::error::{Error, Result};
@@ -270,6 +271,26 @@ impl ApiClient {
         body: &B,
     ) -> Result<T> {
         let req = self.request(Method::POST, path)?.json(body);
+        self.send_json(req).await
+    }
+
+    /// Generic typed `PATCH` helper.
+    pub async fn patch_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let req = self.request(Method::PATCH, path)?.json(body);
+        self.send_json(req).await
+    }
+
+    /// Generic typed `PUT` helper.
+    pub async fn put_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let req = self.request(Method::PUT, path)?.json(body);
         self.send_json(req).await
     }
 
@@ -913,6 +934,38 @@ impl ApiClient {
         body: &DesktopBackgroundDryRunRequest,
     ) -> Result<DesktopCommandResponse> {
         self.post_json("/api/v1/desktop-control/commands/background-dry-run", body)
+            .await
+    }
+
+    /// `GET /api/v1/desktop-control/enablement` — inspect the current tenant's
+    /// desktop-control bootstrap gates. Superuser-only server-side.
+    pub async fn desktop_enablement(&self) -> Result<DesktopControlEnablement> {
+        self.get_json("/api/v1/desktop-control/enablement").await
+    }
+
+    /// `PATCH /api/v1/desktop-control/enablement` — set desktop-control
+    /// bootstrap gates for the current tenant. Superuser-only server-side.
+    pub async fn update_desktop_enablement(
+        &self,
+        body: &DesktopControlEnablementUpdate,
+    ) -> Result<DesktopControlEnablement> {
+        self.patch_json("/api/v1/desktop-control/enablement", body)
+            .await
+    }
+
+    /// `GET /api/v1/desktop-control/allowlist` — inspect the current tenant's
+    /// target allowlist and platform floor.
+    pub async fn desktop_allowlist(&self) -> Result<DesktopControlEnablement> {
+        self.get_json("/api/v1/desktop-control/allowlist").await
+    }
+
+    /// `PUT /api/v1/desktop-control/allowlist` — replace the current tenant's
+    /// target allowlist, bounded server-side by the platform floor.
+    pub async fn update_desktop_allowlist(
+        &self,
+        body: &DesktopControlAllowlistUpdate,
+    ) -> Result<DesktopControlEnablement> {
+        self.put_json("/api/v1/desktop-control/allowlist", body)
             .await
     }
 

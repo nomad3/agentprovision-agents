@@ -32,6 +32,7 @@ def _user():
     user.id = uuid.UUID("22222222-2222-2222-2222-222222222222")
     user.tenant_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
     user.email = "desktop-control-test@example.test"
+    user.is_superuser = True
     return user
 
 
@@ -130,6 +131,19 @@ def _command(**overrides):
         "capability": "screenshot",
         "lease_expires_at": None,
         "payload": {"action": "capture_screenshot", "mode": "observe"},
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _features(**overrides):
+    values = {
+        "tenant_id": _user().tenant_id,
+        "desktop_control_enabled": True,
+        "pointer_control_enabled": False,
+        "keyboard_control_enabled": False,
+        "background_control_enabled": False,
+        "native_control_target_allowlist": [],
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -487,6 +501,149 @@ def _client_for_endpoint(user):
     app.dependency_overrides[deps.get_db] = _fake_db
     app.dependency_overrides[deps.get_current_active_user] = lambda: user
     return TestClient(app), db
+
+
+def test_desktop_enablement_get_returns_effective_allowlist(monkeypatch):
+    client, db = _client_for_endpoint(_user())
+    db.query.return_value.filter.return_value.first.return_value = _features(
+        background_control_enabled=True,
+        native_control_target_allowlist=[
+            "com.agentprovision.luna",
+            "com.example.NotInFloor",
+        ],
+    )
+    monkeypatch.setattr(
+        "app.services.desktop_control_service.settings.DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        ["com.agentprovision.luna", "com.apple.TextEdit"],
+    )
+
+    response = client.get("/api/v1/desktop-control/enablement")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "desktop_control_enabled": True,
+        "pointer_control_enabled": False,
+        "keyboard_control_enabled": False,
+        "background_control_enabled": True,
+        "native_control_target_allowlist": [
+            "com.agentprovision.luna",
+            "com.example.NotInFloor",
+        ],
+        "platform_bundle_allowlist": ["com.agentprovision.luna", "com.apple.TextEdit"],
+        "effective_native_control_allowlist": ["com.agentprovision.luna"],
+    }
+
+
+def test_desktop_enablement_get_missing_row_is_read_only_fail_closed(monkeypatch):
+    client, db = _client_for_endpoint(_user())
+    db.query.return_value.filter.return_value.first.return_value = None
+    monkeypatch.setattr(
+        "app.services.desktop_control_service.settings.DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        ["com.agentprovision.luna"],
+    )
+
+    response = client.get("/api/v1/desktop-control/enablement")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "desktop_control_enabled": False,
+        "pointer_control_enabled": False,
+        "keyboard_control_enabled": False,
+        "background_control_enabled": False,
+        "native_control_target_allowlist": [],
+        "platform_bundle_allowlist": ["com.agentprovision.luna"],
+        "effective_native_control_allowlist": [],
+    }
+    db.add.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_desktop_enablement_patch_sets_only_requested_flags():
+    client, db = _client_for_endpoint(_user())
+    features = _features(
+        pointer_control_enabled=True,
+        keyboard_control_enabled=True,
+        background_control_enabled=False,
+    )
+    db.query.return_value.filter.return_value.first.return_value = features
+
+    response = client.patch(
+        "/api/v1/desktop-control/enablement",
+        json={
+            "background_control_enabled": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert features.pointer_control_enabled is True
+    assert features.keyboard_control_enabled is True
+    assert features.background_control_enabled is True
+    db.commit.assert_called()
+
+
+def test_desktop_enablement_patch_rejects_pointer_keyboard_mutation():
+    client, db = _client_for_endpoint(_user())
+    db.query.return_value.filter.return_value.first.return_value = _features()
+
+    response = client.patch(
+        "/api/v1/desktop-control/enablement",
+        json={
+            "pointer_control_enabled": True,
+            "keyboard_control_enabled": True,
+        },
+    )
+
+    assert response.status_code == 422
+    db.commit.assert_not_called()
+
+
+def test_desktop_allowlist_put_replaces_list_with_platform_floor(monkeypatch):
+    client, db = _client_for_endpoint(_user())
+    features = _features(native_control_target_allowlist=["com.apple.TextEdit"])
+    db.query.return_value.filter.return_value.first.return_value = features
+    monkeypatch.setattr(
+        "app.services.desktop_control_service.settings.DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        ["com.agentprovision.luna", "com.apple.TextEdit"],
+    )
+
+    response = client.put(
+        "/api/v1/desktop-control/allowlist",
+        json={
+            "bundle_ids": [
+                " com.agentprovision.luna ",
+                "com.agentprovision.luna",
+                "com.apple.TextEdit",
+            ],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert features.native_control_target_allowlist == [
+        "com.agentprovision.luna",
+        "com.apple.TextEdit",
+    ]
+    assert response.json()["effective_native_control_allowlist"] == [
+        "com.agentprovision.luna",
+        "com.apple.TextEdit",
+    ]
+
+
+def test_desktop_allowlist_put_rejects_bundle_outside_platform_floor(monkeypatch):
+    client, db = _client_for_endpoint(_user())
+    features = _features(native_control_target_allowlist=["com.agentprovision.luna"])
+    db.query.return_value.filter.return_value.first.return_value = features
+    monkeypatch.setattr(
+        "app.services.desktop_control_service.settings.DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        ["com.agentprovision.luna"],
+    )
+
+    response = client.put(
+        "/api/v1/desktop-control/allowlist",
+        json={"bundle_ids": ["com.example.NotInFloor"]},
+    )
+
+    assert response.status_code == 422
+    assert features.native_control_target_allowlist == ["com.agentprovision.luna"]
 
 
 def test_local_observation_endpoint_rejects_unknown_raw_payload_fields():

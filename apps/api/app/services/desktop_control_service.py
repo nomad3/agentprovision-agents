@@ -1007,6 +1007,122 @@ def _effective_native_control_allowlist(db: Session, tenant_id: uuid.UUID) -> se
     return per_tenant & floor
 
 
+def _get_desktop_control_features_row(
+    db: Session, tenant_id: uuid.UUID
+) -> TenantFeatures | None:
+    features = (
+        db.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant_id)
+        .first()
+    )
+    return features
+
+
+def _get_or_create_desktop_control_features_row(
+    db: Session, tenant_id: uuid.UUID
+) -> TenantFeatures:
+    features = _get_desktop_control_features_row(db, tenant_id)
+    if features is not None:
+        return features
+    features = TenantFeatures(
+        tenant_id=tenant_id,
+        desktop_control_enabled=False,
+        pointer_control_enabled=False,
+        keyboard_control_enabled=False,
+        background_control_enabled=False,
+        native_control_target_allowlist=[],
+    )
+    db.add(features)
+    db.commit()
+    db.refresh(features)
+    return features
+
+
+def _normalized_bundle_list(bundle_ids: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    return sorted({
+        bundle_id.strip()
+        for bundle_id in bundle_ids
+        if isinstance(bundle_id, str) and bundle_id.strip()
+    })
+
+
+def desktop_control_enablement_snapshot(db: Session, tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Operator-facing desktop control bootstrap state for one tenant.
+
+    This is control-plane configuration only. It does not create approvals,
+    enqueue commands, claim leases, or call any macOS API.
+    """
+    features = _get_desktop_control_features_row(db, tenant_id)
+    if features is None:
+        return {
+            "desktop_control_enabled": False,
+            "pointer_control_enabled": False,
+            "keyboard_control_enabled": False,
+            "background_control_enabled": False,
+            "native_control_target_allowlist": [],
+            "platform_bundle_allowlist": sorted(_desktop_control_canary_bundle_allowlist()),
+            "effective_native_control_allowlist": [],
+        }
+    per_tenant = _normalized_bundle_list(
+        getattr(features, "native_control_target_allowlist", None) or []
+    )
+    platform_floor = sorted(_desktop_control_canary_bundle_allowlist())
+    effective = sorted(set(per_tenant) & set(platform_floor))
+    return {
+        "desktop_control_enabled": bool(getattr(features, "desktop_control_enabled", False)),
+        "pointer_control_enabled": bool(getattr(features, "pointer_control_enabled", False)),
+        "keyboard_control_enabled": bool(getattr(features, "keyboard_control_enabled", False)),
+        "background_control_enabled": bool(getattr(features, "background_control_enabled", False)),
+        "native_control_target_allowlist": per_tenant,
+        "platform_bundle_allowlist": platform_floor,
+        "effective_native_control_allowlist": effective,
+    }
+
+
+def update_desktop_control_enablement(
+    db: Session,
+    tenant_id: uuid.UUID,
+    *,
+    background_control_enabled: bool | None = None,
+) -> dict[str, Any]:
+    features = _get_or_create_desktop_control_features_row(db, tenant_id)
+    updates = {
+        "background_control_enabled": background_control_enabled,
+    }
+    for field, value in updates.items():
+        if value is not None:
+            setattr(features, field, bool(value))
+    db.add(features)
+    db.commit()
+    db.refresh(features)
+    return desktop_control_enablement_snapshot(db, tenant_id)
+
+
+def update_desktop_control_target_allowlist(
+    db: Session,
+    tenant_id: uuid.UUID,
+    *,
+    bundle_ids: list[str],
+) -> dict[str, Any]:
+    requested = _normalized_bundle_list(bundle_ids)
+    platform_floor = _desktop_control_canary_bundle_allowlist()
+    outside_floor = sorted(set(requested) - platform_floor)
+    if outside_floor:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Desktop target bundles outside platform floor: "
+                + ", ".join(outside_floor)
+            ),
+        )
+    features = _get_or_create_desktop_control_features_row(db, tenant_id)
+    features.native_control_target_allowlist = requested
+    db.add(features)
+    db.commit()
+    db.refresh(features)
+    return desktop_control_enablement_snapshot(db, tenant_id)
+
+
 def _native_control_target_is_allowlisted(
     target: dict[str, Any] | None, *, db: Session, tenant_id: uuid.UUID
 ) -> bool:
