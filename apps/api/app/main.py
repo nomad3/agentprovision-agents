@@ -155,6 +155,23 @@ async def startup_perception_cleanup():
 
 
 @app.on_event("startup")
+async def startup_perception_redactor():
+    """Spawn the api-internal P5.3a perception-redactor driver (sweep-integrated
+    worker over pending perception_artifacts). Same api-only quarantine mount as the
+    cleanup sweeper; never an agent runtime. DORMANT unless PERCEPTION_REDACTOR_ENABLED
+    is set AND a real OCR/vision engine is wired (a later slice) — so by default it
+    spins, sees the flag off / no engine, and produces no planner-safe artifacts.
+    """
+    import asyncio as _asyncio
+    import logging as _logging
+    try:
+        from app.services.perception_redactor import redactor_loop
+        _asyncio.create_task(redactor_loop())
+    except Exception as exc:  # never block startup on the redactor driver
+        _logging.getLogger(__name__).warning("perception redactor startup skipped: %s", exc)
+
+
+@app.on_event("startup")
 async def startup_skill_manager():
     """Scan and load all file-based skill definitions."""
     import logging as _logging
