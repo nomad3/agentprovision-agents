@@ -1554,6 +1554,26 @@ def test_stop_preempts_pending_claimed_and_running_commands(db_session, seeded):
     }
 
 
+def test_agent_stop_can_preempt_without_device_token_on_connected_shell(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command = _enqueue(db_session, nonce="nonce-agent-stop")
+        count, events, _session_events = preempt_desktop_commands_for_stop(
+            db_session,
+            user=seeded,
+            device_token=None,
+            stop=DesktopCommandStop(session_id=SESSION_ID, shell_id=SHELL_ID, reason="agent Stop"),
+        )
+
+    assert count == 1
+    assert events[0].desktop_command_id == command.id
+    assert events[0].source == "agent"
+    reloaded = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert reloaded.status == "preempted"
+
+
 def test_claim_requires_matching_device_token(db_session, seeded):
     with patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",

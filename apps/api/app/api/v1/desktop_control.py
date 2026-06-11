@@ -904,6 +904,37 @@ def enqueue_command(
     return _command_out(command, event, session_event)
 
 
+@router.post(
+    "/internal/commands/stop",
+    response_model=DesktopCommandStopOut,
+)
+@limiter.limit("120/minute")
+def internal_stop_commands(
+    request: Request,
+    payload: DesktopCommandStopIn,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    user = db.query(UserModel).filter(
+        UserModel.id == user_id,
+        UserModel.tenant_id == tenant_id,
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    count, events, _session_events = preempt_desktop_commands_for_stop(
+        db,
+        user=user,
+        device_token=None,
+        stop=DesktopCommandStop(**payload.model_dump()),
+    )
+    return DesktopCommandStopOut(
+        preempted_count=count,
+        desktop_event_ids=[event.id for event in events],
+    )
+
+
 @router.get(
     "/internal/commands/{command_id}/status",
     response_model=DesktopCommandStatusOut,

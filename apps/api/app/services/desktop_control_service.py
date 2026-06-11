@@ -3408,14 +3408,23 @@ def preempt_desktop_commands_for_stop(
 ) -> tuple[int, list[DesktopCommandEvent], list[dict[str, Any] | None]]:
     _ensure_session_owned(db, stop.session_id, user)
     connected_device_id = _ensure_shell_bound(stop.shell_id, user)
-    token_device_id = _device_for_user_shell(
-        db,
-        user=user,
-        shell_id=stop.shell_id,
-        device_token=device_token,
-    )
-    if str(connected_device_id) != str(token_device_id):
-        raise HTTPException(status_code=403, detail="Device token does not match active shell")
+    if device_token:
+        token_device_id = _device_for_user_shell(
+            db,
+            user=user,
+            shell_id=stop.shell_id,
+            device_token=device_token,
+        )
+        if str(connected_device_id) != str(token_device_id):
+            raise HTTPException(status_code=403, detail="Device token does not match active shell")
+        source = "tauri"
+    else:
+        # Stop is a safety action. Alpha/MCP agent surfaces do not hold the
+        # Luna shell device token, but they may preempt the authenticated
+        # user's own session on a currently connected shell. Native claim and
+        # completion paths still require the device token.
+        token_device_id = connected_device_id
+        source = "agent"
 
     now = _utcnow()
     expired_events = _expire_stale_leases(
@@ -3476,7 +3485,7 @@ def preempt_desktop_commands_for_stop(
                 db,
                 command,
                 event_type="desktop_command_preempted",
-                source="tauri",
+                source=source,
                 outcome="preempted",
                 reason=stop.reason,
             )

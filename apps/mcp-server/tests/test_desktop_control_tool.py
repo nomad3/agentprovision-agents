@@ -20,6 +20,7 @@ def test_desktop_control_module_exports_registered_tools():
         "desktop_fetch_observation",
         "desktop_background_app_control_dry_run",
         "desktop_command_status",
+        "desktop_stop_commands",
     }
 
     assert expected_tools.issubset(set(dc.__all__))
@@ -235,6 +236,59 @@ async def test_desktop_command_status_surfaces_not_found(patch_httpx):
     )
 
     assert out == {"status": "error", "error": "desktop command not found"}
+
+
+@pytest.mark.asyncio
+async def test_desktop_stop_commands_posts_preempt_request(patch_httpx):
+    client = patch_httpx(
+        default_status=200,
+        default_json={
+            "status": "preempted",
+            "preempted_count": 2,
+            "desktop_event_ids": [
+                "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            ],
+        },
+    )
+
+    out = await dc.desktop_stop_commands(
+        session_id="33333333-3333-3333-3333-333333333333",
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        reason="agent Stop",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "preempted"
+    assert out["preempted_count"] == 2
+    assert "screen bytes" in out["message"]
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/desktop-control/internal/commands/stop")
+    assert call["json"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "reason": "agent Stop",
+    }
+    assert call["headers"]["X-Tenant-Id"] == "11111111-1111-1111-1111-111111111111"
+    assert call["headers"]["X-User-Id"] == "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.mark.asyncio
+async def test_desktop_stop_commands_requires_user_header(patch_httpx):
+    client = patch_httpx()
+
+    out = await dc.desktop_stop_commands(
+        session_id="33333333-3333-3333-3333-333333333333",
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=None,
+    )
+
+    assert out["status"] == "error"
+    assert "X-User-Id required" in out["error"]
+    assert client.calls == []
 
 
 @pytest.mark.asyncio

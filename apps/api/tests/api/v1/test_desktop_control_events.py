@@ -1235,6 +1235,63 @@ def test_command_stop_endpoint_returns_preempted_event_ids():
     assert stop.call_args.kwargs["device_token"] == "secret-device-token"
 
 
+def test_command_stop_endpoint_allows_alpha_without_device_token():
+    client, _db = _client_for_endpoint(_user())
+    first_event = SimpleNamespace(id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+
+    with patch(
+        "app.api.v1.desktop_control.preempt_desktop_commands_for_stop",
+        return_value=(1, [first_event], []),
+    ) as stop:
+        response = client.post(
+            "/api/v1/desktop-control/commands/stop",
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "reason": "alpha stop",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "status": "preempted",
+        "preempted_count": 1,
+        "desktop_event_ids": ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"],
+    }
+    assert stop.call_args.kwargs["device_token"] is None
+
+
+def test_internal_command_stop_endpoint_uses_internal_user_scope():
+    user = _user()
+    client, db = _client_for_endpoint(user)
+    db.query.return_value.filter.return_value.first.return_value = user
+    first_event = SimpleNamespace(id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+
+    with patch(
+        "app.api.v1.desktop_control.preempt_desktop_commands_for_stop",
+        return_value=(1, [first_event], []),
+    ) as stop:
+        response = client.post(
+            "/api/v1/desktop-control/internal/commands/stop",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": str(user.tenant_id),
+                "X-User-Id": str(user.id),
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "reason": "agent stop",
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["preempted_count"] == 1
+    assert response.json()["desktop_event_ids"] == ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"]
+    assert stop.call_args.kwargs["user"].id == user.id
+    assert stop.call_args.kwargs["device_token"] is None
+
+
 def test_user_command_status_endpoint_uses_authenticated_user_scope():
     user = _user()
     client, _db = _client_for_endpoint(user)
