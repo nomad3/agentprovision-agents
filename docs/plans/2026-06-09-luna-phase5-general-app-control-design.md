@@ -39,9 +39,9 @@ canary" and "any tenant, governed" — the autonomy gate.
 | **P5.0** | Platform contract — the signed-command + boundary + observation contracts every channel honours | ✅ shipped | `2026-06-09-luna-computer-use-core-productionization-design.md` |
 | **P5.1** | Signed bounded actuation — server issues Ed25519-signed command envelopes; client verifies + actuates ONLY verified args (single actuation site). Pointer coords as integer micro-units. | ✅ shipped + live-validated (#851→#852; bounds-canonicalization hardening for `target_binding.bounds` in #858) | — |
 | **P5.2** | Governed perception transport — capture → quarantine (TTL) → byte-free reference on single SSE; "no-read by construction". | ✅ shipped (#853/#854/#855 + PR4 cleanup #856) and **enabled fleet-wide** (`desktop_control_enabled=true`, migration 168, #857) | `2026-06-09-luna-phase5.2-governed-perception-design.md` |
-| **P5.3** | Perception redactor + validator — the FIRST consumer of quarantined bytes: redact/validate into a `planner_safe` artifact. (Today every artifact is `not_planner_safe`.) | ⏳ next | — |
-| **P5.4** | Agent perception→action loop — Luna reasons over a planner-safe observation and issues the next signed actuation. The general app-control actuator must use the secondary-pointer/background-control design, not global cursor warping. | ⏳ | `2026-06-11-luna-secondary-pointer-background-control.md` |
-| **P5.5** | Chat trigger — "Luna, do X in app Y" from the chat surface drives the loop end-to-end. | ⏳ | — |
+| **P5.3** | Perception redactor + validator — the FIRST consumer of quarantined bytes: redact/validate into a `planner_safe` artifact. (Today every artifact is `not_planner_safe`.) | ⏳ next | `2026-06-11-luna-agent-loop-chat-trigger-execution.md` |
+| **P5.4** | Agent perception→action loop — Luna reasons over a planner-safe observation and issues the next signed actuation. The general app-control actuator must use the secondary-pointer/background-control design, not global cursor warping. | ⏳ design queued | `2026-06-11-luna-secondary-pointer-background-control.md`, `2026-06-11-luna-agent-loop-chat-trigger-execution.md` |
+| **P5.5** | Chat trigger — "Luna, do X in app Y" from the chat surface drives the loop end-to-end. | ⏳ design queued | `2026-06-11-luna-agent-loop-chat-trigger-execution.md` |
 
 ## 4. Productionization phases (`PRx`)
 
@@ -106,17 +106,20 @@ P5.3 redactor → P5.4 agent loop → P5.5 chat trigger   (ride on top, per-tena
 1. **PR4c** — per-tenant allowlist threading + tool-group/scope governance split.
 2. **PR5 → PR6 → PR7 → PR8** — per-tenant keys, capabilities projection, client
    consumption, ramp + runbook + metrics.
-3. **P5.3 redactor/validator** (first planner-safe perception) →
-   **P5.4a secondary-pointer/background actuator** →
-   **P5.4 agent loop** → **P5.5 chat trigger** — the "Luna controls any app from
-   chat" payoff, now on a governed multi-tenant footing without global cursor
-   theft.
+3. **D3 release gate (#872)** → **P5.3 redactor/validator** (first
+   planner-safe perception) → **P5.4a secondary-pointer/background actuator** →
+   **P5.4 agent loop** → **P5.5 chat trigger** — the "Luna controls any app
+   from chat" payoff, now on a governed multi-tenant footing without global
+   cursor theft. The execution ladder is in
+   `2026-06-11-luna-agent-loop-chat-trigger-execution.md`.
 
 ## 8. References
 
 - `docs/plans/2026-06-09-luna-computer-use-core-productionization-design.md` (+ `-codex-review.md`, `-luna-review.md`)
 - `docs/plans/2026-06-09-luna-phase5.2-governed-perception-design.md`
 - `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
+- `docs/plans/2026-06-11-luna-agent-loop-chat-trigger-execution.md`
 - `docs/report/2026-06-10-luna-computer-use-full-audit.md`
+- `docs/report/2026-06-11-luna-computer-use-fable-review.md`
 - `docs/operator/luna-e2e/` (live-validation harnesses)
 - `memory/computer_use_core_feature_directive.md`, `memory/luna_phase5_general_app_control.md`

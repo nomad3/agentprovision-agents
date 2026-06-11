@@ -2882,6 +2882,19 @@ Exit criteria:
 
 ## Next Actions
 
+2026-06-11 execution update:
+
+- [x] D1 / PR #869 merged: observe-path master gate and grant gate.
+- [x] SP1.5 / PR #870 merged: background-control contract/security fixtures.
+- [x] D2 / PR #871 merged: `expires_at_ms`, fail-closed client clock,
+  same-owner pacing carry-forward, and dead `canary_click` removal.
+- [ ] D3 / PR #872: config drift and Ed25519 default are CI-green and
+  mergeable at `e87ea629`; waiting on Luna release-gate approval before merge.
+- [ ] Next feature plan: execute
+  `docs/plans/2026-06-11-luna-agent-loop-chat-trigger-execution.md` in small
+  PRs, starting with P5.3a-2 redactor driver and planner-safe delivery before
+  P5.4/P5.5 chat-trigger actuation.
+
 1. Keep the PR #816 merge recorded as a proof-slice landing only: Luna accepted
    main at `e072f8bf`, but the accepted/stapled release path is still open.
 2. Re-run the Luna Tauri Build once Apple's notary queue accepts the app, or
