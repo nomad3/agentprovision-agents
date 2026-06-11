@@ -116,6 +116,14 @@ Implementation scope:
 - Fix the redactor lows that become live with the driver: TTL race, dangling
   `planner_safe` row after ambiguous failure, short-write handling, unknown
   region-kind fail-closed behavior, max-attempts coverage.
+- Status 2026-06-11: draft PR #880 (`claudia/p53a-redactor-driver`) wires the
+  driver loop, flag gate, cleanup race fixes, and byte-free redaction events.
+  Codex/Luna review found that the original unknown-region reason echoed
+  engine-supplied text into status metadata; commit `af4e5deb` fixes this with
+  a fixed `unknown_region_kind` code and regression coverage. PR #880 remains
+  draft because `_load_engine()` still returns `None`: the loop is correct but
+  dormant, so the exit criterion "quarantined raw capture -> planner-safe
+  derivative" is not satisfied yet.
 
 Tests:
 
@@ -201,8 +209,8 @@ Implementation scope:
   real actuation. The dry-run lifecycle is claimable and Stop-preemptible
   (`pending -> claimed -> running -> no-op`); it is not modeled as an
   immediate-terminal denied row.
-- Status 2026-06-11: first server/MCP dry-run slice is implemented on branch
-  `codex/luna-p54a-background-control`:
+- Status 2026-06-11: first server/MCP dry-run slice landed in PR #879
+  (`codex/luna-p54a-background-control`, merge `cd624503`):
   `background_app_control_dry_run` is a real command action with
   `background_control` capability, `background_control_enabled` tenant gate,
   API route validation, and MCP tool
@@ -279,6 +287,16 @@ Implementation scope:
   global-cursor/frontmost canary path.
 - Responses are display-safe and include command id, status, denial code,
   approval status, and audit refs.
+- Status 2026-06-11: branch `codex/luna-p54b-command-status` implements the
+  first read-only status/audit part of this slice. It adds a tenant/user-scoped
+  command status service, user-JWT route `GET /desktop-control/commands/{id}`,
+  read-only internal status route for MCP, and MCP tool
+  `desktop_command_status`, with the status tool granted through the
+  `desktop_control` tool group. The response intentionally omits raw command
+  payloads, signed envelopes, approval payloads, screen bytes, clipboard text,
+  and native actuation args. This lets Luna queue a dry-run and report its
+  audited terminal state, but it does not add approval grant creation, Alpha CLI
+  verbs, or real native actuation.
 
 Tests:
 

@@ -244,6 +244,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "desktop_keyboard_type",
         "desktop_keyboard_key_chord",
         "desktop_background_app_control_dry_run",
+        "desktop_command_status",
     ],
     # Platform introspection — answers "what's on this tenant?" questions like
     # "list my agents", "what workflows do I have", "which MCP servers are

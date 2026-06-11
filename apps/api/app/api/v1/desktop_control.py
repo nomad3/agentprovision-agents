@@ -39,7 +39,9 @@ from app.services.desktop_control_service import (
     claim_next_desktop_command,
     complete_desktop_command,
     create_desktop_approval_grant,
+    display_safe_command_status,
     enqueue_desktop_command,
+    get_desktop_command_status_snapshot,
     preempt_desktop_commands_for_stop,
     record_local_observation_event,
     record_mcp_observation_request,
@@ -309,6 +311,14 @@ class DesktopCommandStopOut(BaseModel):
     desktop_event_ids: list[uuid.UUID]
 
 
+class DesktopCommandStatusOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    command: dict[str, Any]
+    events: list[dict[str, Any]]
+    terminal: bool
+
+
 def _command_out(command, event=None, session_event=None, *, idempotent: bool = False) -> DesktopCommandOut:
     return DesktopCommandOut(
         desktop_command_id=command.id,
@@ -555,6 +565,30 @@ def enqueue_command(
     return _command_out(command, event, session_event)
 
 
+@router.get(
+    "/internal/commands/{command_id}/status",
+    response_model=DesktopCommandStatusOut,
+)
+@limiter.limit("240/minute")
+def internal_command_status(
+    request: Request,
+    command_id: uuid.UUID,
+    session_id: uuid.UUID | None = None,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    snapshot = get_desktop_command_status_snapshot(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        command_id=command_id,
+        session_id=session_id,
+    )
+    return DesktopCommandStatusOut(**display_safe_command_status(snapshot))
+
+
 @router.post(
     "/commands/claim",
     response_model=DesktopCommandClaimOut,
@@ -628,3 +662,25 @@ def stop_commands(
         preempted_count=count,
         desktop_event_ids=[event.id for event in events],
     )
+
+
+@router.get(
+    "/commands/{command_id}",
+    response_model=DesktopCommandStatusOut,
+)
+@limiter.limit("240/minute")
+def command_status(
+    request: Request,
+    command_id: uuid.UUID,
+    session_id: uuid.UUID | None = None,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    snapshot = get_desktop_command_status_snapshot(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        command_id=command_id,
+        session_id=session_id,
+    )
+    return DesktopCommandStatusOut(**display_safe_command_status(snapshot))
