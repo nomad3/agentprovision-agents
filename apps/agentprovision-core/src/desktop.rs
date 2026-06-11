@@ -476,6 +476,133 @@ pub struct DesktopCommandStatusSnapshot {
     pub terminal: bool,
 }
 
+// ── P5.3b planner-safe observation delivery (`alpha desktop observe`) ─────
+
+/// Perception artifact redaction state. Unknown values fail closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerceptionRedactionStatus {
+    NotPlannerSafe,
+    Redacting,
+    PlannerSafe,
+}
+
+/// Observation action an Alpha caller may request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopObserveAction {
+    CaptureScreenshot,
+    GetActiveApp,
+    ReadClipboard,
+}
+
+/// Observation request acknowledgements are denial-only in P5.3b: they are
+/// display-safe audit envelopes and never carry observed content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopObservationRequestStatus {
+    Denied,
+}
+
+/// Display-safe denial codes for planner-safe artifact delivery. Mirrors
+/// `PerceptionFetchDenialCode` in
+/// `apps/api/app/services/perception_delivery.py` — an unknown code fails to
+/// deserialize (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PerceptionFetchDenialCode {
+    DesktopControlDisabled,
+    ArtifactNotFound,
+    ArtifactExpired,
+    ArtifactNotPlannerSafe,
+    ArtifactRawNotDeleted,
+    ArtifactBytesUnavailable,
+    ArtifactIntegrityMismatch,
+}
+
+/// Structured delivery denial (`{"detail": {"code": ..., "reason": ...}}`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerceptionFetchDenial {
+    pub code: PerceptionFetchDenialCode,
+    pub reason: String,
+}
+
+impl PerceptionFetchDenial {
+    /// Parse a FastAPI error body into a typed denial, if it is one. Returns
+    /// `None` for any other error shape (the caller falls back to the generic
+    /// API error path). Unknown codes fail closed to `None`.
+    pub fn from_error_body(body: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Envelope {
+            detail: PerceptionFetchDenial,
+        }
+        serde_json::from_str::<Envelope>(body)
+            .ok()
+            .map(|e| e.detail)
+    }
+}
+
+/// `POST /api/v1/desktop-control/observations/request` body
+/// (`alpha desktop observe request`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopObservationRequestBody {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    pub action: DesktopObserveAction,
+}
+
+/// Acknowledgement for an observation request — a display-safe audit
+/// envelope, never observed content. `deny_unknown_fields` rejects a raw
+/// `screenshot` / `clipboard_text` / `ocr_text` field outright.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopObservationRequestAck {
+    pub status: DesktopObservationRequestStatus,
+    pub desktop_event_id: String,
+    #[serde(default)]
+    pub session_event_id: Option<String>,
+    #[serde(default)]
+    pub session_seq_no: Option<i64>,
+    pub shell_id: String,
+    pub action: DesktopObserveAction,
+    pub capability: DesktopCapability,
+    #[serde(default)]
+    pub reason: Option<String>,
+    pub down_channel_available: bool,
+}
+
+/// Display-safe perception artifact status (`alpha desktop observe status`).
+/// Byte-free by construction: `deny_unknown_fields` rejects `storage_path`,
+/// `redacted_storage_path`, `ocr_text`, `window_title`, or any content field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerceptionArtifactStatus {
+    pub artifact_id: String,
+    pub session_id: String,
+    pub shell_id: String,
+    pub artifact_type: String,
+    pub redaction_status: PerceptionRedactionStatus,
+    pub size_bytes: u64,
+    pub sha256: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    pub expired: bool,
+    pub raw_deleted: bool,
+    pub redacted_available: bool,
+    #[serde(default)]
+    pub source_window_bundle_id: Option<String>,
+    #[serde(default)]
+    pub redaction_verdict: Option<String>,
+    #[serde(default)]
+    pub redaction_reasons: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +689,129 @@ mod tests {
         let r: Result<DesktopDenialCode, _> =
             serde_json::from_value(serde_json::json!("totally_made_up_code"));
         assert!(r.is_err(), "unknown denial code must fail to deserialize");
+    }
+
+    fn artifact_status_json() -> serde_json::Value {
+        serde_json::json!({
+            "artifact_id": "77777777-7777-7777-7777-777777777777",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "artifact_type": "screenshot",
+            "redaction_status": "planner_safe",
+            "size_bytes": 1024,
+            "sha256": "ab".repeat(32),
+            "created_at": "2026-06-11T12:00:00+00:00",
+            "expires_at": "2026-06-11T12:15:00+00:00",
+            "expired": false,
+            "raw_deleted": true,
+            "redacted_available": true,
+            "source_window_bundle_id": "com.apple.TextEdit",
+            "redaction_verdict": "planner_safe",
+            "redaction_reasons": []
+        })
+    }
+
+    #[test]
+    fn perception_artifact_status_roundtrips() {
+        let status: PerceptionArtifactStatus =
+            serde_json::from_value(artifact_status_json()).expect("status decode");
+        assert_eq!(
+            status.redaction_status,
+            PerceptionRedactionStatus::PlannerSafe
+        );
+        assert!(status.redacted_available);
+        assert!(status.raw_deleted);
+    }
+
+    #[test]
+    fn perception_artifact_status_rejects_path_and_content_fields() {
+        // The status is byte-free/path-free by construction: a server (or MITM)
+        // response smuggling a path or raw content field must fail to decode.
+        for (key, value) in [
+            ("storage_path", serde_json::json!("t/s/a.png")),
+            (
+                "redacted_storage_path",
+                serde_json::json!("t/s/a.redacted.png"),
+            ),
+            ("ocr_text", serde_json::json!("SECRET")),
+            ("window_title", serde_json::json!("SECRET TITLE")),
+            ("content_base64", serde_json::json!("aGVsbG8=")),
+        ] {
+            let mut status = artifact_status_json();
+            status[key] = value;
+            assert!(
+                serde_json::from_value::<PerceptionArtifactStatus>(status).is_err(),
+                "{key} must be rejected by PerceptionArtifactStatus"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_redaction_status_fails_closed() {
+        let mut status = artifact_status_json();
+        status["redaction_status"] = serde_json::json!("totally_new_state");
+        assert!(serde_json::from_value::<PerceptionArtifactStatus>(status).is_err());
+    }
+
+    #[test]
+    fn fetch_denial_codes_roundtrip_canonical_strings() {
+        for s in [
+            "desktop_control_disabled",
+            "artifact_not_found",
+            "artifact_expired",
+            "artifact_not_planner_safe",
+            "artifact_raw_not_deleted",
+            "artifact_bytes_unavailable",
+            "artifact_integrity_mismatch",
+        ] {
+            let v: PerceptionFetchDenialCode =
+                serde_json::from_value(serde_json::Value::String(s.into())).expect(s);
+            assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(s));
+        }
+    }
+
+    #[test]
+    fn fetch_denial_parses_from_error_body_and_fails_closed_on_unknown() {
+        let denial = PerceptionFetchDenial::from_error_body(
+            r#"{"detail": {"code": "artifact_expired", "reason": "perception artifact has expired"}}"#,
+        )
+        .expect("typed denial");
+        assert_eq!(denial.code, PerceptionFetchDenialCode::ArtifactExpired);
+
+        // unknown code / non-denial error shapes → None (fail closed)
+        assert!(PerceptionFetchDenial::from_error_body(
+            r#"{"detail": {"code": "made_up", "reason": "x"}}"#
+        )
+        .is_none());
+        assert!(
+            PerceptionFetchDenial::from_error_body(r#"{"detail": "Session not found"}"#).is_none()
+        );
+    }
+
+    #[test]
+    fn observation_request_ack_rejects_raw_content() {
+        let ack = serde_json::json!({
+            "status": "denied",
+            "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+            "session_event_id": null,
+            "session_seq_no": null,
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "action": "capture_screenshot",
+            "capability": "screenshot",
+            "reason": "desktop observation down-channel unavailable; capture_screenshot request denied",
+            "down_channel_available": false
+        });
+        let decoded: DesktopObservationRequestAck =
+            serde_json::from_value(ack.clone()).expect("ack decode");
+        assert_eq!(decoded.status, DesktopObservationRequestStatus::Denied);
+        for raw in ["screenshot", "clipboard_text", "ocr_text"] {
+            let mut bad = ack.clone();
+            bad[raw] = serde_json::json!("SECRET");
+            assert!(
+                serde_json::from_value::<DesktopObservationRequestAck>(bad).is_err(),
+                "{raw} must be rejected by DesktopObservationRequestAck"
+            );
+        }
     }
 
     #[test]

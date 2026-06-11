@@ -18,7 +18,8 @@ use url::Url;
 use crate::desktop::{
     DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
     DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
-    DesktopPreflight,
+    DesktopObservationRequestAck, DesktopObservationRequestBody, DesktopPreflight,
+    PerceptionArtifactStatus,
 };
 use crate::error::{Error, Result};
 use crate::models::{
@@ -261,6 +262,21 @@ impl ApiClient {
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let req = self.request(Method::GET, path)?;
         self.send_json(req).await
+    }
+
+    /// Generic raw-bytes `GET` helper for the rare byte-returning endpoint
+    /// (e.g. the P5.3b planner-safe observation fetch). Same auth/refresh/
+    /// status handling as `get_json`, without a serde decode.
+    pub async fn get_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let req = self.request(Method::GET, path)?;
+        let clone = req.try_clone();
+        let resp = req.send().await?;
+        let resp = match self.maybe_refresh_and_retry(resp, clone).await? {
+            MaybeRetried::Replied(r) => r,
+            MaybeRetried::FreshFailure(e) => return Err(e),
+        };
+        let resp = self.check_status(resp).await?;
+        Ok(resp.bytes().await?.to_vec())
     }
 
     /// Generic typed `POST` helper. Body is serialized as JSON; auth
@@ -983,6 +999,68 @@ impl ApiClient {
             None => format!("/api/v1/desktop-control/commands/{command_id}"),
         };
         self.get_json(&path).await
+    }
+
+    /// `POST /api/v1/desktop-control/observations/request` — the
+    /// `alpha desktop observe request` verb. User-JWT route (never `/internal/*`);
+    /// returns a display-safe audit acknowledgement, never observed content.
+    pub async fn desktop_observe_request(
+        &self,
+        body: &DesktopObservationRequestBody,
+    ) -> Result<DesktopObservationRequestAck> {
+        self.post_json("/api/v1/desktop-control/observations/request", body)
+            .await
+    }
+
+    fn observation_path(
+        artifact_id: &str,
+        leaf: &str,
+        session_id: &str,
+        shell_id: Option<&str>,
+    ) -> String {
+        let mut path = format!(
+            "/api/v1/desktop-control/observations/{artifact_id}/{leaf}?session_id={session_id}"
+        );
+        if let Some(shell_id) = shell_id {
+            path.push_str(&format!("&shell_id={shell_id}"));
+        }
+        path
+    }
+
+    /// `GET /api/v1/desktop-control/observations/{id}/status` — display-safe
+    /// perception artifact status (`alpha desktop observe status`).
+    pub async fn desktop_observation_status(
+        &self,
+        artifact_id: &str,
+        session_id: &str,
+        shell_id: Option<&str>,
+    ) -> Result<PerceptionArtifactStatus> {
+        self.get_json(&Self::observation_path(
+            artifact_id,
+            "status",
+            session_id,
+            shell_id,
+        ))
+        .await
+    }
+
+    /// `GET /api/v1/desktop-control/observations/{id}/content` — the
+    /// planner-safe REDACTED bytes (`alpha desktop observe fetch`). The server
+    /// serves only the redacted derivative of an artifact whose raw capture was
+    /// already hard-deleted; denials arrive as typed `PerceptionFetchDenial`s.
+    pub async fn desktop_observation_fetch(
+        &self,
+        artifact_id: &str,
+        session_id: &str,
+        shell_id: Option<&str>,
+    ) -> Result<Vec<u8>> {
+        self.get_bytes(&Self::observation_path(
+            artifact_id,
+            "content",
+            session_id,
+            shell_id,
+        ))
+        .await
     }
 }
 

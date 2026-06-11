@@ -7,6 +7,7 @@ signed envelopes and approval consumption ship.
 """
 from __future__ import annotations
 
+import base64
 import uuid
 from typing import Any, Literal
 
@@ -17,7 +18,9 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -28,6 +31,7 @@ from app.api import deps
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.models.user import User as UserModel
+from app.services import perception_delivery
 from app.services.desktop_control_service import (
     DesktopCommandClaim,
     DesktopCommandApprovalGrantCreate,
@@ -528,10 +532,11 @@ async def upload_observation(
     x_device_token: str | None = Header(None, alias="X-Device-Token"),
 ):
     """Phase 5.2 governed perception transport — the Luna client uploads a
-    captured, window-scoped, redacted screenshot. The bytes land in an API-only
-    quarantine under a hard TTL; a BYTE-FREE reference is emitted on the single
-    session SSE. There is intentionally NO endpoint that returns the bytes —
-    nothing reads them in P5.2 (transport only, until the P5.3 validator/redactor).
+    captured, window-scoped screenshot. The bytes land in an API-only quarantine
+    under a hard TTL; a BYTE-FREE reference is emitted on the single session
+    SSE. RAW bytes have NO retrieval endpoint; the only delivery surface is the
+    P5.3b planner-safe route, which serves exclusively the REDACTED derivative
+    after the redactor hard-deleted the raw capture.
     """
     from app.services.perception_storage import MAX_SCREENSHOT_SIZE
 
@@ -573,6 +578,198 @@ async def upload_observation(
         size_bytes=artifact.size_bytes,
         session_event_id=session_event.get("event_id") if session_event else None,
         session_seq_no=session_event.get("seq_no") if session_event else None,
+    )
+
+
+# ── P5.3b planner-safe delivery (`alpha desktop observe request|status|fetch`) ──
+
+_SHELL_ID_PATTERN = (
+    r"^desktop-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+_OBSERVE_ACTION_TOOL_NAMES = {
+    "capture_screenshot": "desktop_observe_screen",
+    "get_active_app": "desktop_get_active_app",
+    "read_clipboard": "desktop_read_clipboard",
+}
+
+
+class AlphaObservationRequestIn(BaseModel):
+    """`alpha desktop observe request` body — user-JWT twin of the internal
+    observation-request route (Alpha never calls `/internal/*`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    shell_id: str | None = Field(default=None, pattern=_SHELL_ID_PATTERN, max_length=96)
+    action: Literal["capture_screenshot", "get_active_app", "read_clipboard"] = (
+        "capture_screenshot"
+    )
+
+
+class DesktopObservationStatusOut(BaseModel):
+    """Display-safe perception-artifact status. Byte-free by construction: no
+    storage paths, no OCR text, no window titles — id/hash/size/state only."""
+
+    artifact_id: uuid.UUID
+    session_id: uuid.UUID
+    shell_id: str
+    artifact_type: str
+    redaction_status: str
+    size_bytes: int
+    sha256: str
+    created_at: str | None = None
+    expires_at: str | None = None
+    expired: bool
+    raw_deleted: bool
+    redacted_available: bool
+    source_window_bundle_id: str | None = None
+    redaction_verdict: str | None = None
+    redaction_reasons: list[str] = Field(default_factory=list)
+
+
+@router.post(
+    "/observations/request",
+    response_model=DesktopObservationRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("120/minute")
+def request_observation(
+    request: Request,
+    payload: AlphaObservationRequestIn,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    event, session_event = record_mcp_observation_request(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        request=McpObservationRequest(
+            session_id=payload.session_id,
+            action=payload.action,
+            shell_id=payload.shell_id,
+            tool_name=_OBSERVE_ACTION_TOOL_NAMES[payload.action],
+        ),
+        source="alpha",
+    )
+    down_channel = event.event_metadata.get("down_channel", {})
+    return DesktopObservationRequestOut(
+        desktop_event_id=event.id,
+        session_event_id=session_event.get("event_id") if session_event else None,
+        session_seq_no=session_event.get("seq_no") if session_event else None,
+        shell_id=event.shell_id,
+        action=event.action,
+        capability=event.capability,
+        reason=event.reason,
+        down_channel_available=bool(down_channel.get("available")),
+    )
+
+
+@router.get(
+    "/observations/{artifact_id}/status",
+    response_model=DesktopObservationStatusOut,
+)
+@limiter.limit("240/minute")
+def observation_artifact_status(
+    request: Request,
+    artifact_id: uuid.UUID,
+    session_id: uuid.UUID = Query(...),
+    shell_id: str | None = Query(None, pattern=_SHELL_ID_PATTERN, max_length=96),
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    return DesktopObservationStatusOut(
+        **perception_delivery.artifact_status(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            session_id=session_id,
+            artifact_id=artifact_id,
+            shell_id=shell_id,
+        )
+    )
+
+
+@router.get("/observations/{artifact_id}/content")
+@limiter.limit("60/minute")
+def observation_artifact_content(
+    request: Request,
+    artifact_id: uuid.UUID,
+    session_id: uuid.UUID = Query(...),
+    shell_id: str | None = Query(None, pattern=_SHELL_ID_PATTERN, max_length=96),
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    """Planner-safe redacted bytes (`alpha desktop observe fetch`). The ONLY
+    byte-returning perception route; serves exclusively the redacted derivative
+    resolved via the canonical id-derived jailed path — never raw capture bytes.
+    """
+    artifact, data = perception_delivery.fetch_planner_safe_bytes(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        session_id=session_id,
+        artifact_id=artifact_id,
+        shell_id=shell_id,
+        source="alpha",
+    )
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'attachment; filename="{artifact.id}.redacted.png"',
+        },
+    )
+
+
+class InternalObservationContentOut(BaseModel):
+    """MCP-facing planner-safe delivery envelope. `content_base64` is the
+    reviewed planner-safe payload; everything else is display-safe metadata."""
+
+    artifact_id: uuid.UUID
+    session_id: uuid.UUID
+    redaction_status: str
+    size_bytes: int
+    sha256: str
+    expires_at: str
+    content_base64: str
+
+
+@router.get(
+    "/internal/observations/{artifact_id}/content",
+    response_model=InternalObservationContentOut,
+)
+@limiter.limit("60/minute")
+def internal_observation_artifact_content(
+    request: Request,
+    artifact_id: uuid.UUID,
+    session_id: uuid.UUID = Query(...),
+    shell_id: str | None = Query(None, pattern=_SHELL_ID_PATTERN, max_length=96),
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    artifact, data = perception_delivery.fetch_planner_safe_bytes(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=session_id,
+        artifact_id=artifact_id,
+        shell_id=shell_id,
+        source="mcp",
+    )
+    return InternalObservationContentOut(
+        artifact_id=artifact.id,
+        session_id=artifact.session_id,
+        redaction_status=artifact.redaction_status,
+        size_bytes=int(artifact.size_bytes),
+        sha256=artifact.sha256,
+        expires_at=artifact.expires_at.isoformat(),
+        content_base64=base64.b64encode(data).decode("ascii"),
     )
 
 

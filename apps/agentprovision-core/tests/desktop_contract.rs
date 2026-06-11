@@ -11,6 +11,8 @@
 use agentprovision_core::desktop::{
     DesktopActionKind, DesktopCapability, DesktopCommandClaim, DesktopCommandDenied,
     DesktopCommandStatus, DesktopControlMode, DesktopDenialCode, DesktopRiskTier, EnvelopeAlg,
+    PerceptionArtifactStatus, PerceptionFetchDenial, PerceptionFetchDenialCode,
+    PerceptionRedactionStatus,
 };
 use serde_json::Value;
 
@@ -20,6 +22,10 @@ const DENY_BUNDLE: &str =
     include_str!("../../../docs/contracts/desktop-control/deny.missing_target_bundle_id.json");
 const DENY_CAP: &str =
     include_str!("../../../docs/contracts/desktop-control/deny.capability_mismatch.json");
+const OBSERVATION_STATUS: &str =
+    include_str!("../../../docs/contracts/desktop-control/observation_status.planner_safe.json");
+const OBSERVATION_FETCH_DENIED: &str =
+    include_str!("../../../docs/contracts/desktop-control/observation_fetch.denied.json");
 
 const FORBIDDEN: &[&str] = &[
     "window_title",
@@ -114,10 +120,44 @@ fn fixtures_are_display_safe_recursive() {
         ("claim", CLAIM),
         ("deny_bundle", DENY_BUNDLE),
         ("deny_cap", DENY_CAP),
+        ("observation_status", OBSERVATION_STATUS),
+        ("observation_fetch_denied", OBSERVATION_FETCH_DENIED),
     ] {
         let v: Value = serde_json::from_str(raw).unwrap();
         let mut hits = Vec::new();
         forbidden_hits(&v, "$", &mut hits);
         assert!(hits.is_empty(), "{name} leaks forbidden field(s): {hits:?}");
+    }
+}
+
+#[test]
+fn observation_fixtures_deserialize_typed() {
+    // P5.3b planner-safe delivery: status + denial parse through the core types.
+    let status: PerceptionArtifactStatus =
+        serde_json::from_str(OBSERVATION_STATUS).expect("typed observation status");
+    assert_eq!(
+        status.redaction_status,
+        PerceptionRedactionStatus::PlannerSafe
+    );
+    assert!(status.redacted_available && status.raw_deleted && !status.expired);
+
+    let denial = PerceptionFetchDenial::from_error_body(OBSERVATION_FETCH_DENIED)
+        .expect("typed fetch denial");
+    assert_eq!(
+        denial.code,
+        PerceptionFetchDenialCode::ArtifactNotPlannerSafe
+    );
+}
+
+#[test]
+fn injected_storage_path_fails_observation_status_deserialize() {
+    for key in ["storage_path", "redacted_storage_path", "ocr_text"] {
+        let mut v: Value = serde_json::from_str(OBSERVATION_STATUS).unwrap();
+        v[key] = Value::String("tenant/session/artifact.png".into());
+        let s = serde_json::to_string(&v).unwrap();
+        assert!(
+            serde_json::from_str::<PerceptionArtifactStatus>(&s).is_err(),
+            "{key} must be rejected by PerceptionArtifactStatus"
+        );
     }
 }

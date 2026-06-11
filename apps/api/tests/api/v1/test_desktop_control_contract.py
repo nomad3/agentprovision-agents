@@ -31,6 +31,8 @@ FIXTURES = _fixtures_dir()
 CLAIM = "pointer_command_claim.display_safe.json"
 DENY_BUNDLE = "deny.missing_target_bundle_id.json"
 DENY_CAP = "deny.capability_mismatch.json"
+OBSERVATION_STATUS = "observation_status.planner_safe.json"
+OBSERVATION_FETCH_DENIED = "observation_fetch.denied.json"
 
 # ── display-safe boundary: these exact keys must never appear, at any depth ──
 FORBIDDEN_KEYS = {
@@ -58,7 +60,9 @@ def _forbidden_hits(node, path="") -> list[str]:
 
 # ── always-runnable: structure + display-safe (no app import) ────────────
 
-@pytest.mark.parametrize("name", [CLAIM, DENY_BUNDLE, DENY_CAP])
+@pytest.mark.parametrize(
+    "name", [CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED]
+)
 def test_fixture_is_display_safe(name):
     hits = _forbidden_hits(_load(name))
     assert hits == [], f"{name} leaks raw/forbidden field(s): {hits}"
@@ -114,6 +118,32 @@ def test_fixtures_match_service_enums():
         d = _load(name)
         assert d["action"] in actions
         assert d["capability"] in capabilities
+
+
+# ── P5.3b planner-safe observation delivery contract ─────────────────────
+
+def test_observation_status_fixture_matches_route_model():
+    """The status fixture must round-trip through the REAL response model
+    (DesktopObservationStatusOut) — any drift between fixture, API model, and
+    the Rust PerceptionArtifactStatus mirror fails here or in the CLI test."""
+    dc = pytest.importorskip("app.api.v1.desktop_control")
+    fixture = _load(OBSERVATION_STATUS)
+    out = dc.DesktopObservationStatusOut(**fixture)
+    assert out.redaction_status == "planner_safe"
+    assert out.redacted_available is True
+    assert out.raw_deleted is True
+    # storage paths are not part of the contract, at any key
+    assert "storage_path" not in fixture
+    assert "redacted_storage_path" not in fixture
+
+
+def test_observation_fetch_denial_code_is_canonical():
+    delivery = pytest.importorskip("app.services.perception_delivery")
+    fixture = _load(OBSERVATION_FETCH_DENIED)
+    detail = fixture["detail"]
+    valid = {c.value for c in delivery.PerceptionFetchDenialCode}
+    assert detail["code"] in valid
+    assert detail["reason"] == detail["reason"].strip()
 
 
 def test_deny_codes_match_pr_c_enum():
