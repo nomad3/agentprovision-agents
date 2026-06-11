@@ -44,6 +44,7 @@ fixture, the mirror is wrong.
 | `observation_fetch.denied.json` | P5.3b planner-safe fetch denial | `{detail: {code, reason}}`; `code` is a `PerceptionFetchDenialCode` (`apps/api/app/services/perception_delivery.py`) — a separate closed enum from the frozen PR-C `DesktopDenialCode` |
 | `grant_request.pending.json` | P5.4b pending desktop approval request (`alpha desktop grant request`) | reduced/display-safe: ids/status/action/capability/reduced-target only; mirrors `DesktopGrantRequestOut` (API) / `DesktopGrantRequest` (core); records intent, never actuates |
 | `grant_request.denied.json` | P5.4b grant-request denial | `{detail: {code, reason}}`; `code` is a `DesktopGrantRequestDenialCode` (`apps/api/app/services/desktop_act.py`) |
+| `grant_approval.approved.json` | P5.5 approve response (`alpha desktop approvals approve`) | approved request projection + minted bounded grant summary (ids/status/bounds/bundle only); mirrors `DesktopGrantApprovalOut` (API) / `DesktopGrantApproval` (core); never an envelope (signed later at claim) |
 
 Display-safe invariant (enforced recursively by every parity test): no
 `window_title`, `screenshot`, `screenshot_b64`, `clipboard`, `clipboard_text`,
@@ -129,7 +130,9 @@ cd apps/agentprovision-cli && cargo test --test desktop_contract
 
 ## Prohibitions
 
-- **No `alpha desktop` command.** Types + parity only; no actuation-adjacent CLI surface.
+- **No local/native actuation through `alpha desktop`.** CLI surfaces may call the
+  API-owned inspection, request, and human-approval endpoints, but they must not
+  drive pointer/keyboard locally or bypass the API grant/claim contract.
 - **No native actuation.** `desktop_control_allows_actuation()` stays false; these fixtures
   type the shape, they do not authorize execution.
 - **No schema drift without an API change + fixture update.** Any shape change MUST: change the

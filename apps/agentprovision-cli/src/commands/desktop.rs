@@ -12,8 +12,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use agentprovision_core::desktop::{
     DesktopActionKind, DesktopBackgroundDryRunRequest, DesktopBackgroundDryRunTarget,
     DesktopCommandStopRequest, DesktopControlAllowlistUpdate, DesktopControlEnablement,
-    DesktopControlEnablementUpdate, DesktopGrantRequestBody, DesktopObservationRequestBody,
-    DesktopObserveAction, DesktopRequestableAction, PerceptionFetchDenial,
+    DesktopControlEnablementUpdate, DesktopGrantApprovalBody, DesktopGrantDenialBody,
+    DesktopGrantRequestBody, DesktopObservationRequestBody, DesktopObserveAction,
+    DesktopRequestableAction, PerceptionFetchDenial,
 };
 use agentprovision_core::Error as CoreError;
 use serde::Serialize;
@@ -42,6 +43,10 @@ pub enum DesktopCommand {
     /// action and poll the request. Never mints a grant or actuates.
     #[command(subcommand)]
     Grant(GrantCommand),
+    /// Human approval surface (P5.5): list pending desktop approval requests and
+    /// approve (mint a bounded grant) or deny them. User-authenticated only.
+    #[command(subcommand)]
+    Approvals(ApprovalsCommand),
     /// Inspect or update the current tenant's desktop-control bootstrap gates.
     #[command(subcommand)]
     Enablement(EnablementCommand),
@@ -239,6 +244,44 @@ pub struct GrantStatusArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ApprovalsCommand {
+    /// List the current user's pending desktop approval requests.
+    List(ApprovalsListArgs),
+    /// Approve a pending request → mint a bounded grant.
+    Approve(ApprovalsApproveArgs),
+    /// Deny a pending request (terminal; mints no grant).
+    Deny(ApprovalsDenyArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ApprovalsListArgs {
+    /// Optional chat/session UUID to scope the list.
+    #[arg(long)]
+    pub session: Option<Uuid>,
+}
+
+#[derive(Debug, Args)]
+pub struct ApprovalsApproveArgs {
+    /// Pending approval request UUID to approve.
+    pub request_id: Uuid,
+    /// Max actions the minted grant authorizes (1..20).
+    #[arg(long, default_value_t = 1)]
+    pub max_actions: u32,
+    /// Grant validity window in seconds (5..600).
+    #[arg(long, default_value_t = 60)]
+    pub expires_in_seconds: u32,
+}
+
+#[derive(Debug, Args)]
+pub struct ApprovalsDenyArgs {
+    /// Pending approval request UUID to deny.
+    pub request_id: Uuid,
+    /// Optional display-safe deny reason (capped server-side).
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum EnablementCommand {
     /// Read the current tenant's desktop-control bootstrap gates.
     Get(EnablementGetArgs),
@@ -285,6 +328,9 @@ pub async fn dispatch(cmd: DesktopCommand, ctx: Context) -> anyhow::Result<()> {
         DesktopCommand::Observe(ObserveCommand::Fetch(a)) => observe_fetch(a, ctx).await,
         DesktopCommand::Grant(GrantCommand::Request(a)) => grant_request(a, ctx).await,
         DesktopCommand::Grant(GrantCommand::Status(a)) => grant_status(a, ctx).await,
+        DesktopCommand::Approvals(ApprovalsCommand::List(a)) => approvals_list(a, ctx).await,
+        DesktopCommand::Approvals(ApprovalsCommand::Approve(a)) => approvals_approve(a, ctx).await,
+        DesktopCommand::Approvals(ApprovalsCommand::Deny(a)) => approvals_deny(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Get(a)) => enablement_get(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Set(a)) => enablement_set(a, ctx).await,
         DesktopCommand::Allowlist(AllowlistCommand::Get(a)) => allowlist_get(a, ctx).await,
@@ -603,6 +649,91 @@ async fn grant_status(args: GrantStatusArgs, ctx: Context) -> anyhow::Result<()>
             let err = anyhow::Error::new(e);
             match grant_denial_message(&err) {
                 Some(msg) => err.context(format!("[alpha] desktop grant status {msg}")),
+                None => err,
+            }
+        })?;
+    emit_grant_request(&ctx, &resp);
+    Ok(())
+}
+
+async fn approvals_list(args: ApprovalsListArgs, ctx: Context) -> anyhow::Result<()> {
+    let session = args.session.map(|s| s.to_string());
+    let resp = ctx
+        .client
+        .desktop_list_grant_requests(session.as_deref())
+        .await
+        .map_err(|e| {
+            let err = anyhow::Error::new(e);
+            match grant_denial_message(&err) {
+                Some(msg) => err.context(format!("[alpha] desktop approvals list {msg}")),
+                None => err,
+            }
+        })?;
+    output::emit(ctx.json, &resp, |rows| {
+        output::ok(format!(
+            "[alpha] {} pending desktop approval request(s)",
+            rows.len()
+        ));
+        for r in rows {
+            output::info(format!(
+                "request={} action={} capability={} bundle={} expires_at={}",
+                r.request_id,
+                json_string(&r.action),
+                json_string(&r.capability),
+                r.target_bundle_id.as_deref().unwrap_or("(none)"),
+                r.expires_at.as_deref().unwrap_or("(none)"),
+            ));
+        }
+    });
+    Ok(())
+}
+
+async fn approvals_approve(args: ApprovalsApproveArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopGrantApprovalBody {
+        max_actions: args.max_actions,
+        expires_in_seconds: args.expires_in_seconds,
+    };
+    let resp = ctx
+        .client
+        .desktop_approve_grant_request(&args.request_id.to_string(), &body)
+        .await
+        .map_err(|e| {
+            let err = anyhow::Error::new(e);
+            match grant_denial_message(&err) {
+                Some(msg) => err.context(format!("[alpha] desktop approvals approve {msg}")),
+                None => err,
+            }
+        })?;
+    output::emit(ctx.json, &resp, |resp| {
+        output::ok(format!(
+            "[alpha] approved request {} → grant {} status={}",
+            resp.request_id, resp.grant_id, resp.grant_status,
+        ));
+        output::info(format!(
+            "capability={} max_actions={} risk_tier={}",
+            json_string(&resp.capability),
+            resp.max_actions,
+            json_string(&resp.risk_tier),
+        ));
+        if let Some(expires_at) = &resp.grant_expires_at {
+            output::info(format!("grant_expires_at={expires_at}"));
+        }
+    });
+    Ok(())
+}
+
+async fn approvals_deny(args: ApprovalsDenyArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopGrantDenialBody {
+        reason: args.reason,
+    };
+    let resp = ctx
+        .client
+        .desktop_deny_grant_request(&args.request_id.to_string(), &body)
+        .await
+        .map_err(|e| {
+            let err = anyhow::Error::new(e);
+            match grant_denial_message(&err) {
+                Some(msg) => err.context(format!("[alpha] desktop approvals deny {msg}")),
                 None => err,
             }
         })?;
@@ -1088,5 +1219,103 @@ mod tests {
             body: r#"{"detail": "Session not found"}"#.to_string(),
         });
         assert!(grant_denial_message(&other).is_none());
+    }
+
+    #[test]
+    fn parses_approvals_list() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "approvals",
+            "list",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Approvals(ApprovalsCommand::List(args)),
+            } => assert_eq!(
+                args.session.map(|s| s.to_string()).as_deref(),
+                Some("33333333-3333-3333-3333-333333333333")
+            ),
+            _ => panic!("expected desktop approvals list"),
+        }
+    }
+
+    #[test]
+    fn parses_approvals_approve_with_bounds() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "approvals",
+            "approve",
+            "55555555-5555-5555-5555-555555555555",
+            "--max-actions",
+            "3",
+            "--expires-in-seconds",
+            "120",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Approvals(ApprovalsCommand::Approve(args)),
+            } => {
+                assert_eq!(
+                    args.request_id.to_string(),
+                    "55555555-5555-5555-5555-555555555555"
+                );
+                assert_eq!(args.max_actions, 3);
+                assert_eq!(args.expires_in_seconds, 120);
+            }
+            _ => panic!("expected desktop approvals approve"),
+        }
+    }
+
+    #[test]
+    fn approvals_approve_defaults_to_single_bounded_action() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "approvals",
+            "approve",
+            "55555555-5555-5555-5555-555555555555",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Approvals(ApprovalsCommand::Approve(args)),
+            } => {
+                assert_eq!(args.max_actions, 1);
+                assert_eq!(args.expires_in_seconds, 60);
+            }
+            _ => panic!("expected desktop approvals approve"),
+        }
+    }
+
+    #[test]
+    fn parses_approvals_deny() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "approvals",
+            "deny",
+            "55555555-5555-5555-5555-555555555555",
+            "--reason",
+            "not now",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Approvals(ApprovalsCommand::Deny(args)),
+            } => {
+                assert_eq!(
+                    args.request_id.to_string(),
+                    "55555555-5555-5555-5555-555555555555"
+                );
+                assert_eq!(args.reason.as_deref(), Some("not now"));
+            }
+            _ => panic!("expected desktop approvals deny"),
+        }
     }
 }

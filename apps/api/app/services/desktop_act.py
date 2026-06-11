@@ -27,12 +27,15 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.desktop_approval_request import DesktopApprovalRequest
+from app.models.desktop_command_approval_grant import DesktopCommandApprovalGrant
 from app.services.desktop_control_service import (
     _NATIVE_CONTROL_CAPABILITIES,
+    _capability_matches_risk_tier,
     _ensure_desktop_control_enabled,
     _ensure_session_owned_by_user,
     _ensure_user_for_tenant,
     _publish_display_safe_session_event,
+    _require_native_control_target_binding,
     _select_connected_shell,
 )
 from app.services.perception_storage import _BUNDLE_ID_RE
@@ -58,6 +61,10 @@ class DesktopGrantRequestDenialCode(str, Enum):
     ACTION_NOT_REQUESTABLE = "action_not_requestable"
     INVALID_TARGET_BUNDLE = "invalid_target_bundle"
     REQUEST_NOT_FOUND = "request_not_found"
+    # P5.5 approve/deny lifecycle: a request that is not still pending (already
+    # approved/denied/cancelled) or that has lapsed past its TTL.
+    REQUEST_NOT_PENDING = "request_not_pending"
+    REQUEST_EXPIRED = "request_expired"
 
 
 _DENIAL_HTTP_STATUS = {
@@ -65,6 +72,8 @@ _DENIAL_HTTP_STATUS = {
     DesktopGrantRequestDenialCode.ACTION_NOT_REQUESTABLE: 422,
     DesktopGrantRequestDenialCode.INVALID_TARGET_BUNDLE: 422,
     DesktopGrantRequestDenialCode.REQUEST_NOT_FOUND: 404,
+    DesktopGrantRequestDenialCode.REQUEST_NOT_PENDING: 409,
+    DesktopGrantRequestDenialCode.REQUEST_EXPIRED: 409,
 }
 
 
@@ -100,11 +109,12 @@ def _effective_status(request: DesktopApprovalRequest, *, now: datetime) -> str:
 
 def _display_safe_request(request: DesktopApprovalRequest, *, now: datetime) -> dict[str, Any]:
     target = request.target_binding or {}
-    # Normalize BOTH timestamps to aware UTC so they serialize identically (with a
+    # Normalize ALL timestamps to aware UTC so they serialize identically (with a
     # +00:00 offset) on every backend — SQLite round-trips DateTime(timezone=True)
-    # as naive, which would otherwise drop the offset on created_at only.
+    # as naive, which would otherwise drop the offset inconsistently across fields.
     created_at = _as_aware_utc(request.created_at)
     expires_at = _as_aware_utc(request.expires_at)
+    decided_at = _as_aware_utc(request.decided_at)
     return {
         "request_id": str(request.id),
         "session_id": str(request.session_id),
@@ -119,7 +129,7 @@ def _display_safe_request(request: DesktopApprovalRequest, *, now: datetime) -> 
         # Whether a human has minted a grant for this request yet (P5.5). Never the
         # grant payload — just presence.
         "grant_present": request.grant_id is not None,
-        "decided_at": request.decided_at.isoformat() if request.decided_at else None,
+        "decided_at": decided_at.isoformat() if decided_at else None,
     }
 
 
@@ -240,3 +250,254 @@ def get_desktop_grant_request_status(
             "desktop approval request not found",
         )
     return _display_safe_request(request, now=now or _utcnow())
+
+
+# ── P5.5 user approval surface (list / approve / deny) ────────────────────────
+#
+# The HUMAN half: an authenticated user converts a pending request into exactly
+# one bounded active DesktopCommandApprovalGrant (approve) or terminally denies
+# it (deny). No agent/MCP path reaches these — the routes are user-JWT only and
+# the owner is the authenticated principal, never a caller-supplied header.
+
+_GRANT_DEFAULT_EXPIRES_SECONDS = 60
+_GRANT_MIN_EXPIRES_SECONDS = 5
+_GRANT_MAX_EXPIRES_SECONDS = 600
+_GRANT_MIN_ACTIONS = 1
+_GRANT_MAX_ACTIONS = 20
+
+
+def _grant_summary(grant: DesktopCommandApprovalGrant) -> dict[str, Any]:
+    """Display-safe projection of the minted grant: ids/status/expiry/bounds
+    only — never the target binding internals beyond the bundle, never an
+    envelope (none exists; envelopes are signed later at claim)."""
+    expires_at = _as_aware_utc(grant.expires_at)
+    target = grant.target_binding or {}
+    return {
+        "grant_id": str(grant.id),
+        "grant_status": grant.status,
+        "risk_tier": grant.risk_tier,
+        "capability": grant.capability,
+        "max_actions": int(grant.max_actions),
+        "remaining_actions": int(grant.remaining_actions),
+        "grant_expires_at": expires_at.isoformat() if expires_at else None,
+        "target_bundle_id": target.get("bundle_id"),
+    }
+
+
+def list_pending_approval_requests(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID | None = None,
+    now: datetime | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Display-safe list of the authenticated user's still-actionable (pending,
+    not lapsed) approval requests, optionally scoped to one session. Tenant +
+    owner scoped — a user only ever sees their own requests."""
+    cutoff = now or _utcnow()
+    query = db.query(DesktopApprovalRequest).filter(
+        DesktopApprovalRequest.tenant_id == tenant_id,
+        DesktopApprovalRequest.user_id == user_id,
+        DesktopApprovalRequest.status == "pending",
+        DesktopApprovalRequest.expires_at > cutoff,
+    )
+    if session_id is not None:
+        query = query.filter(DesktopApprovalRequest.session_id == session_id)
+    rows = query.order_by(DesktopApprovalRequest.created_at.desc()).limit(
+        max(1, min(int(limit), 500))
+    ).all()
+    return [_display_safe_request(r, now=cutoff) for r in rows]
+
+
+def _load_decidable_request(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request_id: uuid.UUID,
+    now: datetime,
+) -> DesktopApprovalRequest:
+    """Row-lock + validate a request for an approve/deny decision. Fail-closed:
+    wrong tenant/owner/id → uniform not-found; already-decided → not-pending;
+    lapsed past TTL → expired. The ``SELECT … FOR UPDATE`` serializes concurrent
+    decisions so a duplicate approve can never mint a second grant (it sees the
+    row already non-pending)."""
+    request = (
+        db.query(DesktopApprovalRequest)
+        .filter(
+            DesktopApprovalRequest.id == request_id,
+            DesktopApprovalRequest.tenant_id == tenant_id,
+            DesktopApprovalRequest.user_id == user_id,
+        )
+        .with_for_update()
+        .first()
+    )
+    if request is None:
+        _deny(
+            DesktopGrantRequestDenialCode.REQUEST_NOT_FOUND,
+            "desktop approval request not found",
+        )
+    if request.status != "pending":
+        _deny(
+            DesktopGrantRequestDenialCode.REQUEST_NOT_PENDING,
+            "desktop approval request is no longer pending",
+        )
+    expires_at = _as_aware_utc(request.expires_at)
+    if expires_at is None or expires_at <= now:
+        _deny(
+            DesktopGrantRequestDenialCode.REQUEST_EXPIRED,
+            "desktop approval request has expired",
+        )
+    return request
+
+
+def approve_desktop_grant_request(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request_id: uuid.UUID,
+    max_actions: int = 1,
+    expires_in_seconds: int = _GRANT_DEFAULT_EXPIRES_SECONDS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Approve a pending request → mint exactly ONE bounded active grant and mark
+    the request approved, atomically. The grant owner is the authenticated
+    ``user_id`` (never a caller-supplied header). Mints no envelope and triggers
+    no actuation — the grant is inert until the (default-off) per-capability flag
+    + an enqueue/claim, none of which this touches."""
+    cutoff = now or _utcnow()
+    # Master flag re-checked at decision time (fail-closed).
+    _ensure_desktop_control_enabled(db, tenant_id)
+    request = _load_decidable_request(
+        db, tenant_id=tenant_id, user_id=user_id, request_id=request_id, now=cutoff
+    )
+    # The session must still be owned by the approving user.
+    _ensure_session_owned_by_user(db, request.session_id, tenant_id, user_id)
+
+    capability = request.capability
+    if not _capability_matches_risk_tier(capability, "native_control"):
+        # Defensive: requests are only ever created for native-control actions.
+        _deny(
+            DesktopGrantRequestDenialCode.ACTION_NOT_REQUESTABLE,
+            "request capability is not a native-control capability",
+        )
+
+    # Resolve shell + device from LIVE presence (binds the device that is
+    # connected now). A disconnected shell fails closed (409) inside the helper.
+    selected_shell, _caps, device_id = _select_connected_shell(tenant_id, request.shell_id)
+    if device_id is None:
+        _deny(
+            DesktopGrantRequestDenialCode.REQUEST_NOT_PENDING,
+            "desktop shell device is not bound",
+        )
+
+    # Build + validate the native-control target binding (allowlist-gated). The
+    # bundle is the one the user is approving; the action is the requested action.
+    target = (request.target_binding or {}).copy()
+    target["action"] = request.action
+    target_binding = _require_native_control_target_binding(
+        target, action=request.action, db=db, tenant_id=tenant_id
+    )
+
+    max_actions = max(_GRANT_MIN_ACTIONS, min(int(max_actions), _GRANT_MAX_ACTIONS))
+    expires_in = max(
+        _GRANT_MIN_EXPIRES_SECONDS, min(int(expires_in_seconds), _GRANT_MAX_EXPIRES_SECONDS)
+    )
+
+    grant = DesktopCommandApprovalGrant(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        session_id=request.session_id,
+        shell_id=selected_shell,
+        device_id=device_id,
+        desktop_command_id=None,
+        risk_tier="native_control",
+        capability=capability,
+        status="active",
+        target_binding=target_binding,
+        max_actions=max_actions,
+        remaining_actions=max_actions,
+        approved_by_user_id=user_id,
+        approved_at=cutoff,
+        expires_at=cutoff + timedelta(seconds=expires_in),
+        created_at=cutoff,
+        updated_at=cutoff,
+    )
+    db.add(grant)
+    db.flush()  # assign grant.id without committing yet
+
+    request.status = "approved"
+    request.grant_id = grant.id
+    request.decided_by_user_id = user_id
+    request.decided_at = cutoff
+    db.add(request)
+
+    _publish_display_safe_session_event(
+        request.session_id,
+        "desktop_grant_approved",
+        {
+            "request_id": str(request.id),
+            "grant_id": str(grant.id),
+            "action": request.action,
+            "capability": capability,
+            "status": "approved",
+            "shell_id": selected_shell,
+            "target_bundle_id": target_binding.get("bundle_id"),
+            "grant_expires_at": grant.expires_at.isoformat(),
+        },
+        tenant_id=tenant_id,
+    )
+    # One commit: grant + request update land together (atomic).
+    db.commit()
+    db.refresh(request)
+    db.refresh(grant)
+    out = _display_safe_request(request, now=cutoff)
+    out.update(_grant_summary(grant))
+    return out
+
+
+def deny_desktop_grant_request(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request_id: uuid.UUID,
+    reason: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Terminally deny a pending request. Creates NO grant. Audit-visible via a
+    display-safe ``desktop_grant_denied`` event. Fail-closed: only a pending,
+    unexpired, owned request can be denied."""
+    cutoff = now or _utcnow()
+    request = _load_decidable_request(
+        db, tenant_id=tenant_id, user_id=user_id, request_id=request_id, now=cutoff
+    )
+    request.status = "denied"
+    request.decided_by_user_id = user_id
+    request.decided_at = cutoff
+    db.add(request)
+
+    deny_reason: str | None = None
+    if reason is not None:
+        deny_reason = str(reason).strip()[:_REASON_MAX_LEN] or None
+
+    _publish_display_safe_session_event(
+        request.session_id,
+        "desktop_grant_denied",
+        {
+            "request_id": str(request.id),
+            "action": request.action,
+            "capability": request.capability,
+            "status": "denied",
+            "shell_id": request.shell_id,
+            # the human's deny reason is display-safe + capped; never raw content
+            "deny_reason": deny_reason,
+        },
+        tenant_id=tenant_id,
+    )
+    db.commit()
+    db.refresh(request)
+    return _display_safe_request(request, now=cutoff)

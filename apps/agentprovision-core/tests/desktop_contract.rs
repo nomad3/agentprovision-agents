@@ -30,6 +30,8 @@ const GRANT_REQUEST: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.pending.json");
 const GRANT_REQUEST_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.denied.json");
+const GRANT_APPROVAL: &str =
+    include_str!("../../../docs/contracts/desktop-control/grant_approval.approved.json");
 
 const FORBIDDEN: &[&str] = &[
     "window_title",
@@ -128,6 +130,7 @@ fn fixtures_are_display_safe_recursive() {
         ("observation_fetch_denied", OBSERVATION_FETCH_DENIED),
         ("grant_request", GRANT_REQUEST),
         ("grant_request_denied", GRANT_REQUEST_DENIED),
+        ("grant_approval", GRANT_APPROVAL),
     ] {
         let v: Value = serde_json::from_str(raw).unwrap();
         let mut hits = Vec::new();
@@ -197,6 +200,32 @@ fn injected_payload_fails_grant_request_deserialize() {
         assert!(
             serde_json::from_str::<DesktopGrantRequest>(&st).is_err(),
             "{key} must be rejected by DesktopGrantRequest"
+        );
+    }
+}
+
+#[test]
+fn grant_approval_fixture_deserializes_typed() {
+    use agentprovision_core::desktop::{
+        DesktopGrantApproval, DesktopGrantRequestStatus, DesktopRiskTier,
+    };
+    let appr: DesktopGrantApproval =
+        serde_json::from_str(GRANT_APPROVAL).expect("typed grant approval");
+    assert_eq!(appr.status, DesktopGrantRequestStatus::Approved);
+    assert_eq!(appr.risk_tier, DesktopRiskTier::NativeControl);
+    assert!(appr.grant_present);
+}
+
+#[test]
+fn injected_payload_fails_grant_approval_deserialize() {
+    use agentprovision_core::desktop::DesktopGrantApproval;
+    for key in ["payload", "envelope", "screenshot"] {
+        let mut v: Value = serde_json::from_str(GRANT_APPROVAL).unwrap();
+        v[key] = serde_json::json!("SECRET");
+        let st = serde_json::to_string(&v).unwrap();
+        assert!(
+            serde_json::from_str::<DesktopGrantApproval>(&st).is_err(),
+            "{key} must be rejected by DesktopGrantApproval"
         );
     }
 }

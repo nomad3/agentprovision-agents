@@ -872,6 +872,117 @@ def desktop_grant_request_status(
     )
 
 
+# ── P5.5 user approval surface (`alpha desktop approvals list|approve|deny`) ──
+#
+# HUMAN-ONLY: these are user-JWT routes (deps.get_current_active_user). There are
+# intentionally NO internal-key twins — an MCP/internal-key caller can never mint
+# a grant, and the grant owner is always the authenticated principal, never a
+# caller-supplied X-User-Id.
+
+
+class DesktopGrantApprovalIn(BaseModel):
+    """Approve body — only the grant bounds are tunable; the action/target/owner
+    all come from the request + authenticated principal, never the caller."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_actions: int = Field(default=1, ge=1, le=20)
+    expires_in_seconds: int = Field(default=60, ge=5, le=600)
+
+
+class DesktopGrantDenialIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(default=None, max_length=280)
+
+
+class DesktopGrantApprovalOut(DesktopGrantRequestOut):
+    """Approved request + the minted bounded grant summary (display-safe)."""
+
+    grant_id: uuid.UUID
+    grant_status: str
+    risk_tier: str
+    max_actions: int
+    remaining_actions: int
+    grant_expires_at: str | None = None
+
+
+@router.get(
+    "/grants/requests",
+    response_model=list[DesktopGrantRequestOut],
+)
+@limiter.limit("240/minute")
+def list_desktop_grant_requests(
+    request: Request,
+    session_id: uuid.UUID | None = Query(None),
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    """List the authenticated user's still-actionable (pending, not lapsed)
+    desktop approval requests, optionally scoped to one session."""
+    return [
+        DesktopGrantRequestOut(**row)
+        for row in desktop_act.list_pending_approval_requests(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            session_id=session_id,
+        )
+    ]
+
+
+@router.post(
+    "/grants/requests/{request_id}/approve",
+    response_model=DesktopGrantApprovalOut,
+)
+@limiter.limit("60/minute")
+def approve_desktop_grant_request(
+    request: Request,
+    request_id: uuid.UUID,
+    payload: DesktopGrantApprovalIn | None = None,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    """Approve a pending request → mint exactly one bounded active grant. Owner is
+    the authenticated user; no actuation, no per-capability flag flip."""
+    body = payload or DesktopGrantApprovalIn()
+    return DesktopGrantApprovalOut(
+        **desktop_act.approve_desktop_grant_request(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            request_id=request_id,
+            max_actions=body.max_actions,
+            expires_in_seconds=body.expires_in_seconds,
+        )
+    )
+
+
+@router.post(
+    "/grants/requests/{request_id}/deny",
+    response_model=DesktopGrantRequestOut,
+)
+@limiter.limit("60/minute")
+def deny_desktop_grant_request(
+    request: Request,
+    request_id: uuid.UUID,
+    payload: DesktopGrantDenialIn | None = None,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    """Terminally deny a pending request. Creates no grant."""
+    body = payload or DesktopGrantDenialIn()
+    return DesktopGrantRequestOut(
+        **desktop_act.deny_desktop_grant_request(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            request_id=request_id,
+            reason=body.reason,
+        )
+    )
+
+
 @router.post(
     "/internal/grants/request",
     response_model=DesktopGrantRequestOut,

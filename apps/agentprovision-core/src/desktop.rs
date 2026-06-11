@@ -664,6 +664,9 @@ pub enum DesktopGrantRequestDenialCode {
     ActionNotRequestable,
     InvalidTargetBundle,
     RequestNotFound,
+    // P5.5 approve/deny lifecycle.
+    RequestNotPending,
+    RequestExpired,
 }
 
 /// Structured grant-request denial (`{"detail": {"code": ..., "reason": ...}}`).
@@ -728,6 +731,69 @@ pub struct DesktopGrantRequest {
     pub grant_present: bool,
     #[serde(default)]
     pub decided_at: Option<String>,
+}
+
+// ── P5.5 user approval surface (`alpha desktop approvals list|approve|deny`) ──
+
+/// `POST …/grants/requests/{id}/approve` body — only the grant bounds are
+/// tunable; the action/target/owner come from the request + authenticated user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopGrantApprovalBody {
+    pub max_actions: u32,
+    pub expires_in_seconds: u32,
+}
+
+impl Default for DesktopGrantApprovalBody {
+    fn default() -> Self {
+        Self {
+            max_actions: 1,
+            expires_in_seconds: 60,
+        }
+    }
+}
+
+/// `POST …/grants/requests/{id}/deny` body.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopGrantDenialBody {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Approve response — the approved request projection PLUS the minted bounded
+/// grant summary. `deny_unknown_fields` rejects any raw payload/envelope field;
+/// only ids/status/bounds/bundle are present.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopGrantApproval {
+    // request projection (mirrors DesktopGrantRequest)
+    pub request_id: String,
+    pub session_id: String,
+    pub shell_id: String,
+    pub action: DesktopRequestableAction,
+    pub capability: DesktopCapability,
+    pub status: DesktopGrantRequestStatus,
+    #[serde(default)]
+    pub target_bundle_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    pub grant_present: bool,
+    #[serde(default)]
+    pub decided_at: Option<String>,
+    // minted grant summary
+    pub grant_id: String,
+    pub grant_status: String,
+    pub risk_tier: DesktopRiskTier,
+    pub max_actions: u32,
+    pub remaining_actions: u32,
+    #[serde(default)]
+    pub grant_expires_at: Option<String>,
 }
 
 #[cfg(test)]
@@ -1002,11 +1068,71 @@ mod tests {
             "action_not_requestable",
             "invalid_target_bundle",
             "request_not_found",
+            "request_not_pending",
+            "request_expired",
         ] {
             let v: DesktopGrantRequestDenialCode =
                 serde_json::from_value(serde_json::Value::String(s.into())).expect(s);
             assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(s));
         }
+    }
+
+    fn grant_approval_json() -> serde_json::Value {
+        serde_json::json!({
+            "request_id": "55555555-5555-5555-5555-555555555555",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "action": "keyboard_type",
+            "capability": "keyboard_control",
+            "status": "approved",
+            "target_bundle_id": "net.whatsapp.WhatsApp",
+            "reason": null,
+            "created_at": "2026-06-11T12:00:00+00:00",
+            "expires_at": "2026-06-11T12:05:00+00:00",
+            "grant_present": true,
+            "decided_at": "2026-06-11T12:01:00+00:00",
+            "grant_id": "99999999-9999-9999-9999-999999999999",
+            "grant_status": "active",
+            "risk_tier": "native_control",
+            "max_actions": 1,
+            "remaining_actions": 1,
+            "grant_expires_at": "2026-06-11T12:02:00+00:00"
+        })
+    }
+
+    #[test]
+    fn grant_approval_roundtrips_with_minted_grant() {
+        let appr: DesktopGrantApproval =
+            serde_json::from_value(grant_approval_json()).expect("approval decode");
+        assert_eq!(appr.status, DesktopGrantRequestStatus::Approved);
+        assert_eq!(appr.risk_tier, DesktopRiskTier::NativeControl);
+        assert!(appr.grant_present);
+        assert_eq!(appr.grant_status, "active");
+    }
+
+    #[test]
+    fn grant_approval_rejects_payload_and_envelope_fields() {
+        for (key, value) in [
+            ("payload", serde_json::json!({"args": {"text": "SECRET"}})),
+            ("envelope", serde_json::json!({"signature": "RAW"})),
+            ("screenshot", serde_json::json!("RAW")),
+        ] {
+            let mut appr = grant_approval_json();
+            appr[key] = value;
+            assert!(
+                serde_json::from_value::<DesktopGrantApproval>(appr).is_err(),
+                "{key} must be rejected by DesktopGrantApproval"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_approval_body_defaults_and_serializes() {
+        let body = DesktopGrantApprovalBody::default();
+        assert_eq!(body.max_actions, 1);
+        assert_eq!(body.expires_in_seconds, 60);
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["max_actions"], serde_json::json!(1));
     }
 
     #[test]
