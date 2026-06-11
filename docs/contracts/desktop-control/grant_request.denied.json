@@ -1,0 +1,6 @@
+{
+  "detail": {
+    "code": "action_not_requestable",
+    "reason": "action is not a grant-requestable native-control action"
+  }
+}

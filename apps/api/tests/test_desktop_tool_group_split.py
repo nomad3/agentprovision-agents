@@ -20,6 +20,9 @@ CONTROL_TOOLS = {
     "desktop_keyboard_key_chord",
     "desktop_background_app_control_dry_run",
     "desktop_command_status",
+    # P5.4b pending-approval request surface (no actuation, no grant minting).
+    "desktop_request_grant",
+    "desktop_request_status",
 }
 
 

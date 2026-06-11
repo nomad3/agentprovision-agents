@@ -31,6 +31,7 @@ from app.api import deps
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.models.user import User as UserModel
+from app.services import desktop_act
 from app.services import perception_delivery
 from app.services.desktop_control_service import (
     DesktopCommandClaim,
@@ -778,6 +779,148 @@ def internal_observation_artifact_content(
         sha256=artifact.sha256,
         expires_at=artifact.expires_at.isoformat(),
         content_base64=base64.b64encode(data).decode("ascii"),
+    )
+
+
+# ── P5.4b pending desktop approval requests (`alpha desktop grant request|status`) ──
+#
+# An agent records a PENDING request to run a native desktop action and polls it;
+# a human approves later (P5.5). These routes never mint a grant, sign an
+# envelope, or actuate — they delegate to the thin `desktop_act` service.
+
+_REQUESTABLE_ACTION = Literal[
+    "pointer_move", "pointer_click", "keyboard_type", "keyboard_key_chord"
+]
+
+
+class DesktopGrantRequestIn(BaseModel):
+    """`alpha desktop grant request` body — reduced target metadata only; no
+    payload bag, no raw content."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    action: _REQUESTABLE_ACTION
+    target_bundle_id: str = Field(min_length=1, max_length=128)
+    shell_id: str | None = Field(default=None, pattern=_SHELL_ID_PATTERN, max_length=96)
+    reason: str | None = Field(default=None, max_length=280)
+
+
+class DesktopGrantRequestOut(BaseModel):
+    """Display-safe pending-approval-request projection. Byte-free: ids/status/
+    action/capability/reduced-target only."""
+
+    request_id: uuid.UUID
+    session_id: uuid.UUID
+    shell_id: str
+    action: str
+    capability: str
+    status: Literal["pending", "approved", "denied", "expired", "cancelled"]
+    target_bundle_id: str | None = None
+    reason: str | None = None
+    created_at: str | None = None
+    expires_at: str | None = None
+    grant_present: bool
+    decided_at: str | None = None
+
+
+@router.post(
+    "/grants/request",
+    response_model=DesktopGrantRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("120/minute")
+def request_desktop_grant(
+    request: Request,
+    payload: DesktopGrantRequestIn,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    return DesktopGrantRequestOut(
+        **desktop_act.request_desktop_grant(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            session_id=payload.session_id,
+            action=payload.action,
+            target_bundle_id=payload.target_bundle_id,
+            shell_id=payload.shell_id,
+            reason=payload.reason,
+            source="alpha",
+        )
+    )
+
+
+@router.get(
+    "/grants/requests/{request_id}",
+    response_model=DesktopGrantRequestOut,
+)
+@limiter.limit("240/minute")
+def desktop_grant_request_status(
+    request: Request,
+    request_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    return DesktopGrantRequestOut(
+        **desktop_act.get_desktop_grant_request_status(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            request_id=request_id,
+        )
+    )
+
+
+@router.post(
+    "/internal/grants/request",
+    response_model=DesktopGrantRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("120/minute")
+def internal_request_desktop_grant(
+    request: Request,
+    payload: DesktopGrantRequestIn,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    return DesktopGrantRequestOut(
+        **desktop_act.request_desktop_grant(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=payload.session_id,
+            action=payload.action,
+            target_bundle_id=payload.target_bundle_id,
+            shell_id=payload.shell_id,
+            reason=payload.reason,
+            source="mcp",
+        )
+    )
+
+
+@router.get(
+    "/internal/grants/requests/{request_id}",
+    response_model=DesktopGrantRequestOut,
+)
+@limiter.limit("240/minute")
+def internal_desktop_grant_request_status(
+    request: Request,
+    request_id: uuid.UUID,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    return DesktopGrantRequestOut(
+        **desktop_act.get_desktop_grant_request_status(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            request_id=request_id,
+        )
     )
 
 

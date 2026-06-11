@@ -525,6 +525,193 @@ async def desktop_stop_commands(
     )
 
 
+_REQUESTABLE_ACTIONS = {
+    "pointer_move",
+    "pointer_click",
+    "keyboard_type",
+    "keyboard_key_chord",
+}
+
+
+async def _request_grant(
+    *,
+    session_id: str,
+    action: str,
+    target_bundle_id: str,
+    shell_id: str = "",
+    reason: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    tid = resolve_tenant_id(ctx, tenant_id)
+    if not tid:
+        return {"status": "error", "error": "tenant_id required"}
+
+    user_id = resolve_user_id(ctx)
+    if not user_id:
+        return {"status": "error", "error": "X-User-Id required for desktop control"}
+
+    if action not in _REQUESTABLE_ACTIONS:
+        return {
+            "status": "error",
+            "error": "action must be one of: " + ", ".join(sorted(_REQUESTABLE_ACTIONS)),
+        }
+
+    body = {
+        "session_id": session_id,
+        "action": action,
+        "target_bundle_id": target_bundle_id,
+    }
+    if shell_id:
+        body["shell_id"] = shell_id
+    if reason:
+        body["reason"] = reason
+
+    headers = {
+        "X-Internal-Key": API_INTERNAL_KEY,
+        "X-Tenant-Id": tid,
+        "X-User-Id": user_id,
+    }
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/grants/request"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning(
+            "desktop_request_grant: HTTP transport error session=%s err=%s",
+            session_id,
+            exc,
+        )
+        return {"status": "error", "error": f"transport: {exc}"}
+
+    if resp.status_code == 201:
+        payload = resp.json()
+        return {
+            **payload,
+            "message": (
+                "Pending desktop approval request recorded. No native actuation "
+                "happens and no approval grant is created — a human must approve "
+                "this request before any action can run."
+            ),
+        }
+    if resp.status_code == 401:
+        return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code in (403, 404, 409, 422):
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        if isinstance(detail, dict) and "code" in detail:
+            return {"status": "denied", **detail}
+        return {"status": "error", "error": f"denied {resp.status_code}: {resp.text[:200]}"}
+    if resp.status_code == 400:
+        return {"status": "error", "error": f"bad request: {resp.text[:200]}"}
+    return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
+
+
+async def _request_status(
+    *,
+    request_id: str,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    tid = resolve_tenant_id(ctx, tenant_id)
+    if not tid:
+        return {"status": "error", "error": "tenant_id required"}
+
+    user_id = resolve_user_id(ctx)
+    if not user_id:
+        return {"status": "error", "error": "X-User-Id required for desktop control"}
+
+    safe_request_id = _validate_uuid(request_id, "request_id")
+    if not safe_request_id:
+        return {"status": "error", "error": "request_id must be a UUID"}
+
+    headers = {
+        "X-Internal-Key": API_INTERNAL_KEY,
+        "X-Tenant-Id": tid,
+        "X-User-Id": user_id,
+    }
+    url = (
+        f"{API_BASE_URL}/api/v1/desktop-control/internal/grants/requests/"
+        f"{safe_request_id}"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning(
+            "desktop_request_status: HTTP transport error request=%s err=%s",
+            request_id,
+            exc,
+        )
+        return {"status": "error", "error": f"transport: {exc}"}
+
+    if resp.status_code == 200:
+        return resp.json()
+    if resp.status_code == 401:
+        return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code in (403, 404, 422):
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        if isinstance(detail, dict) and "code" in detail:
+            return {"status": "denied", **detail}
+        return {"status": "error", "error": f"denied {resp.status_code}: {resp.text[:200]}"}
+    return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
+
+
+@mcp.tool()
+async def desktop_request_grant(
+    session_id: str,
+    action: str,
+    target_bundle_id: str,
+    shell_id: str = "",
+    reason: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Record a PENDING request to run a native desktop action (pointer/keyboard).
+
+    This asks a human for approval; it does NOT create an approval grant, does NOT
+    sign an envelope, and does NOT actuate. The request sits `pending` until a
+    human approves it (then a grant is minted out-of-band). Poll it with
+    `desktop_request_status`. `action` must be one of: pointer_move,
+    pointer_click, keyboard_type, keyboard_key_chord.
+    """
+    return await _request_grant(
+        session_id=session_id,
+        action=action,
+        target_bundle_id=target_bundle_id,
+        shell_id=shell_id,
+        reason=reason,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+
+
+@mcp.tool()
+async def desktop_request_status(
+    request_id: str,
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Read the display-safe status of a pending desktop approval request.
+
+    Returns request id, status (pending/approved/denied/expired/cancelled),
+    action, capability, and whether a human grant has been minted yet — never raw
+    payloads, screen bytes, or actuation args.
+    """
+    return await _request_status(
+        request_id=request_id,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+
+
 __all__ = [
     "desktop_observe_screen",
     "desktop_get_active_app",
@@ -533,4 +720,6 @@ __all__ = [
     "desktop_background_app_control_dry_run",
     "desktop_command_status",
     "desktop_stop_commands",
+    "desktop_request_grant",
+    "desktop_request_status",
 ]

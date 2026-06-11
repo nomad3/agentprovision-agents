@@ -30,6 +30,8 @@ DENY_BUNDLE = "deny.missing_target_bundle_id.json"
 DENY_CAP = "deny.capability_mismatch.json"
 OBSERVATION_STATUS = "observation_status.planner_safe.json"
 OBSERVATION_FETCH_DENIED = "observation_fetch.denied.json"
+GRANT_REQUEST = "grant_request.pending.json"
+GRANT_REQUEST_DENIED = "grant_request.denied.json"
 
 FORBIDDEN_KEYS = {
     "window_title", "screenshot", "screenshot_b64", "screenshot_bytes",
@@ -62,7 +64,11 @@ def _forbidden_hits(node, path="") -> list[str]:
 
 
 @pytest.mark.parametrize(
-    "name", [CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED]
+    "name",
+    [
+        CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED,
+        GRANT_REQUEST, GRANT_REQUEST_DENIED,
+    ],
 )
 def test_passthrough_is_display_safe(name):
     hits = _forbidden_hits(_load(name))
@@ -97,6 +103,20 @@ def test_fetch_observation_passthrough_shape():
     assert status["redaction_status"] == "planner_safe"
 
     denial = _load(OBSERVATION_FETCH_DENIED)
+    detail = denial["detail"]
+    assert set(detail) == {"code", "reason"}
+    assert detail["code"] == detail["code"].lower() and " " not in detail["code"]
+
+
+def test_grant_request_passthrough_shape():
+    """P5.4b: the pending grant-request projection is reduced/display-safe — no
+    payload bag, no storage paths; the denial uses the structured detail shape."""
+    req = _load(GRANT_REQUEST)
+    assert "payload" not in req
+    assert "storage_path" not in req
+    assert req["status"] == "pending"
+
+    denial = _load(GRANT_REQUEST_DENIED)
     detail = denial["detail"]
     assert set(detail) == {"code", "reason"}
     assert detail["code"] == detail["code"].lower() and " " not in detail["code"]

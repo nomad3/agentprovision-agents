@@ -248,6 +248,11 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "desktop_keyboard_key_chord",
         "desktop_background_app_control_dry_run",
         "desktop_command_status",
+        # P5.4b: pending-approval REQUEST surface — an agent asks to run a native
+        # action and polls it; a human approves later (P5.5). These create NO
+        # grant and NEVER actuate.
+        "desktop_request_grant",
+        "desktop_request_status",
     ],
     # Platform introspection — answers "what's on this tenant?" questions like
     # "list my agents", "what workflows do I have", "which MCP servers are

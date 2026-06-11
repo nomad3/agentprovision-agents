@@ -42,6 +42,8 @@ fixture, the mirror is wrong.
 | `background_control_denied.display_safe.json` | SP1.5 background denial | `code` = `pid_reused` (representative); `background_code_for_reason(reason)` maps back to it |
 | `observation_status.planner_safe.json` | P5.3b planner-safe observation status (`alpha desktop observe status`) | byte-free + path-free: ids/hash/size/state only; mirrors `DesktopObservationStatusOut` (API) / `PerceptionArtifactStatus` (core) |
 | `observation_fetch.denied.json` | P5.3b planner-safe fetch denial | `{detail: {code, reason}}`; `code` is a `PerceptionFetchDenialCode` (`apps/api/app/services/perception_delivery.py`) — a separate closed enum from the frozen PR-C `DesktopDenialCode` |
+| `grant_request.pending.json` | P5.4b pending desktop approval request (`alpha desktop grant request`) | reduced/display-safe: ids/status/action/capability/reduced-target only; mirrors `DesktopGrantRequestOut` (API) / `DesktopGrantRequest` (core); records intent, never actuates |
+| `grant_request.denied.json` | P5.4b grant-request denial | `{detail: {code, reason}}`; `code` is a `DesktopGrantRequestDenialCode` (`apps/api/app/services/desktop_act.py`) |
 
 Display-safe invariant (enforced recursively by every parity test): no
 `window_title`, `screenshot`, `screenshot_b64`, `clipboard`, `clipboard_text`,
