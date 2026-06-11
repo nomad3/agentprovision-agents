@@ -63,6 +63,29 @@ describe('DesktopApprovalInbox', () => {
     expect(screen.queryByText(/OCR text that must not render/)).not.toBeInTheDocument();
   });
 
+  it('removes stale requests and prevents approval after the active session changes', async () => {
+    apiJsonMock.mockImplementation((path) => {
+      if (path.includes('session_id=session-1')) return Promise.resolve([pendingRequest]);
+      return Promise.resolve([]);
+    });
+
+    const { rerender } = render(<DesktopApprovalInbox sessionId="session-1" pollMs={0} />);
+    fireEvent.click(screen.getByRole('button', { name: /desktop approvals/i }));
+
+    expect(await screen.findByText('pointer_click')).toBeInTheDocument();
+
+    rerender(<DesktopApprovalInbox sessionId="session-2" pollMs={0} />);
+
+    await waitFor(() => {
+      expect(screen.queryByText('pointer_click')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    expect(apiJsonMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('/approve'),
+      expect.anything(),
+    );
+  });
+
   it('approves with one bounded action and refreshes the list', async () => {
     let requests = [pendingRequest];
     apiJsonMock.mockImplementation((path, options) => {

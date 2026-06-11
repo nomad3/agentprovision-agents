@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiJson } from '../api';
 
 const DEFAULT_POLL_MS = 10000;
@@ -42,6 +42,10 @@ function targetLabel(request) {
   return request?.target_bundle_id || 'unknown target';
 }
 
+function requestMatchesSession(request, sessionId) {
+  return Boolean(request?.session_id && sessionId && String(request.session_id) === String(sessionId));
+}
+
 export default function DesktopApprovalInbox({
   sessionId,
   pollMs = DEFAULT_POLL_MS,
@@ -51,9 +55,22 @@ export default function DesktopApprovalInbox({
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState(null);
   const [error, setError] = useState('');
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
 
   const hasSession = Boolean(sessionId);
-  const pendingCount = requests.length;
+  const visibleRequests = useMemo(
+    () => requests.filter((request) => requestMatchesSession(request, sessionId)),
+    [requests, sessionId],
+  );
+  const pendingCount = visibleRequests.length;
+
+  useEffect(() => {
+    setRequests([]);
+    setBusyId(null);
+    setError('');
+    setLoading(false);
+  }, [sessionId]);
 
   const refresh = useCallback(async () => {
     if (!sessionId) {
@@ -64,13 +81,20 @@ export default function DesktopApprovalInbox({
     }
     setError('');
     setLoading(true);
+    const requestedSessionId = sessionId;
     try {
       const data = await apiJson(requestUrl(sessionId));
-      setRequests(Array.isArray(data) ? data : []);
+      if (sessionIdRef.current !== requestedSessionId) return;
+      setRequests(
+        Array.isArray(data)
+          ? data.filter((request) => requestMatchesSession(request, requestedSessionId))
+          : [],
+      );
     } catch (err) {
+      if (sessionIdRef.current !== requestedSessionId) return;
       setError(err?.message || 'Approval requests unavailable');
     } finally {
-      setLoading(false);
+      if (sessionIdRef.current === requestedSessionId) setLoading(false);
     }
   }, [sessionId]);
 
@@ -92,7 +116,13 @@ export default function DesktopApprovalInbox({
     });
   }, [refresh]);
 
-  const decide = useCallback(async (requestId, decision) => {
+  const decide = useCallback(async (request, decision) => {
+    const requestId = request?.request_id;
+    if (!requestId || !requestMatchesSession(request, sessionIdRef.current)) {
+      setError('Approval request is no longer active for this chat session');
+      await refresh();
+      return;
+    }
     setBusyId(requestId);
     setError('');
     try {
@@ -168,7 +198,7 @@ export default function DesktopApprovalInbox({
 
             {pendingCount > 0 && (
               <div className="desktop-approval-list">
-                {requests.map((request) => {
+                {visibleRequests.map((request) => {
                   const id = request.request_id;
                   const busy = busyId === id;
                   return (
@@ -190,7 +220,7 @@ export default function DesktopApprovalInbox({
                           className="desktop-approval-approve"
                           type="button"
                           disabled={busy}
-                          onClick={() => decide(id, 'approve')}
+                          onClick={() => decide(request, 'approve')}
                         >
                           Approve
                         </button>
@@ -198,7 +228,7 @@ export default function DesktopApprovalInbox({
                           className="desktop-approval-deny"
                           type="button"
                           disabled={busy}
-                          onClick={() => decide(id, 'deny')}
+                          onClick={() => decide(request, 'deny')}
                         >
                           Deny
                         </button>

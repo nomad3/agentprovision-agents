@@ -539,6 +539,11 @@ Implementation scope:
   continue. This branch must not create a new grant path, touch native flags,
   alter the allowlist, mutate TCC settings, or expose raw screen/OCR/window
   content in the UI.
+  Luna review found one release blocker: stale requests from the previous active
+  chat could remain visible during a session switch. The branch now filters
+  rendered requests by `request.session_id === activeSessionId`, clears local
+  request state on session change, refuses approve/deny for mismatched sessions,
+  and has a regression proving a stale request cannot be approved after a switch.
 
 Next smallest make-it-work step:
 
