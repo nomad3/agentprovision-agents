@@ -313,6 +313,37 @@ pub struct DesktopPreflight {
     pub error: Option<String>,
 }
 
+/// Operator bootstrap state for the current tenant. This is control-plane
+/// configuration only; it is not an approval grant or an actuation command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopControlEnablement {
+    pub desktop_control_enabled: bool,
+    pub pointer_control_enabled: bool,
+    pub keyboard_control_enabled: bool,
+    pub background_control_enabled: bool,
+    #[serde(default)]
+    pub native_control_target_allowlist: Vec<String>,
+    #[serde(default)]
+    pub platform_bundle_allowlist: Vec<String>,
+    #[serde(default)]
+    pub effective_native_control_allowlist: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopControlEnablementUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub background_control_enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopControlAllowlistUpdate {
+    pub bundle_ids: Vec<String>,
+}
+
 /// Narrow Alpha/Luna user-facing dry-run request. It intentionally omits a raw
 /// payload bag so the CLI cannot smuggle pointer/keyboard args or approval data
 /// through the working dry-run path.
