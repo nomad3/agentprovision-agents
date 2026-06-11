@@ -158,6 +158,7 @@ _SENSITIVE_ARG_TOOLS: frozenset[str] = frozenset({
     "reply_to_email",           # body / html
     "send_email_attachment",    # body
     "create_drive_file",        # content
+    "create_onedrive_file",     # content
     "create_calendar_event",    # description
     "record_observation",       # raw observation text (PII-ish)
     "create_entity",            # description / attributes free-form

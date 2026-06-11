@@ -46,12 +46,15 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.services.provisioning.vet_manifest import (
     CARDIOLOGY_V1,
+    GP_FULL,
     get_manifest,
 )
 from app.services.provisioning.vet_practice import (
     VetPracticeProfile,
     provision_vet_practice,
 )
+from app.services.vet_practice_dashboard import build_vet_practice_dashboard
+from app.services.workflow_templates import NATIVE_TEMPLATES
 from app.services.tool_groups import TOOL_GROUPS, resolve_tool_names
 
 pytestmark = [pytest.mark.integration, pytest.mark.serial]
@@ -166,6 +169,51 @@ def test_get_manifest_unknown_variant_raises():
         get_manifest("gp_full_does_not_exist")
 
 
+def test_gp_full_manifest_has_practice_management_fleet():
+    """The Angelo / Animal Doctor SOC cut is a 10-agent file-first GP
+    practice fleet, with Drive + OneDrive as the only MVP storage slots."""
+    assert len(GP_FULL.agents) == 10
+    names = {a["name"] for a in GP_FULL.agents}
+    assert {
+        "Luna Supervisor",
+        "Pet Health Concierge Agent",
+        "Front Desk Agent",
+        "Clinical Triage Agent",
+        "SOAP Note Agent",
+        "Billing Agent",
+        "Inventory & Pharma Agent",
+        "Reputation & Growth Agent",
+        "Practice Operations Agent",
+        "PMS Operator Agent",
+    } == names
+    assert {s["integration_name"] for s in GP_FULL.connector_slots} == {
+        "google_drive",
+        "onedrive",
+    }
+
+
+def test_gp_full_manifest_tool_groups_all_resolve():
+    for agent in GP_FULL.agents:
+        for group in agent["tool_groups"]:
+            assert group in TOOL_GROUPS, (
+                f"{agent['name']} references unknown tool_group {group!r}"
+            )
+        assert resolve_tool_names(agent["tool_groups"])
+
+
+def test_gp_full_workflow_templates_write_drive_and_onedrive():
+    native_by_name = {t["name"]: t for t in NATIVE_TEMPLATES}
+    for template_name in GP_FULL.workflow_templates:
+        template = native_by_name[template_name]
+        tools = [
+            step.get("tool")
+            for step in template["definition"]["steps"]
+            if step.get("type") == "mcp_tool"
+        ]
+        assert "create_drive_file" in tools
+        assert "create_onedrive_file" in tools
+
+
 # ── full provision ────────────────────────────────────────────────────
 
 
@@ -278,6 +326,75 @@ def test_provision_seeds_declared_value_sets(db_session, vet_tenant):
         .all()
     )
     assert vs_rows, "no value-set rows seeded"
+
+
+def test_gp_full_provision_seeds_ten_agents_and_storage_slots(db_session, vet_tenant):
+    tenant, admin = vet_tenant
+    profile = VetPracticeProfile(
+        practice_name="The Animal Doctor SOC",
+        practice_type="general_practice",
+        owner_user_id=admin.id,
+        lead_clinician_name="Dr. Angelo Castillo",
+        fleet_variant="gp_full",
+    )
+
+    result = provision_vet_practice(db_session, tenant.id, profile=profile)
+
+    assert result["variant"] == "gp_full"
+    assert result["agents"]["created"] == 10
+    agents = (
+        db_session.query(Agent)
+        .filter(Agent.tenant_id == tenant.id)
+        .all()
+    )
+    assert {a.name for a in agents} == {spec["name"] for spec in GP_FULL.agents}
+    pms = next(a for a in agents if a.name == "PMS Operator Agent")
+    assert pms.status == "staging"
+
+    slots = (
+        db_session.query(IntegrationConfig)
+        .filter(IntegrationConfig.tenant_id == tenant.id)
+        .all()
+    )
+    assert {s.integration_name for s in slots} == {"google_drive", "onedrive"}
+
+
+def test_gp_full_dashboard_is_tenant_scoped(db_session, vet_tenant):
+    tenant, admin = vet_tenant
+    profile = VetPracticeProfile(
+        practice_name="The Animal Doctor SOC",
+        owner_user_id=admin.id,
+        fleet_variant="gp_full",
+    )
+    provision_vet_practice(db_session, tenant.id, profile=profile)
+
+    other_tenant = Tenant(name=f"other-{uuid.uuid4().hex[:8]}")
+    db_session.add(other_tenant)
+    db_session.commit()
+    db_session.add(
+        IntegrationConfig(
+            tenant_id=other_tenant.id,
+            integration_name="google_drive",
+            enabled=True,
+            account_email="other@example.com",
+        )
+    )
+    db_session.commit()
+
+    dashboard = build_vet_practice_dashboard(
+        db_session,
+        tenant.id,
+        variant="gp_full",
+    )
+
+    assert dashboard["tenant_id"] == str(tenant.id)
+    assert dashboard["summary"]["agents_expected"] == 10
+    assert dashboard["summary"]["agents_present"] == 10
+    assert dashboard["summary"]["storage_connected"] == 0
+    assert {row["integration_name"] for row in dashboard["storage"]} == {
+        "google_drive",
+        "onedrive",
+    }
 
 
 # ── idempotency (the §9 BLOCKER) ──────────────────────────────────────

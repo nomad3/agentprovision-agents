@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import re
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, List, Optional
 import uuid
 
 from sqlalchemy.orm import Session
@@ -207,6 +207,7 @@ _FALLBACK_MCP_TOOL_CATEGORIES: Dict[str, str] = {
     "search_drive_files": "drive",
     "read_drive_file": "drive",
     "create_drive_file": "drive",
+    "create_onedrive_file": "drive",
     "list_drive_folders": "drive",
     "create_dynamic_workflow": "dynamic_workflows",
     "list_dynamic_workflows": "dynamic_workflows",

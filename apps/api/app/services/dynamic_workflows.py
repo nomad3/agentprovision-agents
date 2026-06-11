@@ -42,6 +42,7 @@ TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     "read_drive_file": "google_drive",
     "create_drive_file": "google_drive",
     "list_drive_folders": "google_drive",
+    "create_onedrive_file": "onedrive",
     # Meta Ads
     "list_meta_campaigns": "meta_ads",
     "get_meta_campaign_insights": "meta_ads",

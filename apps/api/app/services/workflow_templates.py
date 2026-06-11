@@ -341,10 +341,10 @@ NATIVE_TEMPLATES = [
     },
     {
         "name": "Vet File Intake Packet",
-        "description": "Veterinary MVP: convert an owner/client request into a staff-reviewed intake packet saved to Drive.",
+        "description": "Veterinary MVP: convert an owner/client request into a staff-reviewed intake packet saved to Drive and OneDrive.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "intake", "file-packet"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "intake", "file-packet"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -375,12 +375,24 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "Vet Intake Packet - {{input.pet_name}} - {{input.date}}.md",
+                        "content": "{{packet.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
             "input_schema": {
                 "owner_request": {"type": "string", "description": "Raw owner/client request or intake text"},
                 "pet_name": {"type": "string", "description": "Pet name if known"},
                 "location": {"type": "string", "description": "Anaheim, Buena Park, Mission Viejo, or unassigned"},
                 "drive_folder_id": {"type": "string", "description": "Drive folder for MVP practice packets"},
+                "onedrive_folder_id": {"type": "string", "description": "Optional OneDrive folder item ID; omitted writes to root"},
             },
         },
     },
@@ -389,7 +401,7 @@ NATIVE_TEMPLATES = [
         "description": "Veterinary MVP: create a one-screen clinical triage handoff file from uploaded context.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "triage", "handoff"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "triage", "handoff"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -418,6 +430,17 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_handoff",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "Vet Triage Handoff - {{input.pet_name}} - {{input.date}}.md",
+                        "content": "{{handoff.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
         },
     },
@@ -426,7 +449,7 @@ NATIVE_TEMPLATES = [
         "description": "Veterinary MVP: turn an uploaded transcript or draft note into a DVM-reviewed SOAP draft file.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "soap", "clinical-docs"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "soap", "clinical-docs"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -463,6 +486,17 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_soap",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "SOAP Draft - {{input.pet_name}} - {{input.date}}.md",
+                        "content": "{{soap.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
         },
     },
@@ -471,7 +505,7 @@ NATIVE_TEMPLATES = [
         "description": "Veterinary MVP: create an AAHA-oriented billing exception packet from uploaded charge sheets.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "billing", "aaha"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "billing", "aaha"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -500,6 +534,17 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_billing_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "Billing Review Packet - {{input.date}}.md",
+                        "content": "{{billing_packet.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
         },
     },
@@ -508,7 +553,7 @@ NATIVE_TEMPLATES = [
         "description": "Veterinary MVP: summarize uploaded inventory/count sheets and flag exceptions.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "inventory", "pharmacy"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "inventory", "pharmacy"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -537,6 +582,17 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_inventory_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "Inventory Audit Packet - {{input.date}}.md",
+                        "content": "{{inventory_packet.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
         },
     },
@@ -545,7 +601,7 @@ NATIVE_TEMPLATES = [
         "description": "Veterinary MVP: draft approval-gated review responses and owner education content from uploaded feedback.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "reputation", "reviews"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "reputation", "reviews"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -581,6 +637,17 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_reputation_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "Reputation Response Packet - {{input.date}}.md",
+                        "content": "{{reputation_packet.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
         },
     },
@@ -589,7 +656,7 @@ NATIVE_TEMPLATES = [
         "description": "Veterinary MVP: synthesize uploaded exports and agent packets into a daily operator brief.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "ops", "briefing"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "ops", "briefing"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -618,15 +685,26 @@ NATIVE_TEMPLATES = [
                     },
                     "output": "drive_file",
                 },
+                {
+                    "id": "save_onedrive_ops_brief",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "Daily Practice Ops Brief - {{input.date}}.md",
+                        "content": "{{ops_brief.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
+                },
             ],
         },
     },
     {
         "name": "Vet PMS Desktop Readiness Packet",
-        "description": "Veterinary MVP: document PMS screen-map observations and approved operator steps as a Drive artifact.",
+        "description": "Veterinary MVP: document PMS screen-map observations and approved operator steps as Drive and OneDrive artifacts.",
         "tier": "native",
         "public": True,
-        "tags": ["veterinary", "mvp", "drive", "computer-use", "pms"],
+        "tags": ["veterinary", "mvp", "drive", "onedrive", "computer-use", "pms"],
         "trigger_config": {"type": "manual"},
         "definition": {
             "steps": [
@@ -654,6 +732,17 @@ NATIVE_TEMPLATES = [
                         "folder_id": "{{input.drive_folder_id}}",
                     },
                     "output": "drive_file",
+                },
+                {
+                    "id": "save_onedrive_readiness_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_onedrive_file",
+                    "params": {
+                        "name": "PMS Desktop Readiness Packet - {{input.date}}.md",
+                        "content": "{{readiness_packet.response}}",
+                        "mime_type": "text/markdown",
+                    },
+                    "output": "onedrive_file",
                 },
             ],
         },

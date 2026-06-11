@@ -28,6 +28,7 @@ TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     "read_drive_file": "google_drive",
     "create_drive_file": "google_drive",
     "list_drive_folders": "google_drive",
+    "create_onedrive_file": "onedrive",
     # Jira
     "create_jira_issue": "jira",
     "get_jira_issue": "jira",
