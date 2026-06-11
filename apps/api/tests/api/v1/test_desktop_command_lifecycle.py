@@ -2175,6 +2175,26 @@ def test_background_control_dry_run_denied_when_background_capability_disabled(d
     ).count() == 0
 
 
+def test_background_control_dry_run_enqueue_does_not_require_permission_readiness(db_session, seeded):
+    presence = _presence()
+    presence.pop("shell_permission_readiness")
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=presence,
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, queued_event, _session_event = _enqueue_background_dry_run(
+            db_session,
+            nonce="background-no-readiness",
+        )
+
+    assert command.capability == "background_control"
+    assert command.status == "pending"
+    assert command.payload["dry_run"]["native_envelope"] is False
+    assert queued_event.event_metadata["dry_run"] is True
+    assert queued_event.event_metadata["native_envelope"] is False
+
+
 def test_command_status_snapshot_is_display_safe(db_session, seeded):
     now = _utcnow()
     command = DesktopCommand(

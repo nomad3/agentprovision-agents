@@ -22,8 +22,8 @@ feature flags, sign envelopes, or enable native actuation.
    `/api/v1/presence/shell/register` heartbeats.
 3. The API presence service stores only canonical status fields plus a
    server-side `observed_at` timestamp per shell.
-4. `enqueue_desktop_command` checks the selected live shell before native-control
-   enqueue.
+4. `enqueue_desktop_command` checks the selected live shell before any action
+   that can reach the native-control boundary.
 5. Missing, stale, or non-`granted` required probes raise structured
    `permission_not_ready`; no command row is created.
 
@@ -36,6 +36,12 @@ feature flags, sign envelopes, or enable native actuation.
 `automation_system_events`, `input_monitoring`, camera, and microphone remain
 reported through presence for UX/diagnostics but are not required for this
 native-control enqueue gate.
+
+`background_app_control_dry_run` remains a no-op proof command in this phase:
+it queues only a dry-run payload with `native_envelope: false` and completes at
+claim without macOS actuation. It is still gated by tenant capability, target
+allowlist, shell/device/session ownership, and Stop preemption, but it does not
+require TCC readiness until it grows into a real native-boundary action.
 
 ## Contract
 
@@ -51,6 +57,8 @@ native-control enqueue gate.
   return `permission_not_ready` and create no command rows.
 - API lifecycle tests: normal native-control enqueue fixtures include granted
   readiness.
+- API lifecycle tests: the no-op background dry-run can still enqueue without a
+  readiness snapshot because it never reaches native APIs.
 - Luna hook test: shell registration sends sanitized statuses, not reasons or
   identity details.
 - Tauri/core/CLI contract tests: `permission_not_ready` is recognized by the

@@ -966,6 +966,10 @@ def _risk_tier_for_action(action: str) -> Literal["observe", "native_control"]:
     return "native_control" if action in _NATIVE_CONTROL_CAPABILITIES else "observe"
 
 
+def _requires_native_permission_readiness(action: str) -> bool:
+    return action in _NATIVE_CONTROL_CAPABILITIES and action not in _BACKGROUND_CONTROL_DRY_RUN_ACTIONS
+
+
 def _capability_matches_risk_tier(capability: str, risk_tier: str) -> bool:
     if risk_tier == "observe":
         return capability in set(_OBSERVATION_CAPABILITIES.values())
@@ -2820,7 +2824,7 @@ def enqueue_desktop_command(
 
     shell_id, shell_capabilities, device_id = _select_connected_shell(tenant_id, request.shell_id)
     capability = _COMMAND_ACTION_CAPABILITIES[request.action]
-    if request.action in _NATIVE_CONTROL_CAPABILITIES:
+    if _requires_native_permission_readiness(request.action):
         _ensure_native_permission_readiness(
             tenant_id,
             shell_id=shell_id,
