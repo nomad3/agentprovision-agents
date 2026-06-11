@@ -1,0 +1,19 @@
+{
+  "contract": "agentprovision.desktop_control.v1",
+  "kind": "background_command_denied",
+  "status": "denied",
+  "event_type": "background_control_denied",
+  "_note": "SP1.5 representative background denial. PID alone is never identity — the signed pid is alive but now hosts a different process (no matching proc-launch identity), so the action is denied before any native work. `code`/`reason` align to the SP1.5 vocabulary: background_code_for_reason(reason) == code. Display-safe only.",
+  "capability": "background_control",
+  "primitive": "ax_set_value",
+  "action": "whatsapp_send_message",
+  "target_role": "message_input",
+  "code": "pid_reused",
+  "reason": "desktop background control pid reused; whatsapp_send_message denied",
+  "down_channel_available": false,
+  "desktop_command_id": "00000000-0000-4000-8000-000000000201",
+  "correlation_id": "00000000-0000-4000-8000-0000000002c0",
+  "session_id": "00000000-0000-4000-8000-0000000002d0",
+  "shell_id": "desktop-0a0a0a0a-0b0b-4c0c-8d0d-0e0e0e0e0e0e",
+  "created_at": "2026-06-11T00:00:01Z"
+}

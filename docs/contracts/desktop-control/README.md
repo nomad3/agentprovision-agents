@@ -36,6 +36,10 @@ fixture, the mirror is wrong.
 | `pointer_command_claim.display_safe.json` | native_control pointer command claim | hashed title/screenshot, `signature_present` (no raw signature), agent-requested `action.args` allowed |
 | `deny.missing_target_bundle_id.json` | denial — incomplete target binding | `code` = `target_not_allowlisted` |
 | `deny.capability_mismatch.json` | denial — capability not matched by grant | `code` = `approval_binding_mismatch` |
+| `background_command_claim.display_safe.json` | SP1.5 background-control claim (non-frontmost) | identity beyond PID (bundle + signing/proc/window hashes), `window_bounds` in integer POINTS, hashed message value, independent AX/PID `primitive_flags`, one-window lease |
+| `background_control_verified.event.json` | SP1.5 verify-readback success | byte-free proof only: `content_hash_match`, `value_chars`, `structural_state`, `verified` |
+| `overlay_event.subscriber_only.json` | SP1.5 overlay/HUD event | `authoritative` = false; `allowed_intents` excludes every authority-granting intent (Stop request only) |
+| `background_control_denied.display_safe.json` | SP1.5 background denial | `code` = `pid_reused` (representative); `background_code_for_reason(reason)` maps back to it |
 
 Display-safe invariant (enforced recursively by every parity test): no
 `window_title`, `screenshot`, `screenshot_b64`, `clipboard`, `clipboard_text`,
@@ -47,6 +51,39 @@ The `code` values are canonical PR-C `DesktopDenialCode` values from
 `apps/api/app/services/desktop_control_codes.py`. API parity tests assert each
 deny fixture code is a member of that enum and that `code_for_reason(reason)`
 maps back to the same code.
+
+## SP1.5 — secondary-pointer / background-control contract
+
+The four `background_*` / `overlay_*` fixtures type the **non-frontmost** app-control
+path from `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
+(Luna APPROVE for SP1.5 fixtures only). They are the executable security spec
+SP2+ must satisfy; **no native actuation, no AX/CGEvent, no DB.**
+
+- **Codes (§5.3):** the new background denial vocabulary lives in
+  `apps/api/app/services/desktop_background_codes.py` as `BackgroundControlDenialCode`
+  (a *separate* enum from the frozen PR-C `DesktopDenialCode`). The two reused
+  concepts — `stopped` and `secure_input_active` — keep their canonical PR-C
+  codes; a background deny `code` must be a member of `ALLOWED_BACKGROUND_DENIAL_CODES`
+  (the new tokens ∪ those two). `background_code_for_reason(reason)` maps each
+  canonical display-safe reason (and its bare token) to exactly one code.
+- **Pure gates:** the same module holds the pure SP1.5 security decisions
+  (target identity beyond PID, points-based window/display/title drift, lease
+  loss, independent AX-vs-PID primitive flags, verify-readback, overlay
+  subscriber-only authority, byte-free event guard). Each is unit-tested in
+  `apps/api/tests/api/v1/test_desktop_sp15_contract.py`, covering every §11
+  minimum-test line.
+- **Byte-free (§10/§13):** background events extend the display-safe boundary
+  with WhatsApp/AX-specific raw fields (`message_text`, `contact_name`,
+  `chat_title`, `row_text`, `ax_label`, `text`, `value`, …) via
+  `FORBIDDEN_EVENT_FIELDS`; the verified-event fixture proves outbound proof is
+  hashes/counts/booleans/categories only.
+- **Lane-B follow-up (not done here):** the strongly-typed **core** mirror
+  (`agentprovision_core::desktop` structs / `DesktopDenialCode`) and the Tauri
+  `denial_codes.rs` enum do **not** yet carry the SP1.5 codes/shapes. Extending
+  the typed mirror is owned by lane B (PR-D) and is intentionally deferred so
+  this SP1.5 fixture PR stays small and does not collide with the frozen typed
+  contract. The existing core/MCP/CLI parity suites stay green because they
+  validate only the original three fixtures.
 
 ## Regeneration (API owner only)
 
@@ -62,6 +99,9 @@ No cargo workspace exists; run cargo per crate directory.
 ```
 # API — fixture enum values vs real service constants (drift detector):
 cd apps/api && pytest tests/api/v1/test_desktop_control_contract.py -q
+
+# API — SP1.5 background-control contract + security gates (pure, no DB):
+cd apps/api && pytest tests/api/v1/test_desktop_sp15_contract.py -q
 
 # MCP — passthrough shape + denial code + display-safe:
 cd apps/mcp-server && pytest tests/test_desktop_control_contract.py -q

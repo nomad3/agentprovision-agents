@@ -1,0 +1,78 @@
+{
+  "contract": "agentprovision.desktop_control.v1",
+  "kind": "background_command_claim",
+  "_note": "SP1.5 CONTRACT SKELETON for TYPING/PARITY ONLY. No native actuation; AX/CGEventPostToPid stay hard-disabled. Display-safe fields only — identity beyond PID (bundle + signing/proc/window) hashed, window_bounds in integer POINTS, message value hashed (value_hash/value_chars), never raw text. Ids/hashes are synthetic placeholders.",
+  "desktop_command_id": "00000000-0000-4000-8000-000000000201",
+  "correlation_id": "00000000-0000-4000-8000-0000000002c0",
+  "tenant_id": "00000000-0000-4000-8000-0000000002a0",
+  "user_id": "00000000-0000-4000-8000-0000000002b0",
+  "session_id": "00000000-0000-4000-8000-0000000002d0",
+  "shell_id": "desktop-0a0a0a0a-0b0b-4c0c-8d0d-0e0e0e0e0e0e",
+  "device_id": "00000000-0000-4000-8000-0000000002e0",
+  "source": "api",
+  "capability": "background_control",
+  "risk_tier": "native_control",
+  "status": "claimed",
+  "control_mode": "control_locked",
+  "approval_id": "00000000-0000-4000-8000-0000000002f0",
+  "approval_risk_tier": "native_control",
+  "approval_remaining_actions": 1,
+  "lease": {
+    "lease_id": "00000000-0000-4000-8000-000000000210",
+    "command_id": "00000000-0000-4000-8000-000000000201",
+    "capability": "background_control",
+    "window_id": "win-00000000000000000001",
+    "single_window": true,
+    "expires_at": "2026-06-11T00:00:08Z"
+  },
+  "envelope": {
+    "schema": "agentprovision.desktop_command_envelope.v1",
+    "signature_alg": "Ed25519",
+    "key_id": "agentprovision-desktop-command-ed25519-v1",
+    "policy_version": "desktop-control-v1",
+    "issuer": "agentprovision-api",
+    "nonce": "00000000-0000-4000-8000-000000000abc",
+    "seq_no": 1,
+    "issued_at": "2026-06-11T00:00:00Z",
+    "expires_at": "2026-06-11T00:00:08Z",
+    "envelope_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "signature_present": true
+  },
+  "target": {
+    "bundle_id": "net.whatsapp.WhatsApp",
+    "app": "WhatsApp",
+    "signing_team_id_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "audit_token_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "launch_token_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "window_id": "win-00000000000000000001",
+    "pid": 4321,
+    "window_title_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "title_present": true,
+    "title_chars": 11,
+    "display_id": 1,
+    "scale_factor": 2.0,
+    "window_bounds": [0, 0, 900, 700],
+    "bounds_tolerance_points": 4,
+    "observed_at": "2026-06-11T00:00:00Z",
+    "expires_at": "2026-06-11T00:00:08Z",
+    "target_role": "message_input",
+    "target_element_hint": {
+      "ax_role": "AXTextArea",
+      "label_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  },
+  "action": {
+    "name": "whatsapp_send_message",
+    "primitive": "ax_set_value",
+    "args": {
+      "value_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+      "value_chars": 31
+    }
+  },
+  "primitive_flags": {
+    "ax_set_value": true,
+    "ax_press": true,
+    "pid_post_key": false,
+    "pid_post_click": false
+  }
+}
