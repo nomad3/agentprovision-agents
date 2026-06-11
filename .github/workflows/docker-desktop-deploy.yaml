@@ -41,6 +41,8 @@ jobs:
       # secrets mid-deploy. Sync each checkout into this stable directory
       # and run every compose command from there instead.
       DEPLOY_DIR: /Users/nomade/.agentprovision/deploy/agentprovision-agents
+      DEPLOY_MIN_HOST_FREE_GB: "12"
+      DEPLOY_MIN_DOCKER_FREE_GB: "8"
 
     steps:
       # NOTE: previously this step stopped api / orchestration-worker /
@@ -182,8 +184,8 @@ jobs:
           fi
 
           # Dedup services
-          SERVICES=$(echo $SERVICES | tr ' ' '\n' | sort -u | tr '\n' ' ')
-          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+          SERVICES="$(tr ' ' '\n' <<< "$SERVICES" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+          echo "services=$SERVICES" >> "$GITHUB_OUTPUT"
           if [ -z "$SERVICES" ]; then
             echo "No service files changed; skipping build step."
           else
@@ -249,6 +251,20 @@ jobs:
           # including the cache for the build that's about to run.
           set -e
 
+          HOST_FREE_KB="$(df -Pk /System/Volumes/Data | awk 'NR == 2 { print $4 }')"
+          HOST_MIN_KB=$((DEPLOY_MIN_HOST_FREE_GB * 1024 * 1024))
+          if [ -z "$HOST_FREE_KB" ] || [ "$HOST_FREE_KB" -lt "$HOST_MIN_KB" ]; then
+            echo "::error::Refusing to build with less than ${DEPLOY_MIN_HOST_FREE_GB}GiB free on /System/Volumes/Data after safe prune; found $(( ${HOST_FREE_KB:-0} / 1024 / 1024 ))GiB. Free disk before rebuilding services so deploy does not starve Docker/cloudflared."
+            exit 1
+          fi
+
+          DOCKER_FREE_KB="$(docker exec agentprovision-agents-api-1 df -Pk / 2>/dev/null | awk 'NR == 2 { print $4 }')"
+          DOCKER_MIN_KB=$((DEPLOY_MIN_DOCKER_FREE_GB * 1024 * 1024))
+          if [ -z "$DOCKER_FREE_KB" ] || [ "$DOCKER_FREE_KB" -lt "$DOCKER_MIN_KB" ]; then
+            echo "::error::Refusing to build with less than ${DEPLOY_MIN_DOCKER_FREE_GB}GiB free inside the Docker VM after safe prune; found $(( ${DOCKER_FREE_KB:-0} / 1024 / 1024 ))GiB. Run the disk recovery path before rebuilding services."
+            exit 1
+          fi
+
       - name: Build and update services
         run: |
           cd "$DEPLOY_DIR"
@@ -263,14 +279,14 @@ jobs:
             # `--force-rm` removes intermediate containers from failed/aborted
             # build stages so they don't accumulate on the runner between
             # deploys (BuildKit normally leaves them around for debugging).
-            docker compose build --force-rm $svc || echo "Skipping $svc (not in compose or build error)"
+            docker compose build --force-rm "$svc"
           done
 
       - name: Up
         run: |
           cd "$DEPLOY_DIR"
           SERVICES="${{ steps.changes.outputs.services }}"
-          RECOVER_SERVICES="api code-worker"
+          RECOVER_SERVICES=(api code-worker)
           WORKSPACES_VOLUME_NAME="${WORKSPACES_VOLUME_NAME:-agentprovision-agents_tenant_spaces}"
           WORKSPACES_COMPLETE_MARKER=".agentprovision_workspace_volume_migrated"
           workspace_migration_complete() {
@@ -281,17 +297,17 @@ jobs:
             status=$?
             if [ "$status" -ne 0 ]; then
               if workspace_migration_complete; then
-                echo "Up step failed after workspace migration; recreating workspace services on the new volume: $RECOVER_SERVICES" >&2
-                docker compose up -d --force-recreate --no-deps $RECOVER_SERVICES || true
+                echo "Up step failed after workspace migration; recreating workspace services on the new volume: ${RECOVER_SERVICES[*]}" >&2
+                docker compose up -d --force-recreate --no-deps "${RECOVER_SERVICES[@]}" || true
               else
-                echo "Up step failed before workspace migration completed; restarting existing workspace services: $RECOVER_SERVICES" >&2
-                docker compose start $RECOVER_SERVICES || true
+                echo "Up step failed before workspace migration completed; restarting existing workspace services: ${RECOVER_SERVICES[*]}" >&2
+                docker compose start "${RECOVER_SERVICES[@]}" || true
               fi
             fi
             exit "$status"
           }
           trap recover_on_error EXIT
-          QUIESCE_COMPOSE_SERVICES="$RECOVER_SERVICES" ./scripts/migrate_compose_workspaces_volume.sh
+          QUIESCE_COMPOSE_SERVICES="${RECOVER_SERVICES[*]}" ./scripts/migrate_compose_workspaces_volume.sh
           # Recreate the specific services that were rebuilt above so
           # their containers swap to the fresh images. Plain `compose
           # up -d` (no service args) only starts stopped containers; it
@@ -348,10 +364,11 @@ jobs:
           # container was already running, because compose may have
           # restarted dependent services around it. Wait up to 30s
           # for pg_isready before invoking the apply script.
-          for i in $(seq 1 30); do
+          for attempt in $(seq 1 30); do
             if docker exec "$DB_CONTAINER" pg_isready -U postgres -d agentprovision >/dev/null 2>&1; then
               break
             fi
+            echo "waiting for db readiness ($attempt/30)"
             sleep 1
           done
           ./scripts/apply_pending_migrations.sh

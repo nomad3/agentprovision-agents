@@ -38,7 +38,28 @@ jobs:
     timeout-minutes: 120
     env:
       LUNA_CHECKOUT_DIR: luna-build-${{ github.run_id }}-${{ github.run_attempt }}
+      RUNNER_MIN_FREE_GB: "16"
     steps:
+      - name: Preflight runner disk
+        run: |
+          set -euo pipefail
+          WORK_ROOT="${GITHUB_WORKSPACE:-$PWD}"
+          echo "Runner workspace: $WORK_ROOT"
+
+          # Previous macOS runner deaths can leave isolated Luna checkouts behind
+          # before the always() cleanup step runs. Remove only old per-run Luna
+          # checkouts; current runs use unique names and the workflow concurrency
+          # group queues same-ref builds.
+          find "$WORK_ROOT" -maxdepth 1 -type d -name 'luna-build-*' -mmin +240 -prune -print -exec rm -rf {} + 2>/dev/null || true
+
+          df -h /System/Volumes/Data | tail -1 || true
+          FREE_KB="$(df -Pk /System/Volumes/Data | awk 'NR == 2 { print $4 }')"
+          MIN_KB=$((RUNNER_MIN_FREE_GB * 1024 * 1024))
+          if [ -z "$FREE_KB" ] || [ "$FREE_KB" -lt "$MIN_KB" ]; then
+            echo "::error::Luna release build requires at least ${RUNNER_MIN_FREE_GB}GiB free on /System/Volumes/Data after stale-checkout cleanup; found $(( ${FREE_KB:-0} / 1024 / 1024 ))GiB. Free disk before building so the runner does not die mid-Tauri build."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -592,4 +613,4 @@ jobs:
 
       - name: Remove isolated checkout
         if: always()
-        run: rm -rf "${LUNA_CHECKOUT_DIR}" || true
+        run: rm -rf "${GITHUB_WORKSPACE:?}/${LUNA_CHECKOUT_DIR:?}" || true
