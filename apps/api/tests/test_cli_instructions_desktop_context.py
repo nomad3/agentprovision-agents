@@ -45,12 +45,39 @@ def test_desktop_control_section_renders_dry_run_status_guidance():
 
     assert "## Desktop Computer Use" in out
     assert f"Use session_id `{session_id}`" in out
+    # dry-run proof path is still offered
     assert "desktop_background_app_control_dry_run" in out
     assert "desktop_command_status" in out
     assert "terminal status" in out
     assert "audit/event references" in out
     assert "`com.agentprovision.luna`" in out
-    assert "Do not call pointer, click, keyboard" in out
+
+
+def test_desktop_control_section_describes_governed_approval_loop():
+    # P5.4c: the chat-triggered loop over the already-merged tools. The agent
+    # requests a grant, a human approves, the agent reads grant_id off status,
+    # actuates, polls command status, and reports display-safe facts only.
+    out = generate_cli_instructions(
+        **_base_kwargs(),
+        agent_tool_groups=["desktop_control"],
+        desktop_context={
+            "session_id": "4c96cdbd-a326-48a2-b9ba-016e83a948f4",
+            "default_target_bundle_id": "com.agentprovision.luna",
+        },
+    )
+
+    assert "desktop_request_grant" in out
+    assert "desktop_request_status" in out
+    assert "grant_id" in out
+    assert "desktop_actuate" in out
+    # the agent cannot mint/approve its own grant — a human must approve
+    assert "cannot approve your own request" in out
+    assert "approval_required" in out
+    # display-safe report-back contract
+    assert "Never quote OCR text" in out
+    # Stop semantics
+    assert "desktop_stop_commands" in out
+    assert "revokes the" in out
 
 
 def test_desktop_observe_only_section_does_not_suggest_control_tool():
@@ -64,6 +91,9 @@ def test_desktop_observe_only_section_does_not_suggest_control_tool():
     assert "Observation tools return display-safe audit envelopes only" in out
     assert "desktop_background_app_control_dry_run" not in out
     assert "desktop_command_status" not in out
+    # the act-loop tools must never leak to an observe-only agent
+    assert "desktop_request_grant" not in out
+    assert "desktop_actuate" not in out
 
 
 def test_desktop_section_fails_closed_without_session_id():

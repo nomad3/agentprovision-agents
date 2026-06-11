@@ -648,6 +648,9 @@ fn emit_grant_request(ctx: &Context, resp: &agentprovision_core::desktop::Deskto
         if let Some(expires_at) = &resp.expires_at {
             output::info(format!("expires_at={expires_at}"));
         }
+        if let Some(grant_id) = &resp.grant_id {
+            output::info(format!("grant_id={grant_id}"));
+        }
     });
 }
 

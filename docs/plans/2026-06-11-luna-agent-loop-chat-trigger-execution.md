@@ -494,17 +494,33 @@ Implementation scope:
   `698a3bd0`) refreshed Luna shell registration on heartbeat; installed Luna
   0.1.106 smoke then reached terminal dry-run `no_op` with
   `native_envelope=false`.
+- Status 2026-06-11: PR #898 (`claude/luna-p54b-desktop-actuate`, merge
+  `1daefa51`) shipped `desktop_actuate`: the grant-gated agent act that consumes
+  an existing active grant and enqueues through the shared lifecycle. Missing
+  grant -> `approval_required`, no command; wrong owner/session/expired/revoked
+  -> structured deny; no mint path, no native flag flip.
+- Status 2026-06-11: P5.4c chat-loop slice (this branch,
+  `docs/plans/2026-06-11-luna-p54c-chat-desktop-loop-design.md`). The chat
+  "coordinator" is the planner prompt over the merged tools (the chat turn is a
+  single CLI subprocess; the CLI drives the MCP loop — no server workflow). Two
+  changes close the loop: (1) `desktop_act._display_safe_request` now reflects
+  `grant_id` on the owner-scoped status poll once a human approves, so a
+  CLI-subprocess agent (polls tools, not SSE) can reference the grant for
+  `desktop_actuate` — a reference, not a mint; actuate still re-validates
+  owner/session/expiry/revocation + the default-off native flag; (2) the
+  `desktop_control` prompt block now describes the governed
+  request -> human approval -> actuate -> poll -> report loop (no self-approval,
+  display-safe report-back, Stop). No grant minting from MCP/internal, no native
+  flag flips, no allowlist change, no native actuation added.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
-  approval-request -> user approval -> bounded grant until the chat loop consumes
-  grants.
-- Implement `desktop_actuate`: agent-facing actuation request that consumes an
-  existing approved grant and enqueues through the shared lifecycle. Without an
-  active matching grant it must return `approval_required`; it must not mint a
-  grant, bypass Stop/preflight/allowlist/capability gates, or select a native
-  implementation client-side.
+  approval-request -> user approval -> bounded grant.
+- Land the P5.4c chat-loop slice (grant_id-on-approved-status + planner loop
+  prompt), then the remaining rungs in dependency order: a
+  `permission_not_ready` Luna-client readiness probe before enqueue; byte-free
+  `rl_experience` per desktop decision/denial; report-back leak fixtures.
 
 Tests:
 

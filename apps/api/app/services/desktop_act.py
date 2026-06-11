@@ -133,6 +133,15 @@ def _display_safe_request(request: DesktopApprovalRequest, *, now: datetime) -> 
         # Whether a human has minted a grant for this request yet (P5.5). Never the
         # grant payload — just presence.
         "grant_present": request.grant_id is not None,
+        # The minted grant's id once a human has approved this request (P5.4c).
+        # null while pending/denied/expired. Owner-scoped (this projection is
+        # filtered by tenant_id AND user_id), so only the requesting owner ever
+        # sees it — the same owner already receives it in the approve response.
+        # It is an approval *reference*, not authorization: `actuate` still
+        # re-validates owner/session/expiry/revocation + the default-off native
+        # flag, so the id alone enqueues nothing. It lets a CLI-subprocess agent
+        # (which polls tools, not SSE) actuate against a human-approved grant.
+        "grant_id": str(request.grant_id) if request.grant_id else None,
         "decided_at": decided_at.isoformat() if decided_at else None,
     }
 

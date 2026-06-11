@@ -26,6 +26,8 @@ const OBSERVATION_FETCH_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/observation_fetch.denied.json");
 const GRANT_REQUEST: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.pending.json");
+const GRANT_REQUEST_APPROVED: &str =
+    include_str!("../../../docs/contracts/desktop-control/grant_request.approved.json");
 const GRANT_APPROVAL: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_approval.approved.json");
 const ACTUATE: &str = include_str!("../../../docs/contracts/desktop-control/actuate.queued.json");
@@ -94,6 +96,18 @@ fn cli_deserializes_grant_request_via_core_type() {
         serde_json::from_str(GRANT_REQUEST).expect("core grant request type");
     assert_eq!(req.status, DesktopGrantRequestStatus::Pending);
     assert!(!req.grant_present);
+    assert!(req.grant_id.is_none());
+
+    // P5.4c: `alpha desktop grant status` surfaces the grant id once approved so
+    // the operator (or an agent) can hand it to `alpha desktop act`.
+    let approved: DesktopGrantRequest =
+        serde_json::from_str(GRANT_REQUEST_APPROVED).expect("core approved status type");
+    assert_eq!(approved.status, DesktopGrantRequestStatus::Approved);
+    assert!(approved.grant_present);
+    assert_eq!(
+        approved.grant_id.as_deref(),
+        Some("99999999-9999-9999-9999-999999999999")
+    );
 }
 
 #[test]

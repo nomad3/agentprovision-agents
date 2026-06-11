@@ -292,6 +292,46 @@ def test_approve_bundle_not_allowlisted_denies(db_session):
     assert _active_grants(db_session) == []
 
 
+# ── P5.4c: status poll exposes grant_id only after human approval ────────────
+
+
+def test_status_poll_exposes_grant_id_only_after_human_approval(db_session):
+    """P5.4c chat-loop primitive: the agent's owner-scoped status poll reflects
+    the grant_id once a human approves — so a CLI-subprocess agent (which polls
+    tools, not SSE) can actuate against it. The request/poll path mints NO grant;
+    only the human approve does."""
+    _seed(db_session)
+    rid = _make_pending(db_session)
+
+    # before approval — no grant reference, no grant row
+    before = desktop_act.get_desktop_grant_request_status(
+        db_session, tenant_id=TENANT_ID, user_id=USER_ID, request_id=rid
+    )
+    assert before["grant_present"] is False
+    assert before["grant_id"] is None
+    assert _active_grants(db_session) == []
+
+    # human approves — the ONLY mint path — exactly one grant
+    approved = _approve(db_session, rid)
+    grant_id = approved["grant_id"]
+    assert len(_active_grants(db_session)) == 1
+
+    # after approval — the same owner sees the SAME grant_id it must actuate with
+    after = desktop_act.get_desktop_grant_request_status(
+        db_session, tenant_id=TENANT_ID, user_id=USER_ID, request_id=rid
+    )
+    assert after["status"] == "approved"
+    assert after["grant_present"] is True
+    assert after["grant_id"] == grant_id
+
+    # a different owner still gets uniform not-found — no grant_id oracle
+    with pytest.raises(HTTPException) as exc:
+        desktop_act.get_desktop_grant_request_status(
+            db_session, tenant_id=TENANT_ID, user_id=OTHER_USER_ID, request_id=rid
+        )
+    assert exc.value.status_code == 404
+
+
 # ── deny: terminal, no grant ─────────────────────────────────────────────────
 
 
@@ -389,8 +429,17 @@ def test_approve_route_mints_grant_for_authenticated_user(db_session):
     body = resp.json()
     assert body["status"] == "approved"
     assert body["grant_status"] == "active"
+    assert body["grant_id"]
     assert "storage_path" not in resp.text
     assert len(_active_grants(db_session)) == 1
+
+    status_resp = client.get(
+        f"/api/v1/desktop-control/grants/requests/{rid}",
+    )
+    assert status_resp.status_code == 200
+    status_body = status_resp.json()
+    assert status_body["status"] == "approved"
+    assert status_body["grant_id"] == body["grant_id"]
 
 
 def test_deny_route_is_terminal(db_session):
