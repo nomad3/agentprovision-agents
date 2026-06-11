@@ -261,6 +261,9 @@ def test_window_relative_points_are_integer_and_in_bounds():
     assert window_relative_points_ok({"x": 120, "y": 80}, [0, 0, 900, 700]) is True
     # outside the window
     assert window_relative_points_ok({"x": 950, "y": 80}, [0, 0, 900, 700]) is False
+    # right/bottom edges are outside the half-open window-relative range.
+    assert window_relative_points_ok({"x": 900, "y": 80}, [0, 0, 900, 700]) is False
+    assert window_relative_points_ok({"x": 120, "y": 700}, [0, 0, 900, 700]) is False
     # floats are not points (no Retina pixel/point ambiguity allowed)
     assert window_relative_points_ok({"x": 120.5, "y": 80}, [0, 0, 900, 700]) is False
     # negative is not window-relative
@@ -547,7 +550,17 @@ def test_injected_raw_field_into_claim_is_caught():
 # I-1 / N-3 — malformed bounds must FAIL CLOSED (zip-truncation fail-open).
 @pytest.mark.parametrize(
     "bad",
-    [[0, 0], [], [0, 0, 900, 700, 1], [0, 0, 900, "x"], [0, 0, 900, 700.5], [0, 0, 900, True]],
+    [
+        [0, 0],
+        [],
+        [0, 0, 900, 700, 1],
+        [0, 0, 900, "x"],
+        [0, 0, 900, 700.5],
+        [0, 0, 900, True],
+        [0, 0, 0, 700],
+        [0, 0, 900, 0],
+        [0, 0, -900, 700],
+    ],
 )
 def test_malformed_bounds_fail_closed(bad):
     # bad as the signed side

@@ -247,6 +247,8 @@ def _is_quad_int_points(bounds) -> bool:
         isinstance(bounds, (list, tuple))
         and len(bounds) == 4
         and all(isinstance(v, int) and not isinstance(v, bool) for v in bounds)
+        and bounds[2] > 0
+        and bounds[3] > 0
     )
 
 
@@ -300,7 +302,7 @@ def window_relative_points_ok(point: dict, window_bounds: list[int]) -> bool:
     if not isinstance(x, int) or not isinstance(y, int):
         return False
     width, height = window_bounds[2], window_bounds[3]
-    return 0 <= x <= width and 0 <= y <= height
+    return 0 <= x < width and 0 <= y < height
 
 
 def lease_decision(
