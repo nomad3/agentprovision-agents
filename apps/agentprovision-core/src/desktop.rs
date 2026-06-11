@@ -691,6 +691,33 @@ impl DesktopGrantRequestDenial {
     }
 }
 
+/// A generic structured `{"detail": {"code": ..., "reason": ...}}` denial where
+/// `code` is a plain string. Used by the actuate path, which emits a MIX of
+/// canonical `DesktopDenialCode` values (approval_revoked/expired/exhausted/
+/// binding_mismatch) and surface-specific codes (e.g. `invalid_actuation_args`)
+/// — so it must not be coupled to any one closed enum. Both fields are
+/// display-safe (server-fixed strings, never raw content).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopStructuredDenial {
+    pub code: String,
+    pub reason: String,
+}
+
+impl DesktopStructuredDenial {
+    /// Parse a FastAPI `{"detail": {"code", "reason"}}` error body, or `None` for
+    /// any other shape (e.g. a bare-string `{"detail": "..."}`).
+    pub fn from_error_body(body: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Envelope {
+            detail: DesktopStructuredDenial,
+        }
+        serde_json::from_str::<Envelope>(body)
+            .ok()
+            .map(|e| e.detail)
+    }
+}
+
 /// `POST /api/v1/desktop-control/grants/request` body
 /// (`alpha desktop grant request`). Reduced metadata only — no payload bag.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -794,6 +821,64 @@ pub struct DesktopGrantApproval {
     pub remaining_actions: u32,
     #[serde(default)]
     pub grant_expires_at: Option<String>,
+}
+
+// ── P5.4b desktop_actuate (`alpha desktop act`) ──────────────────────────────
+
+/// Outcome of an actuate call. `queued` = a bounded native command was enqueued
+/// against the grant; `approval_required` = no active grant (no command).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopActuateStatus {
+    Queued,
+    ApprovalRequired,
+}
+
+/// `POST /api/v1/desktop-control/commands/actuate` body. References an existing
+/// approval grant + the action-specific args; the action/target come from the
+/// grant. `deny_unknown_fields` keeps the body reduced.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopActuateBody {
+    pub session_id: String,
+    pub grant_id: String,
+    /// Action-specific actuation parameters (e.g. {"text": "..."} for
+    /// keyboard_type). Opaque JSON; validated server-side against the grant.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub args: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub nonce: Option<String>,
+}
+
+/// Display-safe actuate result. `deny_unknown_fields` rejects any raw actuation
+/// args / screen bytes / envelope; only ids/status/action/capability/bundle +
+/// audit refs exist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopActuate {
+    pub status: DesktopActuateStatus,
+    #[serde(default)]
+    pub command_id: Option<String>,
+    #[serde(default)]
+    pub command_status: Option<String>,
+    #[serde(default)]
+    pub action: Option<DesktopRequestableAction>,
+    #[serde(default)]
+    pub capability: Option<DesktopCapability>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    #[serde(default)]
+    pub target_bundle_id: Option<String>,
+    #[serde(default)]
+    pub desktop_event_id: Option<String>,
+    #[serde(default)]
+    pub session_event_id: Option<String>,
+    #[serde(default)]
+    pub session_seq_no: Option<i64>,
 }
 
 #[cfg(test)]
@@ -1133,6 +1218,79 @@ mod tests {
         assert_eq!(body.expires_in_seconds, 60);
         let v = serde_json::to_value(&body).unwrap();
         assert_eq!(v["max_actions"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn actuate_queued_roundtrips() {
+        let v = serde_json::json!({
+            "status": "queued",
+            "command_id": "99999999-9999-9999-9999-999999999999",
+            "command_status": "pending",
+            "action": "keyboard_type",
+            "capability": "keyboard_control",
+            "approval_id": "55555555-5555-5555-5555-555555555555",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "target_bundle_id": "net.whatsapp.WhatsApp",
+            "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+            "session_event_id": "evt-1",
+            "session_seq_no": 7
+        });
+        let a: DesktopActuate = serde_json::from_value(v).expect("actuate decode");
+        assert_eq!(a.status, DesktopActuateStatus::Queued);
+        assert_eq!(a.action, Some(DesktopRequestableAction::KeyboardType));
+        assert_eq!(a.capability, Some(DesktopCapability::KeyboardControl));
+    }
+
+    #[test]
+    fn actuate_approval_required_has_no_command() {
+        let v = serde_json::json!({"status": "approval_required", "command_id": null});
+        let a: DesktopActuate = serde_json::from_value(v).expect("actuate decode");
+        assert_eq!(a.status, DesktopActuateStatus::ApprovalRequired);
+        assert!(a.command_id.is_none());
+    }
+
+    #[test]
+    fn actuate_rejects_raw_args_and_envelope() {
+        for key in ["args", "text", "envelope", "screenshot"] {
+            let mut v = serde_json::json!({
+                "status": "queued",
+                "command_id": "99999999-9999-9999-9999-999999999999"
+            });
+            v[key] = serde_json::json!("SECRET");
+            assert!(
+                serde_json::from_value::<DesktopActuate>(v).is_err(),
+                "{key} must be rejected by DesktopActuate"
+            );
+        }
+    }
+
+    #[test]
+    fn structured_denial_parses_any_code() {
+        let d = DesktopStructuredDenial::from_error_body(
+            r#"{"detail": {"code": "approval_revoked", "reason": "approval grant revoked"}}"#,
+        )
+        .expect("structured denial");
+        assert_eq!(d.code, "approval_revoked");
+        let d2 = DesktopStructuredDenial::from_error_body(
+            r#"{"detail": {"code": "invalid_actuation_args", "reason": "x"}}"#,
+        )
+        .expect("structured denial");
+        assert_eq!(d2.code, "invalid_actuation_args");
+        // bare-string detail => None
+        assert!(DesktopStructuredDenial::from_error_body(r#"{"detail": "oops"}"#).is_none());
+    }
+
+    #[test]
+    fn actuate_body_omits_empty_optionals() {
+        let body = DesktopActuateBody {
+            session_id: "33333333-3333-3333-3333-333333333333".into(),
+            grant_id: "55555555-5555-5555-5555-555555555555".into(),
+            args: None,
+            nonce: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert!(v.get("args").is_none());
+        assert!(v.get("nonce").is_none());
     }
 
     #[test]

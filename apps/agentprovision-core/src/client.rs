@@ -16,12 +16,12 @@ use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 use crate::desktop::{
-    DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
-    DesktopCommandStopRequest, DesktopCommandStopResponse, DesktopControlAllowlistUpdate,
-    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopGrantApproval,
-    DesktopGrantApprovalBody, DesktopGrantDenialBody, DesktopGrantRequest, DesktopGrantRequestBody,
-    DesktopObservationRequestAck, DesktopObservationRequestBody, DesktopPreflight,
-    PerceptionArtifactStatus,
+    DesktopActuate, DesktopActuateBody, DesktopBackgroundDryRunRequest, DesktopCommandResponse,
+    DesktopCommandStatusSnapshot, DesktopCommandStopRequest, DesktopCommandStopResponse,
+    DesktopControlAllowlistUpdate, DesktopControlEnablement, DesktopControlEnablementUpdate,
+    DesktopGrantApproval, DesktopGrantApprovalBody, DesktopGrantDenialBody, DesktopGrantRequest,
+    DesktopGrantRequestBody, DesktopObservationRequestAck, DesktopObservationRequestBody,
+    DesktopPreflight, PerceptionArtifactStatus,
 };
 use crate::error::{Error, Result};
 use crate::models::{
@@ -1139,6 +1139,14 @@ impl ApiClient {
             body,
         )
         .await
+    }
+
+    /// `POST /api/v1/desktop-control/commands/actuate` — the `alpha desktop act`
+    /// verb. Enqueues one bounded native command against an EXISTING approval
+    /// grant; no grant → `approval_required`. Mints no grant, signs no envelope.
+    pub async fn desktop_actuate(&self, body: &DesktopActuateBody) -> Result<DesktopActuate> {
+        self.post_json("/api/v1/desktop-control/commands/actuate", body)
+            .await
     }
 }
 

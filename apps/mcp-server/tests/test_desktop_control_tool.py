@@ -23,6 +23,7 @@ def test_desktop_control_module_exports_registered_tools():
         "desktop_stop_commands",
         "desktop_request_grant",
         "desktop_request_status",
+        "desktop_actuate",
     }
 
     assert expected_tools.issubset(set(dc.__all__))
@@ -702,3 +703,115 @@ async def test_desktop_request_status_polls_pending(patch_httpx):
         "/api/v1/desktop-control/internal/grants/requests/"
         "55555555-5555-5555-5555-555555555555"
     )
+
+
+# ── P5.4b: desktop_actuate (grant-gated act; never mints) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_desktop_actuate_posts_to_internal_actuate(patch_httpx):
+    client = patch_httpx(
+        default_status=200,
+        default_json={
+            "status": "queued",
+            "command_id": "99999999-9999-9999-9999-999999999999",
+            "command_status": "pending",
+            "action": "keyboard_type",
+            "capability": "keyboard_control",
+            "approval_id": "55555555-5555-5555-5555-555555555555",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "target_bundle_id": "net.whatsapp.WhatsApp",
+        },
+    )
+
+    out = await dc.desktop_actuate(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
+        args={"text": "hello"},
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "queued"
+    assert out["approval_id"] == "55555555-5555-5555-5555-555555555555"
+    assert "never mints" in out["message"]
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/desktop-control/internal/commands/actuate")
+    assert call["json"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "grant_id": "55555555-5555-5555-5555-555555555555",
+        "args": {"text": "hello"},
+    }
+    assert call["headers"]["X-Tenant-Id"] == "11111111-1111-1111-1111-111111111111"
+    assert call["headers"]["X-User-Id"] == "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.mark.asyncio
+async def test_desktop_actuate_surfaces_approval_required(patch_httpx):
+    patch_httpx(
+        default_status=200,
+        default_json={"status": "approval_required", "command_id": None},
+    )
+
+    out = await dc.desktop_actuate(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+    assert out["status"] == "approval_required"
+    assert out["command_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_desktop_actuate_validates_grant_uuid(patch_httpx):
+    client = patch_httpx(default_status=200, default_json={"unreached": True})
+
+    out = await dc.desktop_actuate(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="../../oauth/internal/token/github",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+    assert out == {"status": "error", "error": "grant_id must be a UUID"}
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_desktop_actuate_surfaces_display_safe_denial(patch_httpx):
+    patch_httpx(
+        default_status=409,
+        default_json={
+            "detail": {"code": "approval_revoked", "reason": "approval grant revoked"}
+        },
+    )
+
+    out = await dc.desktop_actuate(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+    assert out["status"] == "denied"
+    assert out["code"] == "approval_revoked"
+
+
+@pytest.mark.asyncio
+async def test_desktop_actuate_requires_tenant_and_user():
+    out_no_tenant = await dc.desktop_actuate(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
+        tenant_id="",
+        ctx=_ctx_with_user(),
+    )
+    assert out_no_tenant == {"status": "error", "error": "tenant_id required"}
+
+    out_no_user = await dc.desktop_actuate(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=SimpleNamespace(request_context={}),
+    )
+    assert out_no_user["status"] == "error"
+    assert "X-User-Id required" in out_no_user["error"]

@@ -45,6 +45,7 @@ fixture, the mirror is wrong.
 | `grant_request.pending.json` | P5.4b pending desktop approval request (`alpha desktop grant request`) | reduced/display-safe: ids/status/action/capability/reduced-target only; mirrors `DesktopGrantRequestOut` (API) / `DesktopGrantRequest` (core); records intent, never actuates |
 | `grant_request.denied.json` | P5.4b grant-request denial | `{detail: {code, reason}}`; `code` is a `DesktopGrantRequestDenialCode` (`apps/api/app/services/desktop_act.py`) |
 | `grant_approval.approved.json` | P5.5 approve response (`alpha desktop approvals approve`) | approved request projection + minted bounded grant summary (ids/status/bounds/bundle only); mirrors `DesktopGrantApprovalOut` (API) / `DesktopGrantApproval` (core); never an envelope (signed later at claim) |
+| `actuate.queued.json` | P5.4b grant-gated act result (`alpha desktop act`) | `status` queued vs approval_required; ids/status/action/capability/bundle + audit refs only; mirrors `DesktopActuateOut` (API) / `DesktopActuate` (core); never the actuation args or envelope |
 
 Display-safe invariant (enforced recursively by every parity test): no
 `window_title`, `screenshot`, `screenshot_b64`, `clipboard`, `clipboard_text`,

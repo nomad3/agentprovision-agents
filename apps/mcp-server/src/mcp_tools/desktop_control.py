@@ -712,6 +712,103 @@ async def desktop_request_status(
     )
 
 
+async def _actuate(
+    *,
+    session_id: str,
+    grant_id: str,
+    args: dict | None = None,
+    nonce: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    tid = resolve_tenant_id(ctx, tenant_id)
+    if not tid:
+        return {"status": "error", "error": "tenant_id required"}
+
+    user_id = resolve_user_id(ctx)
+    if not user_id:
+        return {"status": "error", "error": "X-User-Id required for desktop control"}
+
+    safe_grant_id = _validate_uuid(grant_id, "grant_id")
+    if not safe_grant_id:
+        return {"status": "error", "error": "grant_id must be a UUID"}
+    safe_session_id = _validate_uuid(session_id, "session_id")
+    if not safe_session_id:
+        return {"status": "error", "error": "session_id must be a UUID"}
+
+    body: dict = {"session_id": safe_session_id, "grant_id": safe_grant_id}
+    if args:
+        body["args"] = args
+    if nonce:
+        body["nonce"] = nonce
+
+    headers = {
+        "X-Internal-Key": API_INTERNAL_KEY,
+        "X-Tenant-Id": tid,
+        "X-User-Id": user_id,
+    }
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/commands/actuate"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning(
+            "desktop_actuate: HTTP transport error session=%s err=%s", session_id, exc
+        )
+        return {"status": "error", "error": f"transport: {exc}"}
+
+    if resp.status_code == 200:
+        payload = resp.json()
+        return {
+            **payload,
+            "message": (
+                "Actuate consumes an existing human-approved grant; it never mints "
+                "one. `approval_required` means no active grant — request approval "
+                "first. Raw actuation args/screen bytes are never returned."
+            ),
+        }
+    if resp.status_code == 401:
+        return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code in (403, 404, 409, 422):
+        try:
+            detail = resp.json().get("detail")
+        except ValueError:
+            detail = None
+        if isinstance(detail, dict) and "code" in detail:
+            return {"status": "denied", **detail}
+        return {"status": "error", "error": f"denied {resp.status_code}: {resp.text[:200]}"}
+    return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
+
+
+@mcp.tool()
+async def desktop_actuate(
+    session_id: str,
+    grant_id: str,
+    args: dict | None = None,
+    nonce: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Enqueue ONE bounded native desktop action against an EXISTING approval grant.
+
+    `grant_id` must be a grant a human already approved (via the P5.5 approval
+    surface) for this session. This tool NEVER mints a grant. If no active grant
+    matches, it returns `status="approval_required"` and enqueues no command. The
+    grant fixes the action + target app; `args` are the action-specific parameters
+    (e.g. {"text": "..."} for keyboard_type, {"x":.., "y":..} for pointer). Raw
+    actuation args, screen bytes, and signed envelopes are never returned.
+    """
+    return await _actuate(
+        session_id=session_id,
+        grant_id=grant_id,
+        args=args,
+        nonce=nonce,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+
+
 __all__ = [
     "desktop_observe_screen",
     "desktop_get_active_app",
@@ -722,4 +819,5 @@ __all__ = [
     "desktop_stop_commands",
     "desktop_request_grant",
     "desktop_request_status",
+    "desktop_actuate",
 ]

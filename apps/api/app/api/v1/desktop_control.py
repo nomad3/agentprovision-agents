@@ -983,6 +983,103 @@ def deny_desktop_grant_request(
     )
 
 
+# ── P5.4b desktop_actuate (`alpha desktop act`) ──────────────────────────────
+#
+# Enqueue ONE bounded native command against an EXISTING active grant (minted by
+# a human via P5.5). No grant -> approval_required, no command. The internal twin
+# (for MCP) consumes a grant scoped to its X-User-Id; it can NEVER mint one.
+
+
+class DesktopActuateIn(BaseModel):
+    """Actuate body — references an existing grant id + the action-specific args.
+    The action/target/owner all come from the grant + authenticated principal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    grant_id: uuid.UUID
+    # Action-specific actuation parameters (e.g. {"text": "..."} for keyboard_type,
+    # {"x": .., "y": ..} for pointer_move). Validated server-side against the
+    # grant's action; never echoed back in responses/events (display-safe).
+    args: dict[str, Any] | None = None
+    nonce: str | None = Field(default=None, max_length=128)
+
+
+class DesktopActuateOut(BaseModel):
+    """Display-safe actuate result. `status` distinguishes a queued command from
+    `approval_required` (no grant). Byte-free: ids/status/action/capability/bundle
+    + audit refs only — never the actuation args, screen bytes, or envelope."""
+
+    status: Literal["queued", "approval_required"]
+    command_id: uuid.UUID | None = None
+    command_status: str | None = None
+    action: str | None = None
+    capability: str | None = None
+    approval_id: uuid.UUID | None = None
+    shell_id: str | None = None
+    target_bundle_id: str | None = None
+    desktop_event_id: uuid.UUID | None = None
+    session_event_id: str | None = None
+    session_seq_no: int | None = None
+
+
+@router.post(
+    "/commands/actuate",
+    response_model=DesktopActuateOut,
+)
+@limiter.limit("120/minute")
+def actuate_desktop_command(
+    request: Request,
+    payload: DesktopActuateIn,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    """`alpha desktop act` — enqueue one bounded native command against an existing
+    active grant. No grant → `approval_required` (no command). Mints no grant,
+    signs no envelope; native gates run in the shared enqueue lifecycle."""
+    return DesktopActuateOut(
+        **desktop_act.actuate_command(
+            db,
+            tenant_id=current_user.tenant_id,
+            user_id=current_user.id,
+            session_id=payload.session_id,
+            grant_id=payload.grant_id,
+            args=payload.args,
+            nonce=payload.nonce,
+            source="alpha",
+        )
+    )
+
+
+@router.post(
+    "/internal/commands/actuate",
+    response_model=DesktopActuateOut,
+)
+@limiter.limit("120/minute")
+def internal_actuate_desktop_command(
+    request: Request,
+    payload: DesktopActuateIn,
+    db: Session = Depends(deps.get_db),
+    _auth: None = Depends(_verify_internal_key),
+    tenant_id: uuid.UUID = Depends(_resolve_internal_tenant_id),
+    user_id: uuid.UUID = Depends(_resolve_internal_user_id),
+):
+    """MCP twin of `/commands/actuate`. Consumes a grant scoped to X-User-Id;
+    cannot mint one (grant creation is user-JWT-only, P5.5)."""
+    return DesktopActuateOut(
+        **desktop_act.actuate_command(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=payload.session_id,
+            grant_id=payload.grant_id,
+            args=payload.args,
+            nonce=payload.nonce,
+            source="mcp",
+        )
+    )
+
+
 @router.post(
     "/internal/grants/request",
     response_model=DesktopGrantRequestOut,
