@@ -1172,6 +1172,75 @@ def test_pointer_command_claim_issues_signed_native_control_envelope(db_session,
     assert consumed.status == "consumed"
 
 
+def test_native_control_claim_denies_with_audit_when_ed25519_private_key_missing(
+    db_session,
+    seeded,
+):
+    command = _native_pending_command(db_session, nonce="native-ed25519-missing-private-key")
+    with patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST",
+        [CANARY_BUNDLE_ID],
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM",
+        "Ed25519",
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY",
+        "",
+    ), patch.object(
+        desktop_control_service.settings,
+        "DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID",
+        "agentprovision-desktop-command-ed25519-2026-06",
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                desktop_command_id=command.id,
+                risk_tier="native_control",
+                capability="pointer_control",
+                target_binding={
+                    "bundle_id": CANARY_BUNDLE_ID,
+                    "action": "pointer_click",
+                    "window_title_pattern": "Luna Canary",
+                },
+                expires_in_seconds=60,
+            ),
+        )
+        claimed, event, _claim_session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    db_session.refresh(command)
+    db_session.refresh(grant)
+    assert claimed is None
+    assert command.status == "denied"
+    assert "command_envelope" not in (command.payload or {})
+    assert grant.status == "active"
+    assert grant.remaining_actions == 1
+    assert event is not None
+    assert event.event_type == "desktop_command_envelope_denied"
+    assert event.reason == "desktop command denied"
+    assert event.event_metadata["envelope_config_error"] == "RuntimeError"
+    assert event.event_metadata["envelope_signing_algorithm"] == "Ed25519"
+    assert (
+        db_session.query(DesktopCommandEnvelopeNonce)
+        .filter(DesktopCommandEnvelopeNonce.desktop_command_id == command.id)
+        .count()
+        == 0
+    )
+
+
 def test_native_control_keyboard_nonce_retry_is_idempotent(db_session, seeded):
     # Re-enqueuing the same keyboard command nonce returns the same pending
     # command and writes only one queued event (Phase 4: keyboard is issued, not

@@ -2736,27 +2736,47 @@ def claim_next_desktop_command(
                     tenant_id=user.tenant_id,
                 )
             return None, denied_event, denied_session_event
-    if is_native_control and (
-        _desktop_command_envelope_algorithm() != DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM
-    ):
-        _denied_command, denied_event, denied_session_event = (
-            _deny_pending_command_for_envelope_configuration_failure(
-                db,
-                command,
-                reason="desktop command envelope signing configuration invalid: native control requires Ed25519",
-                metadata={
-                    "envelope_signing_algorithm": settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM,
-                    "envelope_config_error": "RuntimeError",
-                },
+    if is_native_control:
+        try:
+            native_envelope_algorithm = _desktop_command_envelope_algorithm()
+        except (RuntimeError, ValueError, binascii.Error) as exc:
+            _denied_command, denied_event, denied_session_event = (
+                _deny_pending_command_for_envelope_configuration_failure(
+                    db,
+                    command,
+                    reason=f"desktop command envelope signing configuration invalid: {exc}",
+                    metadata={
+                        "envelope_signing_algorithm": settings.DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM,
+                        "envelope_config_error": exc.__class__.__name__,
+                    },
+                )
             )
-        )
-        for expired_event in expired_events:
-            _publish_display_safe_command_event(
-                expired_event,
-                status="expired",
-                tenant_id=user.tenant_id,
+            for expired_event in expired_events:
+                _publish_display_safe_command_event(
+                    expired_event,
+                    status="expired",
+                    tenant_id=user.tenant_id,
+                )
+            return None, denied_event, denied_session_event
+        if native_envelope_algorithm != DESKTOP_COMMAND_ENVELOPE_ED25519_ALGORITHM:
+            _denied_command, denied_event, denied_session_event = (
+                _deny_pending_command_for_envelope_configuration_failure(
+                    db,
+                    command,
+                    reason="desktop command envelope signing configuration invalid: native control requires Ed25519",
+                    metadata={
+                        "envelope_signing_algorithm": native_envelope_algorithm,
+                        "envelope_config_error": "RuntimeError",
+                    },
+                )
             )
-        return None, denied_event, denied_session_event
+            for expired_event in expired_events:
+                _publish_display_safe_command_event(
+                    expired_event,
+                    status="expired",
+                    tenant_id=user.tenant_id,
+                )
+            return None, denied_event, denied_session_event
 
     try:
         _validate_desktop_command_envelope_signing_config()
