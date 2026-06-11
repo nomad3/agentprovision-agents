@@ -1,7 +1,7 @@
 # Luna P5.3-P5.5 Agent Loop And Chat Trigger Execution
 
 Date: 2026-06-11
-Status: design for next implementation slices
+Status: implementation in progress; P5.4 dry-run substrate deployed through PR #885
 Inputs: `docs/report/2026-06-11-luna-computer-use-fable-review.md`, `docs/plans/2026-06-09-luna-phase5-general-app-control-design.md`, `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
 
 ## Goal
@@ -72,15 +72,31 @@ Merged:
 - SP1.5 / PR #870: background-control contract/security fixtures.
 - D2 / PR #871: client `expires_at_ms`, fail-closed clock, same-owner pacing
   carry-forward, dead `canary_click` removal.
-
-Pending release gate:
-
 - D3 / PR #872: config drift, Ed25519 default, compose env precedence, local
-  observations volume. CI is green and mergeable at `e87ea629`; Luna release-gate
-  approval is still required before merge.
-  This is a release/config hygiene gate, not the P5.4 native-actuator
-  prerequisite; do not tag Slices 3-6 as blocked on D3 once the operator
-  environment is already configured.
+  observations volume. Merged at `dc514952`.
+- P5.4a dry-run command / PR #879: background-control no-op command lifecycle.
+- P5.4b status / PR #881: user/internal command status and MCP status tool.
+- P5.4b Alpha bridge / PR #882: Alpha CLI dry-run request/status path.
+- P5.4 bootstrap / PR #883: superuser-only enablement and allowlist Alpha
+  commands. Merged at `6249cb14` and deployed.
+- P5.4 no-op constraint / PR #884: DB constraints allow terminal
+  `no_op` command status and event outcome. Merged at `43c3f767` and deployed.
+- P5.4c operator tool groups / PR #885: operator Luna and Luna Supervisor have
+  `desktop_observe` and `desktop_control` tool groups. Merged at `d96921f6`
+  and deployed.
+
+Current deployed proof:
+
+- Docker Desktop Deployment for PR #885 run `27358303437` passed.
+- Required Docker mount gate returned no output:
+  `docker ps -q | xargs docker inspect --format '{{.Name}}{{range .Mounts}} {{.Source}}{{end}}' | grep _work`.
+- API is healthy after deploy, migration
+  `175_luna_operator_desktop_tool_groups.sql` is recorded, and both operator
+  Luna rows include `desktop_observe` and `desktop_control`.
+- Live Alpha dry-run command
+  `a91985e6-77ac-40e7-883d-f0d0d6bab74a` reached terminal `no_op` with
+  queued, claimed, and completed audit events after refreshing Luna shell
+  presence.
 
 Open after D3:
 
@@ -306,17 +322,23 @@ Implementation scope:
   target metadata, rejects arbitrary payload bags, and queues only
   `background_app_control_dry_run` no-op commands. It still does not mint
   grants, call macOS APIs, or enable pointer/keyboard/native actuation.
-- Status 2026-06-11: after PR #882 deployed, live Alpha validation reached the
+- Status 2026-06-11: PR #882 deployed, live Alpha validation reached the
   production route and shell presence, but the operator tenant denied all floor
   bundles (`com.agentprovision.luna`, `com.apple.TextEdit`,
-  `net.whatsapp.WhatsApp`) with `Desktop command target not allowlisted`. Branch
-  `codex/luna-p54d-desktop-bootstrap` is the smallest unblocker: superuser-only
+  `net.whatsapp.WhatsApp`) with `Desktop command target not allowlisted`. PR
+  #883 (`codex/luna-p54d-desktop-bootstrap`) shipped the smallest unblocker:
+  superuser-only
   `GET/PATCH /desktop-control/enablement`, `GET/PUT /desktop-control/allowlist`,
   typed core models, and `alpha desktop enablement/allowlist get|set`. The
   enablement writer is narrowed to the background-control dry-run gate only, and
   the allowlist writer is still bounded by the deployment floor
   `DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST`; together they only let the operator
   tenant enter the fail-closed lane required for the dry-run proof.
+- Status 2026-06-11: PR #884 (`codex/luna-p54e-noop-status-constraint`) fixed
+  the final dry-run persistence blocker by allowing `no_op` in
+  `desktop_commands.status` and `desktop_command_events.outcome`. After deploy,
+  Alpha dry-run command `813ebc99-6bfa-412f-9d01-16d7c65172ad` reached terminal
+  `no_op` with queued, claimed, and completed audit events.
 
 Tests:
 
@@ -374,6 +396,29 @@ Implementation scope:
   outcome/status, denial codes, and audit refs. It must not quote planner-safe
   OCR text, window titles, contact names, clipboard values, or raw observed
   screen content.
+- Status 2026-06-11: PR #885
+  (`codex/luna-p54f-operator-tool-groups`) completed the first bullet of this
+  slice. It grants `desktop_observe` and `desktop_control` only to Simon's
+  operator `Luna` and `Luna Supervisor` rows, updates the bundled Luna
+  frontmatter for future seeded agents, and adds a Postgres-backed migration
+  regression test. Luna returned `MERGE`; GitHub checks were green; deploy run
+  `27358303437` passed; live Alpha dry-run command
+  `a91985e6-77ac-40e7-883d-f0d0d6bab74a` reached terminal `no_op`.
+- Status 2026-06-11: branch `codex/luna-p54g-agent-loop-scaffold` implements
+  the smallest chat-loop scaffold in the CLI runtime prompt. When the selected
+  agent already has `desktop_observe` and/or `desktop_control`, the generated
+  instruction markdown now includes the current chat `session_id`, the Luna app
+  bundle id, dry-run-only guidance for `desktop_background_app_control_dry_run`,
+  follow-up status guidance for `desktop_command_status`, and explicit denial
+  of pointer/click/keyboard/approval/native actuation in this phase. Agents
+  without desktop tool groups receive no desktop prompt section.
+
+Next smallest make-it-work step:
+
+- Package and review PR for `codex/luna-p54g-agent-loop-scaffold`, then smoke
+  through Luna chat after deploy: ask Luna to run a Luna-app dry-run proof,
+  confirm the tool call queues a command, and verify she reports only command
+  id, terminal status, and audit refs.
 
 Tests:
 
@@ -382,6 +427,9 @@ Tests:
 - Negative tests for non-operator tenants and Luna agents lacking tool groups.
 - Loop dry-run test using denied/no-op command status before any broad actuation
   expansion.
+- Prompt-runtime tests proving the desktop section is omitted without desktop
+  tool groups, observe-only does not suggest control, and control guidance stays
+  dry-run/status only with the current chat `session_id`.
 - Report-back leak test using planner-safe OCR/contact/window-title fixtures:
   final agent text must include only action/outcome/audit refs.
 - RL-leak test using the same OCR/contact/window-title fixtures proving
@@ -494,8 +542,8 @@ Before marking the feature E2E complete:
 2. `desktop_control_service.py` must be split before Slice 4 or any additional
    command/wrapper growth.
 3. Canonical Python/Rust tables need a shared fixture to avoid drift.
-4. Alpha CLI is currently installed locally but unauthenticated in this Codex
-   environment; Luna Desktop remains the active review channel unless auth is
-   explicitly restored.
+4. Alpha CLI is usable locally through the repo cargo command, but cargo emits a
+   non-blocking global-cache cleanup permission warning for `bat-0.25.0` on
+   each run. Fix separately; do not treat it as a desktop-control failure.
 5. The D3 PR body has a stale original table entry, but the correction comment
    and diff reflect the true non-API signing-boundary fix.

@@ -217,6 +217,8 @@ def generate_cli_instructions(
     connected_integrations: list | None = None,
     persona_driven: bool = False,
     agent_display_name: Optional[str] = None,
+    agent_tool_groups: list[str] | None = None,
+    desktop_context: dict[str, Any] | None = None,
 ) -> str:
     """Generate provider-neutral instruction markdown from agent skill + tenant context."""
     limits = TIER_LIMITS.get(tier, TIER_LIMITS["full"])
@@ -336,6 +338,45 @@ def generate_cli_instructions(
         lines.append("If the user references one of these accounts, proceed directly with the tool call. Treat absence from this list as truly missing (then it is appropriate to ask the user to connect it).")
         lines.append("")
 
+    desktop_groups = set(agent_tool_groups or [])
+    has_desktop_observe = "desktop_observe" in desktop_groups
+    has_desktop_control = "desktop_control" in desktop_groups
+    if has_desktop_observe or has_desktop_control:
+        desktop_context = desktop_context or {}
+        desktop_session_id = str(desktop_context.get("session_id") or "").strip()
+        default_bundle_id = str(
+            desktop_context.get("default_target_bundle_id")
+            or "com.agentprovision.luna"
+        ).strip()
+
+        lines.append("## Desktop Computer Use")
+        lines.append("You have Luna macOS desktop-use tools only for this chat session.")
+        if desktop_session_id:
+            lines.append(
+                f"- Use session_id `{desktop_session_id}` for desktop MCP tool calls in this turn."
+            )
+        else:
+            lines.append(
+                "- No desktop session_id is available in this turn; do not call desktop MCP tools."
+            )
+        lines.append("- If a desktop tool reports that no shell is connected, say that Luna Desktop must be in Observe or Control Locked mode, then stop.")
+        if has_desktop_observe:
+            lines.append("- Observation tools return display-safe audit envelopes only, not pixels, clipboard text, or raw window contents.")
+        if has_desktop_control:
+            lines.append(
+                "- Current control phase is dry-run only: use "
+                "`desktop_background_app_control_dry_run` to queue a no-op app-control proof, "
+                "then use `desktop_command_status` to report the command id, terminal status, "
+                "and audit/event references."
+            )
+            lines.append(
+                f"- For the Luna desktop app, the target bundle_id is `{default_bundle_id}`."
+            )
+            lines.append(
+                "- Do not call pointer, click, keyboard, approval-grant, or native actuation paths in this phase."
+            )
+        lines.append("")
+
     lines.append(ANTI_HALLUCINATION_PREAMBLE)
     lines.append("")
 
@@ -376,7 +417,6 @@ def generate_cli_instructions(
             name = entity.get("name", "")
             etype = entity.get("type", "")
             desc = entity.get("description", "")
-            sim = entity.get("similarity")
             summary = f"**{name}** ({etype})"
             if desc:
                 summary += f": {desc}"
@@ -1358,6 +1398,11 @@ def _run_agent_session_legacy(
         connected_integrations=connected_integrations,
         persona_driven=bool(persona_prompt),
         agent_display_name=agent_display_name,
+        agent_tool_groups=agent_tool_groups,
+        desktop_context={
+            "session_id": (db_session_memory or {}).get("chat_session_id", ""),
+            "default_target_bundle_id": "com.agentprovision.luna",
+        },
     )
 
     # Phase 1 PR C — emotion engine prompt-side style injection.
