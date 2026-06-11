@@ -343,14 +343,12 @@ workspaces:
 # screenshot bytes stay unreachable from agent runtimes ("no-read by
 # construction").
 #
-# PVC/replica note: accessMode is ReadWriteOnce, but the api runs
-# autoscaling.minReplicas: 2 (above). A second api replica on a different node
-# cannot mount an RWO PVC and would stay Pending. Before enabling quarantine
-# *capture* in prod, either (a) provide an RWX storageClass and switch
-# accessModes to ReadWriteMany, or (b) pin the perception-capturing api to a
-# single replica / a dedicated single-replica pod. Until capture is wired (G-3:
-# the redactor has no callers and 0 artifacts exist yet) the PVC is allocated but
-# unused, so the conflict is latent, not live.
+# PVC/replica note: accessMode is ReadWriteOnce, while the api runs more than
+# one replica. This is a scheduling constraint independent of whether capture or
+# redaction writes any bytes: a replica placed on a different node may not mount
+# the same RWO PVC. Before using this chart for multi-node api replicas, either
+# (a) provide an RWX storageClass and switch accessModes to ReadWriteMany, or
+# (b) pin the perception-capturing api path to a single-replica deployment/pod.
 observations:
   enabled: true
   storageClass: ""
