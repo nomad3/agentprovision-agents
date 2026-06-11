@@ -70,6 +70,10 @@ def test_desktop_control_section_describes_governed_approval_loop():
     assert "desktop_request_status" in out
     assert "grant_id" in out
     assert "desktop_actuate" in out
+    # ambiguous chat-triggered app-control requests must fail closed before grant
+    assert "map the user's desktop request" in out
+    assert "ask one concise clarifying question" in out
+    assert "do not call `desktop_request_grant` yet" in out
     # the agent cannot mint/approve its own grant — a human must approve
     assert "cannot approve your own request" in out
     assert "approval_required" in out
