@@ -589,3 +589,20 @@ def test_observe_request_route_records_display_safe_denial(db_session):
         text("SELECT source FROM desktop_command_events ORDER BY created_at DESC LIMIT 1")
     ).scalar()
     assert event_source == "alpha"
+
+
+def test_observe_request_route_denies_when_desktop_control_disabled(db_session):
+    # Fail-closed: the user-facing observe-request verb re-checks the master flag,
+    # so a tenant with desktop control OFF cannot drive the observe surface.
+    user = _seed(db_session, control_enabled=False)
+    client = _client(db_session, user)
+    resp = client.post(
+        "/api/v1/desktop-control/observations/request",
+        json={"session_id": str(SESSION_ID), "action": "capture_screenshot"},
+    )
+    assert resp.status_code == 403
+    # no audit event is recorded when the master gate denies
+    count = db_session.execute(
+        text("SELECT COUNT(*) FROM desktop_command_events")
+    ).scalar()
+    assert count == 0
