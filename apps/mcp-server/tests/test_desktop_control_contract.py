@@ -32,6 +32,7 @@ OBSERVATION_STATUS = "observation_status.planner_safe.json"
 OBSERVATION_FETCH_DENIED = "observation_fetch.denied.json"
 GRANT_REQUEST = "grant_request.pending.json"
 GRANT_REQUEST_DENIED = "grant_request.denied.json"
+GRANT_APPROVAL = "grant_approval.approved.json"
 
 FORBIDDEN_KEYS = {
     "window_title", "screenshot", "screenshot_b64", "screenshot_bytes",
@@ -67,7 +68,7 @@ def _forbidden_hits(node, path="") -> list[str]:
     "name",
     [
         CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED,
-        GRANT_REQUEST, GRANT_REQUEST_DENIED,
+        GRANT_REQUEST, GRANT_REQUEST_DENIED, GRANT_APPROVAL,
     ],
 )
 def test_passthrough_is_display_safe(name):

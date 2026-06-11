@@ -18,9 +18,10 @@ use url::Url;
 use crate::desktop::{
     DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
     DesktopCommandStopRequest, DesktopCommandStopResponse, DesktopControlAllowlistUpdate,
-    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopGrantRequest,
-    DesktopGrantRequestBody, DesktopObservationRequestAck, DesktopObservationRequestBody,
-    DesktopPreflight, PerceptionArtifactStatus,
+    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopGrantApproval,
+    DesktopGrantApprovalBody, DesktopGrantDenialBody, DesktopGrantRequest, DesktopGrantRequestBody,
+    DesktopObservationRequestAck, DesktopObservationRequestBody, DesktopPreflight,
+    PerceptionArtifactStatus,
 };
 use crate::error::{Error, Result};
 use crate::models::{
@@ -1094,6 +1095,49 @@ impl ApiClient {
         self.get_json(&format!(
             "/api/v1/desktop-control/grants/requests/{request_id}"
         ))
+        .await
+    }
+
+    /// `GET /api/v1/desktop-control/grants/requests[?session_id=]` — the
+    /// authenticated user's pending approval requests (`alpha desktop approvals
+    /// list`). User-JWT only; never lists another user's requests.
+    pub async fn desktop_list_grant_requests(
+        &self,
+        session_id: Option<&str>,
+    ) -> Result<Vec<DesktopGrantRequest>> {
+        let path = match session_id {
+            Some(s) => format!("/api/v1/desktop-control/grants/requests?session_id={s}"),
+            None => "/api/v1/desktop-control/grants/requests".to_string(),
+        };
+        self.get_json(&path).await
+    }
+
+    /// `POST …/grants/requests/{id}/approve` — mint exactly one bounded active
+    /// grant (`alpha desktop approvals approve`). Human-only (user-JWT); the
+    /// grant owner is the authenticated principal.
+    pub async fn desktop_approve_grant_request(
+        &self,
+        request_id: &str,
+        body: &DesktopGrantApprovalBody,
+    ) -> Result<DesktopGrantApproval> {
+        self.post_json(
+            &format!("/api/v1/desktop-control/grants/requests/{request_id}/approve"),
+            body,
+        )
+        .await
+    }
+
+    /// `POST …/grants/requests/{id}/deny` — terminally deny a pending request
+    /// (`alpha desktop approvals deny`). Creates no grant.
+    pub async fn desktop_deny_grant_request(
+        &self,
+        request_id: &str,
+        body: &DesktopGrantDenialBody,
+    ) -> Result<DesktopGrantRequest> {
+        self.post_json(
+            &format!("/api/v1/desktop-control/grants/requests/{request_id}/deny"),
+            body,
+        )
         .await
     }
 }
