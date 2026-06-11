@@ -314,6 +314,9 @@ def test_claim_issues_signed_command_envelope_and_nonce_row(db_session, seeded):
     grant = db_session.query(DesktopCommandApprovalGrant).filter(
         DesktopCommandApprovalGrant.id == claimed.approval_id,
     ).one()
+    assert claimed.payload["approval"]["expires_at_ms"] == int(
+        grant.expires_at.timestamp() * 1000
+    )
     assert grant.status == "consumed"
     assert grant.remaining_actions == 0
     nonce_row = db_session.query(DesktopCommandEnvelopeNonce).filter(

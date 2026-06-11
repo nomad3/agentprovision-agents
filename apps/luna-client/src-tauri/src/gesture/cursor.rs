@@ -326,29 +326,6 @@ pub async fn canary_move_norm(norm_x: f64, norm_y: f64) -> Result<(), String> {
     }
 }
 
-/// Synthesize a single left click at the current cursor position. Phase 3
-/// allows left single-click only (no drag, no multi-click).
-#[cfg(target_os = "macos")]
-pub async fn canary_click() -> Result<(), String> {
-    // Gate on real macOS Accessibility (AX) trust (AXIsProcessTrusted via the
-    // permissions module), NOT the osascript/System-Events-derived ACCESSIBILITY_OK
-    // — that reflects Automation, a different permission the pointer canary does
-    // not need (and which is often ungranted even when AX is).
-    if !crate::computer_use::permissions::accessibility_trusted() {
-        return Err("accessibility_denied".to_string());
-    }
-    let mut guard = ENIGO.lock().await;
-    if guard.is_none() {
-        *guard = Enigo::new(&Settings::default()).ok().map(SendEnigo);
-    }
-    match guard.as_mut() {
-        Some(e) => e
-            .button(Button::Left, Direction::Click)
-            .map_err(|err| format!("enigo_click_failed: {err:?}")),
-        None => Err("enigo_unavailable".to_string()),
-    }
-}
-
 /// Move to normalized [0, 1] coordinates of the main display, then synthesize a
 /// single left click THERE. Phase 5: a signed `pointer_click` carries its own
 /// coordinates, so the click must land at the VERIFIED point — not wherever the
@@ -463,11 +440,6 @@ pub async fn canary_key_chord(_keys: &[String]) -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 pub async fn canary_move_norm(_norm_x: f64, _norm_y: f64) -> Result<(), String> {
-    Err("unsupported_platform".to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn canary_click() -> Result<(), String> {
     Err("unsupported_platform".to_string())
 }
 

@@ -1028,12 +1028,14 @@ def _approval_metadata(grant: DesktopCommandApprovalGrant | None) -> dict[str, A
 
 
 def _approval_payload(grant: DesktopCommandApprovalGrant) -> dict[str, Any]:
+    expires_at_ms = int(grant.expires_at.timestamp() * 1000) if grant.expires_at else None
     return {
         "approval_id": str(grant.id),
         "risk_tier": grant.risk_tier,
         "capability": grant.capability,
         "remaining_actions": int(grant.remaining_actions or 0),
         "expires_at": grant.expires_at.isoformat() if grant.expires_at else None,
+        "expires_at_ms": expires_at_ms,
     }
 
 
