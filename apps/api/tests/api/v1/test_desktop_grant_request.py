@@ -8,6 +8,7 @@ enqueues a command (no actuation path).
 """
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -158,6 +159,30 @@ def test_reason_is_capped_and_stripped(db_session):
     _seed(db_session)
     out = _req(db_session, reason="  " + "x" * 400 + "  ")
     assert len(out["reason"]) == 280
+
+
+def test_request_logs_byte_free_rl_decision(db_session):
+    _seed(db_session)
+    with patch("app.services.desktop_act.rl_experience_service.log_experience") as log_exp:
+        out = _req(db_session, reason="LEAK_REQUEST_REASON")
+
+    log_exp.assert_called_once()
+    kwargs = log_exp.call_args.kwargs
+    assert kwargs["tenant_id"] == TENANT_ID
+    assert kwargs["trajectory_id"] == SESSION_ID
+    assert kwargs["decision_point"] == "desktop_control_decision"
+    assert kwargs["state"] == {
+        "surface": "desktop_request_grant",
+        "session_id": str(SESSION_ID),
+        "source": "alpha",
+    }
+    assert kwargs["action"]["outcome"] == "pending"
+    assert kwargs["action"]["action"] == "keyboard_type"
+    assert kwargs["action"]["capability"] == "keyboard_control"
+    assert kwargs["action"]["request_id"] == out["request_id"]
+    assert kwargs["action"]["target_bundle_id"] == BUNDLE
+    assert kwargs["state_text"] is None
+    assert "LEAK_REQUEST_REASON" not in json.dumps(kwargs, default=str)
 
 
 # ── service: fail-closed gates ───────────────────────────────────────────────

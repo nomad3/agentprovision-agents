@@ -18,6 +18,7 @@ split pending): it only *imports* the shared display-safe + scoping helpers.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -28,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.models.desktop_approval_request import DesktopApprovalRequest
 from app.models.desktop_command_approval_grant import DesktopCommandApprovalGrant
+from app.services import rl_experience_service
 from app.services.desktop_control_codes import DesktopDenialCode
 from app.services.desktop_control_service import (
     _COMMAND_TOOL_ACTIONS,
@@ -54,6 +56,10 @@ _REASON_MAX_LEN = 280
 _DEFAULT_TTL_SECONDS = 300
 _MIN_TTL_SECONDS = 60
 _MAX_TTL_SECONDS = 3600
+
+logger = logging.getLogger(__name__)
+
+_RL_DECISION_POINT = "desktop_control_decision"
 
 
 class DesktopGrantRequestDenialCode(str, Enum):
@@ -146,6 +152,78 @@ def _display_safe_request(request: DesktopApprovalRequest, *, now: datetime) -> 
     }
 
 
+def _log_desktop_rl_decision(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    session_id: uuid.UUID,
+    surface: str,
+    outcome: str,
+    source: str | None = None,
+    action: str | None = None,
+    capability: str | None = None,
+    request_id: uuid.UUID | str | None = None,
+    grant_id: uuid.UUID | str | None = None,
+    command_id: uuid.UUID | str | None = None,
+    denial_code: str | None = None,
+    status_code: int | None = None,
+    shell_id: str | None = None,
+    target_bundle_id: str | None = None,
+    desktop_event_id: str | None = None,
+    session_event_id: str | None = None,
+) -> None:
+    """Best-effort RL trace for desktop decisions.
+
+    Byte-free by construction: no args, reason, OCR/window/clipboard/typed text,
+    screen content, page text, AX tree, or envelopes are accepted by this helper.
+    """
+    state = {
+        "surface": surface,
+        "session_id": str(session_id),
+        "source": source or "unknown",
+    }
+    action_payload = {
+        "outcome": outcome,
+        "action": action,
+        "capability": capability,
+        "request_id": str(request_id) if request_id else None,
+        "grant_id": str(grant_id) if grant_id else None,
+        "command_id": str(command_id) if command_id else None,
+        "denial_code": denial_code,
+        "status_code": status_code,
+        "shell_id": shell_id,
+        "target_bundle_id": target_bundle_id,
+        "desktop_event_id": desktop_event_id,
+        "session_event_id": session_event_id,
+    }
+    try:
+        rl_experience_service.log_experience(
+            db,
+            tenant_id=tenant_id,
+            trajectory_id=session_id,
+            step_index=0,
+            decision_point=_RL_DECISION_POINT,
+            state=state,
+            action={k: v for k, v in action_payload.items() if v is not None},
+            alternatives=[],
+            explanation={"policy": "byte_free_desktop_control"},
+            policy_version="p5.5",
+            exploration=False,
+            state_text=None,
+        )
+    except Exception:
+        db.rollback()
+        logger.warning("desktop RL decision logging failed", exc_info=True)
+
+
+def _denial_code_from_http_exception(exc: HTTPException) -> str | None:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        code = detail.get("code")
+        return str(code) if code is not None else None
+    return None
+
+
 def request_desktop_grant(
     db: Session,
     *,
@@ -234,6 +312,19 @@ def request_desktop_grant(
     )
     db.commit()
     db.refresh(request)
+    _log_desktop_rl_decision(
+        db,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        surface="desktop_request_grant",
+        outcome="pending",
+        source=source,
+        action=action,
+        capability=capability,
+        request_id=request.id,
+        shell_id=selected_shell,
+        target_bundle_id=target_bundle_id,
+    )
     return _display_safe_request(request, now=now)
 
 
@@ -469,6 +560,20 @@ def approve_desktop_grant_request(
     db.refresh(grant)
     out = _display_safe_request(request, now=cutoff)
     out.update(_grant_summary(grant))
+    _log_desktop_rl_decision(
+        db,
+        tenant_id=tenant_id,
+        session_id=request.session_id,
+        surface="desktop_grant_decision",
+        outcome="approved",
+        source="user_jwt",
+        action=request.action,
+        capability=capability,
+        request_id=request.id,
+        grant_id=grant.id,
+        shell_id=selected_shell,
+        target_bundle_id=target_binding.get("bundle_id"),
+    )
     return out
 
 
@@ -513,6 +618,20 @@ def deny_desktop_grant_request(
     )
     db.commit()
     db.refresh(request)
+    target = request.target_binding or {}
+    _log_desktop_rl_decision(
+        db,
+        tenant_id=tenant_id,
+        session_id=request.session_id,
+        surface="desktop_grant_decision",
+        outcome="denied",
+        source="user_jwt",
+        action=request.action,
+        capability=request.capability,
+        request_id=request.id,
+        shell_id=request.shell_id,
+        target_bundle_id=target.get("bundle_id"),
+    )
     return _display_safe_request(request, now=cutoff)
 
 
@@ -590,7 +709,7 @@ def _approval_required_response(session_id: uuid.UUID) -> dict[str, Any]:
     }
 
 
-def actuate_command(
+def _actuate_command_inner(
     db: Session,
     *,
     tenant_id: uuid.UUID,
@@ -709,3 +828,60 @@ def actuate_command(
     return _display_safe_command(
         command, status="queued", event=event, session_event=session_event
     )
+
+
+def actuate_command(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    args: dict[str, Any] | None = None,
+    nonce: str | None = None,
+    source: str = "alpha",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    try:
+        out = _actuate_command_inner(
+            db,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            grant_id=grant_id,
+            args=args,
+            nonce=nonce,
+            source=source,
+            now=now,
+        )
+    except HTTPException as exc:
+        db.rollback()
+        _log_desktop_rl_decision(
+            db,
+            tenant_id=tenant_id,
+            session_id=session_id,
+            surface="desktop_actuate",
+            outcome="denied",
+            source=source,
+            grant_id=grant_id,
+            denial_code=_denial_code_from_http_exception(exc),
+            status_code=exc.status_code,
+        )
+        raise
+    _log_desktop_rl_decision(
+        db,
+        tenant_id=tenant_id,
+        session_id=session_id,
+        surface="desktop_actuate",
+        outcome=out.get("status") or "unknown",
+        source=source,
+        action=out.get("action"),
+        capability=out.get("capability"),
+        grant_id=grant_id,
+        command_id=out.get("command_id"),
+        shell_id=out.get("shell_id"),
+        target_bundle_id=out.get("target_bundle_id"),
+        desktop_event_id=out.get("desktop_event_id"),
+        session_event_id=out.get("session_event_id"),
+    )
+    return out

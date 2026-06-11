@@ -10,6 +10,7 @@ pending-only request).
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -185,6 +186,54 @@ def test_approve_mints_exactly_one_active_bounded_grant(db_session):
     blob = str(approved[0])
     assert "payload" not in approved[0]
     assert "secret" not in blob.lower()
+
+
+def test_approve_logs_byte_free_rl_decision(db_session):
+    _seed(db_session)
+    rid = _make_pending(db_session)
+
+    with patch("app.services.desktop_act.rl_experience_service.log_experience") as log_exp:
+        out = _approve(db_session, rid, max_actions=1, expires_in_seconds=60)
+
+    log_exp.assert_called_once()
+    kwargs = log_exp.call_args.kwargs
+    assert kwargs["tenant_id"] == TENANT_ID
+    assert kwargs["trajectory_id"] == SESSION_ID
+    assert kwargs["decision_point"] == "desktop_control_decision"
+    assert kwargs["state"] == {
+        "surface": "desktop_grant_decision",
+        "session_id": str(SESSION_ID),
+        "source": "user_jwt",
+    }
+    assert kwargs["action"]["outcome"] == "approved"
+    assert kwargs["action"]["action"] == "keyboard_type"
+    assert kwargs["action"]["capability"] == "keyboard_control"
+    assert kwargs["action"]["request_id"] == str(rid)
+    assert kwargs["action"]["grant_id"] == out["grant_id"]
+    assert kwargs["state_text"] is None
+
+
+def test_deny_logs_byte_free_rl_decision_without_reason(db_session):
+    _seed(db_session)
+    rid = _make_pending(db_session)
+
+    with patch("app.services.desktop_act.rl_experience_service.log_experience") as log_exp:
+        out = desktop_act.deny_desktop_grant_request(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request_id=rid,
+            reason="LEAK_DENY_REASON",
+        )
+
+    assert out["status"] == "denied"
+    log_exp.assert_called_once()
+    kwargs = log_exp.call_args.kwargs
+    assert kwargs["state"]["surface"] == "desktop_grant_decision"
+    assert kwargs["action"]["outcome"] == "denied"
+    assert kwargs["action"]["request_id"] == str(rid)
+    assert kwargs["state_text"] is None
+    assert "LEAK_DENY_REASON" not in json.dumps(kwargs, default=str)
 
 
 def test_claim_path_ignores_pending_only_rows(db_session):

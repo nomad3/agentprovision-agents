@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
@@ -17,6 +17,7 @@ DECISION_POINTS = [
     "code_strategy", "deal_stage_advance", "change_significance",
     "code_task", "tier_selection",
     "gesture_action",
+    "desktop_control_decision",
     # Phase 3 — ResilientExecutor mirror lands here.
     "chat_response",
 ]
