@@ -152,11 +152,10 @@ jobs:
         id: changes
         run: |
           # Diff against the prior commit. fetch-depth: 0 in the checkout
-          # above ensures HEAD~1 resolves. The fallback string ends in a
-          # slash so the `grep -q "apps/api/"` pattern matches — a prior
-          # version used "apps/api" (no slash) and silently emitted an
-          # empty SERVICES on diff failure.
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "apps/api/")
+          # above ensures HEAD~1 resolves. If diff ever fails, fall back to
+          # an API Dockerfile path so the classifier fails conservatively
+          # into the guarded build path instead of a recreate-only deploy.
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "apps/api/Dockerfile")
           BUILD_SERVICES=""
           RECREATE_SERVICES=""
 
@@ -187,7 +186,7 @@ jobs:
           # without forcing a build; leave stateful dependencies alone. If the
           # compose diff changes build metadata itself, fall back to rebuilding
           # the application images because the image contract may have changed.
-          if echo "$CHANGED" | grep -q "^docker-compose.yml$"; then
+          if echo "$CHANGED" | grep -q "^docker-compose\.yml$"; then
             RECREATE_SERVICES="$RECREATE_SERVICES api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client cloudflared"
             COMPOSE_DIFF="$(git diff -U0 HEAD~1 HEAD -- docker-compose.yml 2>/dev/null || true)"
             if echo "$COMPOSE_DIFF" | grep -Eq '^[+-][[:space:]]*(build:|context:|dockerfile:|args:)'; then
@@ -203,8 +202,8 @@ jobs:
           #       which made every workflow-file tweak run a cold
           #       rebuild that timed out at 60 min (cli-v0.7.4 cycle
           #       2026-05-13). Skip-build on (b) instead, so the
-          #       deploy fast-paths through `compose up -d` +
-          #       migrations against the existing images.
+          #       workflow still proves checkout/sync/secret loading and the
+          #       _work mount gate, but skips build/recreate/migrations.
           if [ "${{ github.event.inputs.action }}" = "rebuild-all" ]; then
             BUILD_SERVICES="api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"
           elif [ "${{ github.event.inputs.action }}" = "restart" ]; then
@@ -321,6 +320,7 @@ jobs:
           done
 
       - name: Up
+        if: steps.changes.outputs.recreate_services != ''
         run: |
           cd "$DEPLOY_DIR"
           RECREATE_SERVICES="${{ steps.changes.outputs.recreate_services }}"
@@ -352,12 +352,12 @@ jobs:
           # running containers whose images or bind-mounted code changed.
           if [ -n "$RECREATE_SERVICES" ]; then
             echo "Recreating services: $RECREATE_SERVICES"
-            docker compose up -d --force-recreate --no-deps $RECREATE_SERVICES
+            docker compose up -d --force-recreate --no-deps --no-build $RECREATE_SERVICES
           fi
           # Then bring up anything else that's stopped (db, cloudflared,
           # temporal, redis, etc.) without recreating live containers.
-          echo "Ensuring all services are running..."
-          docker compose up -d
+          echo "Ensuring all services are running without recreating live containers..."
+          docker compose up -d --no-recreate --no-build
           trap - EXIT
 
       - name: Assert no container mounts /actions-runner/_work
@@ -380,6 +380,7 @@ jobs:
           echo "OK — no live container mounts /actions-runner/_work"
 
       - name: Apply pending DB migrations
+        if: steps.changes.outputs.recreate_services != ''
         # Runs after `docker compose up -d` so the db container is up,
         # but BEFORE the API serves traffic against the new image. The
         # script is idempotent: a re-deploy with no new migrations is
@@ -424,6 +425,7 @@ jobs:
       # responsibility is removing the orphans it itself just
       # created.
       - name: Prune orphan images
+        if: steps.changes.outputs.build_services != ''
         run: |
           echo "── Disk before orphan prune ──"
           df -h /System/Volumes/Data | tail -1 || true
@@ -455,7 +457,7 @@ jobs:
       # docs/plans/docker_disk_full_recovery.md (memory) for the
       # rationale.
       - name: Emergency disk cleanup (gated)
-        if: always()
+        if: always() && (steps.changes.outputs.build_services != '' || steps.changes.outputs.recreate_services != '')
         run: |
           set +e
           DISK_PCT=$(df /System/Volumes/Data | tail -1 | awk '{gsub("%","",$5); print $5}')
