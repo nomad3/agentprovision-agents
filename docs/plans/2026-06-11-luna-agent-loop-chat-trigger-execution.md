@@ -41,6 +41,16 @@ before any non-operator tenant receives actuation.
 7. Every state-mutating desktop path emits display-safe `session_events` and
    an audit event. Agent-visible responses carry audit refs, not raw secrets or
    raw perception bytes.
+8. Agent-facing tools never mint approval grants. They may create a pending
+   approval request, enqueue a command that references an already-approved
+   grant, or poll status. The only grant writers are explicit user/operator
+   approval surfaces and their server-side service methods.
+9. General app control uses the secondary-pointer/background-control actuator
+   contract. Existing global-cursor/frontmost paths may remain for their narrow
+   legacy canaries, but they are not the P5.4 general app-control actuator.
+10. Until the P5.5 approval UX exists, P5.4 agent loops are dry-run,
+    pending-approval, or pre-granted test harness only. Chat-originated prompts
+    must not reach native macOS actuation through internal-key-only grants.
 
 ## Current Gate State
 
@@ -140,8 +150,18 @@ Implementation scope:
   - `desktop_command_status`
 - Gate wrappers with `desktop_control` scope and server-side action-derived
   capability class.
+- `desktop_request_grant` creates a pending approval request only. It does not
+  create an approval grant, does not sign an envelope, and does not call a native
+  actuator.
+- `desktop_actuate` accepts only a command plus a server-validated, existing
+  approval grant. Without that grant it returns `approval_required` or a denial,
+  not a queued native command.
 - MCP wrappers enqueue only bounded, reviewed action shapes. They never call
   macOS APIs and never manufacture envelopes client-side.
+- The API claim/approval/envelope lifecycle remains shared with the Tauri shell,
+  but the P5.4 general app-control command must route to the
+  secondary-pointer/background-control actuator contract, not the existing
+  global-cursor/frontmost canary path.
 - Responses are display-safe and include command id, status, denial code,
   approval status, and audit refs.
 
@@ -157,6 +177,8 @@ Exit criteria:
 
 - Agent tools can request governed desktop commands, but only after approval and
   with the same API claim boundary the Tauri shell already uses.
+- No agent-facing path can create approval grants or select the native actuator
+  implementation.
 
 ### Slice 4: P5.4b Operator Luna Tool Groups And Agent Loop Scaffold
 
@@ -169,11 +191,15 @@ Implementation scope:
 - Add planner instructions/persona injection that explains the desktop loop,
   Stop semantics, approval requirements, and audit reporting.
 - Add a loop coordinator that runs inside existing ChatCliWorkflow/task routing:
-  observe, summarize state, propose action, obtain approval grant, enqueue act,
-  wait for status, observe again, report.
+  observe, summarize state, propose action, request approval, wait for a
+  server-created approval grant, enqueue act, wait for status, observe again,
+  report.
 - Log RL experience per desktop decision and per denial.
 - Start with operator-only apps already in the global floor: Luna, TextEdit,
   WhatsApp.
+- Before P5.5 lands, this coordinator may run only in dry-run, denied/no-op, or
+  pre-granted test harness mode. It must not use internal-key-only approval
+  grants to turn chat prompts into native actuation.
 
 Tests:
 
@@ -186,7 +212,9 @@ Tests:
 Exit criteria:
 
 - Luna can perform a governed operator-only loop in a controlled app with audit
-  refs and visible Stop behavior.
+  refs and visible Stop behavior once the explicit approval surface exists.
+- Before that approval surface exists, Luna can prove observe -> plan ->
+  approval-required/denied -> report-back without a native macOS call.
 
 ### Slice 5: P5.5 Chat Trigger, Approval UX, And Report-Back
 
@@ -200,6 +228,9 @@ Implementation scope:
 - Add user approval UX using the existing `human_approval` precedent:
   requested app/action, risk tier, bounded expiry, target session/device, Stop,
   deny, and audit preview.
+- This UX is the first chat-originated writer of approval grants. It creates
+  grants only after explicit user/operator approval and binds them to tenant,
+  session, device, command/action, expiry, and risk tier.
 - Surface progress through session events: observing, planning, awaiting
   approval, queued, claimed, acting, verifying, completed, denied, preempted.
 - Final answer includes what was done, what was not done, and audit refs.
