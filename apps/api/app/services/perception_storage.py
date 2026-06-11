@@ -41,8 +41,15 @@ _QUARANTINE_ROOT_ENV = "OBSERVATION_QUARANTINE_ROOT"
 _DEFAULT_QUARANTINE_ROOT = "/var/agentprovision/observations"
 
 # Hard short TTL (minutes) and a max accepted size. Env-overridable.
-DEFAULT_TTL_MINUTES = int(os.environ.get("PERCEPTION_ARTIFACT_TTL_MINUTES", "15"))
-MAX_SCREENSHOT_SIZE = int(os.environ.get("MAX_SCREENSHOT_SIZE_BYTES", str(8 * 1024 * 1024)))
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+DEFAULT_TTL_MINUTES = _int_env("PERCEPTION_ARTIFACT_TTL_MINUTES", 15)
+MAX_SCREENSHOT_SIZE = _int_env("MAX_SCREENSHOT_SIZE_BYTES", 8 * 1024 * 1024)
 
 # P5.2 never validates pixels — every artifact is explicitly not planner-safe.
 REDACTION_STATUS_TRANSPORT = "not_planner_safe"
@@ -205,14 +212,30 @@ def delete_raw_bytes(artifact: PerceptionArtifact, *, root: str | None = None) -
     return True
 
 
+# An artifact the redactor is actively redacting (status 'redacting' with a FRESH
+# lease) must not be reaped out from under the in-flight redaction — that would let
+# cleanup delete bytes mid-read/write (the P5.3 TTL race). It is left for the next
+# sweep, by which time it has either finished or its lease expired and it reverted to
+# not_planner_safe. A STALE redacting row (crashed worker, lease past) IS reapable.
+_REDACTING_LEASE_GRACE_SECONDS = _int_env("PERCEPTION_REDACTOR_LEASE_TIMEOUT_SECONDS", 120)
+
+
 def expired_artifacts(db: Session, *, now: datetime | None = None, limit: int = 500):
-    """Live (not-yet-deleted) artifacts past TTL — the PR4 cleanup scan."""
+    """Live (not-yet-deleted) artifacts past TTL — the PR4 cleanup scan. Excludes an
+    artifact that is actively `redacting` under a fresh lease (P5.3 TTL-race guard)."""
     cutoff = now or datetime.now(timezone.utc)
+    stale_before = cutoff - timedelta(seconds=_REDACTING_LEASE_GRACE_SECONDS)
+    actively_redacting = (
+        (PerceptionArtifact.redaction_status == "redacting")
+        & PerceptionArtifact.redact_claimed_at.isnot(None)
+        & (PerceptionArtifact.redact_claimed_at > stale_before)
+    )
     return (
         db.query(PerceptionArtifact)
         .filter(
             PerceptionArtifact.deleted_at.is_(None),
             PerceptionArtifact.expires_at <= cutoff,
+            ~actively_redacting,
         )
         .limit(limit)
         .all()
@@ -240,6 +263,10 @@ def hard_delete_artifact(db: Session, artifact: PerceptionArtifact, *, root: str
     )
     if redacted is not None:
         _unlink_quiet(redacted)
+    if artifact.redaction_status == "redacting":
+        artifact.redaction_status = REDACTION_STATUS_TRANSPORT
+        artifact.redact_claimed_at = None
+        artifact.redact_claimed_by = None
     artifact.deleted_at = datetime.now(timezone.utc)
     db.add(artifact)
     return True

@@ -83,6 +83,10 @@ MIN_SECRET_BOX_PX = _int_env("PERCEPTION_REDACTOR_MIN_SECRET_BOX_PX", 4)
 
 _NONTEXT_SENSITIVE_KINDS = frozenset({"qr", "barcode"})
 _UNSUPPORTED_KINDS = frozenset({"id_card", "face"})
+# The only region kinds whose safety we can decide via the deterministic text floor.
+# Any OTHER engine-proposed kind is fail-closed (withheld) so a new/unknown region
+# type can never be silently treated as safe — adding a kind here is a deliberate act.
+_TEXT_KINDS = frozenset({"text"})
 
 # Perception-specific secret shapes that the CLI-output `contains_secret` rules do
 # NOT cover (kept OUT of the shared `_RULES` so CLI-log redaction behaviour is
@@ -220,6 +224,14 @@ def _classify_regions(regions: list[DetectedRegion]) -> _ClassifyResult:
         if r.kind in _NONTEXT_SENSITIVE_KINDS:
             out.redact_boxes.append(r.box)
             continue
+        if r.kind not in _TEXT_KINDS:
+            # An engine-proposed region of a kind we don't recognise: we can't reason
+            # about whether it's safe, so fail closed rather than silently passing it.
+            # Do not echo the unknown kind into metadata/events; engine labels are not
+            # an approved display channel.
+            out.withhold = True
+            out.reasons.append("unknown_region_kind")
+            continue
         if r.text and _floor_detects_secret(r.text):
             x, y, w, h = r.box
             if int(w) < MIN_SECRET_BOX_PX or int(h) < MIN_SECRET_BOX_PX:
@@ -290,8 +302,24 @@ def _atomic_write(abspath: str, data: bytes) -> None:
     try:
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(fd, data)
+            # os.write may write FEWER bytes than requested (short write); loop until
+            # every byte lands, then verify the on-disk size — a truncated redacted
+            # PNG must never be published as planner-safe.
+            mv = memoryview(data)
+            written = 0
+            while written < len(data):
+                n = os.write(fd, mv[written:])
+                if n <= 0:
+                    raise RedactionError(
+                        f"short write to redacted temp: wrote {written}/{len(data)} bytes"
+                    )
+                written += n
             os.fsync(fd)
+            on_disk = os.fstat(fd).st_size
+            if on_disk != len(data):
+                raise RedactionError(
+                    f"redacted write size mismatch: {on_disk} != {len(data)}"
+                )
         finally:
             os.close(fd)
         os.replace(tmp, abspath)
@@ -456,8 +484,12 @@ def redact_artifact(
         return _finish_withheld(db, artifact_id, None, reason_override=f"redaction_error:{exc.__class__.__name__}")
     except Exception as exc:  # noqa: BLE001 — ANY failure is fail-closed
         logger.exception("perception redactor: unexpected failure on %s", artifact_id)
-        perception_storage._unlink_quiet(redacted_abs)
-        return _finish_withheld(db, artifact_id, None, reason_override=f"error:{type(exc).__name__}")
+        outcome = _finish_withheld(
+            db, artifact_id, None, reason_override=f"error:{type(exc).__name__}"
+        )
+        if outcome.status != STATUS_PLANNER_SAFE:
+            perception_storage._unlink_quiet(redacted_abs)
+        return outcome
 
 
 def _lock_owned_redacting(db: Session, artifact_id, worker_id: str):
@@ -471,7 +503,7 @@ def _lock_owned_redacting(db: Session, artifact_id, worker_id: str):
     except Exception:  # pragma: no cover — sqlite
         pass
     art = q.first()
-    if art is None or art.redaction_status != STATUS_REDACTING:
+    if art is None or art.deleted_at is not None or art.redaction_status != STATUS_REDACTING:
         return None
     # Reject an absent/empty claimant too — two stale workers must not both "match"
     # on a None/"" id.
@@ -487,10 +519,14 @@ def claim_next_for_redaction(
     now: datetime | None = None,
     lease_timeout_seconds: int | None = None,
     max_attempts: int | None = None,
+    exclude_ids=None,
 ) -> PerceptionArtifact | None:
     """Claim the oldest redactable artifact (fresh not_planner_safe, or a stale
     'redacting' row whose lease expired) with ``FOR UPDATE SKIP LOCKED``. Returns the
-    claimed row (status 'redacting') or None."""
+    claimed row (status 'redacting') or None. ``exclude_ids`` skips artifacts already
+    handled this pass — a just-withheld row reverts to not_planner_safe and would
+    otherwise be re-claimed immediately (FIFO), burning its whole retry budget in one
+    pass instead of one attempt per pass."""
     if not worker_id or not str(worker_id).strip():
         raise ValueError("claim_next_for_redaction requires a non-empty worker_id")
     now = now or _utcnow()
@@ -515,6 +551,8 @@ def claim_next_for_redaction(
         )
         .order_by(PerceptionArtifact.created_at.asc())
     )
+    if exclude_ids:
+        q = q.filter(~PerceptionArtifact.id.in_(list(exclude_ids)))
     try:
         q = q.with_for_update(skip_locked=True)
     except Exception:  # pragma: no cover — sqlite
@@ -530,3 +568,224 @@ def claim_next_for_redaction(
     db.commit()
     db.refresh(artifact)
     return artifact
+
+
+# ── max-attempts coverage / terminal recovery ────────────────────────────────
+
+def recover_exhausted_redacting(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    lease_timeout_seconds: int | None = None,
+    max_attempts: int | None = None,
+) -> int:
+    """Finalize stale `redacting` rows that exhausted their retry budget.
+
+    A worker crash on the FINAL allowed attempt would otherwise leave a row stuck in
+    `redacting` forever — `claim_next_for_redaction` won't reclaim it once
+    `redact_attempts >= cap`, and nothing reverts it, so it masquerades as in-flight
+    work. This reverts such rows (stale lease only, never an actively-leased one) to
+    `not_planner_safe` with a terminal, byte-free `max_attempts_exhausted` reason so
+    they are observable and TTL-reaped. Fail-closed: never produces planner_safe."""
+    now = now or _utcnow()
+    timeout = lease_timeout_seconds if lease_timeout_seconds is not None else LEASE_TIMEOUT_SECONDS
+    attempts_cap = max_attempts if max_attempts is not None else MAX_ATTEMPTS
+    stale_before = now - timedelta(seconds=timeout)
+    q = (
+        db.query(PerceptionArtifact)
+        .filter(
+            PerceptionArtifact.deleted_at.is_(None),
+            PerceptionArtifact.redaction_status == STATUS_REDACTING,
+            PerceptionArtifact.redact_attempts >= attempts_cap,
+            (
+                PerceptionArtifact.redact_claimed_at.is_(None)
+                | (PerceptionArtifact.redact_claimed_at < stale_before)
+            ),
+        )
+        .order_by(PerceptionArtifact.created_at.asc())
+    )
+    try:
+        q = q.with_for_update(skip_locked=True)
+    except Exception:  # pragma: no cover — sqlite
+        pass
+    recovered = 0
+    for art in q.all():
+        art.redaction_status = STATUS_NOT_PLANNER_SAFE
+        art.redacted_storage_path = None
+        art.redacted_at = None
+        art.raw_deleted_at = None
+        art.redact_claimed_at = None
+        art.redact_claimed_by = None
+        art.redaction_meta = {
+            "verdict": "withheld",
+            "reasons": ["max_attempts_exhausted"],
+            "terminal": True,
+            "redactor_version": REDACTOR_VERSION,
+        }
+        db.add(art)
+        recovered += 1
+    if recovered:
+        db.commit()
+    return recovered
+
+
+def planner_safety_reason(artifact: PerceptionArtifact) -> str:
+    """Display-safe, byte-free reason code for an artifact's planner-safety state.
+
+    Lets the P5.4 observe path explain WHY an artifact is (not) planner-safe without
+    leaking bytes: ``planner_safe`` | ``redacting`` | ``withheld`` |
+    ``redactor_disabled`` (flag off, never processed) | ``pending``."""
+    status = artifact.redaction_status
+    if status == STATUS_PLANNER_SAFE:
+        return "planner_safe"
+    if status == STATUS_REDACTING:
+        return "redacting"
+    meta = artifact.redaction_meta if isinstance(artifact.redaction_meta, dict) else {}
+    if meta.get("verdict") == "withheld":
+        return "withheld"
+    if not redactor_enabled():
+        return "redactor_disabled"
+    return "pending"
+
+
+# ── driver (sweep-integrated worker over pending perception_artifacts) ────────
+
+@dataclass
+class RedactorRunResult:
+    enabled: bool
+    reason: str = ""
+    processed: int = 0
+    planner_safe: int = 0
+    withheld: int = 0
+    recovered: int = 0
+
+
+def _default_publish(session_id: str, event_type: str, payload: dict, *, tenant_id: str):
+    from app.services.collaboration_events import publish_session_event
+
+    return publish_session_event(session_id, event_type, payload, tenant_id=tenant_id)
+
+
+# Only byte-free, display-safe keys ever leave the redactor on the session SSE.
+_SAFE_EVENT_REASON_MAX = 96
+
+
+def _emit_redaction_event(artifact_id, session_id, tenant_id, outcome, *, publish=None) -> None:
+    """Emit a byte-free perception-redaction status event on the session SSE. The
+    payload carries ONLY the resource id, the terminal status, a reason CODE, and a
+    redact count — never bytes, paths, OCR text, or box geometry."""
+    sink = publish or _default_publish
+    status = {
+        "planner_safe": STATUS_PLANNER_SAFE,
+        "withheld": STATUS_NOT_PLANNER_SAFE,
+        "gone": "gone",
+    }.get(outcome.status, STATUS_NOT_PLANNER_SAFE)
+    reason = ",".join(str(r) for r in (outcome.reasons or [])) or outcome.status
+    payload = {
+        "resource_type": "screenshot",
+        "resource_id": str(artifact_id),
+        "redaction_status": status,
+        "reason": reason[:_SAFE_EVENT_REASON_MAX],
+        "redact_count": int(outcome.redact_count or 0),
+    }
+    try:
+        sink(str(session_id), "perception_redaction", payload, tenant_id=str(tenant_id))
+    except Exception:
+        logger.exception("perception redactor: failed to emit redaction event for %s", artifact_id)
+
+
+def run_redactor_once(
+    db: Session,
+    engine: RedactorEngine | None,
+    *,
+    worker_id: str,
+    batch_size: int = 10,
+    now: datetime | None = None,
+    publish=None,
+) -> RedactorRunResult:
+    """One driver pass over pending perception_artifacts.
+
+    Flag OFF (``PERCEPTION_REDACTOR_ENABLED``) or no engine wired → do NOTHING:
+    artifacts stay ``not_planner_safe`` and a display-safe reason is returned
+    (``redactor_disabled`` / ``no_engine``). Flag ON + engine → finalize
+    exhausted-redacting zombies, then claim + redact up to ``batch_size`` artifacts,
+    emitting one byte-free status-transition event per processed artifact. Fail-closed
+    throughout: the per-artifact `redact_artifact` never produces planner_safe on any
+    error/uncertainty."""
+    if not worker_id or not str(worker_id).strip():
+        raise ValueError("run_redactor_once requires a non-empty worker_id")
+    if not redactor_enabled():
+        return RedactorRunResult(enabled=False, reason="redactor_disabled")
+    if engine is None:
+        return RedactorRunResult(enabled=True, reason="no_engine")
+    now = now or _utcnow()
+    res = RedactorRunResult(enabled=True, reason="ran")
+    res.recovered = recover_exhausted_redacting(db, now=now)
+    seen: set = set()
+    for _ in range(max(1, int(batch_size))):
+        artifact = claim_next_for_redaction(db, worker_id=worker_id, now=now, exclude_ids=seen)
+        if artifact is None:
+            break
+        # Capture ownership ids BEFORE redact_artifact (it rolls back / refreshes a
+        # re-loaded row, which can detach the passed object); these never change.
+        aid, sid, tid = artifact.id, artifact.session_id, artifact.tenant_id
+        seen.add(aid)
+        res.processed += 1
+        outcome = redact_artifact(db, artifact, engine, worker_id=worker_id, now=now)
+        if outcome.status == STATUS_PLANNER_SAFE:
+            res.planner_safe += 1
+        elif outcome.status != "gone":
+            res.withheld += 1
+        _emit_redaction_event(aid, sid, tid, outcome, publish=publish)
+    return res
+
+
+def _load_engine() -> RedactorEngine | None:
+    """The production redactor engine, or None when none is wired. The real local
+    OCR/vision engine lands in a later slice; until then the driver is fail-closed
+    DORMANT (no planner-safe artifacts) even if the flag is on — design §202."""
+    return None
+
+
+async def redactor_loop(
+    interval_seconds: int | None = None,
+    *,
+    worker_id: str | None = None,
+) -> None:
+    """In-process redactor driver loop (mirrors ``perception_cleanup.cleanup_loop``).
+    DORMANT unless ``PERCEPTION_REDACTOR_ENABLED`` is set AND a real engine is wired.
+    Uses the API-only quarantine mount; never runs on an agent runtime. Each
+    iteration opens its own session and swallows errors so a transient failure never
+    kills the loop."""
+    import asyncio
+
+    from app.db.session import SessionLocal
+
+    interval = (
+        interval_seconds
+        if interval_seconds is not None
+        else _int_env("PERCEPTION_REDACTOR_INTERVAL_SECONDS", 30)
+    )
+    wid = worker_id or f"perception-redactor-{os.getpid()}"
+    logger.info(
+        "perception redactor driver started (interval=%ss, enabled=%s)",
+        interval,
+        redactor_enabled(),
+    )
+    while True:
+        try:
+            engine = _load_engine()
+            if redactor_enabled() and engine is not None:
+                db = SessionLocal()
+                try:
+                    res = run_redactor_once(db, engine, worker_id=wid)
+                    if res.processed or res.recovered:
+                        logger.info(
+                            "perception redactor: processed=%d planner_safe=%d withheld=%d recovered=%d",
+                            res.processed, res.planner_safe, res.withheld, res.recovered,
+                        )
+                finally:
+                    db.close()
+        except Exception:
+            logger.exception("perception redactor loop iteration failed")
+        await asyncio.sleep(max(5, interval))
