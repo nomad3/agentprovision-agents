@@ -76,18 +76,8 @@ export function useShellPresence() {
   }, [shellId]);
 
   const heartbeat = useCallback(async () => {
-    if (!registered.current) return;
-    try {
-      await apiFetch('/api/v1/presence/', {
-        method: 'PUT',
-        body: JSON.stringify({
-          active_shell: shellId,
-        }),
-      });
-    } catch {
-      // silent — heartbeat is best-effort
-    }
-  }, [shellId]);
+    await register();
+  }, [register]);
 
   useEffect(() => {
     let cancelled = false;

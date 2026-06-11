@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
 const apiFetchMock = vi.fn();
@@ -34,6 +34,10 @@ function registerCalls() {
   return apiFetchMock.mock.calls.filter(([url]) => url === '/api/v1/presence/shell/register');
 }
 
+function presenceUpdateCalls() {
+  return apiFetchMock.mock.calls.filter(([url]) => url === '/api/v1/presence/');
+}
+
 function lastRegisteredCapabilities() {
   const call = registerCalls().at(-1);
   return JSON.parse(call[1].body).capabilities;
@@ -43,12 +47,29 @@ function lastRegisterCall() {
   return registerCalls().at(-1);
 }
 
+function captureShellHeartbeatInterval() {
+  let heartbeatCallback;
+  const originalSetInterval = window.setInterval.bind(window);
+  vi.spyOn(window, 'setInterval').mockImplementation((callback, timeout, ...args) => {
+    if (timeout === 10000) {
+      heartbeatCallback = callback;
+    }
+    return originalSetInterval(callback, timeout, ...args);
+  });
+  return () => heartbeatCallback;
+}
+
 beforeEach(() => {
   apiFetchMock.mockReset();
   invokeMock.mockReset();
   apiFetchMock.mockResolvedValue({
     json: () => Promise.resolve({ state: 'active' }),
   });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe('useShellPresence', () => {
@@ -87,5 +108,50 @@ describe('useShellPresence', () => {
 
     await waitFor(() => expect(registerCalls().length).toBe(2));
     expect(lastRegisteredCapabilities().can_observe).toBe(false);
+  });
+
+  it('refreshes full shell registration on heartbeat', async () => {
+    invokeMock.mockResolvedValue({ can_observe: true });
+    const getHeartbeatCallback = captureShellHeartbeatInterval();
+
+    const { unmount } = renderHook(() => useShellPresence());
+
+    await waitFor(() => expect(registerCalls().length).toBe(1));
+    expect(getHeartbeatCallback()).toBeDefined();
+    await act(async () => {
+      await getHeartbeatCallback()();
+    });
+
+    await waitFor(() => expect(registerCalls().length).toBe(2));
+    expect(presenceUpdateCalls()).toHaveLength(0);
+    expect(JSON.parse(lastRegisterCall()[1].body).device_id).toBe('tenant-desktop-test');
+    expect(lastRegisterCall()[1].headers['X-Device-Token']).toBe('device-token-test');
+
+    unmount();
+  });
+
+  it('retries full shell registration on heartbeat after an initial failure', async () => {
+    invokeMock.mockResolvedValue({ can_observe: true });
+    apiFetchMock
+      .mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValue({
+        json: () => Promise.resolve({ state: 'active' }),
+      });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const getHeartbeatCallback = captureShellHeartbeatInterval();
+
+    const { unmount } = renderHook(() => useShellPresence());
+
+    await waitFor(() => expect(registerCalls().length).toBe(1));
+    expect(getHeartbeatCallback()).toBeDefined();
+    await act(async () => {
+      await getHeartbeatCallback()();
+    });
+
+    await waitFor(() => expect(registerCalls().length).toBe(2));
+    expect(JSON.parse(lastRegisterCall()[1].body).device_id).toBe('tenant-desktop-test');
+    expect(lastRegisterCall()[1].headers['X-Device-Token']).toBe('device-token-test');
+
+    unmount();
   });
 });
