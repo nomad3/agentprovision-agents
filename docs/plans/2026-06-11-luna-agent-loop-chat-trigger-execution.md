@@ -31,9 +31,12 @@ before any non-operator tenant receives actuation.
    reach a planning agent unless a reviewed planner-safe contract explicitly
    allows that field.
 4. Native actuation requires all gates: master desktop control flag, action
-   capability flag, tenant allowlist intersected with the global floor, TCC
-   readiness, secure-input idle, active shell/device/session, approval grant,
-   Ed25519 envelope, Stop/Lock state, and native-boundary checks.
+   capability flag, tenant allowlist intersected with the global floor,
+   permission readiness from a fresh Luna shell preflight, secure-input idle,
+   active shell/device/session, approval grant, Ed25519 envelope, Stop/Lock
+   state, and native-boundary checks. TCC readiness is a client-enforced loop
+   precondition and audit signal; the server must deny stale or failed preflight
+   as `permission_not_ready`, but it cannot prove macOS TCC state by itself.
 5. Stop is preemptive. Any active or queued desktop work must become visibly
    stopped/preempted in API events, Luna UI, and CLI/MCP surfaces.
 6. New MCP tools are wrappers over the same service entrypoints as Alpha/API;
@@ -44,13 +47,20 @@ before any non-operator tenant receives actuation.
 8. Agent-facing tools never mint approval grants. They may create a pending
    approval request, enqueue a command that references an already-approved
    grant, or poll status. The only grant writers are explicit user/operator
-   approval surfaces and their server-side service methods.
+   approval surfaces and their user-authenticated server-side service methods.
+   A grant-writing route must not accept `MCP_API_KEY` alone, must derive the
+   owner from the authenticated principal rather than `X-User-Id`, and must bind
+   the grant to tenant, user, session, device, command/action, expiry, and risk.
 9. General app control uses the secondary-pointer/background-control actuator
    contract. Existing global-cursor/frontmost paths may remain for their narrow
    legacy canaries, but they are not the P5.4 general app-control actuator.
 10. Until the P5.5 approval UX exists, P5.4 agent loops are dry-run,
-    pending-approval, or pre-granted test harness only. Chat-originated prompts
-    must not reach native macOS actuation through internal-key-only grants.
+    pending-approval, or pre-granted test harness only. The pre-granted harness
+    setup must originate outside the chat path; chat-originated prompts must not
+    reach native macOS actuation through internal-key-only grants.
+11. Until PR5 binds tenant/user identity into per-tenant Ed25519 signing keys,
+    exactly one operator tenant may have actuation flags, the global floor, and
+    agent tool groups enabled for native control.
 
 ## Current Gate State
 
@@ -131,6 +141,8 @@ Implementation scope:
 - Fetch must read only `redacted_storage_path`, never raw `storage_path`, and
   must deny unless `redaction_status == planner_safe` and `raw_deleted_at IS NOT
   NULL`.
+- Fetch resolves the canonical id-derived jailed path for the redacted artifact;
+  it must not trust a stored path string as the filesystem authority.
 - Re-check the master `desktop_control_enabled` flag at fetch time; the fetch
   service does not inherit the #869 observe/approval gates by accident.
 - Add `alpha desktop observe request|status|fetch` or the closest existing
@@ -181,14 +193,20 @@ Implementation scope:
 - Re-check Stop, Lock, secure input, target drift, app quit, tenant flags,
   target allowlist, approval grant, and envelope immediately before each native
   call.
+- Define a first-class server-recognized dry-run/no-op command mode before
+  canary execution. The claim path must refuse to wrap this mode in a native
+  envelope, and API/session events must make it distinguishable from a denied
+  real actuation.
 - Use the SP1.5 contract/security fixtures as executable denial vocabulary.
 - Prove global cursor functions are not called by background-control commands.
 
 Tests:
 
 - Contract tests for target resolver, target drift, app quit, revoked allowlist,
-  flag-off, Stop/Lock, and secure-input denial (`SECURE_INPUT_ACTIVE`) before
+  flag-off, Stop/Lock, and secure-input denial (`secure_input`) before
   any native call.
+- Dry-run/no-op tests proving the command status is explicit, audit-visible, and
+  the native envelope path is unreachable.
 - Native-boundary tests proving the operator cursor is not moved by the
   background actuator.
 - Overlay/HUD tests proving it can request Stop but cannot approve, resume,
@@ -229,6 +247,10 @@ Implementation scope:
 - `desktop_request_grant` creates a pending approval request only. It does not
   create an approval grant, does not sign an envelope, and does not call a native
   actuator.
+- Grant creation itself must be exposed only through the P5.5 user approval
+  surface or an equivalent user-JWT + device-token route. It must reject
+  `MCP_API_KEY`-only callers and derive the user from the authenticated
+  principal, not from caller-supplied headers.
 - `desktop_actuate` accepts only a command plus a server-validated, existing
   approval grant. Without that grant it returns `approval_required` or a denial,
   not a queued native command.
@@ -255,6 +277,8 @@ Tests:
   cannot be invoked without a registered MCP tool and a matching tool group.
 - Stop/preempt test on `desktop_actuate` itself, not only the downstream command
   lifecycle.
+- Grant-route auth test proving an MCP/internal-key-only caller cannot mint an
+  approval grant or forge owner identity through `X-User-Id`.
 
 Exit criteria:
 
@@ -278,12 +302,19 @@ Implementation scope:
   observe, summarize state, propose action, request approval, wait for a
   server-created approval grant, enqueue act, wait for status, observe again,
   report.
-- Log RL experience per desktop decision and per denial.
+- Log RL experience per desktop decision and per denial using byte-free fields
+  only: denial code, action class, capability, outcome, command id, and audit
+  refs. Do not persist OCR text, window titles, contact names, clipboard values,
+  typed text, or planner-safe artifact text in `rl_experience.state_text`,
+  action fields, embeddings, or free-form metadata.
 - Start with operator-only apps already in the global floor: Luna, TextEdit,
   WhatsApp.
 - Before P5.5 lands, this coordinator may run only in dry-run, denied/no-op, or
   pre-granted test harness mode. It must not use internal-key-only approval
   grants to turn chat prompts into native actuation.
+- Before enqueue, the coordinator must request a fresh Luna
+  `run_desktop_preflight` result for the target shell/device. Missing, stale, or
+  denied permissions produce `permission_not_ready` and no command row is queued.
 - Report-back from this coordinator is constrained to action summaries,
   outcome/status, denial codes, and audit refs. It must not quote planner-safe
   OCR text, window titles, contact names, clipboard values, or raw observed
@@ -298,6 +329,10 @@ Tests:
   expansion.
 - Report-back leak test using planner-safe OCR/contact/window-title fixtures:
   final agent text must include only action/outcome/audit refs.
+- RL-leak test using the same OCR/contact/window-title fixtures proving
+  `rl_experience` rows and embeddings receive only byte-free decision fields.
+- Permission-readiness test proving stale or denied preflight returns
+  `permission_not_ready` before enqueue and before any claim/native boundary.
 
 Exit criteria:
 
@@ -321,8 +356,13 @@ Implementation scope:
 - This UX is the first chat-originated writer of approval grants. It creates
   grants only after explicit user/operator approval and binds them to tenant,
   session, device, command/action, expiry, and risk tier.
+- Grant creation uses the authenticated user/session/device context. The route
+  must reject `MCP_API_KEY`-only callers and must not accept a caller-supplied
+  `X-User-Id` as the grant owner.
 - Surface progress through session events: observing, planning, awaiting
   approval, queued, claimed, acting, verifying, completed, denied, preempted.
+  Each event goes through `_publish_display_safe_session_event` or the same
+  allowlisted display-safe serializer.
 - Final answer includes what was done, what was not done, denial/status, and
   audit refs only. It must not transcribe observed app content unless a separate
   reviewed disclosure contract allows that exact field.
