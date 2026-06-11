@@ -33,6 +33,9 @@ EXPECTED_FRONTMATTER_TOOL_GROUPS = {
     # Added by the Accountable Learning & Commitment System (migration 165)
     # so Luna can drive commitments — see test_accountable_learning_luna_tool_group.py.
     "commitments",
+    # Added by the Luna macOS computer-use lane (migration 175) so the
+    # operator Luna runtime can see the governed observe/control MCP surfaces.
+    "desktop_observe", "desktop_control",
 }
 
 
