@@ -181,6 +181,18 @@ def _recall_response_to_legacy_dict(resp) -> dict:
 # Simple keyword-based task type inference
 _TASK_TYPE_KEYWORDS = {
     "code": ["code", "implement", "fix", "bug", "pr", "commit", "deploy", "refactor"],
+    "desktop": [
+        "desktop",
+        "macos",
+        "mac app",
+        "desktop app",
+        "app control",
+        "mouse",
+        "pointer",
+        "keyboard",
+        "click",
+        "whatsapp",
+    ],
     "data": ["query", "sql", "dataset", "analytics", "report", "chart", "dashboard"],
     "sales": ["deal", "pipeline", "lead", "prospect", "outreach", "crm"],
     "marketing": ["campaign", "ad", "competitor", "seo", "social", "content"],

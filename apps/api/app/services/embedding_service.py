@@ -117,6 +117,15 @@ INTENT_DEFINITIONS = [
     {"name": "connect or manage mcp servers", "tier": "full", "tools": ["mcp_servers"], "mutation": True},
     {"name": "register or manage webhooks", "tier": "full", "tools": ["webhooks"], "mutation": True},
     {"name": "start or stop inbox or competitor monitor", "tier": "full", "tools": ["monitor"], "mutation": True},
+    {
+        "name": (
+            "operate or observe a macos desktop app with mouse keyboard "
+            "screen or app control"
+        ),
+        "tier": "full",
+        "tools": ["desktop_observe", "desktop_control"],
+        "mutation": True,
+    },
     # Higgsfield creative-content generation (Wave 1a, PR #550 + #569).
     # The tools live behind the per-tenant Higgsfield MCP connector
     # registered by `apps/api/app/services/higgsfield_mcp.py` after the

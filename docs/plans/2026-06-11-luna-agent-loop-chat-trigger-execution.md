@@ -549,22 +549,28 @@ Implementation scope:
   prompt to an explicit allowlist for final desktop summaries and adds
   adversarial fixtures proving raw desktop fields in `desktop_context` are not
   rendered into the prompt.
-- Status 2026-06-11: current branch `codex/luna-p55-desktop-rl-logging` starts
-  the byte-free `rl_experience` rung for desktop decisions/denials. The slice
-  records decision metadata only: surface, session, source, action, capability,
-  outcome/status, fixed denial code/status code, request/grant/command refs,
-  shell id, bundle id, and audit/session event refs. It must not persist
-  actuation args, request/deny reasons, OCR, window/contact/clipboard/typed text,
-  raw screen content, page text, AX trees, envelopes, or embeddings.
+- Status 2026-06-11: PR #903 (`codex/luna-p55-desktop-rl-logging`, merge
+  `6fbe5ce3`) landed the byte-free `rl_experience` rung for desktop
+  decisions/denials. The slice records decision metadata only: surface,
+  session, source, action, capability, outcome/status, fixed denial code/status
+  code, request/grant/command refs, shell id, bundle id, and audit/session event
+  refs. It does not persist actuation args, request/deny reasons, OCR,
+  window/contact/clipboard/typed text, raw screen content, page text, AX trees,
+  envelopes, or embeddings.
+- Status 2026-06-11: current branch `codex/luna-p55-chat-report-polish` starts
+  the next chat-trigger polish rung. It adds a desktop app-control intent
+  definition for routing to `desktop_observe`/`desktop_control` agents, adds
+  desktop task-type inference for chat telemetry, and tells Luna to ask one
+  clarifying question rather than guessing when app/action/target/text/coords/key
+  chord are ambiguous.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
   approval-request -> user approval -> bounded grant.
-- P5.4d permission readiness, P5.5 approval UX, and report-back leak fixtures
-  are landed. Continue with the remaining feature rungs in dependency order:
-  byte-free `rl_experience` per desktop decision/denial, then broader chat
-  trigger/report-back polish.
+- P5.4d permission readiness, P5.5 approval UX, report-back leak fixtures, and
+  byte-free `rl_experience` per desktop decision/denial are landed. Continue
+  with broader chat trigger/report-back polish.
 
 Tests:
 

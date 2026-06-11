@@ -377,6 +377,13 @@ def generate_cli_instructions(
                 "loop and never skip a step:"
             )
             lines.append(
+                "- Before requesting approval, map the user's desktop request to one "
+                "explicit action, target app/bundle, and bounded args. If the app, "
+                "action, target, text, coordinates, or key chord is missing or "
+                "ambiguous, ask one concise clarifying question; do not guess and "
+                "do not call `desktop_request_grant` yet."
+            )
+            lines.append(
                 "  1. `desktop_request_grant` with the action "
                 "(`pointer_move`/`pointer_click`/`keyboard_type`/`keyboard_key_chord`) "
                 "and `target_bundle_id` — this only records a PENDING request."
