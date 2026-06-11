@@ -12,8 +12,8 @@ use clap::{Args, Subcommand, ValueEnum};
 use agentprovision_core::desktop::{
     DesktopActionKind, DesktopBackgroundDryRunRequest, DesktopBackgroundDryRunTarget,
     DesktopCommandStopRequest, DesktopControlAllowlistUpdate, DesktopControlEnablement,
-    DesktopControlEnablementUpdate, DesktopObservationRequestBody, DesktopObserveAction,
-    PerceptionFetchDenial,
+    DesktopControlEnablementUpdate, DesktopGrantRequestBody, DesktopObservationRequestBody,
+    DesktopObserveAction, DesktopRequestableAction, PerceptionFetchDenial,
 };
 use agentprovision_core::Error as CoreError;
 use serde::Serialize;
@@ -38,6 +38,10 @@ pub enum DesktopCommand {
     /// perception artifact, and fetch ONLY its planner-safe redacted content.
     #[command(subcommand)]
     Observe(ObserveCommand),
+    /// Pending desktop approval requests (P5.4b): ask a human to approve a native
+    /// action and poll the request. Never mints a grant or actuates.
+    #[command(subcommand)]
+    Grant(GrantCommand),
     /// Inspect or update the current tenant's desktop-control bootstrap gates.
     #[command(subcommand)]
     Enablement(EnablementCommand),
@@ -182,6 +186,59 @@ pub struct ObserveFetchArgs {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum GrantCommand {
+    /// Record a PENDING request to run a native action (a human approves later).
+    /// Creates no grant and never actuates.
+    Request(GrantRequestArgs),
+    /// Poll a pending approval request by id.
+    Status(GrantStatusArgs),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum GrantActionArg {
+    PointerMove,
+    PointerClick,
+    KeyboardType,
+    KeyboardKeyChord,
+}
+
+impl From<GrantActionArg> for DesktopRequestableAction {
+    fn from(value: GrantActionArg) -> Self {
+        match value {
+            GrantActionArg::PointerMove => DesktopRequestableAction::PointerMove,
+            GrantActionArg::PointerClick => DesktopRequestableAction::PointerClick,
+            GrantActionArg::KeyboardType => DesktopRequestableAction::KeyboardType,
+            GrantActionArg::KeyboardKeyChord => DesktopRequestableAction::KeyboardKeyChord,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct GrantRequestArgs {
+    /// Chat/session UUID the request binds to.
+    #[arg(long)]
+    pub session: Uuid,
+    /// Native action to request approval for.
+    #[arg(long, value_enum)]
+    pub action: GrantActionArg,
+    /// macOS bundle id of the target app.
+    #[arg(long)]
+    pub target_bundle_id: String,
+    /// Optional desktop shell id.
+    #[arg(long)]
+    pub shell_id: Option<String>,
+    /// Optional human-readable rationale (capped server-side).
+    #[arg(long)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct GrantStatusArgs {
+    /// Pending approval request UUID.
+    pub request_id: Uuid,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum EnablementCommand {
     /// Read the current tenant's desktop-control bootstrap gates.
     Get(EnablementGetArgs),
@@ -226,6 +283,8 @@ pub async fn dispatch(cmd: DesktopCommand, ctx: Context) -> anyhow::Result<()> {
         DesktopCommand::Observe(ObserveCommand::Request(a)) => observe_request(a, ctx).await,
         DesktopCommand::Observe(ObserveCommand::Status(a)) => observe_status(a, ctx).await,
         DesktopCommand::Observe(ObserveCommand::Fetch(a)) => observe_fetch(a, ctx).await,
+        DesktopCommand::Grant(GrantCommand::Request(a)) => grant_request(a, ctx).await,
+        DesktopCommand::Grant(GrantCommand::Status(a)) => grant_status(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Get(a)) => enablement_get(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Set(a)) => enablement_set(a, ctx).await,
         DesktopCommand::Allowlist(AllowlistCommand::Get(a)) => allowlist_get(a, ctx).await,
@@ -475,6 +534,79 @@ async fn observe_fetch(args: ObserveFetchArgs, ctx: Context) -> anyhow::Result<(
             sha256,
         ));
     });
+    Ok(())
+}
+
+/// Map an API error into a typed grant-request denial when it is one.
+fn grant_denial_message(err: &anyhow::Error) -> Option<String> {
+    use agentprovision_core::desktop::DesktopGrantRequestDenial;
+    let core = err.downcast_ref::<CoreError>()?;
+    if let CoreError::Api { body, .. } = core {
+        let denial = DesktopGrantRequestDenial::from_error_body(body)?;
+        return Some(format!(
+            "denied code={} reason={}",
+            json_string(&denial.code),
+            denial.reason,
+        ));
+    }
+    None
+}
+
+fn emit_grant_request(ctx: &Context, resp: &agentprovision_core::desktop::DesktopGrantRequest) {
+    output::emit(ctx.json, resp, |resp| {
+        output::ok(format!(
+            "[alpha] desktop approval request {} status={} action={}",
+            resp.request_id,
+            json_string(&resp.status),
+            json_string(&resp.action),
+        ));
+        output::info(format!(
+            "capability={} shell_id={} grant_present={}",
+            json_string(&resp.capability),
+            resp.shell_id,
+            resp.grant_present,
+        ));
+        if let Some(bundle) = &resp.target_bundle_id {
+            output::info(format!("target_bundle_id={bundle}"));
+        }
+        if let Some(expires_at) = &resp.expires_at {
+            output::info(format!("expires_at={expires_at}"));
+        }
+    });
+}
+
+async fn grant_request(args: GrantRequestArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopGrantRequestBody {
+        session_id: args.session.to_string(),
+        action: args.action.into(),
+        target_bundle_id: args.target_bundle_id,
+        shell_id: args.shell_id,
+        reason: args.reason,
+    };
+    let resp = ctx.client.desktop_grant_request(&body).await.map_err(|e| {
+        let err = anyhow::Error::new(e);
+        match grant_denial_message(&err) {
+            Some(msg) => err.context(format!("[alpha] desktop grant request {msg}")),
+            None => err,
+        }
+    })?;
+    emit_grant_request(&ctx, &resp);
+    Ok(())
+}
+
+async fn grant_status(args: GrantStatusArgs, ctx: Context) -> anyhow::Result<()> {
+    let resp = ctx
+        .client
+        .desktop_grant_request_status(&args.request_id.to_string())
+        .await
+        .map_err(|e| {
+            let err = anyhow::Error::new(e);
+            match grant_denial_message(&err) {
+                Some(msg) => err.context(format!("[alpha] desktop grant status {msg}")),
+                None => err,
+            }
+        })?;
+    emit_grant_request(&ctx, &resp);
     Ok(())
 }
 
@@ -865,5 +997,96 @@ mod tests {
             body: r#"{"detail": "Session not found"}"#.to_string(),
         });
         assert!(observe_denial_message(&other_err).is_none());
+    }
+
+    #[test]
+    fn parses_grant_request() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "grant",
+            "request",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--action",
+            "keyboard-type",
+            "--target-bundle-id",
+            "net.whatsapp.WhatsApp",
+            "--reason",
+            "send a message",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Grant(GrantCommand::Request(args)),
+            } => {
+                assert_eq!(
+                    args.session.to_string(),
+                    "33333333-3333-3333-3333-333333333333"
+                );
+                assert_eq!(args.action, GrantActionArg::KeyboardType);
+                assert_eq!(args.target_bundle_id, "net.whatsapp.WhatsApp");
+                assert_eq!(args.reason.as_deref(), Some("send a message"));
+            }
+            _ => panic!("expected desktop grant request"),
+        }
+    }
+
+    #[test]
+    fn grant_request_rejects_non_native_action() {
+        // Observe/dry-run actions are not in the requestable value-enum.
+        let bad = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "grant",
+            "request",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--action",
+            "capture-screenshot",
+            "--target-bundle-id",
+            "net.whatsapp.WhatsApp",
+        ]);
+        assert!(bad.is_err(), "non-native action must fail clap");
+    }
+
+    #[test]
+    fn parses_grant_status() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "grant",
+            "status",
+            "55555555-5555-5555-5555-555555555555",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Grant(GrantCommand::Status(args)),
+            } => {
+                assert_eq!(
+                    args.request_id.to_string(),
+                    "55555555-5555-5555-5555-555555555555"
+                );
+            }
+            _ => panic!("expected desktop grant status"),
+        }
+    }
+
+    #[test]
+    fn grant_denial_maps_typed_denials_only() {
+        let api_err = anyhow::Error::new(CoreError::Api {
+            status: 422,
+            body: r#"{"detail": {"code": "action_not_requestable", "reason": "x"}}"#.to_string(),
+        });
+        assert!(grant_denial_message(&api_err)
+            .expect("typed denial")
+            .contains("action_not_requestable"));
+
+        let other = anyhow::Error::new(CoreError::Api {
+            status: 404,
+            body: r#"{"detail": "Session not found"}"#.to_string(),
+        });
+        assert!(grant_denial_message(&other).is_none());
     }
 }

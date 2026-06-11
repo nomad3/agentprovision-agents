@@ -18,8 +18,9 @@ use url::Url;
 use crate::desktop::{
     DesktopBackgroundDryRunRequest, DesktopCommandResponse, DesktopCommandStatusSnapshot,
     DesktopCommandStopRequest, DesktopCommandStopResponse, DesktopControlAllowlistUpdate,
-    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopObservationRequestAck,
-    DesktopObservationRequestBody, DesktopPreflight, PerceptionArtifactStatus,
+    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopGrantRequest,
+    DesktopGrantRequestBody, DesktopObservationRequestAck, DesktopObservationRequestBody,
+    DesktopPreflight, PerceptionArtifactStatus,
 };
 use crate::error::{Error, Result};
 use crate::models::{
@@ -1069,6 +1070,29 @@ impl ApiClient {
             "content",
             session_id,
             shell_id,
+        ))
+        .await
+    }
+
+    /// `POST /api/v1/desktop-control/grants/request` — the
+    /// `alpha desktop grant request` verb. Records a PENDING approval request for
+    /// a native action; mints no grant, signs no envelope, actuates nothing.
+    pub async fn desktop_grant_request(
+        &self,
+        body: &DesktopGrantRequestBody,
+    ) -> Result<DesktopGrantRequest> {
+        self.post_json("/api/v1/desktop-control/grants/request", body)
+            .await
+    }
+
+    /// `GET /api/v1/desktop-control/grants/requests/{id}` — poll a pending
+    /// approval request (`alpha desktop grant status`).
+    pub async fn desktop_grant_request_status(
+        &self,
+        request_id: &str,
+    ) -> Result<DesktopGrantRequest> {
+        self.get_json(&format!(
+            "/api/v1/desktop-control/grants/requests/{request_id}"
         ))
         .await
     }

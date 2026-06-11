@@ -20,6 +20,7 @@ from .chat import ChatSession, ChatMessage
 from .session_event import SessionEvent
 from .desktop_command import DesktopCommand
 from .desktop_command_approval_grant import DesktopCommandApprovalGrant
+from .desktop_approval_request import DesktopApprovalRequest
 from .desktop_command_envelope_nonce import DesktopCommandEnvelopeNonce
 from .desktop_command_event import DesktopCommandEvent
 from .perception_artifact import PerceptionArtifact
@@ -107,7 +108,7 @@ __all__ = [
     "AgentRelationship", "AgentSkill", "AgentTask",
     "ChannelAccount", "ChannelEvent", "WhatsappSessionBackup",
     "ChatSession", "ChatMessage",
-    "DesktopCommand", "DesktopCommandApprovalGrant", "DesktopCommandEnvelopeNonce", "DesktopCommandEvent",
+    "DesktopCommand", "DesktopCommandApprovalGrant", "DesktopApprovalRequest", "DesktopCommandEnvelopeNonce", "DesktopCommandEvent",
     "PerceptionArtifact",
     "Connector",
     "DataPipeline", "DataSource", "Dataset", "DatasetGroup",

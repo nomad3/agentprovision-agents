@@ -8,8 +8,9 @@
 //! Scope: contract/parity only. No native actuation; no `alpha desktop` command.
 
 use agentprovision_core::desktop::{
-    DesktopCommandClaim, DesktopCommandDenied, DesktopDenialCode, PerceptionArtifactStatus,
-    PerceptionFetchDenial, PerceptionFetchDenialCode, PerceptionRedactionStatus,
+    DesktopCommandClaim, DesktopCommandDenied, DesktopDenialCode, DesktopGrantRequest,
+    DesktopGrantRequestStatus, PerceptionArtifactStatus, PerceptionFetchDenial,
+    PerceptionFetchDenialCode, PerceptionRedactionStatus,
 };
 
 const CLAIM: &str =
@@ -22,6 +23,8 @@ const OBSERVATION_STATUS: &str =
     include_str!("../../../docs/contracts/desktop-control/observation_status.planner_safe.json");
 const OBSERVATION_FETCH_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/observation_fetch.denied.json");
+const GRANT_REQUEST: &str =
+    include_str!("../../../docs/contracts/desktop-control/grant_request.pending.json");
 
 #[test]
 fn cli_deserializes_fixtures_via_core_types() {
@@ -79,4 +82,12 @@ fn cli_rejects_storage_paths_in_observation_status() {
             "{key} must be rejected by the core observation status type"
         );
     }
+}
+
+#[test]
+fn cli_deserializes_grant_request_via_core_type() {
+    let req: DesktopGrantRequest =
+        serde_json::from_str(GRANT_REQUEST).expect("core grant request type");
+    assert_eq!(req.status, DesktopGrantRequestStatus::Pending);
+    assert!(!req.grant_present);
 }

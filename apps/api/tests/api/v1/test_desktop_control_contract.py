@@ -33,6 +33,8 @@ DENY_BUNDLE = "deny.missing_target_bundle_id.json"
 DENY_CAP = "deny.capability_mismatch.json"
 OBSERVATION_STATUS = "observation_status.planner_safe.json"
 OBSERVATION_FETCH_DENIED = "observation_fetch.denied.json"
+GRANT_REQUEST = "grant_request.pending.json"
+GRANT_REQUEST_DENIED = "grant_request.denied.json"
 
 # ── display-safe boundary: these exact keys must never appear, at any depth ──
 FORBIDDEN_KEYS = {
@@ -61,7 +63,11 @@ def _forbidden_hits(node, path="") -> list[str]:
 # ── always-runnable: structure + display-safe (no app import) ────────────
 
 @pytest.mark.parametrize(
-    "name", [CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED]
+    "name",
+    [
+        CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED,
+        GRANT_REQUEST, GRANT_REQUEST_DENIED,
+    ],
 )
 def test_fixture_is_display_safe(name):
     hits = _forbidden_hits(_load(name))
@@ -158,3 +164,21 @@ def test_deny_codes_match_pr_c_enum():
         assert codes.code_for_reason(d["reason"]).value == d["code"], (
             f"{name}: reason does not map to its code via code_for_reason()"
         )
+
+
+def test_grant_request_fixture_matches_route_model():
+    dc = pytest.importorskip("app.api.v1.desktop_control")
+    fixture = _load(GRANT_REQUEST)
+    out = dc.DesktopGrantRequestOut(**fixture)
+    assert out.status == "pending"
+    assert out.grant_present is False
+    assert "payload" not in fixture
+    assert "storage_path" not in fixture
+
+
+def test_grant_request_denial_code_is_canonical():
+    act = pytest.importorskip("app.services.desktop_act")
+    fixture = _load(GRANT_REQUEST_DENIED)
+    detail = fixture["detail"]
+    valid = {c.value for c in act.DesktopGrantRequestDenialCode}
+    assert detail["code"] in valid

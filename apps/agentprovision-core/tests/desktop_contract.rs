@@ -26,6 +26,10 @@ const OBSERVATION_STATUS: &str =
     include_str!("../../../docs/contracts/desktop-control/observation_status.planner_safe.json");
 const OBSERVATION_FETCH_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/observation_fetch.denied.json");
+const GRANT_REQUEST: &str =
+    include_str!("../../../docs/contracts/desktop-control/grant_request.pending.json");
+const GRANT_REQUEST_DENIED: &str =
+    include_str!("../../../docs/contracts/desktop-control/grant_request.denied.json");
 
 const FORBIDDEN: &[&str] = &[
     "window_title",
@@ -122,6 +126,8 @@ fn fixtures_are_display_safe_recursive() {
         ("deny_cap", DENY_CAP),
         ("observation_status", OBSERVATION_STATUS),
         ("observation_fetch_denied", OBSERVATION_FETCH_DENIED),
+        ("grant_request", GRANT_REQUEST),
+        ("grant_request_denied", GRANT_REQUEST_DENIED),
     ] {
         let v: Value = serde_json::from_str(raw).unwrap();
         let mut hits = Vec::new();
@@ -158,6 +164,39 @@ fn injected_storage_path_fails_observation_status_deserialize() {
         assert!(
             serde_json::from_str::<PerceptionArtifactStatus>(&s).is_err(),
             "{key} must be rejected by PerceptionArtifactStatus"
+        );
+    }
+}
+
+#[test]
+fn grant_request_fixtures_deserialize_typed() {
+    use agentprovision_core::desktop::{
+        DesktopGrantRequest, DesktopGrantRequestDenial, DesktopGrantRequestDenialCode,
+        DesktopGrantRequestStatus,
+    };
+    let req: DesktopGrantRequest =
+        serde_json::from_str(GRANT_REQUEST).expect("typed grant request");
+    assert_eq!(req.status, DesktopGrantRequestStatus::Pending);
+    assert!(!req.grant_present);
+
+    let denial = DesktopGrantRequestDenial::from_error_body(GRANT_REQUEST_DENIED)
+        .expect("typed grant denial");
+    assert_eq!(
+        denial.code,
+        DesktopGrantRequestDenialCode::ActionNotRequestable
+    );
+}
+
+#[test]
+fn injected_payload_fails_grant_request_deserialize() {
+    use agentprovision_core::desktop::DesktopGrantRequest;
+    for key in ["payload", "text", "screenshot"] {
+        let mut v: Value = serde_json::from_str(GRANT_REQUEST).unwrap();
+        v[key] = serde_json::json!("SECRET");
+        let st = serde_json::to_string(&v).unwrap();
+        assert!(
+            serde_json::from_str::<DesktopGrantRequest>(&st).is_err(),
+            "{key} must be rejected by DesktopGrantRequest"
         );
     }
 }

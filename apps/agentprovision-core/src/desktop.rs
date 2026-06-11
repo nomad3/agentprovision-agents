@@ -630,6 +630,106 @@ pub struct PerceptionArtifactStatus {
     pub redaction_reasons: Vec<String>,
 }
 
+// ── P5.4b pending desktop approval requests (`alpha desktop grant request|status`) ──
+
+/// The four native-control actions an agent may request approval for. Observe /
+/// dry-run need no grant, so they are not requestable. Unknown values fail closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopRequestableAction {
+    PointerMove,
+    PointerClick,
+    KeyboardType,
+    KeyboardKeyChord,
+}
+
+/// Lifecycle of a pending desktop approval request. Unknown values fail closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopGrantRequestStatus {
+    Pending,
+    Approved,
+    Denied,
+    Expired,
+    Cancelled,
+}
+
+/// Display-safe denial codes for the grant-request surface. Mirrors
+/// `DesktopGrantRequestDenialCode` in `apps/api/app/services/desktop_act.py` — an
+/// unknown code fails to deserialize (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopGrantRequestDenialCode {
+    DesktopControlDisabled,
+    ActionNotRequestable,
+    InvalidTargetBundle,
+    RequestNotFound,
+}
+
+/// Structured grant-request denial (`{"detail": {"code": ..., "reason": ...}}`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopGrantRequestDenial {
+    pub code: DesktopGrantRequestDenialCode,
+    pub reason: String,
+}
+
+impl DesktopGrantRequestDenial {
+    /// Parse a FastAPI error body into a typed denial, if it is one. Returns
+    /// `None` for any other error shape (unknown codes fail closed to `None`).
+    pub fn from_error_body(body: &str) -> Option<Self> {
+        #[derive(Deserialize)]
+        struct Envelope {
+            detail: DesktopGrantRequestDenial,
+        }
+        serde_json::from_str::<Envelope>(body)
+            .ok()
+            .map(|e| e.detail)
+    }
+}
+
+/// `POST /api/v1/desktop-control/grants/request` body
+/// (`alpha desktop grant request`). Reduced metadata only — no payload bag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopGrantRequestBody {
+    pub session_id: String,
+    pub action: DesktopRequestableAction,
+    pub target_bundle_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Display-safe pending-approval-request projection. `deny_unknown_fields`
+/// rejects any raw payload / screenshot / ocr / window-title field outright.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopGrantRequest {
+    pub request_id: String,
+    pub session_id: String,
+    pub shell_id: String,
+    pub action: DesktopRequestableAction,
+    pub capability: DesktopCapability,
+    pub status: DesktopGrantRequestStatus,
+    #[serde(default)]
+    pub target_bundle_id: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    /// Whether a human has minted a grant for this request yet (P5.5). Never the
+    /// grant payload — just presence.
+    pub grant_present: bool,
+    #[serde(default)]
+    pub decided_at: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -811,6 +911,99 @@ mod tests {
             "artifact_integrity_mismatch",
         ] {
             let v: PerceptionFetchDenialCode =
+                serde_json::from_value(serde_json::Value::String(s.into())).expect(s);
+            assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(s));
+        }
+    }
+
+    fn grant_request_json() -> serde_json::Value {
+        serde_json::json!({
+            "request_id": "55555555-5555-5555-5555-555555555555",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "action": "keyboard_type",
+            "capability": "keyboard_control",
+            "status": "pending",
+            "target_bundle_id": "net.whatsapp.WhatsApp",
+            "reason": "send a message",
+            "created_at": "2026-06-11T12:00:00+00:00",
+            "expires_at": "2026-06-11T12:05:00+00:00",
+            "grant_present": false,
+            "decided_at": null
+        })
+    }
+
+    #[test]
+    fn grant_request_roundtrips_and_is_pending() {
+        let req: DesktopGrantRequest =
+            serde_json::from_value(grant_request_json()).expect("grant request decode");
+        assert_eq!(req.status, DesktopGrantRequestStatus::Pending);
+        assert_eq!(req.action, DesktopRequestableAction::KeyboardType);
+        assert_eq!(req.capability, DesktopCapability::KeyboardControl);
+        assert!(!req.grant_present);
+    }
+
+    #[test]
+    fn grant_request_rejects_payload_and_content_fields() {
+        // The request projection is reduced/display-safe: a server (or MITM)
+        // response smuggling a payload bag or raw content must fail to decode.
+        for (key, value) in [
+            ("payload", serde_json::json!({"args": {"text": "SECRET"}})),
+            ("text", serde_json::json!("SECRET")),
+            ("screenshot", serde_json::json!("RAW")),
+            ("window_title", serde_json::json!("SECRET TITLE")),
+        ] {
+            let mut req = grant_request_json();
+            req[key] = value;
+            assert!(
+                serde_json::from_value::<DesktopGrantRequest>(req).is_err(),
+                "{key} must be rejected by DesktopGrantRequest"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_request_unknown_status_and_action_fail_closed() {
+        let mut bad_status = grant_request_json();
+        bad_status["status"] = serde_json::json!("escalated");
+        assert!(serde_json::from_value::<DesktopGrantRequest>(bad_status).is_err());
+
+        // Observe/dry-run actions are NOT requestable — they fail the enum.
+        for action in ["capture_screenshot", "background_app_control_dry_run"] {
+            let mut bad_action = grant_request_json();
+            bad_action["action"] = serde_json::json!(action);
+            assert!(
+                serde_json::from_value::<DesktopGrantRequest>(bad_action).is_err(),
+                "{action} must not be a requestable action"
+            );
+        }
+    }
+
+    #[test]
+    fn grant_request_body_serializes_requestable_actions_only() {
+        let body = DesktopGrantRequestBody {
+            session_id: "33333333-3333-3333-3333-333333333333".into(),
+            action: DesktopRequestableAction::PointerClick,
+            target_bundle_id: "net.whatsapp.WhatsApp".into(),
+            shell_id: None,
+            reason: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["action"], serde_json::json!("pointer_click"));
+        // omitted optional fields are not serialized
+        assert!(v.get("shell_id").is_none());
+        assert!(v.get("reason").is_none());
+    }
+
+    #[test]
+    fn grant_request_denial_codes_roundtrip() {
+        for s in [
+            "desktop_control_disabled",
+            "action_not_requestable",
+            "invalid_target_bundle",
+            "request_not_found",
+        ] {
+            let v: DesktopGrantRequestDenialCode =
                 serde_json::from_value(serde_json::Value::String(s.into())).expect(s);
             assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(s));
         }

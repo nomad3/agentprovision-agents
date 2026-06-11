@@ -21,6 +21,8 @@ def test_desktop_control_module_exports_registered_tools():
         "desktop_background_app_control_dry_run",
         "desktop_command_status",
         "desktop_stop_commands",
+        "desktop_request_grant",
+        "desktop_request_status",
     }
 
     assert expected_tools.issubset(set(dc.__all__))
@@ -544,4 +546,159 @@ async def test_fetch_observation_canonicalizes_uuid_into_url(patch_httpx):
     assert client.calls[0]["url"].endswith(
         "/api/v1/desktop-control/internal/observations/"
         "77777777-7777-7777-7777-777777777777/content"
+    )
+
+
+# ── P5.4b: desktop_request_grant / desktop_request_status (pending approval) ──
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_grant_posts_reduced_request(patch_httpx):
+    client = patch_httpx(
+        default_status=201,
+        default_json={
+            "request_id": "55555555-5555-5555-5555-555555555555",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "action": "keyboard_type",
+            "capability": "keyboard_control",
+            "status": "pending",
+            "target_bundle_id": "net.whatsapp.WhatsApp",
+            "grant_present": False,
+        },
+    )
+
+    out = await dc.desktop_request_grant(
+        session_id="33333333-3333-3333-3333-333333333333",
+        action="keyboard_type",
+        target_bundle_id="net.whatsapp.WhatsApp",
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        reason="send a message",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "pending"
+    assert out["capability"] == "keyboard_control"
+    assert out["grant_present"] is False
+    assert "human must approve" in out["message"]
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/desktop-control/internal/grants/request")
+    assert call["json"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "action": "keyboard_type",
+        "target_bundle_id": "net.whatsapp.WhatsApp",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "reason": "send a message",
+    }
+    assert call["headers"]["X-Tenant-Id"] == "11111111-1111-1111-1111-111111111111"
+    assert call["headers"]["X-User-Id"] == "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_grant_rejects_non_native_action(patch_httpx):
+    client = patch_httpx(default_status=201, default_json={"unreached": True})
+
+    out = await dc.desktop_request_grant(
+        session_id="33333333-3333-3333-3333-333333333333",
+        action="capture_screenshot",
+        target_bundle_id="net.whatsapp.WhatsApp",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    # Rejected client-side before any HTTP call — observe/dry-run never need a grant.
+    assert out["status"] == "error"
+    assert "pointer_move" in out["error"]
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_grant_requires_tenant_and_user():
+    out_no_tenant = await dc.desktop_request_grant(
+        session_id="33333333-3333-3333-3333-333333333333",
+        action="keyboard_type",
+        target_bundle_id="net.whatsapp.WhatsApp",
+        tenant_id="",
+        ctx=_ctx_with_user(),
+    )
+    assert out_no_tenant == {"status": "error", "error": "tenant_id required"}
+
+    out_no_user = await dc.desktop_request_grant(
+        session_id="33333333-3333-3333-3333-333333333333",
+        action="keyboard_type",
+        target_bundle_id="net.whatsapp.WhatsApp",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=SimpleNamespace(request_context={}),
+    )
+    assert out_no_user["status"] == "error"
+    assert "X-User-Id required" in out_no_user["error"]
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_grant_surfaces_display_safe_denial(patch_httpx):
+    patch_httpx(
+        default_status=422,
+        default_json={
+            "detail": {
+                "code": "action_not_requestable",
+                "reason": "action is not a grant-requestable native-control action",
+            }
+        },
+    )
+
+    out = await dc.desktop_request_grant(
+        session_id="33333333-3333-3333-3333-333333333333",
+        action="keyboard_type",
+        target_bundle_id="net.whatsapp.WhatsApp",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+    assert out["status"] == "denied"
+    assert out["code"] == "action_not_requestable"
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_status_validates_uuid(patch_httpx):
+    client = patch_httpx(default_status=200, default_json={"unreached": True})
+
+    out = await dc.desktop_request_status(
+        request_id="../../oauth/internal/token/github",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    # Rejected before any HTTP call — no internal-key request can be retargeted.
+    assert out == {"status": "error", "error": "request_id must be a UUID"}
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_status_polls_pending(patch_httpx):
+    client = patch_httpx(
+        default_status=200,
+        default_json={
+            "request_id": "55555555-5555-5555-5555-555555555555",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "action": "keyboard_type",
+            "capability": "keyboard_control",
+            "status": "pending",
+            "grant_present": False,
+        },
+    )
+
+    out = await dc.desktop_request_status(
+        request_id="55555555-5555-5555-5555-555555555555",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "pending"
+    call = client.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith(
+        "/api/v1/desktop-control/internal/grants/requests/"
+        "55555555-5555-5555-5555-555555555555"
     )
