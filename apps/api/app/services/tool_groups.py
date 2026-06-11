@@ -160,6 +160,7 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "search_drive_files",
         "read_drive_file",
         "create_drive_file",
+        "create_onedrive_file",
         "list_drive_folders",
     ],
     "shell": [

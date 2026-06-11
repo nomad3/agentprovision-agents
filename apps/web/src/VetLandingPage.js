@@ -1,8 +1,8 @@
 /**
  * `vet.agentprovision.com` landing page — the operating system for
  * veterinary practices. Reuses LandingNav + CTASection + LandingFooter
- * from the main agentprovision.com landing (all prop-driven), with five
- * vet-specific sections in between.
+ * from the main agentprovision.com landing (all prop-driven), with
+ * vet-specific mission, safety, agent-room, and specialist-example sections.
  *
  * Positioning is Luna-led: a practice OS (shared state, workflow
  * orchestration, an agent fleet, approval gates, audit trail) — NOT an
@@ -21,7 +21,9 @@ import LandingNav from './components/marketing/LandingNav';
 import LandingFooter from './components/marketing/LandingFooter';
 import CTASection from './components/marketing/CTASection';
 import VetHero from './components/marketing/vet/VetHero';
+import VetCaseFlow from './components/marketing/vet/VetCaseFlow';
 import VetConnectors from './components/marketing/vet/VetConnectors';
+import VetPatientJourneys from './components/marketing/vet/VetPatientJourneys';
 import VetAgentFleet from './components/marketing/vet/VetAgentFleet';
 import VetTrust from './components/marketing/vet/VetTrust';
 import VetCardiologyShowcase from './components/marketing/vet/VetCardiologyShowcase';
@@ -44,16 +46,17 @@ const APEX_SIGNIN = 'https://agentprovision.com/login';
 // t('footer.links.${key}') — added to landing.json (en + es).
 //
 // i18n scope: the reused nav + footer resolve through t('nav.*') /
-// t('footer.links.*') and keep their en + es keys. The five vet-specific
+// t('footer.links.*') and keep their en + es keys. The vet-specific
 // section components (VetHero, VetConnectors, VetAgentFleet, VetTrust,
 // VetCardiologyShowcase) hardcode English copy on purpose —
 // English-only for launch; section-body i18n deferred.
-const VET_NAV_LINKS = ['connectors', 'fleet', 'trust', 'cardiology'];
+const VET_NAV_LINKS = ['mission', 'patients', 'safety', 'rooms', 'example'];
 const VET_FOOTER_LINKS = [
-  { key: 'connectors', href: '#connectors' },
-  { key: 'fleet', href: '#fleet' },
-  { key: 'trust', href: '#trust' },
-  { key: 'cardiology', href: '#cardiology' },
+  { key: 'mission', href: '#mission' },
+  { key: 'patients', href: '#patients' },
+  { key: 'safety', href: '#safety' },
+  { key: 'rooms', href: '#rooms' },
+  { key: 'example', href: '#example' },
 ];
 
 export default function VetLandingPage() {
@@ -63,21 +66,28 @@ export default function VetLandingPage() {
         links={VET_NAV_LINKS}
         registerHref={APEX_REGISTER}
         signInHref={APEX_SIGNIN}
+        ctaLabel="Request access"
+        className="landing-nav--vet"
       />
       <main className="vet-landing">
         <VetHero />
+        <VetCaseFlow />
         <VetConnectors />
+        <VetPatientJourneys />
         <VetAgentFleet />
         <VetTrust />
         <VetCardiologyShowcase />
         <CTASection
           registerHref={APEX_REGISTER}
-          title="Run your practice from one source-traceable record."
-          subtitle="Connect your systems, coordinate your agent fleet, and keep every clinical and financial decision under human approval."
-          buttonText="Request a vet-OS demo"
+          title="Give every case a source, a workflow, and a human owner."
+          subtitle="Start file-first with Drive and OneDrive, then graduate the same approved workflows into PMS and desktop automation when the practice is ready."
+          buttonText="Request access"
         />
       </main>
-      <LandingFooter links={VET_FOOTER_LINKS} />
+      <LandingFooter
+        links={VET_FOOTER_LINKS}
+        tagline="Veterinary practice intelligence with source-traceable workflows and human approval."
+      />
     </>
   );
 }

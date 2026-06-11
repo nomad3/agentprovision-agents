@@ -33,6 +33,7 @@ const DashboardControlCenter = lazy(() => import(/* webpackChunkName: "dashboard
 // Agent Kits removed - using ADK for agent configuration
 const AgentDetailPage = lazy(() => import(/* webpackChunkName: "agent-detail" */ './pages/AgentDetailPage'));
 const AgentsPage = lazy(() => import(/* webpackChunkName: "agents" */ './pages/AgentsPage'));
+const VetPracticeDashboardPage = lazy(() => import(/* webpackChunkName: "vet-practice" */ './pages/VetPracticeDashboardPage'));
 const FleetHealthPage = lazy(() => import(/* webpackChunkName: "fleet-health" */ './pages/FleetHealthPage'));
 const CostInsightsPage = lazy(() => import(/* webpackChunkName: "cost-insights" */ './pages/CostInsightsPage'));
 const CoalitionReplayPage = lazy(() => import(/* webpackChunkName: "coalition-replay" */ './pages/CoalitionReplayPage'));
@@ -269,6 +270,7 @@ function App() {
                 <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
                 <Route path="/data-sources" element={<Navigate to="/integrations?tab=data-sources" replace />} />
                 <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
+                <Route path="/practice" element={<ProtectedRoute><VetPracticeDashboardPage /></ProtectedRoute>} />
                 <Route path="/notebooks" element={<ProtectedRoute><NotebooksPage /></ProtectedRoute>} />
                 <Route path="/agents" element={<ProtectedRoute><AgentsPage /></ProtectedRoute>} />
                 <Route path="/insights/fleet-health" element={<ProtectedRoute><FleetHealthPage /></ProtectedRoute>} />

@@ -28,6 +28,7 @@ TOOL_INTEGRATION_MAP: Dict[str, Optional[str]] = {
     "read_drive_file": "google_drive",
     "create_drive_file": "google_drive",
     "list_drive_folders": "google_drive",
+    "create_onedrive_file": "onedrive",
     # Jira
     "create_jira_issue": "jira",
     "get_jira_issue": "jira",
@@ -98,6 +99,7 @@ INTEGRATION_DISPLAY: Dict[str, Dict[str, str]] = {
     "gmail": {"name": "Gmail", "icon": "FaEnvelope"},
     "google_calendar": {"name": "Google Calendar", "icon": "FaCalendar"},
     "google_drive": {"name": "Google Drive", "icon": "FaGoogleDrive"},
+    "onedrive": {"name": "OneDrive", "icon": "FaMicrosoft"},
     "github": {"name": "GitHub Copilot CLI", "icon": "FaGithub"},
     "jira": {"name": "Jira", "icon": "FaTasks"},
     "meta_ads": {"name": "Meta Ads", "icon": "FaFacebook"},
@@ -143,7 +145,7 @@ def get_connected_integrations(
         db.query(IntegrationConfig)
         .filter(
             IntegrationConfig.tenant_id == tenant_id,
-            IntegrationConfig.enabled == True,
+            IntegrationConfig.enabled.is_(True),
         )
         .all()
     )

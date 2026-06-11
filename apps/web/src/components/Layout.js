@@ -87,6 +87,7 @@ const Layout = ({ children }) => {
       items: [
         { path: '/integrations', icon: PlugFill, label: t('sidebar.integrations'), description: t('sidebar_desc.integrations') },
         { path: '/dashboard', icon: HouseDoorFill, label: t('sidebar.alphaControl', 'Alpha Control'), description: t('sidebar_desc.alphaControl', 'Command center + chat with your agents') },
+        { path: '/practice', icon: HeartbeatFill, label: t('sidebar.vetPractice', 'Vet Practice'), description: t('sidebar_desc.vetPractice', 'File-first veterinary MVP flows') },
       ]
     },
     {

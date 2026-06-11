@@ -21,8 +21,10 @@ const DEFAULT_LINKS = ['platform', 'features', 'integrations', 'pricing'];
  *   subdomain passes 'https://agentprovision.com/register' so the
  *   auth flow always lives on the apex (PR #450 review BLOCKER B1).
  * - signInHref: same shape for sign-in.
+ * - ctaLabel: optional visible label for the register CTA.
+ * - className: optional nav class for page-specific theming.
  */
-export default function LandingNav({ links = DEFAULT_LINKS, registerHref, signInHref } = {}) {
+export default function LandingNav({ links = DEFAULT_LINKS, registerHref, signInHref, ctaLabel, className = '' } = {}) {
   const { t } = useTranslation('landing');
   const navigate = useNavigate();
   const [scrolled, setScrolled] = useState(false);
@@ -53,7 +55,7 @@ export default function LandingNav({ links = DEFAULT_LINKS, registerHref, signIn
 
   return (
     <motion.nav
-      className={`landing-nav ${scrolled ? 'landing-nav--scrolled' : ''}`}
+      className={`landing-nav ${className} ${scrolled ? 'landing-nav--scrolled' : ''}`.trim()}
       initial={prefersReducedMotion ? {} : { opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: prefersReducedMotion ? 0 : 0.4 }}
@@ -87,7 +89,7 @@ export default function LandingNav({ links = DEFAULT_LINKS, registerHref, signIn
             whileTap={{ scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 400, damping: 17 }}
           >
-            {t('nav.getStarted')}
+            {ctaLabel ?? t('nav.getStarted')}
           </motion.button>
         </div>
       </div>

@@ -82,6 +82,10 @@ OAUTH_PROVIDERS = {
             # Outlook
             "Mail.Read",
             "Mail.Send",
+            # OneDrive / Microsoft 365 file packets. The MVP OneDrive MCP
+            # tool writes only to /me/drive for the signed-in account; do
+            # not request tenant-wide Files.ReadWrite.All here.
+            "Files.ReadWrite",
             # Teams (delegated; same Graph token, same app registration as
             # Outlook). Requires the customer to consent to these scopes
             # when re-authorizing the microsoft provider; existing Outlook
@@ -102,7 +106,7 @@ OAUTH_PROVIDERS = {
             "CopilotStudio.Read.User",
             "AIServices.Read.User",
         ],
-        "integration_names": ["outlook", "teams"],
+        "integration_names": ["outlook", "teams", "onedrive"],
     },
     "github": {
         "authorize_url": "https://github.com/login/oauth/authorize",

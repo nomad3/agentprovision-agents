@@ -39,6 +39,14 @@ INTEGRATION_CREDENTIAL_SCHEMAS = {
         "auth_type": "oauth",
         "oauth_provider": "google",
     },
+    "onedrive": {
+        "display_name": "OneDrive",
+        "description": "Microsoft 365 file repository for practice packets, reports, and operational artifacts",
+        "icon": "FaMicrosoft",
+        "credentials": [],
+        "auth_type": "oauth",
+        "oauth_provider": "microsoft",
+    },
     "google_calendar": {
         "display_name": "Google Calendar",
         "description": "Manage calendar events and schedules",

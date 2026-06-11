@@ -1,99 +1,106 @@
-/**
- * "Your systems, finally working together" — the connectors section.
- *
- * Practice-OS thesis: AgentProvision sits ON TOP of the tools a clinic
- * already runs (no rip-and-replace) and unifies them into one
- * source-traceable record. Modeled on AlphaPlatformPower's grid, but
- * card content is the real-world veterinary stack a buyer recognises.
- */
 import { motion, useReducedMotion } from 'framer-motion';
+import {
+  FaBoxes,
+  FaChartLine,
+  FaDesktop,
+  FaFileMedical,
+  FaNotesMedical,
+  FaReceipt,
+  FaStar,
+  FaStethoscope,
+} from 'react-icons/fa';
 
-const CONNECTORS = [
+const PRACTICE_FLOWS = [
   {
-    icon: '🗂️',
-    name: 'Covetrus Pulse',
-    category: 'PIMS',
-    body: 'Patients, visits, and invoices flow in so every agent works from the same medical record.',
+    icon: FaFileMedical,
+    name: 'Intake Packet',
+    category: 'Owner + patient context',
+    body: 'New-client forms, history, reason for visit, location preference, and attachments become a staff-ready packet.',
   },
   {
-    icon: '🎙️',
-    name: 'ScribbleVet',
-    category: 'AI Scribe',
-    body: 'Exam-room transcripts land in the record, structured and source-tagged — never a loose note.',
+    icon: FaStethoscope,
+    name: 'Clinical Triage',
+    category: 'Red flags first',
+    body: 'Symptoms are routed as emergency, same-day, routine, refill, records, billing, or follow-up with missing facts called out.',
   },
   {
-    icon: '🧪',
-    name: 'Antech',
-    category: 'Reference Labs',
-    body: 'Diagnostics arrive attached to the right patient, with result provenance preserved.',
+    icon: FaNotesMedical,
+    name: 'SOAP Draft',
+    category: 'Clinician review',
+    body: 'Visit notes and transcripts turn into structured SOAP drafts with unclear source language marked for DVM confirmation.',
   },
   {
-    icon: '🔬',
-    name: 'IDEXX',
-    category: 'In-house Diagnostics',
-    body: 'In-house panels and imaging sync automatically — no re-keying between machines.',
+    icon: FaReceipt,
+    name: 'Billing Review',
+    category: 'Exceptions surfaced',
+    body: 'Charge sheets, invoices, refunds, discounts, and missing codes become a human-approved review packet.',
   },
   {
-    icon: '📅',
-    name: 'Google · Microsoft 365',
-    category: 'Email & Calendar',
-    body: 'Inbound studies, referrals, and appointments are triaged the moment they hit the inbox.',
+    icon: FaBoxes,
+    name: 'Inventory + Pharmacy',
+    category: 'Count-sheet discipline',
+    body: 'Dispense logs, reorder thresholds, expirations, and controlled-substance exceptions stay open until reconciled.',
   },
   {
-    icon: '💬',
-    name: 'SMS · WhatsApp',
-    category: 'Client Messaging',
-    body: 'Two-way client communication, logged to the record with full conversation history.',
+    icon: FaStar,
+    name: 'Reputation Response',
+    category: 'Approve before public',
+    body: 'Review replies and campaign drafts are grounded in practice facts and held for staff approval before posting.',
   },
   {
-    icon: '🧾',
-    name: 'Accounting',
-    category: 'Billing & Ledger',
-    body: 'Invoices, payments, and collections reconcile against the same source of truth.',
+    icon: FaChartLine,
+    name: 'Daily Ops Brief',
+    category: 'Practice signal',
+    body: 'Location load, unresolved handoffs, revenue files, recall work, and billing exceptions roll into one daily brief.',
   },
   {
-    icon: '⭐',
-    name: 'BrightLocal',
-    category: 'Reputation',
-    body: 'Reviews and local listings feed the marketing agent — surfaced, never auto-posted.',
+    icon: FaDesktop,
+    name: 'PMS Readiness',
+    category: 'Computer-use safe path',
+    body: 'Screen maps, safe fields, and action plans are prepared before any future PMS desktop actuation is enabled.',
   },
 ];
 
 export default function VetConnectors() {
   const prefersReducedMotion = useReducedMotion();
   return (
-    <section className="vet-connectors" id="connectors">
+    <section className="vet-connectors" id="mission">
       <div className="vet-connectors__inner">
-        <h2 className="vet-connectors__title">Your systems, finally working together.</h2>
+        <span className="vet-section-kicker">Mission</span>
+        <h2 className="vet-connectors__title">Make the practice computable before you automate it.</h2>
         <p className="vet-connectors__subtitle">
-          AgentProvision sits on top of the tools your practice already runs and
-          unifies them into one source-traceable record. No rip-and-replace,
-          no data migration project — connect what you have and keep working.
+          The MVP starts with the files practices already trust: Google Drive
+          and OneDrive. Each workflow converts a packet into structured,
+          source-traceable work that staff can approve, hand off, and audit.
         </p>
 
         <div className="vet-connectors__grid">
-          {CONNECTORS.map((c, i) => (
-            <motion.div
-              key={c.name}
-              className="vet-connectors__card"
-              initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: '-40px' }}
-              transition={{ duration: 0.45, delay: i * 0.04 }}
-            >
-              <div className="vet-connectors__card-head">
-                <span className="vet-connectors__card-icon" aria-hidden="true">{c.icon}</span>
-                <span className="vet-connectors__card-cat">{c.category}</span>
-              </div>
-              <h3 className="vet-connectors__card-name">{c.name}</h3>
-              <p className="vet-connectors__card-body">{c.body}</p>
-            </motion.div>
-          ))}
+          {PRACTICE_FLOWS.map((c, i) => {
+            const Icon = c.icon;
+            return (
+              <motion.div
+                key={c.name}
+                className="vet-connectors__card"
+                initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: '-40px' }}
+                transition={{ duration: 0.45, delay: i * 0.04 }}
+              >
+                <div className="vet-connectors__card-head">
+                  <span className="vet-connectors__card-icon" aria-hidden="true"><Icon /></span>
+                  <span className="vet-connectors__card-cat">{c.category}</span>
+                </div>
+                <h3 className="vet-connectors__card-name">{c.name}</h3>
+                <p className="vet-connectors__card-body">{c.body}</p>
+              </motion.div>
+            );
+          })}
         </div>
 
         <p className="vet-connectors__footnote">
-          Don&rsquo;t see your system? The same connector pattern wires up any
-          source with an API or inbox — your record, one place.
+          PMS, scribe, payment, messaging, and inventory integrations come
+          later. The file-first lane gives Dr. Angelo-style GP teams and
+          Dr. Brett-style specialist workflows usable structure now.
         </p>
       </div>
     </section>
