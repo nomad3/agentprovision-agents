@@ -1,9 +1,9 @@
 # Luna P5.3-P5.5 Agent Loop And Chat Trigger Execution
 
 Date: 2026-06-11
-Status: implementation in progress; P5.4 dry-run substrate and Luna prompt
-scaffold deployed through PR #888; P5.3a-2 redactor driver merged through
-PR #880
+Status: implementation in progress; P5.3 planner-safe substrate merged through
+PR #892; P5.4 dry-run/status/Stop/pending-request substrate merged through
+PR #895; P5.5 human approval surface merged through PR #896
 Inputs: `docs/report/2026-06-11-luna-computer-use-fable-review.md`, `docs/plans/2026-06-09-luna-phase5-general-app-control-design.md`, `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
 
 ## Goal
@@ -56,10 +56,11 @@ before any non-operator tenant receives actuation.
 9. General app control uses the secondary-pointer/background-control actuator
    contract. Existing global-cursor/frontmost paths may remain for their narrow
    legacy canaries, but they are not the P5.4 general app-control actuator.
-10. Until the P5.5 approval UX exists, P5.4 agent loops are dry-run,
-    pending-approval, or pre-granted test harness only. The pre-granted harness
-    setup must originate outside the chat path; chat-originated prompts must not
-    reach native macOS actuation through internal-key-only grants.
+10. Until `desktop_actuate` and the chat coordinator consume the P5.5 approval
+    surface, P5.4 agent loops are dry-run, pending-approval, or pre-granted test
+    harness only. The pre-granted harness setup must originate outside the chat
+    path; chat-originated prompts must not reach native macOS actuation through
+    internal-key-only grants.
 11. Until PR5 binds tenant/user identity into per-tenant Ed25519 signing keys,
     exactly one operator tenant may have actuation flags, the global floor, and
     agent tool groups enabled for native control. This is a data-seeded
@@ -98,6 +99,26 @@ Merged:
 - P5.3a-2 redactor driver / PR #880: redactor driver loop, claim fencing,
   byte-free events, cleanup-race fixes, and focused regression coverage merged
   at `5630f8c2`.
+- P5.3b planner-safe observation delivery / PR #890: scoped user/device and MCP
+  planner-safe observe request/status/fetch path merged at `5f761c53`.
+- P5.3b hardening / PR #891: MCP UUID validation blocks SSRF/traversal before
+  internal-key HTTP calls; observe request master gate and closed
+  `redaction_status` model merged at `34e29325`.
+- P5.3c redactor engine / PR #892: Tesseract redactor engine wired at
+  `71c177d7`.
+- P5.4 Stop surface / PR #893: Alpha and MCP Stop/preempt command surface merged
+  at `3e070c6f`.
+- Deploy compatibility / PR #894: greenlet ARM64 wheel hash merged at
+  `fe9638bc`.
+- P5.4b pending approval request / PR #895: agent-facing
+  `desktop_request_grant` request/status surface merged at `3a71cc2d`. It
+  records pending approval requests only; it does not mint grants, enqueue
+  commands, sign envelopes, or actuate.
+- P5.5 approval surface / PR #896: user-JWT
+  `approvals list|approve|deny` surface merged at `8bfcbce9`. It converts a
+  pending request into exactly one bounded active grant or terminal denial. It
+  is user-authenticated only, has no internal-key/MCP grant-minting twin, and
+  still does not enqueue or actuate.
 
 Current deployed proof:
 
@@ -123,6 +144,11 @@ Current deployed proof:
   `b10a1eaa-7bc0-48e0-b695-71a95a1c9827`, and
   `c3c2f3f6-ad51-45b8-8794-2349f3c00e64`, with
   `native_envelope=false` and blocker `none`.
+- PR #896 post-merge verification: GitHub Tests, CLI Build Matrix, and Docker
+  Desktop Deployment passed on merge commit `8bfcbce9`; Docker deployment run
+  `27375497795` passed after host free space was restored. Local post-deploy
+  smoke found API healthy, MCP SSE endpoint emitting, containers up/healthy, and
+  the Docker `_work` bind-mount gate returning no output.
 
 Open after D3:
 
@@ -133,13 +159,20 @@ Open after D3:
 
 Ordering rule:
 
-- P5.3 perception must land before planner delivery.
+- P5.3 perception must land before planner delivery. The substrate has landed
+  through #892, but the live operator planner-safe derivative proof remains a
+  release-smoke item before E2E completion.
 - P5.4a is the secondary-pointer/background actuator from
   `2026-06-11-luna-secondary-pointer-background-control.md` (SP2-SP6), not the
   agent-facing Alpha/MCP wrapper layer.
-- P5.4b exposes act verbs after the actuator contract exists.
+- P5.4b exposes act verbs after the actuator contract exists. The pending
+  request half landed in #895; the next missing act verb is `desktop_actuate`,
+  which consumes an existing approved grant and returns `approval_required`
+  when absent.
 - P5.4c wires the operator Luna loop.
-- P5.5 adds chat trigger and explicit user approval UX.
+- P5.5 adds chat trigger and explicit user approval UX. The explicit
+  approve/deny/list surface landed in #896; chat-triggered orchestration and
+  report-back remain pending.
 
 ## Execution Ladder
 
@@ -162,10 +195,9 @@ Implementation scope:
   `5630f8c2`) wires the driver loop, flag gate, cleanup-race fixes, and
   byte-free redaction events. Codex/Luna/Claudia review found and fixed the
   latent finalize race, missing lost-claim coverage, malformed-env crash, and
-  ambiguous post-commit unlink edge before merge. `_load_engine()` still
-  returns `None`, so the loop is correct but dormant; the exit criterion
-  "quarantined raw capture -> planner-safe derivative" still requires the OCR
-  engine slice and live planner-safe derivative proof.
+  ambiguous post-commit unlink edge before merge. PR #892 later wired the
+  Tesseract engine, so the remaining proof is an installed/operator smoke from
+  quarantined capture to planner-safe derivative.
 
 Tests:
 
@@ -218,6 +250,10 @@ Tests:
   planner-safe artifact.
 - D4 privacy test: real `payload.args.text` may persist in the command row, but
   must be absent from events/display-safe payloads.
+- Status 2026-06-11: PR #890 delivered user/device and MCP planner-safe
+  observe request/status/fetch; PR #891 hardened UUID validation and fail-closed
+  gates for that surface. The read path serves only redacted content through the
+  planner-safe contract.
 
 Exit criteria:
 
@@ -365,6 +401,13 @@ Implementation scope:
   `desktop_commands.status` and `desktop_command_events.outcome`. After deploy,
   Alpha dry-run command `813ebc99-6bfa-412f-9d01-16d7c65172ad` reached terminal
   `no_op` with queued, claimed, and completed audit events.
+- Status 2026-06-11: PR #893 (`codex/luna-p54-stop-surface`, merge
+  `3e070c6f`) added Alpha/MCP Stop so queued or active desktop work can be
+  preempted through the same display-safe lifecycle.
+- Status 2026-06-11: PR #895 (`claude/luna-p54-act-surface`, merge
+  `3a71cc2d`) added the agent-facing pending approval request half:
+  `desktop_request_grant` records a pending request and status can be polled.
+  It still creates no grant, queue row, envelope, or native actuation.
 
 Tests:
 
@@ -389,6 +432,10 @@ Exit criteria:
   with the same API claim boundary the Tauri shell already uses.
 - No agent-facing path can create approval grants or select the native actuator
   implementation.
+- Current next implementation target: `desktop_actuate`, a scoped agent-facing
+  act command that accepts a command shape plus an existing, server-validated
+  approval grant. It must enqueue only bounded governed commands; without the
+  grant it returns `approval_required` and creates no command.
 
 ### Slice 5: P5.4c Operator Luna Tool Groups And Agent Loop Scaffold
 
@@ -412,9 +459,10 @@ Implementation scope:
   `rl_experience.state`, action fields, embeddings, or free-form metadata.
 - Start with operator-only apps already in the global floor: Luna, TextEdit,
   WhatsApp.
-- Before P5.5 lands, this coordinator may run only in dry-run, denied/no-op, or
-  pre-granted test harness mode. It must not use internal-key-only approval
-  grants to turn chat prompts into native actuation.
+- Until `desktop_actuate` and the chat coordinator are merged, this coordinator
+  may run only in dry-run, denied/no-op, pending-approval, or pre-granted test
+  harness mode. It must not use internal-key-only approval grants to turn chat
+  prompts into native actuation.
 - Before enqueue, the coordinator must request a fresh Luna client
   permission-readiness probe for the target shell/device. Missing, stale, or
   denied permissions produce `permission_not_ready` and no command row is queued.
@@ -449,12 +497,14 @@ Implementation scope:
 
 Next smallest make-it-work step:
 
-- Post-#880 Luna chat smoke is complete; keep it as the regression baseline for
-  the dry-run/status loop until P5.5 approval UX lands.
-- Implement the next feature link: P5.3b planner-safe fetch/observe or P5.5
-  chat trigger + approval UX, depending on whether the OCR/redactor engine slice
-  is ready. Until that approval UX lands, chat-originated desktop work remains
-  dry-run, denied, or approval-required only.
+- Post-#896 smoke is complete; keep it as the regression baseline for
+  approval-request -> user approval -> bounded grant until the chat loop consumes
+  grants.
+- Implement `desktop_actuate`: agent-facing actuation request that consumes an
+  existing approved grant and enqueues through the shared lifecycle. Without an
+  active matching grant it must return `approval_required`; it must not mint a
+  grant, bypass Stop/preflight/allowlist/capability gates, or select a native
+  implementation client-side.
 
 Tests:
 
@@ -505,6 +555,11 @@ Implementation scope:
 - Final answer includes what was done, what was not done, denial/status, and
   audit refs only. It must not transcribe observed app content unless a separate
   reviewed disclosure contract allows that exact field.
+- Status 2026-06-11: PR #896 shipped the explicit user-JWT
+  approve/deny/list surface for pending desktop approval requests. It is not yet
+  wired to chat-triggered orchestration: chat still needs intent routing,
+  pending-request creation, user approval presentation, `desktop_actuate`
+  enqueue, status observation, and final report-back.
 
 Tests:
 
