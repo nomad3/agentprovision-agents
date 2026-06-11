@@ -13,6 +13,7 @@ CONTROL_TOOLS = {
     "desktop_keyboard_type",
     "desktop_keyboard_key_chord",
     "desktop_background_app_control_dry_run",
+    "desktop_command_status",
 }
 
 

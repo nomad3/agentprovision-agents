@@ -291,7 +291,8 @@ Implementation scope:
   first read-only status/audit part of this slice. It adds a tenant/user-scoped
   command status service, user-JWT route `GET /desktop-control/commands/{id}`,
   read-only internal status route for MCP, and MCP tool
-  `desktop_command_status`. The response intentionally omits raw command
+  `desktop_command_status`, with the status tool granted through the
+  `desktop_control` tool group. The response intentionally omits raw command
   payloads, signed envelopes, approval payloads, screen bytes, clipboard text,
   and native actuation args. This lets Luna queue a dry-run and report its
   audited terminal state, but it does not add approval grant creation, Alpha CLI
