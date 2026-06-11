@@ -32,8 +32,8 @@ before any non-operator tenant receives actuation.
    allows that field.
 4. Native actuation requires all gates: master desktop control flag, action
    capability flag, tenant allowlist intersected with the global floor, TCC
-   readiness, active shell/device/session, approval grant, Ed25519 envelope,
-   Stop/Lock state, and native-boundary checks.
+   readiness, secure-input idle, active shell/device/session, approval grant,
+   Ed25519 envelope, Stop/Lock state, and native-boundary checks.
 5. Stop is preemptive. Any active or queued desktop work must become visibly
    stopped/preempted in API events, Luna UI, and CLI/MCP surfaces.
 6. New MCP tools are wrappers over the same service entrypoints as Alpha/API;
@@ -66,13 +66,26 @@ Pending release gate:
 - D3 / PR #872: config drift, Ed25519 default, compose env precedence, local
   observations volume. CI is green and mergeable at `e87ea629`; Luna release-gate
   approval is still required before merge.
+  This is a release/config hygiene gate, not the P5.4 native-actuator
+  prerequisite; do not tag Slices 3-6 as blocked on D3 once the operator
+  environment is already configured.
 
 Open after D3:
 
 - D4 test integrity gaps must be folded into the implementation slices below
   when they touch the same surface.
-- D5 structural split and shared canonical fixtures must land before PR5 or any
-  large expansion of `desktop_control_service.py`.
+- D5 structural split and shared canonical fixtures must land before Slice 4 or
+  any large expansion of `desktop_control_service.py`; do not defer this to PR5.
+
+Ordering rule:
+
+- P5.3 perception must land before planner delivery.
+- P5.4a is the secondary-pointer/background actuator from
+  `2026-06-11-luna-secondary-pointer-background-control.md` (SP2-SP6), not the
+  agent-facing Alpha/MCP wrapper layer.
+- P5.4b exposes act verbs after the actuator contract exists.
+- P5.4c wires the operator Luna loop.
+- P5.5 adds chat trigger and explicit user approval UX.
 
 ## Execution Ladder
 
@@ -113,12 +126,21 @@ Purpose: allow Luna's planner to observe only redacted, scoped content.
 
 Implementation scope:
 
-- Add a scoped planner-safe fetch service: tenant, session, shell/device, artifact
-  id, expiry, and planner-safe status are required.
+- Add a scoped planner-safe fetch service: tenant, session, shell/device,
+  artifact id, expiry, and planner-safe status are required.
+- Fetch must read only `redacted_storage_path`, never raw `storage_path`, and
+  must deny unless `redaction_status == planner_safe` and `raw_deleted_at IS NOT
+  NULL`.
+- Re-check the master `desktop_control_enabled` flag at fetch time; the fetch
+  service does not inherit the #869 observe/approval gates by accident.
 - Add `alpha desktop observe request|status|fetch` or the closest existing
   command shape, with typed success/denial models.
-- Extend MCP observation tools so `desktop_observe_screen` can return planner-safe
-  artifact metadata/content after scope checks, not only audit envelopes.
+- Add thin user-JWT + device-token v1 routes for Alpha observe fetch/status if
+  the current implementation is internal-key-only. Alpha CLI must not call
+  `/internal/*` desktop routes.
+- Extend MCP observation tools so `desktop_observe_screen` can return
+  planner-safe artifact metadata/content after scope checks, not only audit
+  envelopes.
 - Keep raw capture handles opaque and unprintable to agents.
 
 Tests:
@@ -127,6 +149,9 @@ Tests:
 - MCP wrapper tests for missing tool scope, wrong tenant/session/device,
   expired artifact, raw-not-planner-safe artifact, and successful planner-safe
   fetch.
+- Fetch-source tests proving raw `storage_path` is never served, `raw_deleted_at`
+  is required, and `desktop_control_enabled=false` denies even for a
+  planner-safe artifact.
 - D4 privacy test: real `payload.args.text` may persist in the command row, but
   must be absent from events/display-safe payloads.
 
@@ -135,15 +160,66 @@ Exit criteria:
 - Luna can call an observe tool and receive planner-safe perception only.
 - No actuation tool is agent-facing yet.
 
-### Slice 3: P5.4a Desktop Act Verbs And MCP Wrappers
+### Slice 3: P5.4a Secondary-Pointer/Background Actuator
+
+Purpose: create the native general app-control actuator before exposing
+agent-facing act tools.
+
+Implementation scope:
+
+- Implement SP2-SP6 from
+  `2026-06-11-luna-secondary-pointer-background-control.md` in order:
+  - SP2 target-app resolver with bundle/process/window identity proof and
+    allowlist/global-floor intersection.
+  - SP3 AX probe and dry-run, with no native actuation.
+  - SP4 overlay pointer/HUD as a subscriber only; Stop request is allowed, but
+    resume/approve/replay/lease extension is not.
+  - SP5 AX action path behind a default-off operator-only flag.
+  - SP6 PID/window-scoped fallback behind a separate default-off review gate.
+- Keep SP7 (retiring the frontmost/global-cursor gate) out of this slice until
+  SP2-SP6 pass and receive a separate Luna/Codex review.
+- Re-check Stop, Lock, secure input, target drift, app quit, tenant flags,
+  target allowlist, approval grant, and envelope immediately before each native
+  call.
+- Use the SP1.5 contract/security fixtures as executable denial vocabulary.
+- Prove global cursor functions are not called by background-control commands.
+
+Tests:
+
+- Contract tests for target resolver, target drift, app quit, revoked allowlist,
+  flag-off, Stop/Lock, and secure-input denial (`SECURE_INPUT_ACTIVE`) before
+  any native call.
+- Native-boundary tests proving the operator cursor is not moved by the
+  background actuator.
+- Overlay/HUD tests proving it can request Stop but cannot approve, resume,
+  mutate, replay, or extend leases.
+- Operator-only canary smoke in denied/dry-run mode before enabling any AX
+  action flag.
+
+Exit criteria:
+
+- The signed background actuator contract exists, is default-off, and can deny
+  or dry-run against an allowlisted operator app without using the global cursor.
+- No agent-facing act tool is exposed until this slice is green.
+
+### Slice 4: P5.4b Desktop Act Verbs And MCP Wrappers
 
 Purpose: expose the governed command lifecycle to agents without bypassing the
 existing signed envelope boundary.
 
 Implementation scope:
 
+- Prerequisite: D5 structural split has landed, or this slice is limited to
+  contract/tests only. Do not add substantial code to
+  `desktop_control_service.py` before D5.
+- Prerequisite: Slice 3 background actuator contract is green. Wrappers may
+  target fixed canary/no-op actions until SP5/SP6 actuation is explicitly
+  enabled.
 - Add `alpha desktop command request|status|audit` and, if needed for clarity,
   `alpha desktop grant request`.
+- Add thin user-JWT + device-token v1 routes for command request/status/audit
+  and pending grant request if the existing route is internal-key-only. Alpha
+  CLI uses those user-facing routes and never calls `/internal/*`.
 - Add MCP wrappers:
   - `desktop_request_grant`
   - `desktop_actuate`
@@ -172,6 +248,13 @@ Tests:
   `payload.args` -> signed `envelope.args` -> client completion/audit.
 - Denial-completion lifecycle tests for missing grant, wrong command, expired
   grant, wrong device/session, action capability off, and allowlist revoke.
+- D4 test-integrity guard proving the real claim path uses `SELECT ... FOR
+  UPDATE` or the production equivalent under concurrent claim/revoke, not only
+  SQLite green-path tests.
+- Runtime permission tests proving forward-declared `desktop_control` tool names
+  cannot be invoked without a registered MCP tool and a matching tool group.
+- Stop/preempt test on `desktop_actuate` itself, not only the downstream command
+  lifecycle.
 
 Exit criteria:
 
@@ -180,7 +263,7 @@ Exit criteria:
 - No agent-facing path can create approval grants or select the native actuator
   implementation.
 
-### Slice 4: P5.4b Operator Luna Tool Groups And Agent Loop Scaffold
+### Slice 5: P5.4c Operator Luna Tool Groups And Agent Loop Scaffold
 
 Purpose: let operator Luna run a bounded observe -> plan -> act -> observe loop.
 
@@ -189,7 +272,8 @@ Implementation scope:
 - Grant `desktop_observe` and `desktop_control` only to the operator tenant's
   intended Luna agents after Luna/Codex approval.
 - Add planner instructions/persona injection that explains the desktop loop,
-  Stop semantics, approval requirements, and audit reporting.
+  Stop semantics, approval requirements, secure-input denial, and audit
+  reporting.
 - Add a loop coordinator that runs inside existing ChatCliWorkflow/task routing:
   observe, summarize state, propose action, request approval, wait for a
   server-created approval grant, enqueue act, wait for status, observe again,
@@ -200,6 +284,10 @@ Implementation scope:
 - Before P5.5 lands, this coordinator may run only in dry-run, denied/no-op, or
   pre-granted test harness mode. It must not use internal-key-only approval
   grants to turn chat prompts into native actuation.
+- Report-back from this coordinator is constrained to action summaries,
+  outcome/status, denial codes, and audit refs. It must not quote planner-safe
+  OCR text, window titles, contact names, clipboard values, or raw observed
+  screen content.
 
 Tests:
 
@@ -208,6 +296,8 @@ Tests:
 - Negative tests for non-operator tenants and Luna agents lacking tool groups.
 - Loop dry-run test using denied/no-op command status before any broad actuation
   expansion.
+- Report-back leak test using planner-safe OCR/contact/window-title fixtures:
+  final agent text must include only action/outcome/audit refs.
 
 Exit criteria:
 
@@ -216,7 +306,7 @@ Exit criteria:
 - Before that approval surface exists, Luna can prove observe -> plan ->
   approval-required/denied -> report-back without a native macOS call.
 
-### Slice 5: P5.5 Chat Trigger, Approval UX, And Report-Back
+### Slice 6: P5.5 Chat Trigger, Approval UX, And Report-Back
 
 Purpose: make "Luna, do X in app Y" work from the chat surface.
 
@@ -233,12 +323,16 @@ Implementation scope:
   session, device, command/action, expiry, and risk tier.
 - Surface progress through session events: observing, planning, awaiting
   approval, queued, claimed, acting, verifying, completed, denied, preempted.
-- Final answer includes what was done, what was not done, and audit refs.
+- Final answer includes what was done, what was not done, denial/status, and
+  audit refs only. It must not transcribe observed app content unless a separate
+  reviewed disclosure contract allows that exact field.
 
 Tests:
 
 - Chat trigger tests for desktop request, non-desktop request, ambiguous request,
   denied approval, Stop during queue, Stop during execution, and shell offline.
+- Chat report tests proving OCR text, window titles, contact names, clipboard
+  values, and typed secrets are absent from final free text and events.
 - Browser/Chrome tenant smoke for live chat routing.
 - Installed Luna app Computer Use smoke for permission readiness, approval UX,
   Stop preemption, and final report.
@@ -264,8 +358,11 @@ Claudia:
 - Heavy implementation and adversarial review.
 - Suggested lanes:
   - P5.3 redactor driver and planner-safe delivery tests.
-  - P5.4 Alpha CLI/core typed models and MCP wrapper tests.
-  - D4/D5 structural/test-debt slices when they block the feature path.
+  - P5.4a SP2-SP6 secondary-pointer/background actuator implementation and
+    native-boundary tests.
+  - P5.4b Alpha CLI/core typed models, user-JWT v1 routes, and MCP wrapper
+    tests.
+  - D4/D5 structural/test-debt slices before they block the feature path.
 
 Codex:
 
@@ -290,13 +387,15 @@ Before marking the feature E2E complete:
 - Verify Chrome/live tenant chat trigger.
 - Verify Luna Tauri chat trigger.
 - Verify Stop preemption.
-- Verify final report carries audit refs and no raw screenshot or typed secret.
+- Verify final report carries audit refs and no raw screenshot, OCR text, window
+  title, contact name, clipboard value, or typed secret.
 - Verify the Docker `_work` mount gate returns no output.
 
 ## Open Risks
 
 1. PR5 per-tenant keys is still required before non-operator actuation.
-2. `desktop_control_service.py` must be split before more large feature growth.
+2. `desktop_control_service.py` must be split before Slice 4 or any additional
+   command/wrapper growth.
 3. Canonical Python/Rust tables need a shared fixture to avoid drift.
 4. Alpha CLI is currently installed locally but unauthenticated in this Codex
    environment; Luna Desktop remains the active review channel unless auth is
