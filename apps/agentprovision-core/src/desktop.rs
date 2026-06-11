@@ -80,6 +80,7 @@ pub enum DesktopCapability {
     ClipboardRead,
     PointerControl,
     KeyboardControl,
+    BackgroundControl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +93,7 @@ pub enum DesktopActionKind {
     PointerClick,
     KeyboardType,
     KeyboardKeyChord,
+    BackgroundAppControlDryRun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +105,7 @@ pub enum DesktopCommandStatus {
     Succeeded,
     Failed,
     Denied,
+    NoOp,
     Preempted,
     Expired,
 }
@@ -118,6 +121,7 @@ pub enum DesktopRiskTier {
 #[serde(rename_all = "snake_case")]
 pub enum DesktopControlMode {
     ControlLocked,
+    BackgroundControlDryRun,
     Observe,
     Stopped,
 }
@@ -309,6 +313,138 @@ pub struct DesktopPreflight {
     pub error: Option<String>,
 }
 
+/// Narrow Alpha/Luna user-facing dry-run request. It intentionally omits a raw
+/// payload bag so the CLI cannot smuggle pointer/keyboard args or approval data
+/// through the working dry-run path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopBackgroundDryRunTarget {
+    pub bundle_id: String,
+    #[serde(default = "default_background_dry_run_action")]
+    pub action: DesktopActionKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub window_title_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub display_id: Option<i64>,
+}
+
+fn default_background_dry_run_action() -> DesktopActionKind {
+    DesktopActionKind::BackgroundAppControlDryRun
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopBackgroundDryRunRequest {
+    pub session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub shell_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub nonce: Option<String>,
+    pub target: DesktopBackgroundDryRunTarget,
+}
+
+/// `POST /api/v1/desktop-control/commands/background-dry-run` response.
+/// Payload remains opaque because it is the caller's reduced command metadata,
+/// not observed screen/clipboard content. Status reporting uses the stricter
+/// display-safe summary below.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCommandResponse {
+    pub desktop_command_id: String,
+    #[serde(default)]
+    pub desktop_event_id: Option<String>,
+    #[serde(default)]
+    pub session_event_id: Option<String>,
+    #[serde(default)]
+    pub session_seq_no: Option<i64>,
+    pub status: DesktopCommandStatus,
+    pub shell_id: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    pub capability: DesktopCapability,
+    #[serde(default)]
+    pub lease_expires_at: Option<String>,
+    #[serde(default)]
+    pub payload: Option<serde_json::Value>,
+    #[serde(default)]
+    pub idempotent: bool,
+}
+
+/// Display-safe command summary returned by `desktop_command_status`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCommandStatusCommand {
+    pub desktop_command_id: String,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    pub action: DesktopActionKind,
+    #[serde(default)]
+    pub tool_name: Option<String>,
+    pub shell_id: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    pub source: String,
+    pub capability: DesktopCapability,
+    pub status: DesktopCommandStatus,
+    #[serde(default)]
+    pub lease_expires_at: Option<String>,
+    #[serde(default)]
+    pub claimed_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCommandStatusEvent {
+    pub desktop_event_id: String,
+    #[serde(default)]
+    pub desktop_command_id: Option<String>,
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    #[serde(default)]
+    pub correlation_id: Option<String>,
+    pub event_type: AuditEventKind,
+    pub source: String,
+    pub action: DesktopActionKind,
+    pub capability: DesktopCapability,
+    pub outcome: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub mode: Option<DesktopControlMode>,
+    pub shell_id: String,
+    #[serde(default)]
+    pub device_id: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub code: Option<DesktopDenialCode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DesktopCommandStatusSnapshot {
+    pub command: DesktopCommandStatusCommand,
+    #[serde(default)]
+    pub events: Vec<DesktopCommandStatusEvent>,
+    pub terminal: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,6 +464,66 @@ mod tests {
                 serde_json::from_value(serde_json::Value::String(s.into())).expect(s);
             assert_eq!(serde_json::to_value(v).unwrap(), serde_json::json!(s));
         }
+    }
+
+    #[test]
+    fn background_dry_run_contract_values_roundtrip() {
+        assert_eq!(
+            serde_json::to_value(DesktopActionKind::BackgroundAppControlDryRun).unwrap(),
+            serde_json::json!("background_app_control_dry_run")
+        );
+        assert_eq!(
+            serde_json::to_value(DesktopCapability::BackgroundControl).unwrap(),
+            serde_json::json!("background_control")
+        );
+        assert_eq!(
+            serde_json::to_value(DesktopCommandStatus::NoOp).unwrap(),
+            serde_json::json!("no_op")
+        );
+    }
+
+    #[test]
+    fn command_status_rejects_raw_payload_fields() {
+        let mut status = serde_json::json!({
+            "command": {
+                "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+                "correlation_id": "77777777-7777-7777-7777-777777777777",
+                "action": "background_app_control_dry_run",
+                "tool_name": "desktop_background_app_control_dry_run",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "device_id": "88888888-8888-8888-8888-888888888888",
+                "approval_id": null,
+                "source": "mcp",
+                "capability": "background_control",
+                "status": "no_op",
+                "lease_expires_at": null,
+                "claimed_at": "2026-06-11T13:00:00+00:00",
+                "completed_at": "2026-06-11T13:00:00+00:00",
+                "created_at": "2026-06-11T12:59:59+00:00",
+                "updated_at": "2026-06-11T13:00:00+00:00"
+            },
+            "events": [{
+                "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+                "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+                "approval_id": null,
+                "correlation_id": "77777777-7777-7777-7777-777777777777",
+                "event_type": "desktop_command_completed",
+                "source": "api",
+                "action": "background_app_control_dry_run",
+                "capability": "background_control",
+                "outcome": "no_op",
+                "reason": null,
+                "mode": "background_control_dry_run",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "device_id": "88888888-8888-8888-8888-888888888888",
+                "metadata": {"dry_run": true, "native_envelope": false},
+                "created_at": "2026-06-11T13:00:00+00:00"
+            }],
+            "terminal": true
+        });
+        serde_json::from_value::<DesktopCommandStatusSnapshot>(status.clone()).unwrap();
+        status["command"]["payload"] = serde_json::json!({"args": {"text": "SECRET"}});
+        assert!(serde_json::from_value::<DesktopCommandStatusSnapshot>(status).is_err());
     }
 
     #[test]

@@ -199,6 +199,31 @@ class DesktopCommandEnqueueIn(BaseModel):
         return self
 
 
+class DesktopBackgroundDryRunTargetIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    bundle_id: str = Field(..., min_length=1, max_length=256)
+    action: Literal["background_app_control_dry_run"] = "background_app_control_dry_run"
+    window_title_pattern: str | None = Field(default=None, min_length=1, max_length=256)
+    display_id: int | None = Field(default=None, ge=0)
+
+
+class DesktopBackgroundDryRunIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: uuid.UUID
+    shell_id: str | None = Field(
+        default=None,
+        pattern=(
+            r"^desktop-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        ),
+        max_length=96,
+    )
+    nonce: str | None = Field(default=None, max_length=96)
+    target: DesktopBackgroundDryRunTargetIn
+
+
 class DesktopCommandOut(BaseModel):
     desktop_command_id: uuid.UUID
     desktop_event_id: uuid.UUID | None = None
@@ -540,6 +565,38 @@ def create_approval_grant(
         expires_at=grant.expires_at.isoformat(),
         expires_at_ms=int(grant.expires_at.timestamp() * 1000),
     )
+
+
+@router.post(
+    "/commands/background-dry-run",
+    response_model=DesktopCommandOut,
+    status_code=status.HTTP_201_CREATED,
+)
+@limiter.limit("60/minute")
+def enqueue_background_dry_run_command(
+    request: Request,
+    payload: DesktopBackgroundDryRunIn,
+    db: Session = Depends(deps.get_db),
+    current_user: UserModel = Depends(deps.get_current_active_user),
+):
+    command, event, session_event = enqueue_desktop_command(
+        db,
+        tenant_id=current_user.tenant_id,
+        user_id=current_user.id,
+        request=DesktopCommandEnqueue(
+            session_id=payload.session_id,
+            shell_id=payload.shell_id,
+            action="background_app_control_dry_run",
+            tool_name="desktop_background_app_control_dry_run",
+            nonce=payload.nonce,
+            approval_id=None,
+            payload={
+                "target": payload.target.model_dump(exclude_none=True),
+                "dry_run": True,
+            },
+        ),
+    )
+    return _command_out(command, event, session_event)
 
 
 @router.post(

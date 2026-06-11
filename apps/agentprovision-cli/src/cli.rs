@@ -4,9 +4,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::{
     agent, cancel, chat, coalition, completions, desktop, goal, integration, learn, login, logout,
-    memory,
-    quickstart, recall, recipes, remember, review, run, session, sessions, skill, status, tasks,
-    upgrade, usage, watch, workflow, workspace,
+    memory, quickstart, recall, recipes, remember, review, run, session, sessions, skill, status,
+    tasks, upgrade, usage, watch, workflow, workspace,
 };
 use crate::context::Context;
 

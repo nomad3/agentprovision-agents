@@ -287,16 +287,25 @@ Implementation scope:
   global-cursor/frontmost canary path.
 - Responses are display-safe and include command id, status, denial code,
   approval status, and audit refs.
-- Status 2026-06-11: branch `codex/luna-p54b-command-status` implements the
-  first read-only status/audit part of this slice. It adds a tenant/user-scoped
-  command status service, user-JWT route `GET /desktop-control/commands/{id}`,
-  read-only internal status route for MCP, and MCP tool
-  `desktop_command_status`, with the status tool granted through the
-  `desktop_control` tool group. The response intentionally omits raw command
-  payloads, signed envelopes, approval payloads, screen bytes, clipboard text,
-  and native actuation args. This lets Luna queue a dry-run and report its
-  audited terminal state, but it does not add approval grant creation, Alpha CLI
-  verbs, or real native actuation.
+- Status 2026-06-11: PR #881 (`codex/luna-p54b-command-status`, merge
+  `adbc2172`) implements the first read-only status/audit part of this slice.
+  It adds a tenant/user-scoped command status service, user-JWT route
+  `GET /desktop-control/commands/{id}`, read-only internal status route for
+  MCP, and MCP tool `desktop_command_status`, with the status tool granted
+  through the `desktop_control` tool group. The response intentionally omits raw
+  command payloads, signed envelopes, approval payloads, screen bytes,
+  clipboard text, and native actuation args. This lets Luna queue a dry-run and
+  report its audited terminal state, but it does not add approval grant creation
+  or real native actuation.
+- Status 2026-06-11: branch `codex/luna-p54c-alpha-desktop-cli` adds the
+  Alpha-kernel bridge for the working dry-run loop: a narrow user-JWT route
+  `POST /desktop-control/commands/background-dry-run`, typed core request/status
+  models, `alpha desktop dry-run request`, and
+  `alpha desktop command status`. The route fixes the action/tool server-side,
+  derives tenant/user from the authenticated principal, accepts only reduced
+  target metadata, rejects arbitrary payload bags, and queues only
+  `background_app_control_dry_run` no-op commands. It still does not mint
+  grants, call macOS APIs, or enable pointer/keyboard/native actuation.
 
 Tests:
 
