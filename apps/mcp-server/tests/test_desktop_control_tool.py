@@ -426,3 +426,68 @@ async def test_desktop_fetch_observation_omits_empty_shell_id(patch_httpx):
     assert client.calls[0]["params"] == {
         "session_id": "33333333-3333-3333-3333-333333333333",
     }
+
+
+# ── SSRF / path-traversal hardening: agent-supplied ids must be UUIDs ─────────
+
+
+@pytest.mark.asyncio
+async def test_fetch_observation_rejects_traversal_artifact_id(patch_httpx):
+    client = patch_httpx(default_status=200, default_json={"unreached": True})
+
+    out = await dc.desktop_fetch_observation(
+        artifact_id="../../../oauth/internal/token/github?x=",
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    # Rejected BEFORE any HTTP call — no internal-key request is ever issued, so
+    # the traversal cannot retarget another /internal/* endpoint.
+    assert out == {"status": "error", "error": "artifact_id must be a UUID"}
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_command_status_rejects_traversal_command_id(patch_httpx):
+    client = patch_httpx(default_status=200, default_json={"unreached": True})
+
+    out = await dc.desktop_command_status(
+        command_id="../../oauth/internal/token/github",
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out == {"status": "error", "error": "command_id must be a UUID"}
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_observation_canonicalizes_uuid_into_url(patch_httpx):
+    # A valid (upper/mixed-case) UUID is canonicalized; the URL only ever
+    # contains the canonical lower-case UUID, never raw caller input.
+    client = patch_httpx(
+        default_status=200,
+        default_json={
+            "artifact_id": "77777777-7777-7777-7777-777777777777",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "redaction_status": "planner_safe",
+            "size_bytes": 42,
+            "sha256": "ab" * 32,
+            "expires_at": "2026-06-11T13:00:00+00:00",
+            "content_base64": "aGVsbG8=",
+        },
+    )
+
+    await dc.desktop_fetch_observation(
+        artifact_id="77777777-7777-7777-7777-777777777777".upper(),
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert client.calls[0]["url"].endswith(
+        "/api/v1/desktop-control/internal/observations/"
+        "77777777-7777-7777-7777-777777777777/content"
+    )

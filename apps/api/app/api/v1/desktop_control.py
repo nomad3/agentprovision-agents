@@ -40,6 +40,7 @@ from app.services.desktop_control_service import (
     DesktopCommandStop,
     LocalObservationAudit,
     McpObservationRequest,
+    _ensure_desktop_control_enabled,
     claim_next_desktop_command,
     complete_desktop_command,
     create_desktop_approval_grant,
@@ -616,7 +617,10 @@ class DesktopObservationStatusOut(BaseModel):
     session_id: uuid.UUID
     shell_id: str
     artifact_type: str
-    redaction_status: str
+    # Pinned to the redactor's closed vocabulary so API-side drift fails loudly
+    # here (and matches the closed Rust `PerceptionRedactionStatus` enum) rather
+    # than surfacing a new status string the typed CLI mirror cannot decode.
+    redaction_status: Literal["not_planner_safe", "redacting", "planner_safe"]
     size_bytes: int
     sha256: str
     created_at: str | None = None
@@ -641,6 +645,10 @@ def request_observation(
     db: Session = Depends(deps.get_db),
     current_user: UserModel = Depends(deps.get_current_active_user),
 ):
+    # Fail-closed: re-check the master desktop-control flag on this user-facing
+    # verb too, so a tenant with desktop control OFF cannot drive the observe
+    # audit/down-channel surface (the delivery routes already re-check it).
+    _ensure_desktop_control_enabled(db, current_user.tenant_id)
     event, session_event = record_mcp_observation_request(
         db,
         tenant_id=current_user.tenant_id,

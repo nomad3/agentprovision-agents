@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 
 import httpx
 from mcp.server.fastmcp import Context
@@ -20,6 +21,19 @@ logger = logging.getLogger(__name__)
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://api:8000")
 API_INTERNAL_KEY = os.environ.get("MCP_API_KEY", "dev_mcp_key")
+
+
+def _validate_uuid(value: str, field: str) -> str | None:
+    """Return the canonical UUID string for ``value`` or None if it is not a
+    UUID. Agent-supplied ids are interpolated into internal-key-bearing API
+    URLs; a raw value containing path separators / ``..`` could otherwise
+    retarget the request at another ``/internal/*`` endpoint (httpx normalizes
+    dot segments). Pinning to a canonical UUID removes every traversal char."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError):
+        logger.warning("desktop-control: rejected non-UUID %s", field)
+        return None
 
 _TOOL_ACTIONS = {
     "desktop_observe_screen": "capture_screenshot",
@@ -180,13 +194,17 @@ async def _get_command_status(
     if not user_id:
         return {"status": "error", "error": "X-User-Id required for desktop control"}
 
+    safe_command_id = _validate_uuid(command_id, "command_id")
+    if not safe_command_id:
+        return {"status": "error", "error": "command_id must be a UUID"}
+
     headers = {
         "X-Internal-Key": API_INTERNAL_KEY,
         "X-Tenant-Id": tid,
         "X-User-Id": user_id,
     }
     params = {"session_id": session_id} if session_id else None
-    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/commands/{command_id}/status"
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/commands/{safe_command_id}/status"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -320,6 +338,10 @@ async def _fetch_observation(
     if not user_id:
         return {"status": "error", "error": "X-User-Id required for desktop observation"}
 
+    safe_artifact_id = _validate_uuid(artifact_id, "artifact_id")
+    if not safe_artifact_id:
+        return {"status": "error", "error": "artifact_id must be a UUID"}
+
     headers = {
         "X-Internal-Key": API_INTERNAL_KEY,
         "X-Tenant-Id": tid,
@@ -328,7 +350,10 @@ async def _fetch_observation(
     params = {"session_id": session_id}
     if shell_id:
         params["shell_id"] = shell_id
-    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/observations/{artifact_id}/content"
+    url = (
+        f"{API_BASE_URL}/api/v1/desktop-control/internal/observations/"
+        f"{safe_artifact_id}/content"
+    )
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
