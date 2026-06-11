@@ -531,12 +531,12 @@ Implementation scope:
   structured `permission_not_ready` and queue no command. This does not grant
   macOS permissions, change TCC settings, flip tenant flags, sign envelopes, or
   enable native actuation.
-- Status 2026-06-11: current branch `codex/luna-p55-report-back` starts the
-  P5.5 app-facing approval UX rung. The target is the smallest useful Luna app
+- Status 2026-06-11: PR #901 (`codex/luna-p55-report-back`, merge `ef60a023`)
+  landed the P5.5 app-facing approval UX rung. It is the smallest useful Luna app
   bridge over the already-merged user-JWT approval routes: show active-session
   pending desktop approval requests, approve/deny with bounded defaults, then
   let the existing agent loop poll `desktop_request_status` for `grant_id` and
-  continue. This branch must not create a new grant path, touch native flags,
+  continue. This branch did not create a new grant path, touch native flags,
   alter the allowlist, mutate TCC settings, or expose raw screen/OCR/window
   content in the UI.
   Luna review found one release blocker: stale requests from the previous active
@@ -544,15 +544,19 @@ Implementation scope:
   rendered requests by `request.session_id === activeSessionId`, clears local
   request state on session change, refuses approve/deny for mismatched sessions,
   and has a regression proving a stale request cannot be approved after a switch.
+- Status 2026-06-11: current branch `codex/luna-p55-report-back-guards` starts
+  the report-back guard rung. It tightens the CLI runtime prompt to an explicit
+  allowlist for final desktop summaries and adds adversarial fixtures proving raw
+  desktop fields in `desktop_context` are not rendered into the prompt.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
   approval-request -> user approval -> bounded grant.
-- P5.4d permission readiness is landed. Continue with the remaining feature
-  rungs in dependency order: Luna app approval inbox / P5.5 approval UX, report-
-  back leak fixtures, byte-free `rl_experience` per desktop decision/denial, then
-  broader chat trigger/report-back polish.
+- P5.4d permission readiness and P5.5 approval UX are landed. Continue with the
+  remaining feature rungs in dependency order: report-back leak fixtures,
+  byte-free `rl_experience` per desktop decision/denial, then broader chat
+  trigger/report-back polish.
 
 Tests:
 
