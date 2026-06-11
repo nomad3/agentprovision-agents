@@ -150,6 +150,9 @@ class TenantFeatures(Base):
     keyboard_control_enabled = Column(  # Phase 4 keyboard actuation
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    background_control_enabled = Column(  # Phase 5 background app-control
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     # Per-tenant bundle allowlist; the intended effective list = per-tenant ∩
     # global platform floor (DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST). NOTE: this
     # column is INERT on the actuation path today — PR4b enforces the per-capability

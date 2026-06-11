@@ -97,6 +97,58 @@ async def test_desktop_read_clipboard_omits_empty_shell_id(patch_httpx):
 
 
 @pytest.mark.asyncio
+async def test_desktop_background_app_control_dry_run_posts_command(patch_httpx):
+    client = patch_httpx(
+        default_json={
+            "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+            "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+            "session_event_id": "session-event-background",
+            "session_seq_no": 13,
+            "status": "pending",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "device_id": "88888888-8888-8888-8888-888888888888",
+            "approval_id": None,
+            "capability": "background_control",
+            "lease_expires_at": None,
+            "payload": {
+                "action": "background_app_control_dry_run",
+                "mode": "background_control_dry_run",
+                "dry_run": {"native_envelope": False},
+            },
+            "idempotent": False,
+        },
+    )
+
+    out = await dc.desktop_background_app_control_dry_run(
+        session_id="33333333-3333-3333-3333-333333333333",
+        bundle_id="com.example.LunaCanaryTarget",
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "pending"
+    assert out["capability"] == "background_control"
+    assert "native macOS actuation" in out["message"]
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/desktop-control/internal/commands")
+    assert call["json"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "action": "background_app_control_dry_run",
+        "tool_name": "desktop_background_app_control_dry_run",
+        "payload": {
+            "target": {
+                "bundle_id": "com.example.LunaCanaryTarget",
+                "action": "background_app_control_dry_run",
+            },
+            "dry_run": True,
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_desktop_tools_require_tenant():
     out = await dc.desktop_get_active_app(
         session_id="33333333-3333-3333-3333-333333333333",

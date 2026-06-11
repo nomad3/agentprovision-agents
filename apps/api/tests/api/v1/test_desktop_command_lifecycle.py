@@ -120,6 +120,7 @@ def seeded_fixture(db_session: Session):
         desktop_control_enabled=True,
         pointer_control_enabled=True,
         keyboard_control_enabled=True,
+        background_control_enabled=True,
         # PR4c: per-tenant target allowlist (effective = per-tenant ∩ floor). The
         # seeded operator opts the canary bundle in so native-control tests (which
         # patch the floor to [CANARY_BUNDLE_ID]) resolve effective=[CANARY];
@@ -265,6 +266,7 @@ def _seed_second_tenant(db_session: Session):
         desktop_control_enabled=True,
         pointer_control_enabled=False,
         keyboard_control_enabled=False,
+        background_control_enabled=False,
         native_control_target_allowlist=[],
     )
     db_session.add_all([tenant, user, session, device, features])
@@ -1855,11 +1857,12 @@ def test_enqueue_nonce_is_tenant_scoped(db_session, seeded):
 # boundary). The seeded tenant is fully enabled; these tests flip flags OFF.
 
 
-def _set_capability_flags(db, *, desktop=True, pointer=True, keyboard=True):
+def _set_capability_flags(db, *, desktop=True, pointer=True, keyboard=True, background=True):
     f = db.query(TenantFeatures).filter(TenantFeatures.tenant_id == TENANT_ID).one()
     f.desktop_control_enabled = desktop
     f.pointer_control_enabled = pointer
     f.keyboard_control_enabled = keyboard
+    f.background_control_enabled = background
     db.add(f)
     db.commit()
 
@@ -1883,6 +1886,28 @@ def _enqueue_pointer(db, *, nonce="p", action="pointer_move", tool="desktop_poin
             shell_id=None,
             nonce=nonce,
             payload={"x": 100, "y": 200, "target": {"bundle_id": CANARY_BUNDLE_ID, "action": action}},
+        ),
+    )
+
+
+def _enqueue_background_dry_run(db, *, nonce="background-dry-run"):
+    return enqueue_desktop_command(
+        db,
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        request=DesktopCommandEnqueue(
+            session_id=SESSION_ID,
+            action="background_app_control_dry_run",
+            tool_name="desktop_background_app_control_dry_run",
+            shell_id=None,
+            nonce=nonce,
+            payload={
+                "target": {
+                    "bundle_id": CANARY_BUNDLE_ID,
+                    "action": "background_app_control_dry_run",
+                },
+                "dry_run": True,
+            },
         ),
     )
 
@@ -2021,6 +2046,104 @@ def test_native_control_enqueue_denied_when_keyboard_capability_disabled(db_sess
         command, _e, _s = _enqueue_pointer(db_session, nonce="pointer-still-ok")
     assert command.status == "pending"
     assert command.capability == "pointer_control"
+
+
+def test_background_control_dry_run_claim_completes_no_op_without_envelope(db_session, seeded):
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, queued_event, _queued_session = _enqueue_background_dry_run(
+            db_session,
+            nonce="background-dry-run-claim",
+        )
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert command.capability == "background_control"
+    assert command.approval_id is None
+    assert command.payload["mode"] == "background_control_dry_run"
+    assert queued_event.event_metadata["dry_run"] is True
+    assert queued_event.event_metadata["native_envelope"] is False
+
+    assert claimed is not None
+    assert claimed.id == command.id
+    assert claimed.status == "no_op"
+    assert claimed.claimed_at is not None
+    assert claimed.completed_at is not None
+    assert claimed.payload["dry_run"]["native_envelope"] is False
+    assert claimed.payload["dry_run"]["completed_without_native_actuation"] is True
+    assert "command_envelope" not in claimed.payload
+    assert "approval" not in claimed.payload
+    assert event.event_type == "desktop_command_completed"
+    assert event.outcome == "no_op"
+    assert event.event_metadata["dry_run"] is True
+    assert event.event_metadata["native_envelope"] is False
+
+    claim_event = db_session.query(DesktopCommandEvent).filter(
+        DesktopCommandEvent.desktop_command_id == command.id,
+        DesktopCommandEvent.event_type == "desktop_command_claimed",
+    ).one()
+    assert claim_event.outcome == "started"
+    assert claim_event.event_metadata["dry_run"] is True
+    assert db_session.query(DesktopCommandEnvelopeNonce).filter(
+        DesktopCommandEnvelopeNonce.desktop_command_id == command.id,
+    ).count() == 0
+    assert db_session.query(DesktopCommandApprovalGrant).filter(
+        DesktopCommandApprovalGrant.desktop_command_id == command.id,
+    ).count() == 0
+
+
+def test_background_control_dry_run_stop_preempts_pending_before_claim(db_session, seeded):
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        command, _event, _session = _enqueue_background_dry_run(
+            db_session,
+            nonce="background-dry-run-stop",
+        )
+        count, events, _session_events = preempt_desktop_commands_for_stop(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            stop=DesktopCommandStop(session_id=SESSION_ID, shell_id=SHELL_ID),
+        )
+        claimed, event, _claim_session = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert count == 1
+    assert events[0].desktop_command_id == command.id
+    refreshed = db_session.query(DesktopCommand).filter(DesktopCommand.id == command.id).one()
+    assert refreshed.status == "preempted"
+    assert claimed is None
+    assert event is None
+
+
+def test_background_control_dry_run_denied_when_background_capability_disabled(db_session, seeded):
+    _set_capability_flags(db_session, desktop=True, pointer=True, keyboard=True, background=False)
+    with patch.object(
+        desktop_control_service.settings, "DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST", [CANARY_BUNDLE_ID],
+    ), patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence", return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        with pytest.raises(HTTPException) as exc:
+            _enqueue_background_dry_run(db_session, nonce="background-off")
+
+    assert exc.value.status_code == 403
+    assert db_session.query(DesktopCommand).filter(
+        DesktopCommand.capability == "background_control",
+    ).count() == 0
 
 
 def test_native_control_claim_denies_when_capability_revoked_midflight(db_session, seeded):

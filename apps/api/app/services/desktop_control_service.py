@@ -68,6 +68,7 @@ _NATIVE_CONTROL_CAPABILITIES = {
     "pointer_click": "pointer_control",
     "keyboard_type": "keyboard_control",
     "keyboard_key_chord": "keyboard_control",
+    "background_app_control_dry_run": "background_control",
 }
 
 # Per-action-class tenant flag for each native-control capability (PR4b). The
@@ -77,12 +78,14 @@ _NATIVE_CONTROL_CAPABILITIES = {
 _CAPABILITY_TENANT_FLAG = {
     "pointer_control": "pointer_control_enabled",
     "keyboard_control": "keyboard_control_enabled",
+    "background_control": "background_control_enabled",
 }
 
 _TERMINAL_COMMAND_STATUSES = {
     "succeeded",
     "failed",
     "denied",
+    "no_op",
     "preempted",
     "expired",
 }
@@ -108,6 +111,7 @@ _COMMAND_TOOL_ACTIONS = {
     "desktop_pointer_click": "pointer_click",
     "desktop_keyboard_type": "keyboard_type",
     "desktop_keyboard_key_chord": "keyboard_key_chord",
+    "desktop_background_app_control_dry_run": "background_app_control_dry_run",
 }
 
 # Pointer (Phase 3) and keyboard (Phase 4) are both enabled: issued as signed
@@ -116,6 +120,7 @@ _COMMAND_TOOL_ACTIONS = {
 # key chords). No native-control action is server-disabled now.
 _POINTER_CONTROL_ACTIONS = frozenset({"pointer_move", "pointer_click"})
 _KEYBOARD_CONTROL_ACTIONS = frozenset({"keyboard_type", "keyboard_key_chord"})
+_BACKGROUND_CONTROL_DRY_RUN_ACTIONS = frozenset({"background_app_control_dry_run"})
 _DISABLED_NATIVE_CONTROL_ACTIONS: frozenset[str] = frozenset()
 
 _SAFE_METADATA_KEYS = {
@@ -130,6 +135,8 @@ _SAFE_METADATA_KEYS = {
     "approval_remaining_actions",
     "approval_risk_tier",
     "denial_code",
+    "dry_run",
+    "native_envelope",
     "payload_key_count",
     "result_fields",
     "result_kind",
@@ -140,7 +147,7 @@ _SAFE_METADATA_KEYS = {
 
 _SAFE_RESULT_KINDS = {"binary", "string", "json", "error", "unsupported", "unknown"}
 _SAFE_RESULT_FIELDS = {"app", "title_chars", "title_present"}
-_SAFE_CONTROL_MODES = {"control_locked", "observe", "stopped"}
+_SAFE_CONTROL_MODES = {"background_control_dry_run", "control_locked", "observe", "stopped"}
 
 DEFAULT_COMMAND_LEASE_SECONDS = 30
 DEFAULT_COMMAND_PENDING_TTL_SECONDS = 300
@@ -392,6 +399,8 @@ def _safe_metadata(raw: dict[str, Any] | None) -> dict[str, Any]:
         elif normalized_key == "approval_remaining_actions" and isinstance(value, int):
             safe[normalized_key] = max(0, value)
         elif normalized_key == "can_observe" and isinstance(value, bool):
+            safe[normalized_key] = value
+        elif normalized_key in {"dry_run", "native_envelope"} and isinstance(value, bool):
             safe[normalized_key] = value
         elif normalized_key == "result_fields" and isinstance(value, list):
             safe[normalized_key] = [
@@ -751,6 +760,8 @@ def _enqueue_native_control_command(
     # Canary commands carry no args -> None -> omitted (envelope unchanged).
     raw_args = request.payload.get("args") if isinstance(request.payload, dict) else None
     actuation_args = _normalize_native_control_args(request.action, raw_args)
+    is_background_dry_run = request.action in _BACKGROUND_CONTROL_DRY_RUN_ACTIONS
+    control_mode = "background_control_dry_run" if is_background_dry_run else "control_locked"
 
     now = _utcnow()
     command = DesktopCommand(
@@ -767,10 +778,19 @@ def _enqueue_native_control_command(
         payload={
             "action": request.action,
             "tool_name": request.tool_name,
-            "mode": "control_locked",
+            "mode": control_mode,
             "risk_tier": "native_control",
             "target": target,
             "request": _safe_request_metadata(request.payload),
+            **(
+                {
+                    "dry_run": {
+                        "native_envelope": False,
+                    }
+                }
+                if is_background_dry_run
+                else {}
+            ),
             **({"args": actuation_args} if actuation_args is not None else {}),
         },
         created_at=now,
@@ -804,6 +824,14 @@ def _enqueue_native_control_command(
         metadata={
             "tool_name": request.tool_name,
             "risk_tier": "native_control",
+            **(
+                {
+                    "dry_run": True,
+                    "native_envelope": False,
+                }
+                if is_background_dry_run
+                else {}
+            ),
             **_safe_request_metadata(request.payload),
         },
     )
@@ -2622,6 +2650,115 @@ def enqueue_desktop_command(
     return command, event, session_event
 
 
+def _complete_background_control_dry_run_claim(
+    db: Session,
+    command: DesktopCommand,
+    *,
+    claim: DesktopCommandClaim,
+    lease_expires_at: datetime,
+    now: datetime,
+    expired_events: list[DesktopCommandEvent],
+) -> tuple[DesktopCommand, DesktopCommandEvent, dict[str, Any] | None]:
+    payload = dict(command.payload or {})
+    payload["dry_run"] = {
+        "native_envelope": False,
+        "completed_without_native_actuation": True,
+    }
+    result = db.execute(
+        update(DesktopCommand)
+        .where(
+            DesktopCommand.id == command.id,
+            DesktopCommand.tenant_id == command.tenant_id,
+            DesktopCommand.status == "pending",
+        )
+        .values(
+            status="claimed",
+            lease_owner_shell_id=claim.shell_id,
+            lease_expires_at=lease_expires_at,
+            claimed_at=now,
+            payload=payload,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Desktop command was claimed by another worker")
+
+    command.status = "claimed"
+    command.lease_owner_shell_id = claim.shell_id
+    command.lease_expires_at = lease_expires_at
+    command.claimed_at = now
+    command.payload = payload
+    command.updated_at = now
+
+    _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_claimed",
+        source="tauri",
+        outcome="started",
+        metadata={
+            "control_mode": "background_control_dry_run",
+            "dry_run": True,
+            "native_envelope": False,
+        },
+    )
+    result = db.execute(
+        update(DesktopCommand)
+        .where(
+            DesktopCommand.id == command.id,
+            DesktopCommand.tenant_id == command.tenant_id,
+            DesktopCommand.status == "claimed",
+        )
+        .values(
+            status="no_op",
+            completed_at=now,
+            updated_at=now,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if int(getattr(result, "rowcount", 0) or 0) != 1:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Desktop command dry-run claim is no longer valid")
+    command.status = "no_op"
+    command.completed_at = now
+    command.updated_at = now
+
+    event = _record_command_event(
+        db,
+        command,
+        event_type="desktop_command_completed",
+        source="api",
+        outcome="no_op",
+        metadata={
+            "control_mode": "background_control_dry_run",
+            "dry_run": True,
+            "native_envelope": False,
+        },
+    )
+    db.commit()
+    db.refresh(command)
+    db.refresh(event)
+    for expired_event in expired_events:
+        _publish_display_safe_command_event(
+            expired_event,
+            status="expired",
+            tenant_id=command.tenant_id,
+        )
+    session_event = _publish_display_safe_session_event(
+        command.session_id,
+        event.event_type,
+        {
+            **_display_safe_command_payload(command),
+            "desktop_event_id": str(event.id),
+            "outcome": event.outcome,
+        },
+        tenant_id=command.tenant_id,
+    )
+    return command, event, session_event
+
+
 def claim_next_desktop_command(
     db: Session,
     *,
@@ -2681,6 +2818,7 @@ def claim_next_desktop_command(
 
     command_action = str((command.payload or {}).get("action") or "desktop_command")
     is_native_control = _risk_tier_for_action(command_action) == "native_control"
+    is_background_dry_run = command_action in _BACKGROUND_CONTROL_DRY_RUN_ACTIONS
     if not is_native_control:
         try:
             _ensure_desktop_control_enabled(db, user.tenant_id, lock=True)
@@ -2738,6 +2876,15 @@ def claim_next_desktop_command(
                     tenant_id=user.tenant_id,
                 )
             return None, denied_event, denied_session_event
+    if is_background_dry_run:
+        return _complete_background_control_dry_run_claim(
+            db,
+            command,
+            claim=claim,
+            lease_expires_at=lease_expires_at,
+            now=now,
+            expired_events=expired_events,
+        )
     if is_native_control:
         try:
             native_envelope_algorithm = _desktop_command_envelope_algorithm()

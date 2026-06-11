@@ -57,6 +57,7 @@ _TOOL_ACTIONS = {
     "desktop_pointer_click": "pointer_click",
     "desktop_keyboard_type": "keyboard_type",
     "desktop_keyboard_key_chord": "keyboard_key_chord",
+    "desktop_background_app_control_dry_run": "background_app_control_dry_run",
 }
 
 _OBSERVATION_TOOL_ACTIONS = {
@@ -172,6 +173,7 @@ class DesktopCommandEnqueueIn(BaseModel):
         "pointer_click",
         "keyboard_type",
         "keyboard_key_chord",
+        "background_app_control_dry_run",
     ]
     tool_name: Literal[
         "desktop_observe_screen",
@@ -181,6 +183,7 @@ class DesktopCommandEnqueueIn(BaseModel):
         "desktop_pointer_click",
         "desktop_keyboard_type",
         "desktop_keyboard_key_chord",
+        "desktop_background_app_control_dry_run",
     ]
     nonce: str | None = Field(default=None, max_length=96)
     approval_id: uuid.UUID | None = None

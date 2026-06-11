@@ -801,6 +801,56 @@ def test_command_enqueue_endpoint_accepts_native_control_scaffold_actions():
     assert saved_request.tool_name == "desktop_pointer_click"
 
 
+def test_command_enqueue_endpoint_accepts_background_control_dry_run():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.enqueue_desktop_command",
+        return_value=(
+            _command(
+                status="pending",
+                capability="background_control",
+                payload={
+                    "action": "background_app_control_dry_run",
+                    "mode": "background_control_dry_run",
+                    "dry_run": {"native_envelope": False},
+                },
+            ),
+            event,
+            {"event_id": "session-event-background", "seq_no": 13},
+        ),
+    ) as enqueue:
+        response = client.post(
+            "/api/v1/desktop-control/internal/commands",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "action": "background_app_control_dry_run",
+                "tool_name": "desktop_background_app_control_dry_run",
+                "payload": {
+                    "target": {
+                        "bundle_id": "com.example.LunaCanaryTarget",
+                        "action": "background_app_control_dry_run",
+                    },
+                    "dry_run": True,
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "pending"
+    assert response.json()["capability"] == "background_control"
+    assert response.json()["payload"]["mode"] == "background_control_dry_run"
+    saved_request = enqueue.call_args.kwargs["request"]
+    assert saved_request.action == "background_app_control_dry_run"
+    assert saved_request.tool_name == "desktop_background_app_control_dry_run"
+
+
 def test_command_claim_endpoint_passes_device_token():
     client, _db = _client_for_endpoint(_user())
     event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))

@@ -12,6 +12,7 @@ CONTROL_TOOLS = {
     "desktop_pointer_click",
     "desktop_keyboard_type",
     "desktop_keyboard_key_chord",
+    "desktop_background_app_control_dry_run",
 }
 
 
