@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient
 
 from app.api import deps
 from app.api.v1 import provision as provision_route
+from app.api.v1 import vet_practice as vet_practice_route
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
@@ -488,6 +489,14 @@ def _build_client(db_session) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
+def _build_vet_dashboard_client(db_session, current_user) -> TestClient:
+    app = FastAPI()
+    app.dependency_overrides[deps.get_db] = lambda: db_session
+    app.dependency_overrides[deps.get_current_active_user] = lambda: current_user
+    app.include_router(vet_practice_route.router, prefix="/api/v1/vet-practice")
+    return TestClient(app, raise_server_exceptions=False)
+
+
 def test_endpoint_rejects_missing_internal_key(db_session, vet_tenant):
     tenant, _ = vet_tenant
     client = _build_client(db_session)
@@ -541,6 +550,28 @@ def test_endpoint_invalid_tenant_id_is_400(db_session, vet_tenant):
             "X-Tenant-Id": "not-a-uuid",
         },
     )
+    assert resp.status_code == 400, resp.text
+
+
+def test_vet_dashboard_endpoint_defaults_to_gp_full(db_session, vet_tenant):
+    tenant, admin = vet_tenant
+    client = _build_vet_dashboard_client(db_session, admin)
+
+    resp = client.get("/api/v1/vet-practice/dashboard")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["variant"] == "gp_full"
+    assert body["tenant_id"] == str(tenant.id)
+    assert body["summary"]["agents_expected"] == 10
+
+
+def test_vet_dashboard_endpoint_rejects_unknown_variant(db_session, vet_tenant):
+    _, admin = vet_tenant
+    client = _build_vet_dashboard_client(db_session, admin)
+
+    resp = client.get("/api/v1/vet-practice/dashboard?variant=nope")
+
     assert resp.status_code == 400, resp.text
 
 
