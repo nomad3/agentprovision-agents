@@ -115,6 +115,7 @@ jobs:
             --exclude 'apps/api/.env' \
             --exclude 'cloudflared/credentials.json' \
             --exclude 'cloudflared/cert.pem' \
+            --exclude '.agentprovision_last_deployed_sha' \
             ./ "$DEPLOY_DIR"/
           echo "Deploy checkout synced to $DEPLOY_DIR"
 
@@ -151,11 +152,26 @@ jobs:
       - name: Detect changed services
         id: changes
         run: |
-          # Diff against the prior commit. fetch-depth: 0 in the checkout
-          # above ensures HEAD~1 resolves. If diff ever fails, fall back to
-          # an API Dockerfile path so the classifier fails conservatively
-          # into the guarded build path instead of a recreate-only deploy.
-          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "apps/api/Dockerfile")
+          # Diff against the last successfully deployed commit, not just
+          # HEAD~1. A failed deploy must not advance the service classifier:
+          # the next green deploy still needs to include every service change
+          # that never reached the stable compose directory.
+          LAST_DEPLOYED_SHA_FILE="$DEPLOY_DIR/.agentprovision_last_deployed_sha"
+          DIFF_BASE="HEAD~1"
+          if [ -s "$LAST_DEPLOYED_SHA_FILE" ]; then
+            LAST_DEPLOYED_SHA="$(tr -d '[:space:]' < "$LAST_DEPLOYED_SHA_FILE")"
+            if git cat-file -e "${LAST_DEPLOYED_SHA}^{commit}" 2>/dev/null; then
+              DIFF_BASE="$LAST_DEPLOYED_SHA"
+            else
+              echo "Last deployed SHA marker is not in this checkout; falling back to HEAD~1"
+            fi
+          fi
+          echo "Diff base: $DIFF_BASE"
+          # fetch-depth: 0 above should make both the marker and HEAD~1
+          # resolvable. If diff ever fails, fall back to an API Dockerfile
+          # path so the classifier fails conservatively into the guarded
+          # build path instead of a recreate-only deploy.
+          CHANGED=$(git diff --name-only "$DIFF_BASE" HEAD 2>/dev/null || echo "apps/api/Dockerfile")
           BUILD_SERVICES=""
           RECREATE_SERVICES=""
 
@@ -188,7 +204,7 @@ jobs:
           # the application images because the image contract may have changed.
           if echo "$CHANGED" | grep -q "^docker-compose\.yml$"; then
             RECREATE_SERVICES="$RECREATE_SERVICES api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client cloudflared"
-            COMPOSE_DIFF="$(git diff -U0 HEAD~1 HEAD -- docker-compose.yml 2>/dev/null || true)"
+            COMPOSE_DIFF="$(git diff -U0 "$DIFF_BASE" HEAD -- docker-compose.yml 2>/dev/null || true)"
             if echo "$COMPOSE_DIFF" | grep -Eq '^[+-][[:space:]]*(build:|context:|dockerfile:|args:)'; then
               BUILD_SERVICES="$BUILD_SERVICES api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"
             fi
@@ -520,3 +536,9 @@ jobs:
           fi
           echo "── disk after gated cleanup ──"
           df -h /System/Volumes/Data | tail -1 || true
+
+      - name: Mark successful deployed SHA
+        if: success()
+        run: |
+          git rev-parse HEAD > "$DEPLOY_DIR/.agentprovision_last_deployed_sha"
+          echo "Marked successful deploy SHA: $(git rev-parse HEAD)"
