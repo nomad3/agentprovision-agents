@@ -851,6 +851,79 @@ def test_command_enqueue_endpoint_accepts_background_control_dry_run():
     assert saved_request.tool_name == "desktop_background_app_control_dry_run"
 
 
+def _display_safe_status():
+    return {
+        "command": {
+            "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+            "correlation_id": "77777777-7777-7777-7777-777777777777",
+            "action": "background_app_control_dry_run",
+            "tool_name": "desktop_background_app_control_dry_run",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "device_id": "88888888-8888-8888-8888-888888888888",
+            "approval_id": None,
+            "source": "mcp",
+            "capability": "background_control",
+            "status": "no_op",
+            "lease_expires_at": None,
+            "claimed_at": "2026-06-11T13:00:00+00:00",
+            "completed_at": "2026-06-11T13:00:00+00:00",
+            "created_at": "2026-06-11T12:59:59+00:00",
+            "updated_at": "2026-06-11T13:00:00+00:00",
+        },
+        "events": [
+            {
+                "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+                "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+                "approval_id": None,
+                "correlation_id": "77777777-7777-7777-7777-777777777777",
+                "event_type": "desktop_command_completed",
+                "source": "api",
+                "action": "background_app_control_dry_run",
+                "capability": "background_control",
+                "outcome": "no_op",
+                "reason": None,
+                "mode": "background_control_dry_run",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "device_id": "88888888-8888-8888-8888-888888888888",
+                "metadata": {"dry_run": True, "native_envelope": False},
+                "created_at": "2026-06-11T13:00:00+00:00",
+            },
+        ],
+        "terminal": True,
+    }
+
+
+def test_internal_command_status_endpoint_returns_display_safe_audit():
+    client, _db = _client_for_endpoint(_user())
+
+    with patch(
+        "app.api.v1.desktop_control.get_desktop_command_status_snapshot",
+        return_value=object(),
+    ) as get_status, patch(
+        "app.api.v1.desktop_control.display_safe_command_status",
+        return_value=_display_safe_status(),
+    ):
+        response = client.get(
+            "/api/v1/desktop-control/internal/commands/99999999-9999-9999-9999-999999999999/status",
+            headers={
+                "X-Internal-Key": settings.API_INTERNAL_KEY,
+                "X-Tenant-Id": "11111111-1111-1111-1111-111111111111",
+                "X-User-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            params={"session_id": "33333333-3333-3333-3333-333333333333"},
+        )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["command"]["status"] == "no_op"
+    assert body["events"][0]["metadata"] == {"dry_run": True, "native_envelope": False}
+    assert "payload" not in body["command"]
+    assert "command_envelope" not in str(body)
+    assert get_status.call_args.kwargs["tenant_id"] == uuid.UUID("11111111-1111-1111-1111-111111111111")
+    assert get_status.call_args.kwargs["user_id"] == uuid.UUID("22222222-2222-2222-2222-222222222222")
+    assert get_status.call_args.kwargs["session_id"] == uuid.UUID("33333333-3333-3333-3333-333333333333")
+
+
 def test_command_claim_endpoint_passes_device_token():
     client, _db = _client_for_endpoint(_user())
     event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
@@ -936,3 +1009,51 @@ def test_command_stop_endpoint_returns_preempted_event_ids():
         ],
     }
     assert stop.call_args.kwargs["device_token"] == "secret-device-token"
+
+
+def test_user_command_status_endpoint_uses_authenticated_user_scope():
+    user = _user()
+    client, _db = _client_for_endpoint(user)
+
+    with patch(
+        "app.api.v1.desktop_control.get_desktop_command_status_snapshot",
+        return_value=object(),
+    ) as get_status, patch(
+        "app.api.v1.desktop_control.display_safe_command_status",
+        return_value=_display_safe_status(),
+    ):
+        response = client.get(
+            "/api/v1/desktop-control/commands/99999999-9999-9999-9999-999999999999",
+            params={"session_id": "33333333-3333-3333-3333-333333333333"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["terminal"] is True
+    assert get_status.call_args.kwargs["tenant_id"] == user.tenant_id
+    assert get_status.call_args.kwargs["user_id"] == user.id
+
+
+def test_command_claim_route_still_wins_over_command_id_route():
+    client, _db = _client_for_endpoint(_user())
+    event = SimpleNamespace(id=uuid.UUID("66666666-6666-6666-6666-666666666666"))
+
+    with patch(
+        "app.api.v1.desktop_control.claim_next_desktop_command",
+        return_value=(
+            _command(),
+            event,
+            {"event_id": "session-event-claim", "seq_no": 14},
+        ),
+    ):
+        response = client.post(
+            "/api/v1/desktop-control/commands/claim",
+            headers={"X-Device-Token": "secret-device-token"},
+            json={
+                "session_id": "33333333-3333-3333-3333-333333333333",
+                "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+                "lease_seconds": 30,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "claimed"

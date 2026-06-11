@@ -34,7 +34,9 @@ from app.services.desktop_control_service import (
     claim_next_desktop_command,
     complete_desktop_command,
     create_desktop_approval_grant,
+    display_safe_command_status,
     enqueue_desktop_command,
+    get_desktop_command_status_snapshot,
     preempt_desktop_commands_for_stop,
 )
 
@@ -2144,6 +2146,114 @@ def test_background_control_dry_run_denied_when_background_capability_disabled(d
     assert db_session.query(DesktopCommand).filter(
         DesktopCommand.capability == "background_control",
     ).count() == 0
+
+
+def test_command_status_snapshot_is_display_safe(db_session, seeded):
+    now = _utcnow()
+    command = DesktopCommand(
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        shell_id=SHELL_ID,
+        device_id=DEVICE_ID,
+        capability="keyboard_control",
+        status="succeeded",
+        source="mcp",
+        nonce="status-safe",
+        payload={
+            "action": "keyboard_type",
+            "tool_name": "desktop_keyboard_type",
+            "mode": "control_locked",
+            "args": {"text": "must not leak typed text"},
+            "command_envelope": {"signature": "must-not-leak"},
+            "approval": {"approval_id": "must-not-leak"},
+        },
+        claimed_at=now,
+        completed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(command)
+    db_session.flush()
+    event = DesktopCommandEvent(
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        session_id=SESSION_ID,
+        desktop_command_id=command.id,
+        correlation_id=command.correlation_id,
+        event_type="desktop_command_completed",
+        source="tauri",
+        action="keyboard_type",
+        capability="keyboard_control",
+        outcome="succeeded",
+        mode="control_locked",
+        shell_id=SHELL_ID,
+        device_id=DEVICE_ID,
+        event_metadata={
+            "result_kind": "json",
+            "result_size_chars": 42,
+            "raw_clipboard_text": "must not leak metadata",
+            "args_text": "must not leak metadata",
+        },
+        created_at=now,
+    )
+    db_session.add(event)
+    db_session.commit()
+
+    snapshot = get_desktop_command_status_snapshot(
+        db_session,
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        command_id=command.id,
+        session_id=SESSION_ID,
+    )
+    payload = display_safe_command_status(snapshot)
+    rendered = str(payload)
+
+    assert payload["command"]["action"] == "keyboard_type"
+    assert payload["command"]["tool_name"] == "desktop_keyboard_type"
+    assert payload["events"][0]["metadata"] == {
+        "result_kind": "json",
+        "result_size_chars": 42,
+    }
+    assert "payload" not in payload["command"]
+    assert "must not leak" not in rendered
+    assert "must-not-leak" not in rendered
+    assert "command_envelope" not in rendered
+
+
+def test_command_status_snapshot_denies_cross_user(db_session, seeded):
+    now = _utcnow()
+    command = DesktopCommand(
+        tenant_id=TENANT_ID,
+        user_id=USER_ID_2,
+        session_id=SESSION_ID,
+        shell_id=SHELL_ID,
+        device_id=DEVICE_ID,
+        capability="background_control",
+        status="no_op",
+        source="mcp",
+        payload={
+            "action": "background_app_control_dry_run",
+            "tool_name": "desktop_background_app_control_dry_run",
+            "mode": "background_control_dry_run",
+        },
+        completed_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(command)
+    db_session.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        get_desktop_command_status_snapshot(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            command_id=command.id,
+        )
+
+    assert exc.value.status_code == 404
 
 
 def test_native_control_claim_denies_when_capability_revoked_midflight(db_session, seeded):

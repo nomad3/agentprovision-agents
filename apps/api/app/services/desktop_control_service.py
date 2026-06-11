@@ -231,6 +231,12 @@ class DesktopCommandStop:
     reason: str = "desktop control stopped"
 
 
+@dataclass(frozen=True)
+class DesktopCommandStatusSnapshot:
+    command: DesktopCommand
+    events: list[DesktopCommandEvent]
+
+
 def _get_session_for_tenant(db: Session, session_id: uuid.UUID, tenant_id: uuid.UUID) -> ChatSession:
     session = db.query(ChatSession).filter(
         ChatSession.id == session_id,
@@ -417,6 +423,16 @@ def _safe_request_metadata(raw: dict[str, Any] | None) -> dict[str, Any]:
     return {"payload_key_count": len(raw)}
 
 
+def _safe_command_action(command: DesktopCommand) -> str:
+    action = str((command.payload or {}).get("action") or "")
+    return action if action in _COMMAND_ACTION_CAPABILITIES else "desktop_command"
+
+
+def _safe_command_tool_name(command: DesktopCommand) -> str | None:
+    tool_name = str((command.payload or {}).get("tool_name") or "")
+    return tool_name if tool_name in _COMMAND_TOOL_ACTIONS else None
+
+
 def _safe_command_reason(action: str, outcome: str, reason: str | None) -> str | None:
     if not reason:
         return None
@@ -479,6 +495,8 @@ def _display_safe_command_payload(command: DesktopCommand) -> dict[str, Any]:
     return {
         "desktop_command_id": str(command.id),
         "correlation_id": str(command.correlation_id) if command.correlation_id else None,
+        "action": _safe_command_action(command),
+        "tool_name": _safe_command_tool_name(command),
         "shell_id": command.shell_id,
         "device_id": str(command.device_id) if command.device_id else None,
         "approval_id": str(command.approval_id) if command.approval_id else None,
@@ -488,6 +506,8 @@ def _display_safe_command_payload(command: DesktopCommand) -> dict[str, Any]:
         "lease_expires_at": (
             command.lease_expires_at.isoformat() if command.lease_expires_at else None
         ),
+        "claimed_at": command.claimed_at.isoformat() if command.claimed_at else None,
+        "completed_at": command.completed_at.isoformat() if command.completed_at else None,
         "created_at": command.created_at.isoformat() if command.created_at else None,
         "updated_at": command.updated_at.isoformat() if command.updated_at else None,
     }
@@ -2137,6 +2157,69 @@ def _display_safe_payload(event: DesktopCommandEvent) -> dict[str, Any]:
         "created_at_ms": event.event_metadata.get("created_at_ms"),
         **_denial_result_code_field(event),
     }
+
+
+def _display_safe_command_event_payload(event: DesktopCommandEvent) -> dict[str, Any]:
+    return {
+        "desktop_event_id": str(event.id),
+        "desktop_command_id": str(event.desktop_command_id) if event.desktop_command_id else None,
+        "approval_id": str(event.approval_id) if event.approval_id else None,
+        "correlation_id": str(event.correlation_id) if event.correlation_id else None,
+        "event_type": event.event_type,
+        "source": event.source,
+        "action": event.action,
+        "capability": event.capability,
+        "outcome": event.outcome,
+        "reason": event.reason,
+        "mode": event.mode,
+        "shell_id": event.shell_id,
+        "device_id": str(event.device_id) if event.device_id else None,
+        "metadata": _safe_metadata(event.event_metadata),
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+        **_denial_result_code_field(event),
+    }
+
+
+def display_safe_command_status(snapshot: DesktopCommandStatusSnapshot) -> dict[str, Any]:
+    command = snapshot.command
+    return {
+        "command": _display_safe_command_payload(command),
+        "events": [
+            _display_safe_command_event_payload(event)
+            for event in snapshot.events
+        ],
+        "terminal": command.status in _TERMINAL_COMMAND_STATUSES,
+    }
+
+
+def get_desktop_command_status_snapshot(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    command_id: uuid.UUID,
+    session_id: uuid.UUID | None = None,
+) -> DesktopCommandStatusSnapshot:
+    query = db.query(DesktopCommand).filter(
+        DesktopCommand.tenant_id == tenant_id,
+        DesktopCommand.user_id == user_id,
+        DesktopCommand.id == command_id,
+    )
+    if session_id is not None:
+        query = query.filter(DesktopCommand.session_id == session_id)
+    command = query.first()
+    if command is None:
+        raise HTTPException(status_code=404, detail="Desktop command not found")
+    events = (
+        db.query(DesktopCommandEvent)
+        .filter(
+            DesktopCommandEvent.tenant_id == tenant_id,
+            DesktopCommandEvent.desktop_command_id == command.id,
+        )
+        .order_by(DesktopCommandEvent.created_at.asc(), DesktopCommandEvent.id.asc())
+        .all()
+    )
+    return DesktopCommandStatusSnapshot(command=command, events=events)
 
 
 def _safe_reason(audit: LocalObservationAudit) -> str | None:
