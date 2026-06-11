@@ -42,10 +42,7 @@ fn cli_deserializes_fixtures_via_core_types() {
     assert_eq!(d2.code, DesktopDenialCode::ApprovalBindingMismatch);
     let permission_not_ready: DesktopDenialCode =
         serde_json::from_value(serde_json::json!("permission_not_ready")).unwrap();
-    assert_eq!(
-        permission_not_ready,
-        DesktopDenialCode::PermissionNotReady
-    );
+    assert_eq!(permission_not_ready, DesktopDenialCode::PermissionNotReady);
 }
 
 #[test]

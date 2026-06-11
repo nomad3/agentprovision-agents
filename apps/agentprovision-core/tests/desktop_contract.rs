@@ -101,10 +101,7 @@ fn denies_deserialize_typed_with_canonical_codes() {
 
     let permission_not_ready: DesktopDenialCode =
         serde_json::from_value(serde_json::json!("permission_not_ready")).unwrap();
-    assert_eq!(
-        permission_not_ready,
-        DesktopDenialCode::PermissionNotReady
-    );
+    assert_eq!(permission_not_ready, DesktopDenialCode::PermissionNotReady);
 }
 
 #[test]
