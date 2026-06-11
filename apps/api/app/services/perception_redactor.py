@@ -484,8 +484,12 @@ def redact_artifact(
         return _finish_withheld(db, artifact_id, None, reason_override=f"redaction_error:{exc.__class__.__name__}")
     except Exception as exc:  # noqa: BLE001 — ANY failure is fail-closed
         logger.exception("perception redactor: unexpected failure on %s", artifact_id)
-        perception_storage._unlink_quiet(redacted_abs)
-        return _finish_withheld(db, artifact_id, None, reason_override=f"error:{type(exc).__name__}")
+        outcome = _finish_withheld(
+            db, artifact_id, None, reason_override=f"error:{type(exc).__name__}"
+        )
+        if outcome.status != STATUS_PLANNER_SAFE:
+            perception_storage._unlink_quiet(redacted_abs)
+        return outcome
 
 
 def _lock_owned_redacting(db: Session, artifact_id, worker_id: str):
@@ -499,7 +503,7 @@ def _lock_owned_redacting(db: Session, artifact_id, worker_id: str):
     except Exception:  # pragma: no cover — sqlite
         pass
     art = q.first()
-    if art is None or art.redaction_status != STATUS_REDACTING:
+    if art is None or art.deleted_at is not None or art.redaction_status != STATUS_REDACTING:
         return None
     # Reject an absent/empty claimant too — two stale workers must not both "match"
     # on a None/"" id.

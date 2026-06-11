@@ -320,6 +320,81 @@ def test_cleanup_skips_in_flight_redacting_but_reaps_stale(db_session):
     assert stale.id in ids and plain.id in ids
 
 
+def test_hard_delete_clears_redacting_claim(db_session):
+    art = _seed_artifact(
+        db_session,
+        status=pr.STATUS_REDACTING,
+        claimed_by=WORKER,
+        claimed_at=_utc(0),
+        attempts=1,
+        expires_min=-1,
+    )
+    assert perception_storage.hard_delete_artifact(db_session, art) is True
+    assert art.deleted_at is not None
+    assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
+    assert art.redact_claimed_by is None and art.redact_claimed_at is None
+
+
+def test_finalize_refuses_soft_deleted_redacting_row(db_session, enabled):
+    art = _seed_artifact(
+        db_session,
+        status=pr.STATUS_REDACTING,
+        claimed_by=WORKER,
+        claimed_at=_utc(0),
+        attempts=1,
+    )
+
+    class SoftDeleteBeforeFinalizeEngine:
+        def __init__(self):
+            self.calls = 0
+
+        def detect(self, image_bytes, *, width, height):
+            self.calls += 1
+            if self.calls == 2:
+                row = db_session.get(PerceptionArtifact, art.id)
+                row.deleted_at = _utc(0)
+                db_session.add(row)
+                db_session.commit()
+            return []
+
+    res = pr.redact_artifact(
+        db_session,
+        art,
+        SoftDeleteBeforeFinalizeEngine(),
+        worker_id=WORKER,
+    )
+
+    assert res.status == "withheld"
+    assert res.reasons == ["lost_claim"]
+    db_session.expire_all()
+    row = db_session.get(PerceptionArtifact, art.id)
+    assert row.deleted_at is not None
+    assert row.redaction_status != pr.STATUS_PLANNER_SAFE
+    assert row.raw_deleted_at is None
+    assert os.path.exists(_raw_path(row))
+    assert not os.path.exists(_redacted_path(row))
+
+
+def test_lost_claim_does_not_delete_or_publish_bytes(db_session, enabled):
+    art = _seed_artifact(
+        db_session,
+        status=pr.STATUS_REDACTING,
+        claimed_by="worker-a",
+        claimed_at=_utc(0),
+        attempts=1,
+    )
+
+    res = pr.redact_artifact(db_session, art, StubEngine([]), worker_id="worker-b")
+
+    assert res.status == "withheld"
+    assert res.reasons == ["lost_claim"]
+    db_session.refresh(art)
+    assert art.redaction_status == pr.STATUS_REDACTING
+    assert art.raw_deleted_at is None
+    assert os.path.exists(_raw_path(art))
+    assert not os.path.exists(_redacted_path(art))
+
+
 # ── unknown region-kind fail-closed (Low 4) ──────────────────────────────────
 
 def test_unknown_region_kind_withholds(db_session, enabled):
@@ -389,3 +464,32 @@ def test_finish_withheld_leaves_committed_planner_safe(db_session, enabled):
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_PLANNER_SAFE  # NOT reverted
     assert art.raw_deleted_at is not None
+
+
+def test_ambiguous_post_commit_keeps_redacted_bytes(db_session, enabled, monkeypatch):
+    art = _seed_artifact(db_session)
+    claimed = pr.claim_next_for_redaction(db_session, worker_id=WORKER)
+    assert claimed is not None
+    real_refresh = db_session.refresh
+
+    def raise_after_planner_safe_commit(obj, *args, **kwargs):
+        if (
+            isinstance(obj, PerceptionArtifact)
+            and obj.id == art.id
+            and obj.redaction_status == pr.STATUS_PLANNER_SAFE
+        ):
+            raise RuntimeError("refresh failed after commit")
+        return real_refresh(obj, *args, **kwargs)
+
+    monkeypatch.setattr(db_session, "refresh", raise_after_planner_safe_commit)
+    res = pr.redact_artifact(db_session, claimed, StubEngine([]), worker_id=WORKER)
+    monkeypatch.setattr(db_session, "refresh", real_refresh)
+
+    assert res.status == pr.STATUS_PLANNER_SAFE
+    db_session.expire_all()
+    row = db_session.get(PerceptionArtifact, art.id)
+    assert row.redaction_status == pr.STATUS_PLANNER_SAFE
+    assert row.raw_deleted_at is not None
+    assert row.redacted_storage_path is not None
+    assert not os.path.exists(_raw_path(row))
+    assert os.path.exists(_redacted_path(row))
