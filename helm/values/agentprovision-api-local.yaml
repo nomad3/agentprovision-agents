@@ -75,7 +75,7 @@ configMap:
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
     TEMPORAL_ADDRESS: "temporal:7233"
     DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
-    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "HMAC-SHA256"
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: "agentprovision-desktop-command-ed25519-v1"
 
 # Load secrets from k8s secret (created from apps/api/.env)
@@ -105,6 +105,19 @@ persistence:
   storageClass: local-path
   size: 5Gi
   mountPath: /app/storage
+
+# Luna P5.2 governed-perception quarantine — local (Rancher Desktop K8s). API-ONLY,
+# mirrors the prod chart block and the docker-compose `observations:` named volume
+# so the quarantine volume actually exists locally (it was previously never enabled
+# here — the report's local-Helm drift). ReadWriteOnce is correct locally:
+# replicaCount is 1 (above), so there is no multi-replica RWO conflict.
+observations:
+  enabled: true
+  storageClass: local-path
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  mountPath: /var/agentprovision/observations
 
 # API secrets — defaults from config.py work for local dev
 env:

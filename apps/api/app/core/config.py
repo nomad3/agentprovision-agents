@@ -43,11 +43,14 @@ class Settings(BaseSettings):
     JWT_USER_SECRET: str | None = None
     JWT_AGENT_TOKEN_SECRET: str | None = None
     JWT_OAUTH_STATE_SECRET: str | None = None
-    # Desktop command envelopes default to the existing HMAC contract so current
-    # clients keep working. Set DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519
-    # and provide a base64url/hex 32-byte private key to issue envelopes that
-    # Luna can verify locally with only the matching public key.
-    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: str = "HMAC-SHA256"
+    # Desktop command envelopes default to Ed25519 (M-11 step 1). Native control
+    # hard-denies non-Ed25519 and the Luna client only accepts Ed25519, so HMAC
+    # now signs nothing the actuation path verifies. With no private key set this
+    # stays fail-closed (native control disabled); provide a base64url/hex 32-byte
+    # private key via env / Helm externalSecret to issue envelopes Luna can verify
+    # locally with only the matching public key. Set this back to HMAC-SHA256 only
+    # for the legacy observation-envelope path.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: str = "Ed25519"
     DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: str | None = None
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: str = "agentprovision-desktop-command-ed25519-v1"
     # Default-empty by design: no native-control target is canary-eligible until

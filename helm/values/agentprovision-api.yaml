@@ -150,14 +150,17 @@ configMap:
     EMAIL_SMTP_USE_TLS: "true"
     EMAIL_FROM: "noreply@agentprovision.com"
     EMAIL_FROM_NAME: "AgentProvision"
-    # Default-empty fail-closed native-control canary allowlist. Operators must
-    # explicitly stamp bundle ids before native-control grants can persist.
-    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
-    # Desktop-command envelope signing. Defaults are fail-closed (HMAC + no key =
-    # native control disabled). Native control (Phase 3 pointer canary) requires
-    # Ed25519: set the algorithm + provide the private key via the secret. The
-    # key id must match the Luna client's default key id.
-    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "HMAC-SHA256"
+    # Non-secret native-control canary floor (M-2). The effective per-tenant
+    # allowlist = this global floor ∩ the tenant's own allowlist, so this must be
+    # tracked to match the live runtime (apps/api/.env / PRODUCTION.env). NOTE: the
+    # var is named "canary" but is the GLOBAL floor (known misnomer).
+    DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: "com.agentprovision.luna,com.apple.TextEdit,net.whatsapp.WhatsApp"
+    # Desktop-command envelope signing — NON-SECRET config, tracked here to match
+    # the live Ed25519 runtime (M-2). The signing PRIVATE KEY is a secret and is
+    # supplied ONLY via the externalSecret block below (uncomment + pre-seed the
+    # GCP Secret Manager key). With Ed25519 set but no key wired, native control
+    # stays fail-closed (disabled). Key id must match the Luna client default.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: "agentprovision-desktop-command-ed25519-v1"
 
 # External Secrets - pulls from GCP Secret Manager
@@ -237,13 +240,15 @@ externalSecret:
     - secretKey: EMAIL_SMTP_PASSWORD
       remoteRef:
         key: agentprovision-email-smtp-password
-    # --- Luna desktop-control Ed25519 signing (Ed25519 path only) ---
-    # The non-secret knobs (algorithm, key id, allowlist) are in configMap
-    # above. When DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM=Ed25519, the API
-    # also needs the signing private key, and optionally a JWT_AGENT_TOKEN_SECRET
-    # distinct from SECRET_KEY for the HMAC fallback. PRE-SEED these GCP Secret
-    # Manager keys FIRST, then uncomment — otherwise external-secret sync spins
-    # on the missing remote keys (same caution as EMAIL_SMTP_* above).
+    # --- Luna desktop-control Ed25519 signing (REQUIRED for native control) ---
+    # The non-secret knobs (algorithm=Ed25519, key id, floor allowlist) are in the
+    # configMap above (M-2). Because the algorithm is now Ed25519, the API needs the
+    # signing private key to issue verifiable envelopes — without it native control
+    # stays fail-closed (disabled). Provide the key (and optionally a
+    # JWT_AGENT_TOKEN_SECRET distinct from SECRET_KEY) ONLY here via externalSecret,
+    # never in the configMap. PRE-SEED these GCP Secret Manager keys FIRST, then
+    # uncomment — otherwise external-secret sync spins on the missing remote keys
+    # (same caution as EMAIL_SMTP_* above).
     # - secretKey: DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY
     #   remoteRef:
     #     key: agentprovision-desktop-command-ed25519-private-key
@@ -336,7 +341,14 @@ workspaces:
 # Luna P5.2 governed-perception quarantine — API-ONLY. Enabled here (api) and
 # NOWHERE else. The code-worker chart must NOT enable this, so captured
 # screenshot bytes stay unreachable from agent runtimes ("no-read by
-# construction"). ReadWriteOnce is fine — only the api pod mounts it.
+# construction").
+#
+# PVC/replica note: accessMode is ReadWriteOnce, while the api runs more than
+# one replica. This is a scheduling constraint independent of whether capture or
+# redaction writes any bytes: a replica placed on a different node may not mount
+# the same RWO PVC. Before using this chart for multi-node api replicas, either
+# (a) provide an RWX storageClass and switch accessModes to ReadWriteMany, or
+# (b) pin the perception-capturing api path to a single-replica deployment/pod.
 observations:
   enabled: true
   storageClass: ""

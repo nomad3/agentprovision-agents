@@ -46,6 +46,10 @@ configMap:
     TEMPORAL_NAMESPACE: "default"
     API_BASE_URL: "http://api"
     CLAUDE_CODE_MODEL: "sonnet"
+    # API is the ONLY desktop-command signing boundary. The code worker stays
+    # fail-closed for desktop envelopes.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: ""
     # Codex CLI MCP opt-in (see workflows.py::_prepare_codex_home).
     # Set "false" to disable the rmcp_client path.
     CODEX_USE_RMCP_CLIENT: "true"

@@ -50,6 +50,10 @@ configMap:
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
     # 4h cache for BrightLocal rank pulls (and any future MCP tool that opts in)
     REDIS_URL: "redis://redis:6379/0"
+    # API is the ONLY desktop-command signing boundary. MCP stays fail-closed
+    # for desktop envelopes.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: ""
 
 # Disable GKE specifics
 externalSecret:

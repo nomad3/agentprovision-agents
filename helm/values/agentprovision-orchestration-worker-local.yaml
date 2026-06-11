@@ -54,9 +54,12 @@ configMap:
     MEMORY_CORE_URL: "memory-core:50052"
     DATABASE_URL: "postgresql://postgres:postgres@postgresql:5432/agentprovision"
     TEMPORAL_ADDRESS: "temporal:7233"
+    # API is the ONLY desktop-command signing boundary. Local worker stays
+    # fail-closed for desktop envelopes.
     DESKTOP_CONTROL_CANARY_BUNDLE_ALLOWLIST: ""
-    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "HMAC-SHA256"
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
     DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID: "agentprovision-desktop-command-ed25519-v1"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: ""
 
 # Load secrets from k8s secret
 envFrom:
