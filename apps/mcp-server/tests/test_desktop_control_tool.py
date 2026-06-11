@@ -12,6 +12,20 @@ def _ctx_with_user(user_id: str = "22222222-2222-2222-2222-222222222222"):
     return SimpleNamespace(request_context={"X-User-Id": user_id})
 
 
+def test_desktop_control_module_exports_registered_tools():
+    expected_tools = {
+        "desktop_observe_screen",
+        "desktop_get_active_app",
+        "desktop_read_clipboard",
+        "desktop_background_app_control_dry_run",
+        "desktop_command_status",
+    }
+
+    assert expected_tools.issubset(set(dc.__all__))
+    for tool_name in expected_tools:
+        assert hasattr(dc, tool_name)
+
+
 @pytest.fixture
 def patch_httpx(monkeypatch, make_client):
     def _install(side_effect=None, default_status=201, default_json=None):
