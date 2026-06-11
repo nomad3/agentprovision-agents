@@ -31,6 +31,7 @@ DENY_CAP = "deny.capability_mismatch.json"
 OBSERVATION_STATUS = "observation_status.planner_safe.json"
 OBSERVATION_FETCH_DENIED = "observation_fetch.denied.json"
 GRANT_REQUEST = "grant_request.pending.json"
+GRANT_REQUEST_APPROVED = "grant_request.approved.json"
 GRANT_REQUEST_DENIED = "grant_request.denied.json"
 GRANT_APPROVAL = "grant_approval.approved.json"
 ACTUATE = "actuate.queued.json"
@@ -69,7 +70,8 @@ def _forbidden_hits(node, path="") -> list[str]:
     "name",
     [
         CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED,
-        GRANT_REQUEST, GRANT_REQUEST_DENIED, GRANT_APPROVAL, ACTUATE,
+        GRANT_REQUEST, GRANT_REQUEST_APPROVED, GRANT_REQUEST_DENIED, GRANT_APPROVAL,
+        ACTUATE,
     ],
 )
 def test_passthrough_is_display_safe(name):
@@ -117,8 +119,22 @@ def test_grant_request_passthrough_shape():
     assert "payload" not in req
     assert "storage_path" not in req
     assert req["status"] == "pending"
+    # P5.4c: the grant reference is null while pending.
+    assert req["grant_id"] is None
 
     denial = _load(GRANT_REQUEST_DENIED)
     detail = denial["detail"]
     assert set(detail) == {"code", "reason"}
     assert detail["code"] == detail["code"].lower() and " " not in detail["code"]
+
+
+def test_grant_request_status_exposes_grant_id_once_approved():
+    """P5.4c: once a human approves, desktop_request_status passes the grant_id
+    through display-safe so a CLI-subprocess agent can actuate against it — still
+    no payload bag, no storage path, no raw content."""
+    appr = _load(GRANT_REQUEST_APPROVED)
+    assert "payload" not in appr
+    assert "storage_path" not in appr
+    assert appr["status"] == "approved"
+    assert appr["grant_present"] is True
+    assert appr["grant_id"] and " " not in appr["grant_id"]

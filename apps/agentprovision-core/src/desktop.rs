@@ -756,6 +756,13 @@ pub struct DesktopGrantRequest {
     /// Whether a human has minted a grant for this request yet (P5.5). Never the
     /// grant payload — just presence.
     pub grant_present: bool,
+    /// The minted grant's id once a human approved this request (P5.4c); `None`
+    /// while pending/denied/expired. Owner-scoped — lets a CLI-subprocess agent
+    /// (which polls tools, not SSE) reference a human-approved grant for
+    /// `desktop_actuate`. A reference only: actuate still re-validates
+    /// owner/session/expiry/revocation + the default-off native flag.
+    #[serde(default)]
+    pub grant_id: Option<String>,
     #[serde(default)]
     pub decided_at: Option<String>,
 }
@@ -1080,6 +1087,7 @@ mod tests {
             "created_at": "2026-06-11T12:00:00+00:00",
             "expires_at": "2026-06-11T12:05:00+00:00",
             "grant_present": false,
+            "grant_id": null,
             "decided_at": null
         })
     }
@@ -1092,6 +1100,28 @@ mod tests {
         assert_eq!(req.action, DesktopRequestableAction::KeyboardType);
         assert_eq!(req.capability, DesktopCapability::KeyboardControl);
         assert!(!req.grant_present);
+        // P5.4c: a pending request carries no grant reference yet.
+        assert!(req.grant_id.is_none());
+    }
+
+    #[test]
+    fn grant_request_status_exposes_grant_id_once_approved() {
+        // P5.4c: after a human approves, the owner-scoped status poll reflects
+        // the minted grant id so a CLI-subprocess agent can actuate against it.
+        let mut approved = grant_request_json();
+        approved["status"] = serde_json::json!("approved");
+        approved["grant_present"] = serde_json::json!(true);
+        approved["grant_id"] = serde_json::json!("99999999-9999-9999-9999-999999999999");
+        approved["decided_at"] = serde_json::json!("2026-06-11T12:01:00+00:00");
+
+        let req: DesktopGrantRequest =
+            serde_json::from_value(approved).expect("approved status decode");
+        assert_eq!(req.status, DesktopGrantRequestStatus::Approved);
+        assert!(req.grant_present);
+        assert_eq!(
+            req.grant_id.as_deref(),
+            Some("99999999-9999-9999-9999-999999999999")
+        );
     }
 
     #[test]

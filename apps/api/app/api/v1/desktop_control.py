@@ -821,6 +821,7 @@ class DesktopGrantRequestOut(BaseModel):
     created_at: str | None = None
     expires_at: str | None = None
     grant_present: bool
+    grant_id: uuid.UUID | None = None
     decided_at: str | None = None
 
 

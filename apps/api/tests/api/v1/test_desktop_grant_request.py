@@ -235,6 +235,23 @@ def test_status_poll_returns_pending(db_session):
     assert status_out["request_id"] == out["request_id"]
 
 
+def test_status_poll_grant_id_is_null_while_pending(db_session):
+    # P5.4c: the grant reference is null until a human approves; the request and
+    # status-poll paths mint no grant (grant_id is a reflection, not a mint).
+    _seed(db_session)
+    out = _req(db_session)
+    assert out["grant_id"] is None
+    status_out = desktop_act.get_desktop_grant_request_status(
+        db_session,
+        tenant_id=TENANT_ID,
+        user_id=USER_ID,
+        request_id=uuid.UUID(out["request_id"]),
+    )
+    assert status_out["grant_present"] is False
+    assert status_out["grant_id"] is None
+    assert db_session.query(DesktopCommandApprovalGrant).count() == 0
+
+
 def test_status_wrong_user_is_uniform_not_found(db_session):
     _seed(db_session)
     out = _req(db_session)
@@ -315,6 +332,7 @@ def test_request_route_creates_pending(db_session):
     body = resp.json()
     assert body["status"] == "pending"
     assert body["capability"] == "keyboard_control"
+    assert body["grant_id"] is None
     assert "storage_path" not in resp.text
 
 
@@ -350,7 +368,9 @@ def test_status_route_round_trips(db_session):
         f"/api/v1/desktop-control/grants/requests/{created['request_id']}",
     )
     assert resp.status_code == 200
-    assert resp.json()["status"] == "pending"
+    body = resp.json()
+    assert body["status"] == "pending"
+    assert body["grant_id"] is None
 
 
 def test_internal_request_route_requires_internal_key(db_session):

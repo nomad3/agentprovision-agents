@@ -364,16 +364,46 @@ def generate_cli_instructions(
             lines.append("- Observation tools return display-safe audit envelopes only, not pixels, clipboard text, or raw window contents.")
         if has_desktop_control:
             lines.append(
-                "- Current control phase is dry-run only: use "
-                "`desktop_background_app_control_dry_run` to queue a no-op app-control proof, "
-                "then use `desktop_command_status` to report the command id, terminal status, "
-                "and audit/event references."
-            )
-            lines.append(
                 f"- For the Luna desktop app, the target bundle_id is `{default_bundle_id}`."
             )
             lines.append(
-                "- Do not call pointer, click, keyboard, approval-grant, or native actuation paths in this phase."
+                "- To prove app control without acting, use "
+                "`desktop_background_app_control_dry_run` to queue a no-op proof, "
+                "then `desktop_command_status` to report the command id, terminal status, "
+                "and audit/event references."
+            )
+            lines.append(
+                "- For a real pointer/keyboard action, follow the governed approval "
+                "loop and never skip a step:"
+            )
+            lines.append(
+                "  1. `desktop_request_grant` with the action "
+                "(`pointer_move`/`pointer_click`/`keyboard_type`/`keyboard_key_chord`) "
+                "and `target_bundle_id` — this only records a PENDING request."
+            )
+            lines.append(
+                "  2. A human must approve it. You cannot approve your own request. "
+                "Poll `desktop_request_status(request_id)` until `status` is `approved` "
+                "and a `grant_id` is present; if it becomes `denied` or `expired`, stop "
+                "and tell the user."
+            )
+            lines.append(
+                "  3. `desktop_actuate(session_id, grant_id, args)` enqueues exactly one "
+                "bounded command. If it returns `approval_required` or any `approval_*` "
+                "denial, report it and stop — do not retry without a fresh approval."
+            )
+            lines.append(
+                "  4. Poll `desktop_command_status(command_id)` to its terminal status."
+            )
+            lines.append(
+                "- Report back display-safe facts only: action class, capability, "
+                "outcome/status, denial code, command id, and audit/event references. "
+                "Never quote OCR text, window titles, contact names, clipboard values, "
+                "typed text, or raw screen content."
+            )
+            lines.append(
+                "- `desktop_stop_commands` cancels in-flight work; a Stop revokes the "
+                "active grant, so a later actuate is denied."
             )
         lines.append("")
 

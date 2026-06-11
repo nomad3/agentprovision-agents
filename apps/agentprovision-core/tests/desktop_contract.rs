@@ -28,6 +28,8 @@ const OBSERVATION_FETCH_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/observation_fetch.denied.json");
 const GRANT_REQUEST: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.pending.json");
+const GRANT_REQUEST_APPROVED: &str =
+    include_str!("../../../docs/contracts/desktop-control/grant_request.approved.json");
 const GRANT_REQUEST_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.denied.json");
 const GRANT_APPROVAL: &str =
@@ -130,6 +132,7 @@ fn fixtures_are_display_safe_recursive() {
         ("observation_status", OBSERVATION_STATUS),
         ("observation_fetch_denied", OBSERVATION_FETCH_DENIED),
         ("grant_request", GRANT_REQUEST),
+        ("grant_request_approved", GRANT_REQUEST_APPROVED),
         ("grant_request_denied", GRANT_REQUEST_DENIED),
         ("grant_approval", GRANT_APPROVAL),
         ("actuate", ACTUATE),
@@ -183,6 +186,18 @@ fn grant_request_fixtures_deserialize_typed() {
         serde_json::from_str(GRANT_REQUEST).expect("typed grant request");
     assert_eq!(req.status, DesktopGrantRequestStatus::Pending);
     assert!(!req.grant_present);
+    assert!(req.grant_id.is_none());
+
+    // P5.4c: the status poll of an approved request reflects the grant id so a
+    // CLI-subprocess agent can actuate against the human-minted grant.
+    let approved: DesktopGrantRequest =
+        serde_json::from_str(GRANT_REQUEST_APPROVED).expect("typed approved status");
+    assert_eq!(approved.status, DesktopGrantRequestStatus::Approved);
+    assert!(approved.grant_present);
+    assert_eq!(
+        approved.grant_id.as_deref(),
+        Some("99999999-9999-9999-9999-999999999999")
+    );
 
     let denial = DesktopGrantRequestDenial::from_error_body(GRANT_REQUEST_DENIED)
         .expect("typed grant denial");
