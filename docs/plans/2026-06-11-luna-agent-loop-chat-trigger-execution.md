@@ -544,17 +544,25 @@ Implementation scope:
   rendered requests by `request.session_id === activeSessionId`, clears local
   request state on session change, refuses approve/deny for mismatched sessions,
   and has a regression proving a stale request cannot be approved after a switch.
-- Status 2026-06-11: current branch `codex/luna-p55-report-back-guards` starts
-  the report-back guard rung. It tightens the CLI runtime prompt to an explicit
-  allowlist for final desktop summaries and adds adversarial fixtures proving raw
-  desktop fields in `desktop_context` are not rendered into the prompt.
+- Status 2026-06-11: PR #902 (`codex/luna-p55-report-back-guards`, merge
+  `cb673f01`) landed the report-back guard rung. It tightens the CLI runtime
+  prompt to an explicit allowlist for final desktop summaries and adds
+  adversarial fixtures proving raw desktop fields in `desktop_context` are not
+  rendered into the prompt.
+- Status 2026-06-11: current branch `codex/luna-p55-desktop-rl-logging` starts
+  the byte-free `rl_experience` rung for desktop decisions/denials. The slice
+  records decision metadata only: surface, session, source, action, capability,
+  outcome/status, fixed denial code/status code, request/grant/command refs,
+  shell id, bundle id, and audit/session event refs. It must not persist
+  actuation args, request/deny reasons, OCR, window/contact/clipboard/typed text,
+  raw screen content, page text, AX trees, envelopes, or embeddings.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
   approval-request -> user approval -> bounded grant.
-- P5.4d permission readiness and P5.5 approval UX are landed. Continue with the
-  remaining feature rungs in dependency order: report-back leak fixtures,
+- P5.4d permission readiness, P5.5 approval UX, and report-back leak fixtures
+  are landed. Continue with the remaining feature rungs in dependency order:
   byte-free `rl_experience` per desktop decision/denial, then broader chat
   trigger/report-back polish.
 

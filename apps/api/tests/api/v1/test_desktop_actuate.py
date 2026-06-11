@@ -10,6 +10,7 @@ command. actuate NEVER mints a grant.
 """
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -244,6 +245,70 @@ def test_actuate_response_is_display_safe(db_session):
     blob = str(out)
     assert "SECRET-TYPED-TEXT" not in blob
     assert "args" not in out
+
+
+def test_actuate_logs_byte_free_queued_decision(db_session):
+    _seed(db_session)
+    grant = _mk_grant(db_session)
+
+    with patch(
+        "app.services.desktop_control_service.publish_session_event",
+        return_value={"event_id": "event-1", "seq_no": 1},
+    ), _patch_presence(), patch(
+        "app.services.desktop_act.rl_experience_service.log_experience"
+    ) as log_exp:
+        out = desktop_act.actuate_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            session_id=SESSION_ID,
+            grant_id=grant.id,
+            args={"text": "LEAK_TYPED_TEXT"},
+        )
+
+    assert out["status"] == "queued"
+    log_exp.assert_called_once()
+    kwargs = log_exp.call_args.kwargs
+    assert kwargs["tenant_id"] == TENANT_ID
+    assert kwargs["trajectory_id"] == SESSION_ID
+    assert kwargs["decision_point"] == "desktop_control_decision"
+    assert kwargs["state"] == {
+        "surface": "desktop_actuate",
+        "session_id": str(SESSION_ID),
+        "source": "alpha",
+    }
+    assert kwargs["action"]["outcome"] == "queued"
+    assert kwargs["action"]["action"] == "keyboard_type"
+    assert kwargs["action"]["capability"] == "keyboard_control"
+    assert kwargs["action"]["grant_id"] == str(grant.id)
+    assert kwargs["action"]["command_id"] == out["command_id"]
+    assert kwargs["action"]["desktop_event_id"] == out["desktop_event_id"]
+    assert kwargs["action"]["session_event_id"] == "event-1"
+    assert kwargs["state_text"] is None
+    assert "LEAK_TYPED_TEXT" not in json.dumps(kwargs, default=str)
+
+
+def test_actuate_logs_byte_free_approval_required(db_session):
+    _seed(db_session)
+    missing_grant_id = uuid.uuid4()
+
+    with patch(
+        "app.services.desktop_act.rl_experience_service.log_experience"
+    ) as log_exp:
+        out = _actuate(
+            db_session,
+            missing_grant_id,
+            args={"text": "LEAK_APPROVAL_REQUIRED_TEXT"},
+        )
+
+    assert out["status"] == "approval_required"
+    log_exp.assert_called_once()
+    kwargs = log_exp.call_args.kwargs
+    assert kwargs["state"]["surface"] == "desktop_actuate"
+    assert kwargs["action"]["outcome"] == "approval_required"
+    assert kwargs["action"]["grant_id"] == str(missing_grant_id)
+    assert kwargs["state_text"] is None
+    assert "LEAK_APPROVAL_REQUIRED_TEXT" not in json.dumps(kwargs, default=str)
 
 
 # ── missing grant → approval_required (no command) ───────────────────────────
