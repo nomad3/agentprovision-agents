@@ -1,6 +1,7 @@
 # P5.5 — user approval surface for desktop approval requests
 
-Status: design + implementation (this slice). Lane: Luna computer-use P5.5.
+Status: merged through PR #896 (`8bfcbce9`) and post-merge smoke passed. Lane:
+Luna computer-use P5.5.
 Builds on: P5.4b pending request `desktop_approval_requests` (#895), grant
 substrate `create_desktop_approval_grant` (internal), Stop/preempt (#893).
 
@@ -63,6 +64,12 @@ request into an actionable grant — and it is human-only.
 
 ## Out of scope (follow-ups)
 
+- **Chat orchestration:** chat still needs to create the pending request,
+  present the user approval, call the next `desktop_actuate` slice once an
+  existing grant is active, poll status, and report audit refs.
+- **Actuate verb:** the next make-it-work slice is `desktop_actuate`
+  (agent-facing command + existing-grant -> enqueue; no grant ->
+  `approval_required`; no grant minting).
 - **MCP:** a read-only `desktop_list_approval_requests` could help the agent loop
   *see* pending requests, but is deferred to keep this slice tight; approve/deny
   stays human-only (no MCP grant minting, per the gate).
