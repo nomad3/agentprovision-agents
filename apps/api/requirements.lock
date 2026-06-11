@@ -913,6 +913,7 @@ grpcio==1.80.0 \
     --hash=sha256:f7691a6788ad9196872f95716df5bc643ebba13c97140b7a5ee5c8e75d1dea81
     # via -r requirements.in
 greenlet==3.5.1 \
+    --hash=sha256:a0cbed8bb44e23c5b199f888f4e4ce096b45ad9f25ff74a7ad0213875e936bb2 \
     --hash=sha256:8a271fcd66c74615cda6a964fda3f304267a12e50a084472218a39bb0376f563
     # via
     #   -r requirements.in
