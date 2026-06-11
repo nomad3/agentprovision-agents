@@ -36,6 +36,7 @@ OBSERVATION_FETCH_DENIED = "observation_fetch.denied.json"
 GRANT_REQUEST = "grant_request.pending.json"
 GRANT_REQUEST_DENIED = "grant_request.denied.json"
 GRANT_APPROVAL = "grant_approval.approved.json"
+ACTUATE = "actuate.queued.json"
 
 # ── display-safe boundary: these exact keys must never appear, at any depth ──
 FORBIDDEN_KEYS = {
@@ -67,7 +68,7 @@ def _forbidden_hits(node, path="") -> list[str]:
     "name",
     [
         CLAIM, DENY_BUNDLE, DENY_CAP, OBSERVATION_STATUS, OBSERVATION_FETCH_DENIED,
-        GRANT_REQUEST, GRANT_REQUEST_DENIED, GRANT_APPROVAL,
+        GRANT_REQUEST, GRANT_REQUEST_DENIED, GRANT_APPROVAL, ACTUATE,
     ],
 )
 def test_fixture_is_display_safe(name):
@@ -195,3 +196,13 @@ def test_grant_approval_fixture_matches_route_model():
     assert out.grant_present is True
     assert "payload" not in fixture
     assert "envelope" not in fixture
+
+
+def test_actuate_fixture_matches_route_model():
+    dc = pytest.importorskip("app.api.v1.desktop_control")
+    fixture = _load(ACTUATE)
+    out = dc.DesktopActuateOut(**fixture)
+    assert out.status == "queued"
+    assert out.command_status == "pending"
+    assert out.approval_id is not None
+    assert "args" not in fixture and "envelope" not in fixture

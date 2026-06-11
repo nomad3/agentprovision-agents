@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 
 use agentprovision_core::desktop::{
-    DesktopActionKind, DesktopBackgroundDryRunRequest, DesktopBackgroundDryRunTarget,
-    DesktopCommandStopRequest, DesktopControlAllowlistUpdate, DesktopControlEnablement,
-    DesktopControlEnablementUpdate, DesktopGrantApprovalBody, DesktopGrantDenialBody,
-    DesktopGrantRequestBody, DesktopObservationRequestBody, DesktopObserveAction,
-    DesktopRequestableAction, PerceptionFetchDenial,
+    DesktopActionKind, DesktopActuateBody, DesktopBackgroundDryRunRequest,
+    DesktopBackgroundDryRunTarget, DesktopCommandStopRequest, DesktopControlAllowlistUpdate,
+    DesktopControlEnablement, DesktopControlEnablementUpdate, DesktopGrantApprovalBody,
+    DesktopGrantDenialBody, DesktopGrantRequestBody, DesktopObservationRequestBody,
+    DesktopObserveAction, DesktopRequestableAction, PerceptionFetchDenial,
 };
 use agentprovision_core::Error as CoreError;
 use serde::Serialize;
@@ -47,6 +47,10 @@ pub enum DesktopCommand {
     /// approve (mint a bounded grant) or deny them. User-authenticated only.
     #[command(subcommand)]
     Approvals(ApprovalsCommand),
+    /// Enqueue ONE bounded native action against an existing approved grant
+    /// (P5.4b). No grant → approval_required. Mints no grant; actuates nothing
+    /// locally — the governed shared lifecycle runs the gates.
+    Act(ActArgs),
     /// Inspect or update the current tenant's desktop-control bootstrap gates.
     #[command(subcommand)]
     Enablement(EnablementCommand),
@@ -281,6 +285,31 @@ pub struct ApprovalsDenyArgs {
     pub reason: Option<String>,
 }
 
+#[derive(Debug, Args)]
+pub struct ActArgs {
+    /// Chat/session UUID the grant is bound to.
+    #[arg(long)]
+    pub session: Uuid,
+    /// Existing approved grant UUID to actuate against.
+    #[arg(long)]
+    pub grant: Uuid,
+    /// keyboard_type text (for a keyboard grant).
+    #[arg(long, conflicts_with_all = ["x", "y", "keys"])]
+    pub text: Option<String>,
+    /// Normalized pointer x coordinate in [0, 1] (for a pointer grant).
+    #[arg(long, requires = "y", conflicts_with = "keys")]
+    pub x: Option<f64>,
+    /// Normalized pointer y coordinate in [0, 1] (for a pointer grant).
+    #[arg(long, requires = "x", conflicts_with = "keys")]
+    pub y: Option<f64>,
+    /// keyboard key for a key-chord grant. Repeat for a chord.
+    #[arg(long = "key", conflicts_with_all = ["text", "x", "y"])]
+    pub keys: Vec<String>,
+    /// Optional client nonce for idempotent enqueue.
+    #[arg(long)]
+    pub nonce: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum EnablementCommand {
     /// Read the current tenant's desktop-control bootstrap gates.
@@ -331,6 +360,7 @@ pub async fn dispatch(cmd: DesktopCommand, ctx: Context) -> anyhow::Result<()> {
         DesktopCommand::Approvals(ApprovalsCommand::List(a)) => approvals_list(a, ctx).await,
         DesktopCommand::Approvals(ApprovalsCommand::Approve(a)) => approvals_approve(a, ctx).await,
         DesktopCommand::Approvals(ApprovalsCommand::Deny(a)) => approvals_deny(a, ctx).await,
+        DesktopCommand::Act(a) => act(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Get(a)) => enablement_get(a, ctx).await,
         DesktopCommand::Enablement(EnablementCommand::Set(a)) => enablement_set(a, ctx).await,
         DesktopCommand::Allowlist(AllowlistCommand::Get(a)) => allowlist_get(a, ctx).await,
@@ -738,6 +768,75 @@ async fn approvals_deny(args: ApprovalsDenyArgs, ctx: Context) -> anyhow::Result
             }
         })?;
     emit_grant_request(&ctx, &resp);
+    Ok(())
+}
+
+/// Map an actuate API error into a typed structured denial. actuate emits a mix
+/// of canonical `DesktopDenialCode` (approval_revoked/expired/…) and surface
+/// codes (`invalid_actuation_args`), so it uses the generic `{code, reason}`
+/// parser rather than a single closed enum.
+fn act_denial_message(err: &anyhow::Error) -> Option<String> {
+    use agentprovision_core::desktop::DesktopStructuredDenial;
+    let core = err.downcast_ref::<CoreError>()?;
+    if let CoreError::Api { body, .. } = core {
+        let denial = DesktopStructuredDenial::from_error_body(body)?;
+        return Some(format!(
+            "denied code={} reason={}",
+            denial.code, denial.reason
+        ));
+    }
+    None
+}
+
+/// Assemble the action-specific actuation args from the typed flags. Only one
+/// shape is sent; the server validates it against the grant's action.
+fn act_args(args: &ActArgs) -> Option<serde_json::Value> {
+    if let Some(text) = &args.text {
+        return Some(serde_json::json!({ "text": text }));
+    }
+    if let (Some(x), Some(y)) = (args.x, args.y) {
+        return Some(serde_json::json!({ "x": x, "y": y }));
+    }
+    if !args.keys.is_empty() {
+        return Some(serde_json::json!({ "keys": args.keys }));
+    }
+    None
+}
+
+async fn act(args: ActArgs, ctx: Context) -> anyhow::Result<()> {
+    let body = DesktopActuateBody {
+        session_id: args.session.to_string(),
+        grant_id: args.grant.to_string(),
+        args: act_args(&args),
+        nonce: args.nonce.clone(),
+    };
+    let resp = ctx.client.desktop_actuate(&body).await.map_err(|e| {
+        let err = anyhow::Error::new(e);
+        match act_denial_message(&err) {
+            Some(msg) => err.context(format!("[alpha] desktop act {msg}")),
+            None => err,
+        }
+    })?;
+    output::emit(ctx.json, &resp, |resp| match resp.status {
+        agentprovision_core::desktop::DesktopActuateStatus::ApprovalRequired => {
+            output::warn(
+                "[alpha] desktop act: approval_required — no active grant; request approval first",
+            );
+        }
+        agentprovision_core::desktop::DesktopActuateStatus::Queued => {
+            output::ok(format!(
+                "[alpha] desktop act queued command={} status={}",
+                resp.command_id.as_deref().unwrap_or("(none)"),
+                resp.command_status.as_deref().unwrap_or("(none)"),
+            ));
+            if let Some(approval_id) = &resp.approval_id {
+                output::info(format!("approval_id={approval_id}"));
+            }
+            if let Some(bundle) = &resp.target_bundle_id {
+                output::info(format!("target_bundle_id={bundle}"));
+            }
+        }
+    });
     Ok(())
 }
 
@@ -1317,5 +1416,185 @@ mod tests {
             }
             _ => panic!("expected desktop approvals deny"),
         }
+    }
+
+    #[test]
+    fn parses_act_with_text() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "act",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--grant",
+            "55555555-5555-5555-5555-555555555555",
+            "--text",
+            "hello",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Act(args),
+            } => {
+                assert_eq!(
+                    args.grant.to_string(),
+                    "55555555-5555-5555-5555-555555555555"
+                );
+                assert_eq!(args.text.as_deref(), Some("hello"));
+                assert_eq!(act_args(&args), Some(serde_json::json!({"text": "hello"})));
+            }
+            _ => panic!("expected desktop act"),
+        }
+    }
+
+    #[test]
+    fn act_pointer_requires_both_coords() {
+        // --x without --y fails clap (requires).
+        let bad = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "act",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--grant",
+            "55555555-5555-5555-5555-555555555555",
+            "--x",
+            "0.12",
+        ]);
+        assert!(bad.is_err(), "--x without --y must fail clap");
+    }
+
+    #[test]
+    fn act_denial_renders_canonical_and_surface_codes() {
+        // canonical DesktopDenialCode (approval_revoked) renders
+        let revoked = anyhow::Error::new(CoreError::Api {
+            status: 409,
+            body: r#"{"detail": {"code": "approval_revoked", "reason": "approval grant revoked"}}"#
+                .to_string(),
+        });
+        assert!(act_denial_message(&revoked)
+            .expect("typed denial")
+            .contains("approval_revoked"));
+
+        // surface-specific code (invalid_actuation_args) also renders
+        let bad_args = anyhow::Error::new(CoreError::Api {
+            status: 422,
+            body: r#"{"detail": {"code": "invalid_actuation_args", "reason": "x"}}"#.to_string(),
+        });
+        assert!(act_denial_message(&bad_args)
+            .expect("typed denial")
+            .contains("invalid_actuation_args"));
+
+        // a bare-string detail is not a structured denial → None
+        let other = anyhow::Error::new(CoreError::Api {
+            status: 500,
+            body: r#"{"detail": "Internal Server Error"}"#.to_string(),
+        });
+        assert!(act_denial_message(&other).is_none());
+    }
+
+    #[test]
+    fn act_args_builds_pointer_and_keys() {
+        let pointer = ActArgs {
+            session: Uuid::nil(),
+            grant: Uuid::nil(),
+            text: None,
+            x: Some(0.12),
+            y: Some(0.34),
+            keys: vec![],
+            nonce: None,
+        };
+        assert_eq!(
+            act_args(&pointer),
+            Some(serde_json::json!({"x": 0.12, "y": 0.34}))
+        );
+
+        let chord = ActArgs {
+            session: Uuid::nil(),
+            grant: Uuid::nil(),
+            text: None,
+            x: None,
+            y: None,
+            keys: vec!["cmd".into(), "v".into()],
+            nonce: None,
+        };
+        assert_eq!(
+            act_args(&chord),
+            Some(serde_json::json!({"keys": ["cmd", "v"]}))
+        );
+    }
+
+    #[test]
+    fn parses_act_with_normalized_pointer_coords() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "act",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--grant",
+            "55555555-5555-5555-5555-555555555555",
+            "--x",
+            "0.12",
+            "--y",
+            "0.34",
+        ])
+        .expect("clap parse");
+        match cli.cmd {
+            TestCmd::Desktop {
+                sub: DesktopCommand::Act(args),
+            } => {
+                assert_eq!(args.x, Some(0.12));
+                assert_eq!(args.y, Some(0.34));
+                assert_eq!(
+                    act_args(&args),
+                    Some(serde_json::json!({"x": 0.12, "y": 0.34}))
+                );
+            }
+            _ => panic!("expected desktop act"),
+        }
+    }
+
+    #[test]
+    fn act_rejects_mixed_arg_shapes() {
+        let text_and_pointer = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "act",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--grant",
+            "55555555-5555-5555-5555-555555555555",
+            "--text",
+            "hello",
+            "--x",
+            "0.12",
+            "--y",
+            "0.34",
+        ]);
+        assert!(
+            text_and_pointer.is_err(),
+            "act must not silently choose one of multiple arg shapes"
+        );
+
+        let pointer_and_keys = TestCli::try_parse_from([
+            "t",
+            "desktop",
+            "act",
+            "--session",
+            "33333333-3333-3333-3333-333333333333",
+            "--grant",
+            "55555555-5555-5555-5555-555555555555",
+            "--x",
+            "0.12",
+            "--y",
+            "0.34",
+            "--key",
+            "cmd",
+        ]);
+        assert!(
+            pointer_and_keys.is_err(),
+            "act must reject pointer args mixed with key-chord args"
+        );
     }
 }

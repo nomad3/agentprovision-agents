@@ -32,6 +32,7 @@ const GRANT_REQUEST_DENIED: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.denied.json");
 const GRANT_APPROVAL: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_approval.approved.json");
+const ACTUATE: &str = include_str!("../../../docs/contracts/desktop-control/actuate.queued.json");
 
 const FORBIDDEN: &[&str] = &[
     "window_title",
@@ -131,6 +132,7 @@ fn fixtures_are_display_safe_recursive() {
         ("grant_request", GRANT_REQUEST),
         ("grant_request_denied", GRANT_REQUEST_DENIED),
         ("grant_approval", GRANT_APPROVAL),
+        ("actuate", ACTUATE),
     ] {
         let v: Value = serde_json::from_str(raw).unwrap();
         let mut hits = Vec::new();
@@ -226,6 +228,28 @@ fn injected_payload_fails_grant_approval_deserialize() {
         assert!(
             serde_json::from_str::<DesktopGrantApproval>(&st).is_err(),
             "{key} must be rejected by DesktopGrantApproval"
+        );
+    }
+}
+
+#[test]
+fn actuate_fixture_deserializes_typed() {
+    use agentprovision_core::desktop::{DesktopActuate, DesktopActuateStatus};
+    let a: DesktopActuate = serde_json::from_str(ACTUATE).expect("typed actuate");
+    assert_eq!(a.status, DesktopActuateStatus::Queued);
+    assert_eq!(a.command_status.as_deref(), Some("pending"));
+}
+
+#[test]
+fn injected_args_fails_actuate_deserialize() {
+    use agentprovision_core::desktop::DesktopActuate;
+    for key in ["args", "envelope", "screenshot"] {
+        let mut v: Value = serde_json::from_str(ACTUATE).unwrap();
+        v[key] = serde_json::json!("SECRET");
+        let st = serde_json::to_string(&v).unwrap();
+        assert!(
+            serde_json::from_str::<DesktopActuate>(&st).is_err(),
+            "{key} must be rejected"
         );
     }
 }

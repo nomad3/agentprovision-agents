@@ -1,0 +1,13 @@
+{
+  "status": "queued",
+  "command_id": "99999999-9999-9999-9999-999999999999",
+  "command_status": "pending",
+  "action": "keyboard_type",
+  "capability": "keyboard_control",
+  "approval_id": "55555555-5555-5555-5555-555555555555",
+  "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+  "target_bundle_id": "net.whatsapp.WhatsApp",
+  "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+  "session_event_id": "evt-1",
+  "session_seq_no": 7
+}

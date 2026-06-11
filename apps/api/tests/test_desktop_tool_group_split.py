@@ -23,6 +23,8 @@ CONTROL_TOOLS = {
     # P5.4b pending-approval request surface (no actuation, no grant minting).
     "desktop_request_grant",
     "desktop_request_status",
+    # P5.4b grant-gated act surface (consumes an existing grant; mints none).
+    "desktop_actuate",
 }
 
 

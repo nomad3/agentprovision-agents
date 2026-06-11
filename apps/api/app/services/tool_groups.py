@@ -253,6 +253,10 @@ TOOL_GROUPS: dict[str, list[str]] = {
         # grant and NEVER actuate.
         "desktop_request_grant",
         "desktop_request_status",
+        # P5.4b: grant-gated ACT surface — enqueue one bounded native command
+        # against an EXISTING human-approved grant. Mints NO grant; no grant ->
+        # approval_required.
+        "desktop_actuate",
     ],
     # Platform introspection — answers "what's on this tenant?" questions like
     # "list my agents", "what workflows do I have", "which MCP servers are

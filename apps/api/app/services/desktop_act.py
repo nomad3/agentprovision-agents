@@ -28,7 +28,9 @@ from sqlalchemy.orm import Session
 
 from app.models.desktop_approval_request import DesktopApprovalRequest
 from app.models.desktop_command_approval_grant import DesktopCommandApprovalGrant
+from app.services.desktop_control_codes import DesktopDenialCode
 from app.services.desktop_control_service import (
+    _COMMAND_TOOL_ACTIONS,
     _NATIVE_CONTROL_CAPABILITIES,
     _capability_matches_risk_tier,
     _ensure_desktop_control_enabled,
@@ -37,6 +39,8 @@ from app.services.desktop_control_service import (
     _publish_display_safe_session_event,
     _require_native_control_target_binding,
     _select_connected_shell,
+    DesktopCommandEnqueue,
+    enqueue_desktop_command,
 )
 from app.services.perception_storage import _BUNDLE_ID_RE
 
@@ -501,3 +505,198 @@ def deny_desktop_grant_request(
     db.commit()
     db.refresh(request)
     return _display_safe_request(request, now=cutoff)
+
+
+# ── P5.4b desktop_actuate — grant-gated agent act (no minting) ────────────────
+#
+# Given an EXISTING active grant (minted by a human via P5.5), enqueue exactly
+# one bounded native command through the shared `enqueue_desktop_command`
+# lifecycle, bound to that grant. No grant -> approval_required, NO command.
+# Wrong/expired/revoked/exhausted/wrong-session grant -> structured deny, NO
+# command. Mints no grant, signs no envelope, calls no native API. The grant is
+# consumed at CLAIM (unchanged); actuate only enqueues.
+
+# action -> tool_name (invert the canonical tool->action map).
+_ACTION_TO_TOOL = {action: tool for tool, action in _COMMAND_TOOL_ACTIONS.items()}
+
+
+def _deny_canonical(code: DesktopDenialCode, reason: str, *, status_code: int = 409) -> None:
+    raise HTTPException(status_code=status_code, detail={"code": code.value, "reason": reason})
+
+
+def _actuate_grant_state_denial(grant: DesktopCommandApprovalGrant, *, now: datetime) -> None:
+    """Raise the canonical structured denial for a non-actionable grant. A grant
+    that passes all checks here returns None (actionable)."""
+    if grant.status == "revoked" or grant.revoked_at is not None:
+        _deny_canonical(DesktopDenialCode.APPROVAL_REVOKED, "approval grant revoked")
+    expires_at = _as_aware_utc(grant.expires_at)
+    if grant.status == "expired" or expires_at is None or expires_at <= now:
+        _deny_canonical(DesktopDenialCode.APPROVAL_EXPIRED, "approval grant expired")
+    if grant.status == "consumed" or int(grant.remaining_actions or 0) <= 0:
+        _deny_canonical(DesktopDenialCode.APPROVAL_EXHAUSTED, "approval grant exhausted")
+    if grant.status != "active":
+        _deny_canonical(DesktopDenialCode.APPROVAL_BINDING_MISMATCH, "approval grant not active")
+
+
+def _display_safe_command(
+    command: Any,
+    *,
+    status: str,
+    event: Any = None,
+    session_event: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Display-safe actuate projection: command id/status/action/capability/
+    approval ref/bundle + audit refs. NEVER the actuation args, target internals
+    beyond the bundle, screen bytes, or envelope."""
+    payload = command.payload or {}
+    target = payload.get("target") or {}
+    return {
+        "status": status,  # "queued" | "approval_required"
+        "command_id": str(command.id) if command is not None else None,
+        "command_status": command.status if command is not None else None,
+        "action": payload.get("action"),
+        "capability": command.capability if command is not None else None,
+        "approval_id": str(command.approval_id) if (command is not None and command.approval_id) else None,
+        "shell_id": command.shell_id if command is not None else None,
+        "target_bundle_id": target.get("bundle_id"),
+        "desktop_event_id": str(event.id) if event is not None else None,
+        "session_event_id": session_event.get("event_id") if session_event else None,
+        "session_seq_no": session_event.get("seq_no") if session_event else None,
+    }
+
+
+def _approval_required_response(session_id: uuid.UUID) -> dict[str, Any]:
+    return {
+        "status": "approval_required",
+        "command_id": None,
+        "command_status": None,
+        "action": None,
+        "capability": None,
+        "approval_id": None,
+        "shell_id": None,
+        "target_bundle_id": None,
+        "desktop_event_id": None,
+        "session_event_id": None,
+        "session_seq_no": None,
+    }
+
+
+def actuate_command(
+    db: Session,
+    *,
+    tenant_id: uuid.UUID,
+    user_id: uuid.UUID,
+    session_id: uuid.UUID,
+    grant_id: uuid.UUID,
+    args: dict[str, Any] | None = None,
+    nonce: str | None = None,
+    source: str = "alpha",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Enqueue ONE bounded native command against an existing active grant.
+
+    Fail-closed: master flag re-checked; a grant that does not resolve in the
+    caller's (tenant, user) scope -> approval_required (NO command); a resolved
+    grant that is for another session / not native_control / revoked / expired /
+    exhausted -> structured deny (NO command). A valid grant delegates to the
+    shared `enqueue_desktop_command`, which runs every native-control gate
+    (default-off per-capability flag, allowlist, shell-connected, args) and binds
+    the command to ``approval_id=grant.id``. The grant is consumed at CLAIM.
+    """
+    cutoff = now or _utcnow()
+    # Master capability gate (fail-closed) — also confirms the user/tenant.
+    _ensure_desktop_control_enabled(db, tenant_id)
+    _ensure_user_for_tenant(db, user_id, tenant_id)
+
+    # Scope the lookup to the tenant (not the user) so a grant owned by another
+    # user in the SAME tenant denies as a wrong-owner (per spec), while a
+    # cross-tenant or nonexistent id stays a uniform approval_required (no
+    # cross-tenant existence oracle). Grant ids are uuid4 (unguessable).
+    grant = (
+        db.query(DesktopCommandApprovalGrant)
+        .filter(
+            DesktopCommandApprovalGrant.id == grant_id,
+            DesktopCommandApprovalGrant.tenant_id == tenant_id,
+        )
+        .first()
+    )
+    # Missing grant in the tenant => approval_required, NO command.
+    if grant is None:
+        return _approval_required_response(session_id)
+
+    # Wrong owner => structured deny (the grant belongs to a different user).
+    if str(grant.user_id) != str(user_id):
+        _deny_canonical(
+            DesktopDenialCode.APPROVAL_BINDING_MISMATCH,
+            "approval grant is not owned by the caller",
+        )
+
+    # Wrong session / not a native-control grant => structured deny.
+    if str(grant.session_id) != str(session_id):
+        _deny_canonical(
+            DesktopDenialCode.APPROVAL_BINDING_MISMATCH,
+            "approval grant is not for this session",
+        )
+    if grant.risk_tier != "native_control":
+        _deny_canonical(
+            DesktopDenialCode.APPROVAL_BINDING_MISMATCH,
+            "approval grant is not a native-control grant",
+        )
+    # Revoked / expired / exhausted / not-active => structured deny.
+    _actuate_grant_state_denial(grant, now=cutoff)
+
+    # Derive the bounded action/target from the grant — the agent cannot pick a
+    # different action or target than the human approved.
+    target = grant.target_binding or {}
+    action = target.get("action")
+    if not action or action not in _NATIVE_CONTROL_CAPABILITIES:
+        _deny_canonical(
+            DesktopDenialCode.APPROVAL_BINDING_MISMATCH,
+            "approval grant has no actionable native-control action",
+        )
+    capability = _NATIVE_CONTROL_CAPABILITIES[action]
+    if grant.capability != capability or not _capability_matches_risk_tier(capability, "native_control"):
+        _deny_canonical(
+            DesktopDenialCode.APPROVAL_BINDING_MISMATCH,
+            "approval grant capability does not match its action",
+        )
+    tool_name = _ACTION_TO_TOOL.get(action)
+    if tool_name is None:
+        _deny_canonical(
+            DesktopDenialCode.APPROVAL_BINDING_MISMATCH,
+            "approval grant action is not actuatable",
+        )
+
+    request = DesktopCommandEnqueue(
+        session_id=grant.session_id,
+        action=action,
+        tool_name=tool_name,
+        shell_id=grant.shell_id,
+        payload={"target": dict(target), "args": args or {}},
+        nonce=nonce,
+        approval_id=grant.id,
+    )
+    # Delegate to the shared lifecycle — runs the native-control gates
+    # (per-capability flag default-off, allowlist, shell-connected, args
+    # validation) and creates a pending command bound to the grant. Any gate
+    # failure propagates as a display-safe denial; no command is created.
+    try:
+        command, event, session_event = enqueue_desktop_command(
+            db, tenant_id=tenant_id, user_id=user_id, request=request
+        )
+    except ValueError:
+        # Malformed actuation args (e.g. over-long text, out-of-range coords, a
+        # non-allowlisted key chord) raise a bare ValueError from the shared arg
+        # normalizer → no command is created. Convert it to a structured 422
+        # deny (the agent-facing surface never returns an opaque 500), with a
+        # FIXED reason — the args themselves are never echoed.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid_actuation_args",
+                "reason": "actuation args are invalid for the granted action",
+            },
+        )
+    return _display_safe_command(
+        command, status="queued", event=event, session_event=session_event
+    )

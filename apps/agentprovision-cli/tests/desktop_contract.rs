@@ -8,9 +8,10 @@
 //! Scope: contract/parity only. No native actuation; no `alpha desktop` command.
 
 use agentprovision_core::desktop::{
-    DesktopCommandClaim, DesktopCommandDenied, DesktopDenialCode, DesktopGrantApproval,
-    DesktopGrantRequest, DesktopGrantRequestStatus, PerceptionArtifactStatus,
-    PerceptionFetchDenial, PerceptionFetchDenialCode, PerceptionRedactionStatus,
+    DesktopActuate, DesktopActuateStatus, DesktopCommandClaim, DesktopCommandDenied,
+    DesktopDenialCode, DesktopGrantApproval, DesktopGrantRequest, DesktopGrantRequestStatus,
+    PerceptionArtifactStatus, PerceptionFetchDenial, PerceptionFetchDenialCode,
+    PerceptionRedactionStatus,
 };
 
 const CLAIM: &str =
@@ -27,6 +28,7 @@ const GRANT_REQUEST: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_request.pending.json");
 const GRANT_APPROVAL: &str =
     include_str!("../../../docs/contracts/desktop-control/grant_approval.approved.json");
+const ACTUATE: &str = include_str!("../../../docs/contracts/desktop-control/actuate.queued.json");
 
 #[test]
 fn cli_deserializes_fixtures_via_core_types() {
@@ -100,4 +102,10 @@ fn cli_deserializes_grant_approval_via_core_type() {
         serde_json::from_str(GRANT_APPROVAL).expect("core grant approval type");
     assert_eq!(appr.status, DesktopGrantRequestStatus::Approved);
     assert!(appr.grant_present);
+}
+
+#[test]
+fn cli_deserializes_actuate_via_core_type() {
+    let a: DesktopActuate = serde_json::from_str(ACTUATE).expect("core actuate type");
+    assert_eq!(a.status, DesktopActuateStatus::Queued);
 }
