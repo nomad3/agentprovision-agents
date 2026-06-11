@@ -1,7 +1,9 @@
 # Luna P5.3-P5.5 Agent Loop And Chat Trigger Execution
 
 Date: 2026-06-11
-Status: implementation in progress; P5.4 dry-run substrate deployed through PR #885
+Status: implementation in progress; P5.4 dry-run substrate and Luna prompt
+scaffold deployed through PR #888; P5.3a-2 redactor driver merged through
+PR #880
 Inputs: `docs/report/2026-06-11-luna-computer-use-fable-review.md`, `docs/plans/2026-06-09-luna-phase5-general-app-control-design.md`, `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
 
 ## Goal
@@ -84,6 +86,18 @@ Merged:
 - P5.4c operator tool groups / PR #885: operator Luna and Luna Supervisor have
   `desktop_observe` and `desktop_control` tool groups. Merged at `d96921f6`
   and deployed.
+- P5.4c prompt scaffold / PR #886: Luna desktop dry-run/status guidance is
+  injected only when the selected agent has desktop tool groups. Merged at
+  `97d6f4c8`.
+- P5.4h MCP deployment recovery / PR #887: Docker Desktop deploy now rebuilds
+  stale MCP services after failed deploys so newly registered desktop tools are
+  callable. Merged at `dc35ae72`.
+- Luna shell presence reconnect / PR #888: the installed Luna app refreshes
+  shell registration on heartbeat, preserving dry-run claimability after API
+  restarts/redeploys. Merged at `698a3bd0`.
+- P5.3a-2 redactor driver / PR #880: redactor driver loop, claim fencing,
+  byte-free events, cleanup-race fixes, and focused regression coverage merged
+  at `5630f8c2`.
 
 Current deployed proof:
 
@@ -97,6 +111,18 @@ Current deployed proof:
   `a91985e6-77ac-40e7-883d-f0d0d6bab74a` reached terminal `no_op` with
   queued, claimed, and completed audit events after refreshing Luna shell
   presence.
+- Installed Luna 0.1.106 smoke after PR #888 produced dry-run command
+  `f7ac3530-c2c7-45fd-9033-e705dd0f9dac`, terminal `no_op`, no blocker, and
+  `native_envelope=false`.
+- PR #880 post-merge verification: local focused redactor suite passed
+  (`61 passed, 11 warnings`), focused ruff passed, GitHub main Tests aggregate
+  passed, and Docker Desktop Deployment passed for `5630f8c2`.
+- Post-#880 installed Luna chat smoke produced dry-run command
+  `95d41f1c-c913-46a3-a0a3-b90e7a80491c`, terminal `no_op`, outcome `no_op`,
+  audit refs `d0944e13-8ed3-4aa9-bad4-c353727ab3d9`,
+  `b10a1eaa-7bc0-48e0-b695-71a95a1c9827`, and
+  `c3c2f3f6-ad51-45b8-8794-2349f3c00e64`, with
+  `native_envelope=false` and blocker `none`.
 
 Open after D3:
 
@@ -132,14 +158,14 @@ Implementation scope:
 - Fix the redactor lows that become live with the driver: TTL race, dangling
   `planner_safe` row after ambiguous failure, short-write handling, unknown
   region-kind fail-closed behavior, max-attempts coverage.
-- Status 2026-06-11: draft PR #880 (`claudia/p53a-redactor-driver`) wires the
-  driver loop, flag gate, cleanup race fixes, and byte-free redaction events.
-  Codex/Luna review found that the original unknown-region reason echoed
-  engine-supplied text into status metadata; commit `af4e5deb` fixes this with
-  a fixed `unknown_region_kind` code and regression coverage. PR #880 remains
-  draft because `_load_engine()` still returns `None`: the loop is correct but
-  dormant, so the exit criterion "quarantined raw capture -> planner-safe
-  derivative" is not satisfied yet.
+- Status 2026-06-11: PR #880 (`claudia/p53a-redactor-driver`, merge
+  `5630f8c2`) wires the driver loop, flag gate, cleanup-race fixes, and
+  byte-free redaction events. Codex/Luna/Claudia review found and fixed the
+  latent finalize race, missing lost-claim coverage, malformed-env crash, and
+  ambiguous post-commit unlink edge before merge. `_load_engine()` still
+  returns `None`, so the loop is correct but dormant; the exit criterion
+  "quarantined raw capture -> planner-safe derivative" still requires the OCR
+  engine slice and live planner-safe derivative proof.
 
 Tests:
 
@@ -404,21 +430,31 @@ Implementation scope:
   regression test. Luna returned `MERGE`; GitHub checks were green; deploy run
   `27358303437` passed; live Alpha dry-run command
   `a91985e6-77ac-40e7-883d-f0d0d6bab74a` reached terminal `no_op`.
-- Status 2026-06-11: branch `codex/luna-p54g-agent-loop-scaffold` implements
-  the smallest chat-loop scaffold in the CLI runtime prompt. When the selected
-  agent already has `desktop_observe` and/or `desktop_control`, the generated
-  instruction markdown now includes the current chat `session_id`, the Luna app
-  bundle id, dry-run-only guidance for `desktop_background_app_control_dry_run`,
-  follow-up status guidance for `desktop_command_status`, and explicit denial
-  of pointer/click/keyboard/approval/native actuation in this phase. Agents
+- Status 2026-06-11: PR #886 (`codex/luna-p54g-agent-loop-scaffold`, merge
+  `97d6f4c8`) implements the smallest chat-loop scaffold in the CLI runtime
+  prompt. When the selected agent already has `desktop_observe` and/or
+  `desktop_control`, the generated instruction markdown now includes the
+  current chat `session_id`, the Luna app bundle id, dry-run-only guidance for
+  `desktop_background_app_control_dry_run`, follow-up status guidance for
+  `desktop_command_status`, and explicit denial of
+  pointer/click/keyboard/approval/native actuation in this phase. Agents
   without desktop tool groups receive no desktop prompt section.
+- Status 2026-06-11: PR #887 (`codex/luna-p54h-desktop-tools-callable`, merge
+  `dc35ae72`) fixed Docker Desktop deploy recovery for stale MCP services after
+  failed deploys, so the desktop MCP tools are reachable after deployment.
+- Status 2026-06-11: PR #888 (`codex/luna-shell-presence-reconnect`, merge
+  `698a3bd0`) refreshed Luna shell registration on heartbeat; installed Luna
+  0.1.106 smoke then reached terminal dry-run `no_op` with
+  `native_envelope=false`.
 
 Next smallest make-it-work step:
 
-- Package and review PR for `codex/luna-p54g-agent-loop-scaffold`, then smoke
-  through Luna chat after deploy: ask Luna to run a Luna-app dry-run proof,
-  confirm the tool call queues a command, and verify she reports only command
-  id, terminal status, and audit refs.
+- Post-#880 Luna chat smoke is complete; keep it as the regression baseline for
+  the dry-run/status loop until P5.5 approval UX lands.
+- Implement the next feature link: P5.3b planner-safe fetch/observe or P5.5
+  chat trigger + approval UX, depending on whether the OCR/redactor engine slice
+  is ready. Until that approval UX lands, chat-originated desktop work remains
+  dry-run, denied, or approval-required only.
 
 Tests:
 
