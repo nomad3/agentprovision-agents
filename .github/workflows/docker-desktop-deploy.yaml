@@ -157,19 +157,45 @@ jobs:
           # version used "apps/api" (no slash) and silently emitted an
           # empty SERVICES on diff failure.
           CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "apps/api/")
-          SERVICES=""
-          echo "$CHANGED" | grep -q "apps/api/" && SERVICES="$SERVICES api orchestration-worker"
-          echo "$CHANGED" | grep -q "apps/web/" && SERVICES="$SERVICES web"
-          echo "$CHANGED" | grep -q "apps/code-worker/" && SERVICES="$SERVICES code-worker"
-          echo "$CHANGED" | grep -q "apps/embedding-service/" && SERVICES="$SERVICES embedding-service"
-          echo "$CHANGED" | grep -q "apps/memory-core/" && SERVICES="$SERVICES memory-core"
-          echo "$CHANGED" | grep -q "apps/mcp-server/" && SERVICES="$SERVICES mcp-tools"
-          echo "$CHANGED" | grep -q "apps/luna-client/" && SERVICES="$SERVICES luna-client"
-          # Phase 1.5: cli_orchestrator package is shared by api, orchestration-worker
-          # and code-worker — any change rebuilds all three.
-          echo "$CHANGED" | grep -q "packages/cli_orchestrator/" && SERVICES="$SERVICES api orchestration-worker code-worker"
+          BUILD_SERVICES=""
+          RECREATE_SERVICES=""
+
+          # Bind-mounted services can pick up source-only changes by syncing
+          # DEPLOY_DIR and recreating the container. Reserve image rebuilds for
+          # dependency / Dockerfile / generated-proto inputs that actually change
+          # the image filesystem. This keeps one-PR deploys from hitting the
+          # Docker-VM build-space guard when no image build is needed.
+          echo "$CHANGED" | grep -q "apps/api/" && RECREATE_SERVICES="$RECREATE_SERVICES api orchestration-worker"
+          echo "$CHANGED" | grep -Eq '^apps/api/(Dockerfile|requirements\.(in|lock)|proto/|scripts/gen_proto\.sh)' && BUILD_SERVICES="$BUILD_SERVICES api orchestration-worker"
+
+          echo "$CHANGED" | grep -q "apps/code-worker/" && RECREATE_SERVICES="$RECREATE_SERVICES code-worker"
+          echo "$CHANGED" | grep -Eq '^apps/code-worker/(Dockerfile|package(-lock)?\.json|requirements[^/]*\.txt)' && BUILD_SERVICES="$BUILD_SERVICES code-worker"
+
+          echo "$CHANGED" | grep -q "apps/web/" && BUILD_SERVICES="$BUILD_SERVICES web"
+          echo "$CHANGED" | grep -q "apps/embedding-service/" && BUILD_SERVICES="$BUILD_SERVICES embedding-service"
+          echo "$CHANGED" | grep -q "apps/memory-core/" && BUILD_SERVICES="$BUILD_SERVICES memory-core"
+          echo "$CHANGED" | grep -q "apps/mcp-server/" && BUILD_SERVICES="$BUILD_SERVICES mcp-tools"
+          echo "$CHANGED" | grep -q "apps/luna-client/" && BUILD_SERVICES="$BUILD_SERVICES luna-client"
+
+          # Phase 1.5: cli_orchestrator is bind-mounted into api,
+          # orchestration-worker, and code-worker, so source changes need
+          # recreation, not an image rebuild.
+          echo "$CHANGED" | grep -q "packages/cli_orchestrator/" && RECREATE_SERVICES="$RECREATE_SERVICES api orchestration-worker code-worker"
+
+          # Compose-only changes can affect environment, volumes, healthchecks,
+          # or commands for several services. Recreate the application layer
+          # without forcing a build; leave stateful dependencies alone. If the
+          # compose diff changes build metadata itself, fall back to rebuilding
+          # the application images because the image contract may have changed.
+          if echo "$CHANGED" | grep -q "^docker-compose.yml$"; then
+            RECREATE_SERVICES="$RECREATE_SERVICES api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client cloudflared"
+            COMPOSE_DIFF="$(git diff -U0 HEAD~1 HEAD -- docker-compose.yml 2>/dev/null || true)"
+            if echo "$COMPOSE_DIFF" | grep -Eq '^[+-][[:space:]]*(build:|context:|dockerfile:|args:)'; then
+              BUILD_SERVICES="$BUILD_SERVICES api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"
+            fi
+          fi
           
-          # Two cases for an empty SERVICES list:
+          # Two cases for an empty detected service set:
           #   (a) explicit `rebuild-all` from workflow_dispatch → build all.
           #   (b) push event with NO `apps/**/` match (workflow-file
           #       only, docs-only, etc.) → nothing to build. The
@@ -180,16 +206,27 @@ jobs:
           #       deploy fast-paths through `compose up -d` +
           #       migrations against the existing images.
           if [ "${{ github.event.inputs.action }}" = "rebuild-all" ]; then
-            SERVICES="api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"
+            BUILD_SERVICES="api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client"
+          elif [ "${{ github.event.inputs.action }}" = "restart" ]; then
+            RECREATE_SERVICES="api web code-worker orchestration-worker embedding-service memory-core mcp-tools luna-client cloudflared"
           fi
 
-          # Dedup services
-          SERVICES="$(tr ' ' '\n' <<< "$SERVICES" | sed '/^$/d' | sort -u | tr '\n' ' ')"
-          echo "services=$SERVICES" >> "$GITHUB_OUTPUT"
-          if [ -z "$SERVICES" ]; then
-            echo "No service files changed; skipping build step."
+          # Rebuilt services must also be recreated so containers pick up the
+          # new image. Dedup both lists.
+          RECREATE_SERVICES="$RECREATE_SERVICES $BUILD_SERVICES"
+          BUILD_SERVICES="$(tr ' ' '\n' <<< "$BUILD_SERVICES" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+          RECREATE_SERVICES="$(tr ' ' '\n' <<< "$RECREATE_SERVICES" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+          echo "build_services=$BUILD_SERVICES" >> "$GITHUB_OUTPUT"
+          echo "recreate_services=$RECREATE_SERVICES" >> "$GITHUB_OUTPUT"
+          if [ -z "$BUILD_SERVICES" ]; then
+            echo "No image build required."
           else
-            echo "Services to build: $SERVICES"
+            echo "Services to build: $BUILD_SERVICES"
+          fi
+          if [ -z "$RECREATE_SERVICES" ]; then
+            echo "No service recreate required."
+          else
+            echo "Services to recreate: $RECREATE_SERVICES"
           fi
 
       # ── Reclaim disk before build ──
@@ -200,9 +237,9 @@ jobs:
       # is too rare; the sentinel runbook is reactive. This tiny
       # pre-build step makes every deploy start at maximum free space.
       #
-      # Runs only when SERVICES is non-empty (i.e. an actual build is
-      # about to happen) — no-op deploys (workflow-file tweaks, docs)
-      # don't churn the prune.
+      # Runs only when BUILD_SERVICES is non-empty (i.e. an actual image
+      # build is about to happen) — bind-mounted source/config deploys
+      # don't churn prune or hit the Docker-VM build-space guard.
       #
       # Flag rationale:
       #   * `image prune -f`        → dangling images only (cheap, frees real bytes,
@@ -230,7 +267,7 @@ jobs:
       # `set +e` is intentional: a single failing prune subcommand
       # should never fail the deploy — the build is what matters.
       - name: Reclaim disk before build
-        if: steps.changes.outputs.services != ''
+        if: steps.changes.outputs.build_services != ''
         run: |
           set +e
           echo "=== Before prune ==="
@@ -266,13 +303,14 @@ jobs:
           fi
 
       - name: Build and update services
+        if: steps.changes.outputs.build_services != ''
         run: |
           cd "$DEPLOY_DIR"
-          SERVICES="${{ steps.changes.outputs.services }}"
-          echo "Updating: $SERVICES"
+          BUILD_SERVICES="${{ steps.changes.outputs.build_services }}"
+          echo "Building: $BUILD_SERVICES"
 
           # Build only the changed services to save time, but use compose context
-          for svc in $SERVICES; do
+          for svc in $BUILD_SERVICES; do
             echo "--- Building $svc ---"
             # Some services might not be in docker-compose.yml yet or have different names
             # We use docker compose build <service_name> to respect the compose file.
@@ -285,7 +323,7 @@ jobs:
       - name: Up
         run: |
           cd "$DEPLOY_DIR"
-          SERVICES="${{ steps.changes.outputs.services }}"
+          RECREATE_SERVICES="${{ steps.changes.outputs.recreate_services }}"
           RECOVER_SERVICES=(api code-worker)
           WORKSPACES_VOLUME_NAME="${WORKSPACES_VOLUME_NAME:-agentprovision-agents_tenant_spaces}"
           WORKSPACES_COMPLETE_MARKER=".agentprovision_workspace_volume_migrated"
@@ -308,17 +346,13 @@ jobs:
           }
           trap recover_on_error EXIT
           QUIESCE_COMPOSE_SERVICES="${RECOVER_SERVICES[*]}" ./scripts/migrate_compose_workspaces_volume.sh
-          # Recreate the specific services that were rebuilt above so
-          # their containers swap to the fresh images. Plain `compose
-          # up -d` (no service args) only starts stopped containers; it
-          # does NOT recreate already-running containers whose images
-          # were just rebuilt — that's how the 2026-05-14 #471 deploy
-          # left web on the old image even though apps/web/* had been
-          # rebuilt. With explicit services + --force-recreate the
-          # swap is unambiguous.
-          if [ -n "$SERVICES" ]; then
-            echo "Recreating rebuilt services: $SERVICES"
-            docker compose up -d --force-recreate --no-deps $SERVICES
+          # Recreate the services that need either a fresh image or a restart
+          # over bind-mounted source/config. Plain `compose up -d` (no service
+          # args) only starts stopped containers; it does NOT recreate already-
+          # running containers whose images or bind-mounted code changed.
+          if [ -n "$RECREATE_SERVICES" ]; then
+            echo "Recreating services: $RECREATE_SERVICES"
+            docker compose up -d --force-recreate --no-deps $RECREATE_SERVICES
           fi
           # Then bring up anything else that's stopped (db, cloudflared,
           # temporal, redis, etc.) without recreating live containers.
