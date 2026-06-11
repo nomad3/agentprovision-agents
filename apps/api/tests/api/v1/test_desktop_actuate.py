@@ -29,7 +29,7 @@ from app.models.desktop_command_approval_grant import DesktopCommandApprovalGran
 from app.models.tenant import Tenant
 from app.models.tenant_features import TenantFeatures
 from app.models.user import User
-from app.services import desktop_act
+from app.services import desktop_act, luna_presence_service
 
 TENANT_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
 USER_ID = uuid.UUID("22222222-2222-2222-2222-222222222222")
@@ -422,6 +422,66 @@ def test_actuate_stale_permission_readiness_denies_no_command(db_session):
     assert exc.value.status_code == 409
     assert exc.value.detail["code"] == "permission_not_ready"
     assert _commands(db_session) == []
+
+
+def test_actuate_latest_shell_heartbeat_clears_stale_permission_readiness(db_session):
+    _seed(db_session)
+    grant = _mk_grant(db_session)
+    tid = str(TENANT_ID)
+    luna_presence_service._presence_store.pop(tid, None)
+    capabilities = {"can_observe": True, "can_control_keyboard": True, "can_control_pointer": True}
+    try:
+        luna_presence_service.register_shell(
+            TENANT_ID,
+            SHELL_ID,
+            capabilities=capabilities,
+            device_registry_id=str(DEVICE_ID),
+            permission_readiness=_permission_readiness(),
+        )
+        assert SHELL_ID in luna_presence_service.get_presence(TENANT_ID)["shell_permission_readiness"]
+
+        luna_presence_service.register_shell(
+            TENANT_ID,
+            SHELL_ID,
+            capabilities=capabilities,
+            device_registry_id=str(DEVICE_ID),
+            permission_readiness={},
+        )
+        assert SHELL_ID not in luna_presence_service.get_presence(TENANT_ID)["shell_permission_readiness"]
+
+        luna_presence_service.register_shell(
+            TENANT_ID,
+            SHELL_ID,
+            capabilities=capabilities,
+            device_registry_id=str(DEVICE_ID),
+            permission_readiness=_permission_readiness(),
+        )
+        assert SHELL_ID in luna_presence_service.get_presence(TENANT_ID)["shell_permission_readiness"]
+
+        luna_presence_service.register_shell(
+            TENANT_ID,
+            SHELL_ID,
+            capabilities=capabilities,
+            device_registry_id=str(DEVICE_ID),
+            permission_readiness=None,
+        )
+        assert SHELL_ID not in luna_presence_service.get_presence(TENANT_ID)["shell_permission_readiness"]
+
+        with pytest.raises(HTTPException) as exc:
+            desktop_act.actuate_command(
+                db_session,
+                tenant_id=TENANT_ID,
+                user_id=USER_ID,
+                session_id=SESSION_ID,
+                grant_id=grant.id,
+                args={"text": "hello"},
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "permission_not_ready"
+        assert _commands(db_session) == []
+    finally:
+        luna_presence_service._presence_store.pop(tid, None)
 
 
 # ── routes: user-JWT + internal-key (no minting via internal) ────────────────

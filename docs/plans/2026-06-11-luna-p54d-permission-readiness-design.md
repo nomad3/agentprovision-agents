@@ -20,8 +20,10 @@ feature flags, sign envelopes, or enable native actuation.
    `control_get_safety_state`.
 2. `useShellPresence` includes a sanitized `permission_readiness` object during
    `/api/v1/presence/shell/register` heartbeats.
-3. The API presence service stores only canonical status fields plus a
-   server-side `observed_at` timestamp per shell.
+3. The API presence service replaces each shell's readiness snapshot on every
+   heartbeat, storing only canonical status fields plus a server-side
+   `observed_at` timestamp. Missing, empty, or invalid readiness clears the
+   shell's previous snapshot instead of trusting stale granted state.
 4. `enqueue_desktop_command` checks the selected live shell before any action
    that can reach the native-control boundary.
 5. Missing, stale, or non-`granted` required probes raise structured
@@ -55,6 +57,9 @@ require TCC readiness until it grows into a real native-boundary action.
 
 - API actuate tests: missing readiness, denied readiness, and stale readiness all
   return `permission_not_ready` and create no command rows.
+- API actuate tests: a granted readiness heartbeat followed by missing or invalid
+  readiness clears the prior snapshot, so native actuate returns
+  `permission_not_ready` and creates no command row.
 - API lifecycle tests: normal native-control enqueue fixtures include granted
   readiness.
 - API lifecycle tests: the no-op background dry-run can still enqueue without a

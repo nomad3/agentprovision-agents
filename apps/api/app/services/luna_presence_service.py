@@ -242,8 +242,11 @@ def register_shell(
             permission_readiness,
             observed_at=now,
         )
+        readiness_by_shell = p.setdefault("shell_permission_readiness", {})
         if sanitized_permissions:
-            p.setdefault("shell_permission_readiness", {})[shell_name] = sanitized_permissions
+            readiness_by_shell[shell_name] = sanitized_permissions
+        else:
+            readiness_by_shell.pop(shell_name, None)
         snap = dict(p)
         snap["connected_shells"] = list(shells)
         snap["shell_capabilities"] = dict(snap.get("shell_capabilities", {}))
