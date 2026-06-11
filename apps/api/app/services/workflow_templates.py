@@ -340,6 +340,325 @@ NATIVE_TEMPLATES = [
         },
     },
     {
+        "name": "Vet File Intake Packet",
+        "description": "Veterinary MVP: convert an owner/client request into a staff-reviewed intake packet saved to Drive.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "intake", "file-packet"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_intake_packet",
+                    "type": "agent",
+                    "agent": "Front Desk Agent",
+                    "prompt": (
+                        "Create a veterinary intake packet for staff review.\n\n"
+                        "Practice: The Animal Doctor SOC\n"
+                        "Location: {{input.location}}\n"
+                        "Owner request:\n{{input.owner_request}}\n\n"
+                        "Return markdown with: owner/pet identifiers, reason for visit, "
+                        "urgency, red flags, requested window, missing fields, and next staff action. "
+                        "Do not promise appointment availability or medical outcomes."
+                    ),
+                    "output": "packet",
+                },
+                {
+                    "id": "save_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "Vet Intake Packet - {{input.pet_name}} - {{input.date}}.md",
+                        "content": "{{packet.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+            "input_schema": {
+                "owner_request": {"type": "string", "description": "Raw owner/client request or intake text"},
+                "pet_name": {"type": "string", "description": "Pet name if known"},
+                "location": {"type": "string", "description": "Anaheim, Buena Park, Mission Viejo, or unassigned"},
+                "drive_folder_id": {"type": "string", "description": "Drive folder for MVP practice packets"},
+            },
+        },
+    },
+    {
+        "name": "Vet Triage Handoff Packet",
+        "description": "Veterinary MVP: create a one-screen clinical triage handoff file from uploaded context.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "triage", "handoff"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_triage_handoff",
+                    "type": "agent",
+                    "agent": "Clinical Triage Agent",
+                    "prompt": (
+                        "Create a conservative veterinary triage handoff from this packet.\n\n"
+                        "Case packet:\n{{input.case_packet}}\n\n"
+                        "Return markdown with: severity bucket, emergency red flags, "
+                        "owner/pet/location, symptoms, duration, meds/allergies if present, "
+                        "what is missing, and recommended staff routing. Do not diagnose or prescribe."
+                    ),
+                    "output": "handoff",
+                },
+                {
+                    "id": "save_handoff",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "Vet Triage Handoff - {{input.pet_name}} - {{input.date}}.md",
+                        "content": "{{handoff.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
+        "name": "Vet SOAP Draft Packet",
+        "description": "Veterinary MVP: turn an uploaded transcript or draft note into a DVM-reviewed SOAP draft file.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "soap", "clinical-docs"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_soap",
+                    "type": "agent",
+                    "agent": "SOAP Note Agent",
+                    "prompt": (
+                        "Draft a veterinary SOAP note from the source text below.\n\n"
+                        "Source:\n{{input.source_text}}\n\n"
+                        "Use sections Subjective, Objective, Assessment, Plan. "
+                        "Flag missing weight, temperature, vaccines, allergies, medication, "
+                        "or unclear DVM wording. Use [source unclear - DVM to confirm] instead of guessing."
+                    ),
+                    "output": "soap",
+                },
+                {
+                    "id": "approval",
+                    "type": "human_approval",
+                    "name": "DVM review required",
+                    "timeout_hours": 48,
+                    "on_timeout": "reject",
+                    "output": "approval",
+                },
+                {
+                    "id": "save_soap",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "SOAP Draft - {{input.pet_name}} - {{input.date}}.md",
+                        "content": "{{soap.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
+        "name": "Vet Billing Review Packet",
+        "description": "Veterinary MVP: create an AAHA-oriented billing exception packet from uploaded charge sheets.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "billing", "aaha"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_billing_packet",
+                    "type": "agent",
+                    "agent": "Billing Agent",
+                    "prompt": (
+                        "Create a billing review packet from these uploaded charge/payment notes.\n\n"
+                        "Source:\n{{input.billing_source}}\n\n"
+                        "Return markdown with: line-item table, likely AAHA category, missing code, "
+                        "refund/write-off/discount flags, financing candidate flag, and accountant notes. "
+                        "Do not claim a ledger entry was posted."
+                    ),
+                    "output": "billing_packet",
+                },
+                {
+                    "id": "save_billing_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "Billing Review Packet - {{input.date}}.md",
+                        "content": "{{billing_packet.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
+        "name": "Vet Inventory Audit Packet",
+        "description": "Veterinary MVP: summarize uploaded inventory/count sheets and flag exceptions.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "inventory", "pharmacy"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_inventory_packet",
+                    "type": "agent",
+                    "agent": "Inventory & Pharma Agent",
+                    "prompt": (
+                        "Create an inventory/pharmacy audit packet from this uploaded source.\n\n"
+                        "Source:\n{{input.inventory_source}}\n\n"
+                        "Return markdown with: SKU/medication, on-hand count, par level if present, "
+                        "expiration issues, discrepancies, controlled-substance flags, and human follow-up. "
+                        "Never close a discrepancy by assumption."
+                    ),
+                    "output": "inventory_packet",
+                },
+                {
+                    "id": "save_inventory_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "Inventory Audit Packet - {{input.date}}.md",
+                        "content": "{{inventory_packet.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
+        "name": "Vet Reputation Response Packet",
+        "description": "Veterinary MVP: draft approval-gated review responses and owner education content from uploaded feedback.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "reputation", "reviews"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_reputation_packet",
+                    "type": "agent",
+                    "agent": "Reputation & Growth Agent",
+                    "prompt": (
+                        "Create a reputation response/content packet from this uploaded feedback.\n\n"
+                        "Source:\n{{input.feedback_source}}\n\n"
+                        "Return markdown with: review summary, risk flags, suggested public reply, "
+                        "private follow-up note, and content opportunity. Do not publish anything."
+                    ),
+                    "output": "reputation_packet",
+                },
+                {
+                    "id": "approval",
+                    "type": "human_approval",
+                    "name": "Manager approval required before public response",
+                    "timeout_hours": 72,
+                    "on_timeout": "reject",
+                    "output": "approval",
+                },
+                {
+                    "id": "save_reputation_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "Reputation Response Packet - {{input.date}}.md",
+                        "content": "{{reputation_packet.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
+        "name": "Vet Daily Practice Ops Brief",
+        "description": "Veterinary MVP: synthesize uploaded exports and agent packets into a daily operator brief.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "ops", "briefing"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_ops_brief",
+                    "type": "agent",
+                    "agent": "Practice Operations Agent",
+                    "prompt": (
+                        "Create today's veterinary practice operations brief from these file-backed inputs.\n\n"
+                        "Inputs:\n{{input.ops_sources}}\n\n"
+                        "Return markdown with: by-location summary, appointment/request queue, "
+                        "billing exceptions, triage escalations, inventory exceptions, reputation items, "
+                        "blocked workflows, and next actions. Separate file-backed metrics from future PMS fields."
+                    ),
+                    "output": "ops_brief",
+                },
+                {
+                    "id": "save_ops_brief",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "Daily Practice Ops Brief - {{input.date}}.md",
+                        "content": "{{ops_brief.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
+        "name": "Vet PMS Desktop Readiness Packet",
+        "description": "Veterinary MVP: document PMS screen-map observations and approved operator steps as a Drive artifact.",
+        "tier": "native",
+        "public": True,
+        "tags": ["veterinary", "mvp", "drive", "computer-use", "pms"],
+        "trigger_config": {"type": "manual"},
+        "definition": {
+            "steps": [
+                {
+                    "id": "draft_readiness_packet",
+                    "type": "agent",
+                    "agent": "PMS Operator Agent",
+                    "prompt": (
+                        "Create a PMS desktop-control readiness packet.\n\n"
+                        "Observed/source notes:\n{{input.pms_notes}}\n\n"
+                        "Return markdown with: app/screen, safe fields, unsafe fields, "
+                        "required human approval, target allowlist notes, exact proposed operator steps, "
+                        "and open questions. Do not claim any PMS action was performed."
+                    ),
+                    "output": "readiness_packet",
+                },
+                {
+                    "id": "save_readiness_packet",
+                    "type": "mcp_tool",
+                    "tool": "create_drive_file",
+                    "params": {
+                        "name": "PMS Desktop Readiness Packet - {{input.date}}.md",
+                        "content": "{{readiness_packet.response}}",
+                        "mime_type": "text/markdown",
+                        "folder_id": "{{input.drive_folder_id}}",
+                    },
+                    "output": "drive_file",
+                },
+            ],
+        },
+    },
+    {
         "name": "Data Source Sync",
         "description": "Extract data from any connector, load to PostgreSQL Bronze and Silver layers, update sync metadata",
         "tier": "native",

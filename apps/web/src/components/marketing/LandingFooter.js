@@ -17,8 +17,9 @@ const DEFAULT_LINKS = [
  *   key under `footer.links.${key}`. Alpha landing overrides this with
  *   anchors that actually exist on the page (commands, platform, etc.)
  *   so reused links aren't dead. PR #450 review IMPORTANT I1.
+ * - tagline: optional visible footer tagline override.
  */
-export default function LandingFooter({ links = DEFAULT_LINKS } = {}) {
+export default function LandingFooter({ links = DEFAULT_LINKS, tagline } = {}) {
   const { t } = useTranslation('landing');
   const year = new Date().getFullYear();
 
@@ -27,7 +28,7 @@ export default function LandingFooter({ links = DEFAULT_LINKS } = {}) {
       <div className="landing-footer__inner">
         <div className="landing-footer__brand">
           <span className="landing-footer__logo">AgentProvision</span>
-          <p className="landing-footer__tagline">{t('footer.tagline')}</p>
+          <p className="landing-footer__tagline">{tagline ?? t('footer.tagline')}</p>
         </div>
 
         <nav className="landing-footer__nav">

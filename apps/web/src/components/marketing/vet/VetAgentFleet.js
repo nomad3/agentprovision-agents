@@ -1,96 +1,116 @@
-/**
- * "An agent for every part of the practice" — the agent-fleet section.
- *
- * Each agent owns one slice of the operation and carries an explicit
- * approval gate. Luna guardrail: NO clinical autonomy. Agents draft,
- * triage, and prepare — a licensed human signs off on anything
- * clinical or financial. Card grid mirrors AlphaCommands.js.
- */
 import { motion, useReducedMotion } from 'framer-motion';
+import {
+  FaCalendarCheck,
+  FaChartPie,
+  FaClipboardCheck,
+  FaComments,
+  FaDesktop,
+  FaFileInvoiceDollar,
+  FaLock,
+  FaNotesMedical,
+  FaPills,
+  FaStarHalfAlt,
+  FaUserMd,
+} from 'react-icons/fa';
 
 const AGENTS = [
   {
-    icon: '🛎️',
-    title: 'Front Desk & Scheduling',
-    body: 'Prepares booking, confirmation, and reschedule workflows; fills cancellations from approved rules.',
-    gate: 'Staff confirms every booking change',
+    icon: FaUserMd,
+    title: 'Luna Supervisor',
+    body: 'Routes work across the fleet, maintains context, and keeps clinical, financial, and PMS actions inside approval boundaries.',
+    gate: 'Supervisor coordinates, staff decides',
   },
   {
-    icon: '📝',
-    title: 'Clinical Documentation',
-    body: 'Turns exam-room audio and notes into structured SOAP drafts, attached to the record.',
-    gate: 'Clinician approves every note',
+    icon: FaComments,
+    title: 'Pet Health Concierge',
+    body: 'Answers owner intake, gathers missing facts, and escalates red flags without diagnosing or prescribing.',
+    gate: 'Urgent cases route to staff',
   },
   {
-    icon: '🔬',
-    title: 'Diagnostics & Specialist Reports',
-    body: 'Assembles labs and imaging into specialist-grade report drafts for review.',
-    gate: 'Specialist approves every report',
+    icon: FaCalendarCheck,
+    title: 'Front Desk Agent',
+    body: 'Prepares scheduling packets, confirmations, reschedule requests, and new-client onboarding for each location.',
+    gate: 'Staff confirms every slot',
   },
   {
-    icon: '💬',
-    title: 'Client Communication',
-    body: 'Drafts reminders, results explainers, and follow-ups across SMS, WhatsApp, and email.',
-    gate: 'Team approves before anything sends',
+    icon: FaClipboardCheck,
+    title: 'Clinical Triage Agent',
+    body: 'Classifies messages by urgency and produces one-screen summaries grounded in uploaded records.',
+    gate: 'No diagnosis, conservative routing',
   },
   {
-    icon: '🧾',
-    title: 'Billing & Collections',
-    body: 'Reconciles invoices, flags unpaid balances, and prepares statements and payment plans.',
-    gate: 'Manager approves every adjustment',
+    icon: FaNotesMedical,
+    title: 'SOAP Note Agent',
+    body: 'Turns transcripts, notes, and visit context into structured drafts with uncertain source language marked clearly.',
+    gate: 'DVM approves every note',
   },
   {
-    icon: '📦',
-    title: 'Inventory & Pharmacy',
-    body: 'Tracks stock, predicts reorders, and drafts purchase orders before you run dry.',
-    gate: 'Lead approves every order',
+    icon: FaFileInvoiceDollar,
+    title: 'Billing Agent',
+    body: 'Reviews invoices, charge sheets, write-offs, refunds, and missing codes before accountant export.',
+    gate: 'Manager approves exceptions',
   },
   {
-    icon: '📣',
-    title: 'Marketing & Reputation',
-    body: 'Surfaces reviews, drafts responses, and prepares campaigns from real practice signals.',
-    gate: 'You approve before anything posts',
+    icon: FaPills,
+    title: 'Inventory & Pharma Agent',
+    body: 'Keeps count sheets, dispense events, expirations, reorder thresholds, and controlled-substance issues visible.',
+    gate: 'Discrepancies stay open',
   },
   {
-    icon: '🤝',
-    title: 'Referrals',
-    body: 'Routes cases to the right specialist, packages records, and tracks the loop closed.',
-    gate: 'Vet approves every referral',
+    icon: FaStarHalfAlt,
+    title: 'Reputation & Growth Agent',
+    body: 'Drafts review replies and campaign ideas from measured practice signals without publishing autonomously.',
+    gate: 'Approval before public response',
+  },
+  {
+    icon: FaChartPie,
+    title: 'Practice Operations Agent',
+    body: 'Builds daily operator briefs across locations, unresolved handoffs, revenue packets, recall backlog, and readiness.',
+    gate: 'Separates file-backed facts from future fields',
+  },
+  {
+    icon: FaDesktop,
+    title: 'PMS Operator Agent',
+    body: 'Maps PMS screens, identifies safe fields, and prepares human-approved desktop action plans for the computer-use lane.',
+    gate: 'Readiness-only until enabled',
   },
 ];
 
 export default function VetAgentFleet() {
   const prefersReducedMotion = useReducedMotion();
   return (
-    <section className="vet-fleet" id="fleet">
+    <section className="vet-fleet" id="rooms">
       <div className="vet-fleet__inner">
-        <h2 className="vet-fleet__title">An agent for every part of the practice.</h2>
+        <span className="vet-section-kicker">Practice rooms</span>
+        <h2 className="vet-fleet__title">A named agent room for every core workflow.</h2>
         <p className="vet-fleet__subtitle">
-          Not one chatbot trying to do everything — a coordinated fleet of
-          specialists, each owning a slice of the day-to-day. Every agent
-          drafts and prepares; a person on your team approves the decisions
-          that matter.
+          This is clinical infrastructure, not a generic chatbot. Each room has
+          a defined job, a bounded source of truth, and an explicit handoff to
+          the human who owns the decision.
         </p>
 
         <div className="vet-fleet__grid">
-          {AGENTS.map((a, i) => (
-            <motion.div
-              key={a.title}
-              className="vet-fleet__card"
-              initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true, margin: '-40px' }}
-              transition={{ duration: 0.45, delay: i * 0.04 }}
-            >
-              <div className="vet-fleet__card-icon" aria-hidden="true">{a.icon}</div>
-              <h3 className="vet-fleet__card-title">{a.title}</h3>
-              <p className="vet-fleet__card-body">{a.body}</p>
-              <p className="vet-fleet__card-gate">
-                <span className="vet-fleet__card-gate-icon" aria-hidden="true">🔒</span>
-                {a.gate}
-              </p>
-            </motion.div>
-          ))}
+          {AGENTS.map((a, i) => {
+            const Icon = a.icon;
+            return (
+              <motion.div
+                key={a.title}
+                className="vet-fleet__card"
+                initial={prefersReducedMotion ? false : { opacity: 0, y: 18 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true, margin: '-40px' }}
+                transition={{ duration: 0.45, delay: i * 0.04 }}
+              >
+                <div className="vet-fleet__card-icon" aria-hidden="true"><Icon /></div>
+                <h3 className="vet-fleet__card-title">{a.title}</h3>
+                <p className="vet-fleet__card-body">{a.body}</p>
+                <p className="vet-fleet__card-gate">
+                  <span className="vet-fleet__card-gate-icon" aria-hidden="true"><FaLock /></span>
+                  {a.gate}
+                </p>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </section>

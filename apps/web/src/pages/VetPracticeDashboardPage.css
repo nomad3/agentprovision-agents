@@ -1,0 +1,105 @@
+.vet-practice-page {
+  max-width: 1180px;
+}
+
+.vet-practice-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--ap-space-4);
+  margin-bottom: var(--ap-space-6);
+}
+
+.vet-practice-metric .ap-card-body {
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-3);
+}
+
+.vet-practice-metric__icon {
+  color: var(--ap-primary);
+  flex: 0 0 auto;
+}
+
+.vet-practice-metric__value {
+  color: var(--ap-text);
+  font-size: var(--ap-fs-lg);
+  font-weight: 700;
+  line-height: var(--ap-lh-tight);
+}
+
+.vet-practice-metric__label {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-xs);
+}
+
+.vet-practice-section {
+  margin-bottom: var(--ap-space-6);
+}
+
+.vet-practice-storage,
+.vet-practice-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ap-space-4);
+}
+
+.vet-practice-storage-card,
+.vet-practice-agent-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ap-space-4);
+}
+
+.vet-practice-flow-list,
+.vet-practice-agent-list,
+.vet-practice-future-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ap-space-3);
+}
+
+.vet-practice-flow__head {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ap-space-4);
+  align-items: flex-start;
+}
+
+.vet-practice-flow__meta {
+  display: flex;
+  gap: var(--ap-space-2);
+  flex-wrap: wrap;
+  margin-top: var(--ap-space-3);
+}
+
+.vet-practice-flow__meta span {
+  color: var(--ap-text-muted);
+  background: var(--ap-primary-tint);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-sm);
+  font-size: var(--ap-fs-xs);
+  padding: 3px 8px;
+}
+
+@media (max-width: 991.98px) {
+  .vet-practice-metrics,
+  .vet-practice-storage,
+  .vet-practice-two-col {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 575.98px) {
+  .vet-practice-metrics,
+  .vet-practice-storage,
+  .vet-practice-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .vet-practice-flow__head,
+  .vet-practice-storage-card,
+  .vet-practice-agent-row {
+    flex-direction: column;
+  }
+}

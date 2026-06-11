@@ -1,63 +1,55 @@
-/**
- * Trust section — the guardrails that make an agent fleet safe inside a
- * licensed medical practice. Luna-led positioning: provenance on every
- * fact, a licensed human signs off, full audit trail, your data stays
- * yours. NO clinical-autonomy claims anywhere on this page; this
- * section is where we make that promise explicit. Pillar layout mirrors
- * AlphaPlatformPower.js.
- */
 import { motion, useReducedMotion } from 'framer-motion';
 
 const PILLARS = [
   {
-    icon: '🧬',
-    title: 'Provenance on every fact',
+    icon: '01',
+    title: 'Deterministic where it matters',
     body:
-      'Every data point in the record carries its source, a timestamp, and a ' +
-      'confidence signal. When an agent surfaces something, you can see exactly ' +
-      'where it came from — no black-box answers, no untraceable claims.',
-    proof: 'source · timestamp · confidence',
+      'Red flags, missing records, controlled-substance mismatches, and ' +
+      'approval boundaries are handled as workflow rules. Unvalidated paths ' +
+      'are surfaced for staff instead of smoothed over.',
+    proof: 'routing rules · missing-source blocks · approval gates',
   },
   {
-    icon: '✍️',
-    title: 'A licensed human signs off',
+    icon: '02',
+    title: 'Clinician-led by design',
     body:
-      'Agents draft, triage, and prepare. They never diagnose, prescribe, or ' +
-      'settle a bill on their own. Every clinical and financial decision routes ' +
-      'to a licensed member of your team for approval before it counts.',
-    proof: 'approval gate on every decision',
+      'Agents draft, triage, summarize, and prepare. They do not diagnose, ' +
+      'prescribe, alter records, post payments, or send sensitive messages ' +
+      'without the practice team approving the decision.',
+    proof: 'licensed staff stays accountable',
   },
   {
-    icon: '🧾',
-    title: 'Full audit trail',
+    icon: '03',
+    title: 'Fully auditable',
     body:
-      'Who approved what, when, and on what evidence — captured for every action ' +
-      'the fleet takes. Reconstruct any decision after the fact for quality ' +
-      'review, compliance, or peace of mind.',
-    proof: 'who · what · when · why',
+      'Every packet, draft, and handoff records the source file, stated ' +
+      'assumptions, confidence, approver, and next action. You can reconstruct ' +
+      'why a workflow moved the way it did.',
+    proof: 'source · assumption · confidence · approver',
   },
   {
-    icon: '🔐',
-    title: 'Your data stays yours',
+    icon: '04',
+    title: 'Practice memory compounds',
     body:
-      'Per-practice isolation, encrypted credentials, and a record you own. ' +
-      'AgentProvision connects your systems together — it does not take your ' +
-      'data somewhere you can’t reach it.',
-    proof: 'tenant isolation · encrypted vault',
+      'Each approved case leaves behind structured operational memory: what ' +
+      'worked, what was missing, who handled it, and what should be faster next ' +
+      'time across the practice.',
+    proof: 'case packets become reusable intelligence',
   },
 ];
 
 export default function VetTrust() {
   const prefersReducedMotion = useReducedMotion();
   return (
-    <section className="vet-trust" id="trust">
+    <section className="vet-trust" id="safety">
       <div className="vet-trust__inner">
-        <h2 className="vet-trust__title">Built to be trusted in a medical practice.</h2>
+        <span className="vet-section-kicker vet-section-kicker--dark">Trust & safety</span>
+        <h2 className="vet-trust__title">Safety is the workflow, not a banner claim.</h2>
         <p className="vet-trust__subtitle">
-          An agent fleet only belongs in veterinary medicine if it earns trust the
-          way your team does — with evidence, sign-off, and a record of every call.
-          This is not an AI veterinarian. It is the operating system your licensed
-          team runs the practice on.
+          A veterinary agent system earns its place only when it behaves like
+          accountable clinical infrastructure: bounded, cited, reviewable, and
+          explicit about what it does not know.
         </p>
 
         <div className="vet-trust__grid">

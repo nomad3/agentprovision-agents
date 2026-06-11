@@ -103,6 +103,7 @@ from app.api.v1 import (
     desktop_control,
     luna_impact,
     provision,
+    vet_practice,
 )
 
 _logger = logging.getLogger(__name__)
@@ -205,6 +206,7 @@ router.include_router(usage_costs.router, tags=["usage-costs"])
 # because the v1 root already has /tasks claimed by agent_tasks
 # (orchestration-internal AgentTask records).
 router.include_router(dashboard_tasks.router, prefix="/dashboard", tags=["dashboard"])
+router.include_router(vet_practice.router, prefix="/vet-practice", tags=["vet-practice"])
 router.include_router(desktop_control.router, tags=["desktop-control"])
 # Luna-impact baseline dashboard (#327) — single tenant-scoped endpoint
 # aggregating Layer-1 measurable signals (stability / routing / affect /

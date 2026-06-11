@@ -191,7 +191,7 @@ def _agent_managed_values(spec: Dict[str, Any]) -> Dict[str, Any]:
         "default_model_tier": spec["default_model_tier"],
         "autonomy_level": "supervised",
         "max_delegation_depth": 2,
-        "status": "production",
+        "status": spec.get("status", "production"),
         "version": 1,
         "tool_groups_review_required": bool(
             spec.get("tool_groups_review_required", True)

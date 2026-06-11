@@ -1,499 +1,1412 @@
-/**
- * Styles for `vet.agentprovision.com` — the veterinary practice OS
- * landing page. Reuses the --land-* design tokens defined in
- * LandingPage.css (imported below for token resolution; the entry page
- * also imports LandingPage.css for the shared nav/footer/cta styles).
- * Naming convention: `vet-` prefix (NOT the `--ap-*` brand props).
- *
- * Palette leans on a calm clinical teal/blue drawn from the shared
- * tokens (--land-teal, --land-blue) so it reads "trusted medical
- * software", not "neon AI startup".
- */
 @import './LandingPage.css';
 
-/* ── Hero ───────────────────────────────────────────────────────── */
+.vet-landing {
+  background: #f7faf8;
+}
+
+.landing-nav--vet:not(.landing-nav--scrolled) .landing-nav__logo,
+.landing-nav--vet:not(.landing-nav--scrolled) .landing-nav__link,
+.landing-nav--vet:not(.landing-nav--scrolled) .landing-nav__signin {
+  color: rgba(246, 251, 250, 0.86);
+}
+
+.landing-nav--vet:not(.landing-nav--scrolled) .landing-nav__link:hover,
+.landing-nav--vet:not(.landing-nav--scrolled) .landing-nav__signin:hover {
+  color: #ffffff;
+}
+
+.landing-nav--vet:not(.landing-nav--scrolled) .landing-nav__cta {
+  border: 1px solid rgba(159, 230, 208, 0.85);
+  background: rgba(159, 230, 208, 0.92);
+  color: #06100f;
+}
+
+.vet-section-kicker {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  margin-bottom: 16px;
+  border: 1px solid rgba(22, 94, 82, 0.18);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #edf7f3;
+  color: #166052;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vet-section-kicker--dark {
+  border-color: rgba(149, 219, 199, 0.32);
+  background: rgba(149, 219, 199, 0.1);
+  color: #9fe6d0;
+}
+
+#mission,
+#patients,
+#rooms,
+#safety,
+#example {
+  scroll-margin-top: 84px;
+}
+
+/* Hero */
 .vet-hero {
   position: relative;
-  min-height: 100vh;
+  min-height: 88vh;
   display: flex;
   align-items: center;
-  padding: 96px 24px 64px;
+  padding: 112px 24px 72px;
   overflow: hidden;
-  background: linear-gradient(180deg, #07221f 0%, #0a2a3a 55%, #0e3550 100%);
-  color: #eef6f5;
+  color: #f6fbfa;
+  background: #06100f;
 }
-.vet-hero__bg {
+
+.vet-hero::before {
+  content: '';
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(circle at 18% 28%, rgba(94, 197, 176, 0.22), transparent 60%),
-    radial-gradient(circle at 82% 72%, rgba(37, 99, 235, 0.16), transparent 55%);
+  background-image:
+    linear-gradient(90deg, rgba(4, 14, 13, 0.96) 0%, rgba(4, 14, 13, 0.86) 31%, rgba(4, 14, 13, 0.46) 58%, rgba(4, 14, 13, 0.16) 100%),
+    linear-gradient(180deg, rgba(4, 14, 13, 0.42) 0%, rgba(4, 14, 13, 0.06) 44%, rgba(4, 14, 13, 0.72) 100%),
+    url('./assets/marketing/vet/openvet-style-hero.png');
+  background-size: cover;
+  background-position: center;
+}
+
+.vet-hero::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 96px;
+  background: linear-gradient(180deg, rgba(247, 250, 248, 0), #f7faf8 92%);
+}
+
+.vet-hero__bg {
+  display: none;
+}
+
+.vet-hero__clinical-trace {
+  position: absolute;
+  right: 7vw;
+  bottom: 14vh;
+  z-index: 1;
+  width: min(420px, 32vw);
   pointer-events: none;
 }
+
+.vet-hero__trace-shell {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(159, 230, 208, 0.16);
+  border-radius: 8px;
+  padding: 16px;
+  background: rgba(6, 16, 15, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(246, 251, 250, 0.04);
+  overflow: hidden;
+}
+
+.vet-hero__trace-shell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(110deg, transparent 0%, rgba(159, 230, 208, 0.12) 42%, transparent 64%);
+  animation: vet-trace-glint 5.6s ease-in-out infinite;
+}
+
+.vet-hero__trace-row {
+  position: relative;
+  display: block;
+  width: var(--trace-width);
+  height: 7px;
+  margin-left: var(--trace-offset);
+  border-radius: 999px;
+  background: rgba(246, 251, 250, 0.13);
+  overflow: hidden;
+}
+
+.vet-hero__trace-row::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 36%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(159, 230, 208, 0), rgba(159, 230, 208, 0.85), rgba(159, 230, 208, 0));
+  animation: vet-trace-row 3.8s ease-in-out infinite;
+  animation-delay: var(--trace-delay);
+}
+
 .vet-hero__content {
   position: relative;
-  max-width: 1200px;
+  z-index: 1;
+  max-width: 1180px;
   margin: 0 auto;
   width: 100%;
-  display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  gap: 56px;
-  align-items: center;
 }
-@media (max-width: 900px) {
-  .vet-hero__content { grid-template-columns: 1fr; gap: 40px; }
+
+.vet-hero__text {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 760px;
 }
-.vet-hero__text { display: flex; flex-direction: column; gap: 22px; }
+
 .vet-hero__badge {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  background: rgba(94, 197, 176, 0.12);
-  color: var(--land-teal);
-  border: 1px solid rgba(94, 197, 176, 0.34);
-  border-radius: 9999px;
-  padding: 6px 14px;
   width: max-content;
-}
-.vet-hero__title {
-  font-size: clamp(38px, 6vw, 62px);
-  line-height: 1.06;
+  border: 1px solid rgba(159, 230, 208, 0.38);
+  border-radius: 999px;
+  padding: 7px 13px;
+  background: rgba(159, 230, 208, 0.1);
+  color: #b8f0df;
+  font-size: 12px;
   font-weight: 800;
-  margin: 0;
-  letter-spacing: -0.02em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
+
+.vet-hero__title {
+  max-width: 740px;
+  margin: 0;
+  color: #ffffff;
+  font-size: 68px;
+  line-height: 1.03;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
 .vet-hero__subtitle {
+  max-width: 650px;
+  margin: 0;
+  color: rgba(246, 251, 250, 0.84);
   font-size: 18px;
-  line-height: 1.55;
-  color: rgba(238, 246, 245, 0.82);
-  margin: 0;
-  max-width: 600px;
+  line-height: 1.6;
 }
+
 .vet-hero__assurances {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-wrap: wrap;
   gap: 10px 20px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
+
 .vet-hero__assurance {
   position: relative;
-  font-size: 14px;
-  color: rgba(238, 246, 245, 0.92);
   padding-left: 22px;
+  color: rgba(246, 251, 250, 0.92);
+  font-size: 14px;
+  line-height: 1.4;
 }
+
 .vet-hero__assurance::before {
-  content: '✓';
+  content: '';
   position: absolute;
   left: 0;
-  color: var(--land-teal);
-  font-weight: 700;
+  top: 0.45em;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9fe6d0;
+  box-shadow: 0 0 0 4px rgba(159, 230, 208, 0.14);
 }
-.vet-hero__ctas { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
-.vet-hero__cta-primary {
-  display: inline-flex;
-  align-items: center;
-  text-decoration: none;
-  background: var(--land-teal);
-  color: #06241f;
-  border: none;
-  border-radius: 9999px;
-  padding: 13px 28px;
-  font-size: 15px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: filter 0.2s, transform 0.2s;
+
+.vet-hero__ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
 }
-.vet-hero__cta-primary:hover { filter: brightness(1.07); transform: translateY(-1px); }
+
+.vet-hero__cta-primary,
 .vet-hero__cta-ghost {
   display: inline-flex;
   align-items: center;
-  text-decoration: none;
-  background: transparent;
-  color: rgba(238, 246, 245, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.26);
-  border-radius: 9999px;
-  padding: 13px 28px;
+  justify-content: center;
+  min-height: 48px;
+  border-radius: 999px;
+  padding: 0 24px;
   font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.2s;
+  font-weight: 800;
+  text-decoration: none;
+  transition: transform 0.18s, background 0.18s, border-color 0.18s;
 }
-.vet-hero__cta-ghost:hover { background: rgba(255, 255, 255, 0.07); }
 
-/* Hero "unified record" panel */
-.vet-hero__panel {
-  background: rgba(8, 30, 36, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 16px;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
-  padding: 26px;
+.vet-hero__cta-primary {
+  border: 1px solid #9fe6d0;
+  background: #9fe6d0;
+  color: #06100f;
+}
+
+.vet-hero__cta-primary:hover {
+  color: #06100f;
+  transform: translateY(-1px);
+}
+
+.vet-hero__cta-ghost {
+  border: 1px solid rgba(246, 251, 250, 0.28);
+  background: rgba(246, 251, 250, 0.06);
+  color: #f6fbfa;
+}
+
+.vet-hero__cta-ghost:hover {
+  border-color: rgba(246, 251, 250, 0.5);
+  background: rgba(246, 251, 250, 0.12);
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.vet-hero__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  max-width: 920px;
+  margin-top: 48px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(246, 251, 250, 0.18);
+}
+
+.vet-hero__stat {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  gap: 6px;
 }
-.vet-hero__panel-feeds {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-}
-.vet-hero__feed {
-  font-size: 13px;
-  font-weight: 600;
-  color: #cdeee6;
-  background: rgba(94, 197, 176, 0.1);
-  border: 1px solid rgba(94, 197, 176, 0.28);
-  border-radius: 8px;
-  padding: 7px 12px;
-}
-.vet-hero__panel-arrow {
-  color: rgba(94, 197, 176, 0.7);
+
+.vet-hero__stat-value {
+  color: #ffffff;
   font-size: 20px;
-  line-height: 1;
+  font-weight: 850;
+  line-height: 1.15;
 }
-.vet-hero__panel-record {
-  width: 100%;
-  text-align: center;
-  background: linear-gradient(135deg, rgba(94, 197, 176, 0.16), rgba(37, 99, 235, 0.14));
-  border: 1px solid rgba(94, 197, 176, 0.32);
+
+.vet-hero__stat-label {
+  max-width: 250px;
+  color: rgba(246, 251, 250, 0.72);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* Animated case-flow console */
+.vet-caseflow {
+  position: relative;
+  overflow: hidden;
+  padding: 92px 24px;
+  background:
+    linear-gradient(135deg, #071513 0%, #0d2824 48%, #102f3d 100%);
+  color: #f6fbfa;
+}
+
+.vet-caseflow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(246, 251, 250, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(246, 251, 250, 0.045) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent);
+  pointer-events: none;
+}
+
+.vet-caseflow__inner {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 0.82fr 1.18fr;
+  gap: 34px;
+  align-items: center;
+}
+
+.vet-caseflow__copy h2 {
+  max-width: 470px;
+  margin: 0 0 16px;
+  color: #ffffff;
+  font-size: 42px;
+  line-height: 1.08;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.vet-caseflow__copy p {
+  max-width: 500px;
+  margin: 0;
+  color: rgba(246, 251, 250, 0.72);
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+.vet-caseflow__console {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(246, 251, 250, 0.14);
   border-radius: 12px;
   padding: 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  background: rgba(6, 16, 15, 0.58);
+  box-shadow:
+    0 30px 70px rgba(0, 0, 0, 0.24),
+    inset 0 0 0 1px rgba(246, 251, 250, 0.04);
 }
-.vet-hero__panel-record-label { font-size: 17px; font-weight: 700; color: #eef6f5; }
-.vet-hero__panel-record-sub {
-  font-size: 12px;
-  color: rgba(238, 246, 245, 0.7);
-  letter-spacing: 0.02em;
+
+.vet-caseflow__console::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(110deg, transparent 0%, rgba(159, 230, 208, 0.16) 38%, transparent 58%);
+  transform: translateX(-120%);
+  animation: vet-console-glint 7.8s ease-in-out infinite;
+  pointer-events: none;
 }
-.vet-hero__panel-gate {
-  width: 100%;
+
+.vet-caseflow__console-top {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #eef6f5;
-  background: rgba(40, 200, 64, 0.1);
-  border: 1px solid rgba(40, 200, 64, 0.3);
-  border-radius: 10px;
-  padding: 12px;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid rgba(246, 251, 250, 0.12);
+  padding-bottom: 16px;
+  margin-bottom: 18px;
 }
-.vet-hero__panel-gate-icon {
+
+.vet-caseflow__console-top strong {
+  display: block;
+  color: #ffffff;
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.vet-caseflow__eyebrow,
+.vet-caseflow__ledger-title {
+  display: block;
+  margin-bottom: 4px;
+  color: #9fe6d0;
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.vet-caseflow__live {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: max-content;
+  border: 1px solid rgba(159, 230, 208, 0.32);
+  border-radius: 999px;
+  padding: 7px 10px;
+  background: rgba(159, 230, 208, 0.1);
+  color: #c9f5e8;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.vet-caseflow__stage-wrap {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.vet-caseflow__rail {
+  position: absolute;
+  left: 38px;
+  right: 38px;
+  top: 31px;
+  height: 2px;
+  background: rgba(246, 251, 250, 0.1);
+  transform: translateY(-50%);
+}
+
+.vet-caseflow__rail span {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #9fe6d0, #7daaf7);
+  transform-origin: left center;
+}
+
+.vet-caseflow__stage {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-height: 194px;
+  border: 1px solid rgba(246, 251, 250, 0.12);
+  border-radius: 10px;
+  padding: 14px;
+  background: rgba(246, 251, 250, 0.055);
+  backdrop-filter: blur(10px);
+}
+
+.vet-caseflow__stage-number {
+  color: rgba(246, 251, 250, 0.54);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.vet-caseflow__stage-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(40, 200, 64, 0.85);
-  color: #06241f;
-  font-size: 13px;
-  font-weight: 800;
+  width: 34px;
+  height: 34px;
+  margin: 10px 0 14px;
+  border: 1px solid rgba(159, 230, 208, 0.3);
+  border-radius: 8px;
+  background: rgba(159, 230, 208, 0.11);
+  color: #9fe6d0;
+  font-size: 15px;
+  box-shadow: 0 0 0 0 rgba(159, 230, 208, 0.38);
+  animation: vet-case-icon-pulse 4.2s ease-in-out infinite;
 }
 
-/* ── Connectors ─────────────────────────────────────────────────── */
-.vet-connectors {
-  background: var(--land-bg);
-  padding: 96px 24px;
+.vet-caseflow__stage h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 850;
+  line-height: 1.25;
+  letter-spacing: 0;
 }
-.vet-connectors__inner { max-width: 1200px; margin: 0 auto; }
-.vet-connectors__title {
-  font-size: clamp(28px, 4vw, 40px);
-  line-height: 1.15;
+
+.vet-caseflow__stage p {
+  flex: 1;
+  margin: 8px 0 12px;
+  color: rgba(246, 251, 250, 0.67);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.vet-caseflow__stage-meta {
+  width: max-content;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: rgba(246, 251, 250, 0.08);
+  color: rgba(246, 251, 250, 0.82);
+  font-size: 11px;
   font-weight: 800;
+  line-height: 1.2;
+}
+
+.vet-caseflow__ledger {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+  border-top: 1px solid rgba(246, 251, 250, 0.12);
+  padding-top: 16px;
+}
+
+.vet-caseflow__ledger-title {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+
+.vet-caseflow__ledger-item {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(246, 251, 250, 0.12);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(246, 251, 250, 0.045);
+  color: rgba(246, 251, 250, 0.78);
+  font-size: 12px;
+  font-weight: 760;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.vet-caseflow__ledger-item::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(159, 230, 208, 0.14), transparent);
+  transform: translateX(-110%);
+  animation: vet-ledger-scan 5.8s ease-in-out infinite;
+}
+
+.vet-caseflow__packet {
+  position: absolute;
+  z-index: 1;
+  width: 72px;
+  height: 34px;
+  border: 1px solid rgba(159, 230, 208, 0.2);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(159, 230, 208, 0.18), rgba(125, 170, 247, 0.1)),
+    rgba(246, 251, 250, 0.04);
+  opacity: 0.7;
+}
+
+.vet-caseflow__packet::before,
+.vet-caseflow__packet::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(246, 251, 250, 0.28);
+}
+
+.vet-caseflow__packet::before {
+  top: 10px;
+}
+
+.vet-caseflow__packet::after {
+  bottom: 10px;
+  right: 26px;
+}
+
+.vet-caseflow__packet--one {
+  left: -86px;
+  top: 94px;
+  animation: vet-packet-fly 12s linear infinite;
+}
+
+.vet-caseflow__packet--two {
+  left: -110px;
+  top: 224px;
+  animation: vet-packet-fly 15s linear infinite;
+  animation-delay: 3.5s;
+}
+
+.vet-caseflow__packet--three {
+  left: -92px;
+  bottom: 62px;
+  animation: vet-packet-fly 13.5s linear infinite;
+  animation-delay: 7s;
+}
+
+/* Mission / file workflows */
+.vet-connectors {
+  background: #f7faf8;
+  padding: 88px 24px 96px;
+}
+
+.vet-connectors__inner {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.vet-connectors__title,
+.vet-fleet__title,
+.vet-trust__title,
+.vet-cardio__title {
   margin: 0 0 16px;
-  color: var(--land-text);
+  font-size: 40px;
+  line-height: 1.12;
+  font-weight: 850;
+  letter-spacing: 0;
 }
-.vet-connectors__subtitle {
+
+.vet-connectors__title,
+.vet-fleet__title,
+.vet-cardio__title {
+  color: #0c1715;
+}
+
+.vet-connectors__subtitle,
+.vet-fleet__subtitle,
+.vet-cardio__subtitle {
+  max-width: 760px;
+  margin: 0 0 44px;
+  color: #52635f;
   font-size: 17px;
-  line-height: 1.55;
-  color: var(--land-text-muted);
-  max-width: 740px;
-  margin: 0 0 48px;
+  line-height: 1.62;
 }
-.vet-connectors__grid {
+
+.vet-connectors__grid,
+.vet-fleet__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 20px;
+  gap: 16px;
 }
-.vet-connectors__card {
+
+.vet-connectors__card,
+.vet-fleet__card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #dfe8e4;
+  border-radius: 8px;
   background: #ffffff;
-  border: 1px solid var(--land-border);
-  border-radius: 14px;
+  box-shadow: 0 10px 24px rgba(9, 31, 27, 0.04);
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+}
+
+.vet-connectors__card {
   padding: 22px;
-  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
 }
-.vet-connectors__card:hover {
-  border-color: var(--land-teal);
-  transform: translateY(-3px);
-  box-shadow: 0 12px 28px rgba(14, 53, 80, 0.08);
+
+.vet-connectors__card:hover,
+.vet-fleet__card:hover {
+  border-color: rgba(22, 96, 82, 0.34);
+  box-shadow: 0 14px 32px rgba(9, 31, 27, 0.08);
+  transform: translateY(-2px);
 }
+
 .vet-connectors__card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  gap: 14px;
+  margin-bottom: 18px;
 }
-.vet-connectors__card-icon { font-size: 28px; line-height: 1; }
+
+.vet-connectors__card-icon,
+.vet-fleet__card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  background: #e8f5f1;
+  color: #166052;
+  font-size: 18px;
+}
+
 .vet-connectors__card-cat {
+  border: 1px solid #d7e8e2;
+  border-radius: 999px;
+  padding: 5px 8px;
+  color: #166052;
+  background: #f3fbf8;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--land-teal);
-  background: rgba(94, 197, 176, 0.1);
-  border-radius: 6px;
-  padding: 4px 8px;
 }
-.vet-connectors__card-name {
-  font-size: 17px;
-  font-weight: 700;
-  margin: 0 0 8px;
-  color: var(--land-text);
-}
-.vet-connectors__card-body {
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--land-text-muted);
+
+.vet-connectors__card-name,
+.vet-fleet__card-title,
+.vet-trust__pillar-title,
+.vet-cardio__step-title {
   margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: 0;
 }
-.vet-connectors__footnote {
-  margin: 36px 0 0;
+
+.vet-connectors__card-name,
+.vet-fleet__card-title,
+.vet-cardio__step-title {
+  color: #0c1715;
+}
+
+.vet-connectors__card-body,
+.vet-fleet__card-body,
+.vet-cardio__step-body {
+  margin: 10px 0 0;
+  color: #52635f;
+  font-size: 14px;
+  line-height: 1.58;
+}
+
+.vet-connectors__footnote,
+.vet-cardio__footnote {
+  max-width: 760px;
+  margin: 34px auto 0;
+  color: #52635f;
   font-size: 15px;
-  line-height: 1.55;
-  color: var(--land-text-muted);
+  line-height: 1.6;
   text-align: center;
 }
 
-/* ── Agent fleet ────────────────────────────────────────────────── */
-.vet-fleet {
-  background: var(--land-bg-subtle);
-  padding: 96px 24px;
-}
-.vet-fleet__inner { max-width: 1200px; margin: 0 auto; }
-.vet-fleet__title {
-  font-size: clamp(28px, 4vw, 40px);
-  font-weight: 800;
-  margin: 0 0 16px;
-  color: var(--land-text);
-}
-.vet-fleet__subtitle {
-  font-size: 17px;
-  line-height: 1.55;
-  color: var(--land-text-muted);
-  max-width: 740px;
-  margin: 0 0 48px;
-}
-.vet-fleet__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 20px;
-}
-.vet-fleet__card {
+/* Patient journeys */
+.vet-patients {
+  position: relative;
+  overflow: hidden;
   background: #ffffff;
-  border: 1px solid var(--land-border);
-  border-radius: 14px;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  padding: 92px 24px 104px;
 }
-.vet-fleet__card:hover {
-  border-color: var(--land-blue);
-  transform: translateY(-3px);
-  box-shadow: 0 12px 28px rgba(14, 53, 80, 0.08);
+
+.vet-patients__inner {
+  position: relative;
+  max-width: 1180px;
+  margin: 0 auto;
 }
-.vet-fleet__card-icon { font-size: 32px; line-height: 1; margin-bottom: 14px; }
-.vet-fleet__card-title {
-  font-size: 18px;
-  font-weight: 700;
-  margin: 0 0 10px;
-  color: var(--land-text);
+
+.vet-patients__header {
+  max-width: 790px;
+  margin-bottom: 42px;
 }
-.vet-fleet__card-body {
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--land-text-muted);
+
+.vet-patients__title {
   margin: 0 0 16px;
-  flex: 1;
+  color: #0c1715;
+  font-size: 40px;
+  line-height: 1.12;
+  font-weight: 850;
+  letter-spacing: 0;
 }
+
+.vet-patients__subtitle {
+  max-width: 760px;
+  margin: 0;
+  color: #52635f;
+  font-size: 17px;
+  line-height: 1.62;
+}
+
+.vet-patients__belt {
+  position: absolute;
+  left: -12%;
+  right: -12%;
+  top: 152px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: 18px;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.vet-patients__belt span {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(22, 96, 82, 0.36), transparent);
+}
+
+.vet-patients__grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.vet-patients__card {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #dfe8e4;
+  border-radius: 10px;
+  background: #f7faf8;
+  box-shadow: 0 14px 34px rgba(9, 31, 27, 0.08);
+  transform-origin: center bottom;
+}
+
+.vet-patients__image-wrap {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  background: #071513;
+}
+
+.vet-patients__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.vet-patients__image-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(7, 21, 19, 0) 48%, rgba(7, 21, 19, 0.76) 100%),
+    linear-gradient(90deg, rgba(7, 21, 19, 0.1), rgba(7, 21, 19, 0));
+  pointer-events: none;
+}
+
+.vet-patients__scan {
+  position: absolute;
+  top: -20%;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  height: 34%;
+  background: linear-gradient(180deg, transparent, rgba(159, 230, 208, 0.18), transparent);
+  mix-blend-mode: screen;
+  animation: vet-patient-scan 6.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.vet-patients__overlay {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 3;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vet-patients__label,
+.vet-patients__status {
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.vet-patients__label {
+  border: 1px solid rgba(246, 251, 250, 0.24);
+  background: rgba(6, 16, 15, 0.52);
+  color: #ffffff;
+}
+
+.vet-patients__status {
+  gap: 7px;
+  border: 1px solid rgba(159, 230, 208, 0.35);
+  background: rgba(159, 230, 208, 0.16);
+  color: #c9f5e8;
+}
+
+.vet-patients__copy {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 14px;
+  padding: 20px;
+}
+
+.vet-patients__copy-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #e8f5f1;
+  color: #166052;
+  font-size: 16px;
+}
+
+.vet-patients__copy h3 {
+  margin: 0;
+  color: #0c1715;
+  font-size: 18px;
+  font-weight: 850;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.vet-patients__copy p {
+  margin: 9px 0 0;
+  color: #52635f;
+  font-size: 14px;
+  line-height: 1.58;
+}
+
+/* Practice rooms */
+.vet-fleet {
+  background: #eef5f2;
+  padding: 92px 24px;
+}
+
+.vet-fleet__inner {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.vet-fleet__card {
+  padding: 22px;
+}
+
+.vet-fleet__card-icon {
+  margin-bottom: 16px;
+}
+
+.vet-fleet__card-body {
+  flex: 1;
+  margin-bottom: 18px;
+}
+
 .vet-fleet__card-gate {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--land-text);
-  background: var(--land-bg-subtle);
-  border: 1px solid var(--land-border);
-  border-radius: 9px;
-  padding: 9px 11px;
+  min-height: 40px;
   margin: 0;
+  border-top: 1px solid #e4ede9;
+  padding-top: 13px;
+  color: #20342f;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.35;
 }
-.vet-fleet__card-gate-icon { font-size: 13px; }
 
-/* ── Trust ──────────────────────────────────────────────────────── */
+.vet-fleet__card-gate-icon {
+  display: inline-flex;
+  color: #166052;
+  font-size: 12px;
+}
+
+/* Trust and safety */
 .vet-trust {
-  background: var(--land-bg-dark);
-  color: #eef6f5;
+  background: #071513;
+  color: #f6fbfa;
   padding: 96px 24px;
 }
-.vet-trust__inner { max-width: 1200px; margin: 0 auto; text-align: center; }
+
+.vet-trust__inner {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
 .vet-trust__title {
-  font-size: clamp(28px, 4vw, 40px);
-  font-weight: 800;
-  margin: 0 0 16px;
+  max-width: 760px;
   color: #ffffff;
 }
+
 .vet-trust__subtitle {
+  max-width: 780px;
+  margin: 0 0 52px;
+  color: rgba(246, 251, 250, 0.76);
   font-size: 17px;
-  line-height: 1.6;
-  color: rgba(238, 246, 245, 0.78);
-  max-width: 760px;
-  margin: 0 auto 56px;
+  line-height: 1.65;
 }
+
 .vet-trust__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: 24px;
-  text-align: left;
-}
-.vet-trust__pillar {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 14px;
-  padding: 28px;
-}
-.vet-trust__pillar-icon { font-size: 34px; line-height: 1; margin-bottom: 14px; }
-.vet-trust__pillar-title {
-  font-size: 18px;
-  font-weight: 700;
-  margin: 0 0 12px;
-  color: #ffffff;
-}
-.vet-trust__pillar-body {
-  font-size: 15px;
-  line-height: 1.6;
-  color: rgba(238, 246, 245, 0.76);
-  margin: 0 0 14px;
-}
-.vet-trust__pillar-proof {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  color: var(--land-teal);
-  margin: 0;
+  gap: 16px;
 }
 
-/* ── Cardiology depth example ───────────────────────────────────── */
-.vet-cardio {
-  background: var(--land-bg);
-  padding: 96px 24px;
+.vet-trust__pillar {
+  border: 1px solid rgba(246, 251, 250, 0.12);
+  border-radius: 8px;
+  padding: 24px;
+  background: rgba(246, 251, 250, 0.04);
 }
-.vet-cardio__inner { max-width: 980px; margin: 0 auto; }
-.vet-cardio__eyebrow {
-  display: inline-block;
+
+.vet-trust__pillar-icon {
+  display: inline-flex;
+  margin-bottom: 22px;
+  color: #9fe6d0;
+  font-size: 13px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+
+.vet-trust__pillar-title {
+  color: #ffffff;
+}
+
+.vet-trust__pillar-body {
+  margin: 12px 0 16px;
+  color: rgba(246, 251, 250, 0.76);
+  font-size: 15px;
+  line-height: 1.62;
+}
+
+.vet-trust__pillar-proof {
+  margin: 0;
+  color: #9fe6d0;
   font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--land-blue);
-  background: rgba(37, 99, 235, 0.08);
-  border-radius: 9999px;
-  padding: 5px 14px;
-  margin-bottom: 18px;
-}
-.vet-cardio__title {
-  font-size: clamp(26px, 3.6vw, 38px);
-  line-height: 1.15;
   font-weight: 800;
-  margin: 0 0 16px;
-  color: var(--land-text);
+  letter-spacing: 0.04em;
+  line-height: 1.45;
+  text-transform: uppercase;
 }
-.vet-cardio__subtitle {
-  font-size: 17px;
-  line-height: 1.6;
-  color: var(--land-text-muted);
-  max-width: 720px;
-  margin: 0 0 44px;
+
+/* Specialist example */
+.vet-cardio {
+  background: #ffffff;
+  padding: 94px 24px;
 }
+
+.vet-cardio__inner {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.vet-cardio__eyebrow {
+  display: inline-flex;
+  width: max-content;
+  margin-bottom: 18px;
+  border: 1px solid rgba(45, 93, 145, 0.18);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #edf4fb;
+  color: #255480;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .vet-cardio__steps {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+.vet-cardio__step {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 18px;
+  align-items: flex-start;
+  border: 1px solid #dfe8e4;
+  border-radius: 8px;
+  padding: 22px;
+  background: #f7faf8;
+}
+
+.vet-cardio__step--gate {
+  border-color: rgba(22, 96, 82, 0.32);
+  background: #eef8f4;
+}
+
+.vet-cardio__step-num {
+  color: #166052;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.vet-cardio__step-text {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 7px;
 }
-.vet-cardio__step {
-  display: flex;
-  gap: 20px;
-  align-items: flex-start;
-  background: var(--land-bg-subtle);
-  border: 1px solid var(--land-border);
-  border-radius: 14px;
-  padding: 22px;
-}
-.vet-cardio__step--gate {
-  background: rgba(40, 200, 64, 0.05);
-  border-color: rgba(40, 200, 64, 0.32);
-}
-.vet-cardio__step-num {
-  font-size: 22px;
-  font-weight: 800;
-  color: var(--land-teal);
-  line-height: 1.2;
-  min-width: 36px;
-}
-.vet-cardio__step--gate .vet-cardio__step-num { color: #1f9d3a; }
-.vet-cardio__step-text { display: flex; flex-direction: column; gap: 6px; }
+
 .vet-cardio__step-actor {
+  color: #6b7a76;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--land-text-muted);
 }
-.vet-cardio__step-title {
-  font-size: 18px;
-  font-weight: 700;
-  margin: 0;
-  color: var(--land-text);
-}
-.vet-cardio__step-body {
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--land-text-muted);
-  margin: 0;
-}
+
 .vet-cardio__step-badge {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   width: max-content;
-  margin-top: 6px;
+  margin-top: 7px;
+  border: 1px solid rgba(22, 96, 82, 0.24);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #ffffff;
+  color: #166052;
   font-size: 13px;
-  font-weight: 700;
-  color: #1f7a32;
-  background: rgba(40, 200, 64, 0.12);
-  border: 1px solid rgba(40, 200, 64, 0.3);
-  border-radius: 9999px;
-  padding: 5px 12px;
+  font-weight: 850;
 }
-.vet-cardio__footnote {
-  margin: 36px 0 0;
-  font-size: 15px;
-  line-height: 1.55;
-  color: var(--land-text-muted);
-  text-align: center;
+
+@media (max-width: 900px) {
+  .vet-hero {
+    min-height: auto;
+    padding: 104px 20px 64px;
+  }
+
+  .vet-hero::before {
+    background-image:
+      linear-gradient(180deg, rgba(4, 14, 13, 0.93) 0%, rgba(4, 14, 13, 0.84) 48%, rgba(4, 14, 13, 0.66) 100%),
+      url('./assets/marketing/vet/openvet-style-hero.png');
+    background-position: 58% center;
+  }
+
+  .vet-hero__title {
+    font-size: 48px;
+  }
+
+  .vet-hero__stats {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-top: 36px;
+  }
+
+  .vet-connectors,
+  .vet-caseflow,
+  .vet-patients,
+  .vet-fleet,
+  .vet-trust,
+  .vet-cardio {
+    padding: 72px 20px;
+  }
+
+  .vet-connectors__title,
+  .vet-caseflow__copy h2,
+  .vet-patients__title,
+  .vet-fleet__title,
+  .vet-trust__title,
+  .vet-cardio__title {
+    font-size: 32px;
+  }
+
+  .vet-hero__clinical-trace {
+    display: none;
+  }
+
+  .vet-patients__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .vet-patients__belt {
+    display: none;
+  }
+
+  .vet-caseflow__inner {
+    grid-template-columns: 1fr;
+  }
+
+  .vet-caseflow__stage-wrap {
+    grid-template-columns: 1fr;
+  }
+
+  .vet-caseflow__rail {
+    left: 31px;
+    right: auto;
+    top: 20px;
+    bottom: 20px;
+    width: 2px;
+    height: auto;
+    transform: none;
+  }
+
+  .vet-caseflow__rail span {
+    width: 100%;
+    height: 100%;
+    transform-origin: top center;
+  }
+
+  .vet-caseflow__stage {
+    min-height: auto;
+    padding-left: 58px;
+  }
+
+  .vet-caseflow__stage-icon {
+    position: absolute;
+    left: 14px;
+    top: 33px;
+    margin: 0;
+  }
+
+  .vet-caseflow__ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .landing-nav--vet .landing-nav__inner {
+    gap: 12px;
+    padding: 0 20px;
+  }
+
+  .landing-nav--vet .landing-nav__actions {
+    margin-left: auto;
+  }
+
+  .landing-nav--vet .landing-nav__signin {
+    display: none;
+  }
+
+  .landing-nav--vet .landing-nav__cta {
+    padding: 9px 16px;
+    font-size: 14px;
+  }
+
+  .vet-hero {
+    padding-top: 96px;
+  }
+
+  .vet-hero__title {
+    font-size: 38px;
+  }
+
+  .vet-hero__subtitle,
+  .vet-connectors__subtitle,
+  .vet-caseflow__copy p,
+  .vet-patients__subtitle,
+  .vet-fleet__subtitle,
+  .vet-trust__subtitle,
+  .vet-cardio__subtitle {
+    font-size: 16px;
+  }
+
+  .vet-hero__cta-primary,
+  .vet-hero__cta-ghost {
+    width: 100%;
+  }
+
+  .vet-connectors__card-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vet-cardio__step {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .vet-patients__overlay {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vet-patients__copy {
+    grid-template-columns: 1fr;
+  }
+
+  .vet-caseflow__console {
+    padding: 14px;
+  }
+
+  .vet-caseflow__console-top,
+  .vet-caseflow__ledger {
+    grid-template-columns: 1fr;
+  }
+
+  .vet-caseflow__console-top {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .vet-caseflow__ledger {
+    display: grid;
+  }
+
+  .vet-caseflow__packet {
+    display: none;
+  }
+}
+
+@keyframes vet-trace-row {
+  0% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  16% {
+    opacity: 1;
+  }
+  74% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(310%);
+    opacity: 0;
+  }
+}
+
+@keyframes vet-trace-glint {
+  0%,
+  62%,
+  100% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  72% {
+    opacity: 1;
+  }
+  92% {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+}
+
+@keyframes vet-patient-scan {
+  0%,
+  58%,
+  100% {
+    transform: translateY(-40%);
+    opacity: 0;
+  }
+  68% {
+    opacity: 0.75;
+  }
+  88% {
+    transform: translateY(360%);
+    opacity: 0;
+  }
+}
+
+@keyframes vet-console-glint {
+  0%,
+  58%,
+  100% {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  70% {
+    opacity: 1;
+  }
+  88% {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+}
+
+@keyframes vet-case-icon-pulse {
+  0%,
+  70%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(159, 230, 208, 0);
+  }
+  82% {
+    box-shadow: 0 0 0 7px rgba(159, 230, 208, 0.09);
+  }
+}
+
+@keyframes vet-ledger-scan {
+  0%,
+  55%,
+  100% {
+    transform: translateX(-110%);
+    opacity: 0;
+  }
+  66% {
+    opacity: 1;
+  }
+  86% {
+    transform: translateX(110%);
+    opacity: 0;
+  }
+}
+
+@keyframes vet-packet-fly {
+  0% {
+    transform: translateX(0) translateY(0) rotate(-3deg);
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.72;
+  }
+  48% {
+    transform: translateX(420px) translateY(-10px) rotate(2deg);
+  }
+  92% {
+    opacity: 0.72;
+  }
+  100% {
+    transform: translateX(880px) translateY(8px) rotate(4deg);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vet-hero__trace-shell::after,
+  .vet-hero__trace-row::before,
+  .vet-caseflow__console::after,
+  .vet-caseflow__stage-icon,
+  .vet-caseflow__ledger-item::after,
+  .vet-caseflow__packet,
+  .vet-patients__scan {
+    animation: none;
+  }
 }
