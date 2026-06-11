@@ -236,6 +236,26 @@ def test_status_event_is_byte_free(db_session, enabled):
     assert "/" not in payload["reason"] and ".png" not in blob
 
 
+def test_status_event_does_not_echo_unknown_region_kind(db_session, enabled):
+    _seed_artifact(db_session)
+    captured = []
+
+    def fake_publish(session_id, event_type, payload, *, tenant_id):
+        captured.append(payload)
+
+    pr.run_redactor_once(
+        db_session,
+        StubEngine([_region(kind="secret/path.png", text="")]),
+        worker_id=WORKER,
+        publish=fake_publish,
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["reason"] == "unknown_region_kind"
+    blob = json.dumps(captured[0])
+    assert "secret/path.png" not in blob
+
+
 # ── retries + max-attempts coverage (Low 5) ──────────────────────────────────
 
 def test_failing_engine_retries_then_stops_at_max_attempts(db_session, enabled, monkeypatch):
@@ -309,12 +329,13 @@ def test_unknown_region_kind_withholds(db_session, enabled):
     assert res.withheld == 1
     db_session.refresh(art)
     assert art.redaction_status == pr.STATUS_NOT_PLANNER_SAFE
-    assert "unknown_region_kind:signature" in (art.redaction_meta or {}).get("reasons", [])
+    assert "unknown_region_kind" in (art.redaction_meta or {}).get("reasons", [])
+    assert "signature" not in json.dumps(art.redaction_meta or {})
 
 
 def test_classify_unknown_kind_unit():
     out = pr._classify_regions([_region(kind="logo", text="")])
-    assert out.withhold and any(r.startswith("unknown_region_kind:") for r in out.reasons)
+    assert out.withhold and out.reasons == ["unknown_region_kind"]
 
 
 # ── short-write handling (Low 3) ─────────────────────────────────────────────

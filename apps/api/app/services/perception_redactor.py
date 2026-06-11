@@ -227,8 +227,10 @@ def _classify_regions(regions: list[DetectedRegion]) -> _ClassifyResult:
         if r.kind not in _TEXT_KINDS:
             # An engine-proposed region of a kind we don't recognise: we can't reason
             # about whether it's safe, so fail closed rather than silently passing it.
+            # Do not echo the unknown kind into metadata/events; engine labels are not
+            # an approved display channel.
             out.withhold = True
-            out.reasons.append(f"unknown_region_kind:{r.kind}")
+            out.reasons.append("unknown_region_kind")
             continue
         if r.text and _floor_detects_secret(r.text):
             x, y, w, h = r.box
