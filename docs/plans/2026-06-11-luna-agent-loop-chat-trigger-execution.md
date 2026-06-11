@@ -176,7 +176,7 @@ Exit criteria:
 
 ### Slice 3: P5.4a Secondary-Pointer/Background Actuator
 
-Purpose: create the native general app-control actuator before exposing
+Purpose: create the native general app-control actuator before exposing broad
 agent-facing act tools.
 
 Implementation scope:
@@ -201,6 +201,16 @@ Implementation scope:
   real actuation. The dry-run lifecycle is claimable and Stop-preemptible
   (`pending -> claimed -> running -> no-op`); it is not modeled as an
   immediate-terminal denied row.
+- Status 2026-06-11: first server/MCP dry-run slice is implemented on branch
+  `codex/luna-p54a-background-control`:
+  `background_app_control_dry_run` is a real command action with
+  `background_control` capability, `background_control_enabled` tenant gate,
+  API route validation, and MCP tool
+  `desktop_background_app_control_dry_run`. Claim emits a claimed event then
+  terminal `no_op`, persists no native command envelope, consumes no approval
+  grant, and remains Stop-preemptible while pending. This is a working
+  dry-run lifecycle only; it does not enable AX, PID, pointer, or keyboard
+  native actuation.
 - Use the SP1.5 contract/security fixtures as executable denial vocabulary.
 - Prove global cursor functions are not called by background-control commands.
 
@@ -224,7 +234,8 @@ Exit criteria:
 
 - The signed background actuator contract exists, is default-off, and can deny
   or dry-run against an allowlisted operator app without using the global cursor.
-- No agent-facing act tool is exposed until this slice is green.
+- Only dry-run/no-op agent-facing act tooling is exposed until this slice is
+  green; real native actuation remains behind later review gates.
 
 ### Slice 4: P5.4b Desktop Act Verbs And MCP Wrappers
 

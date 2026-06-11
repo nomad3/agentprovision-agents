@@ -25,6 +25,7 @@ _TOOL_ACTIONS = {
     "desktop_observe_screen": "capture_screenshot",
     "desktop_get_active_app": "get_active_app",
     "desktop_read_clipboard": "read_clipboard",
+    "desktop_background_app_control_dry_run": "background_app_control_dry_run",
 }
 
 
@@ -83,6 +84,78 @@ async def _request_observation(
         }
     if resp.status_code == 401:
         return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code == 404:
+        return {"status": "error", "error": "session not found"}
+    if resp.status_code == 409:
+        return {"status": "error", "error": f"desktop shell unavailable: {resp.text[:200]}"}
+    if resp.status_code in (400, 422):
+        return {"status": "error", "error": f"bad request: {resp.text[:200]}"}
+    return {"status": "error", "error": f"upstream {resp.status_code}: {resp.text[:200]}"}
+
+
+async def _enqueue_background_dry_run(
+    *,
+    session_id: str,
+    bundle_id: str,
+    shell_id: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    tid = resolve_tenant_id(ctx, tenant_id)
+    if not tid:
+        return {"status": "error", "error": "tenant_id required"}
+
+    user_id = resolve_user_id(ctx)
+    if not user_id:
+        return {"status": "error", "error": "X-User-Id required for desktop control"}
+
+    action = _TOOL_ACTIONS["desktop_background_app_control_dry_run"]
+    body = {
+        "session_id": session_id,
+        "action": action,
+        "tool_name": "desktop_background_app_control_dry_run",
+        "payload": {
+            "target": {
+                "bundle_id": bundle_id,
+                "action": action,
+            },
+            "dry_run": True,
+        },
+    }
+    if shell_id:
+        body["shell_id"] = shell_id
+
+    headers = {
+        "X-Internal-Key": API_INTERNAL_KEY,
+        "X-Tenant-Id": tid,
+        "X-User-Id": user_id,
+    }
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/commands"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url, json=body, headers=headers)
+    except httpx.RequestError as exc:
+        logger.warning(
+            "desktop_background_app_control_dry_run: HTTP transport error session=%s err=%s",
+            session_id,
+            exc,
+        )
+        return {"status": "error", "error": f"transport: {exc}"}
+
+    if resp.status_code == 201:
+        payload = resp.json()
+        return {
+            **payload,
+            "message": (
+                "Background app-control dry-run was queued. No native macOS "
+                "actuation or signed native envelope is issued by this tool."
+            ),
+        }
+    if resp.status_code == 401:
+        return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code == 403:
+        return {"status": "error", "error": f"desktop control denied: {resp.text[:200]}"}
     if resp.status_code == 404:
         return {"status": "error", "error": "session not found"}
     if resp.status_code == 409:
@@ -155,8 +228,32 @@ async def desktop_read_clipboard(
     )
 
 
+@mcp.tool()
+async def desktop_background_app_control_dry_run(
+    session_id: str,
+    bundle_id: str,
+    shell_id: str = "",
+    tenant_id: str = "",
+    ctx: Context = None,
+) -> dict:
+    """Queue a governed background app-control dry-run command.
+
+    The command enters the same API-to-Luna down-channel as native desktop
+    control, but claim completes as `no_op`: no native macOS actuation, no raw
+    screen/app bytes, and no signed native envelope.
+    """
+    return await _enqueue_background_dry_run(
+        session_id=session_id,
+        bundle_id=bundle_id,
+        shell_id=shell_id,
+        tenant_id=tenant_id,
+        ctx=ctx,
+    )
+
+
 __all__ = [
     "desktop_observe_screen",
     "desktop_get_active_app",
     "desktop_read_clipboard",
+    "desktop_background_app_control_dry_run",
 ]

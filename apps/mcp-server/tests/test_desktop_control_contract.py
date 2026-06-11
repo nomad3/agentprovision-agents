@@ -38,6 +38,7 @@ FORBIDDEN_KEYS = {
 CONTRACT_ACTIONS = {
     "capture_screenshot", "get_active_app", "read_clipboard",
     "pointer_move", "pointer_click", "keyboard_type", "keyboard_key_chord",
+    "background_app_control_dry_run",
 }
 
 

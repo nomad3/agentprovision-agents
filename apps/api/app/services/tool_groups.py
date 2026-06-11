@@ -235,21 +235,15 @@ TOOL_GROUPS: dict[str, list[str]] = {
         "desktop_get_active_app",
         "desktop_read_clipboard",
     ],
-    # Forward-declared for the P5.4 agent-driven actuation loop. Actuation is
-    # API-native TODAY (the enqueue/claim/complete HTTP path, user-JWT + device
-    # token, gated by the per-tenant capability flags [PR4b] + target allowlist
-    # [PR4c] + signed Ed25519 envelopes) — NOT yet MCP tools, so no agent token can
-    # reach it. These names mirror desktop_control_service._COMMAND_TOOL_ACTIONS so
-    # that when P5.4 registers agent-driven actuation tools they are scoped to this
-    # group out of the box. The names DO enter a granting agent's resolved scope
-    # list, but are inert until the matching MCP tools exist: scope is enforced
-    # against the actually-invoked tool_name (tool_audit.py), so a scoped name with
-    # no registered tool can never be called.
+    # Agent-driven actuation surface. Pointer/keyboard remain API-native until
+    # their MCP wrappers ship; the background dry-run tool is registered now and
+    # claims into a terminal no-op without native macOS actuation.
     "desktop_control": [
         "desktop_pointer_move",
         "desktop_pointer_click",
         "desktop_keyboard_type",
         "desktop_keyboard_key_chord",
+        "desktop_background_app_control_dry_run",
     ],
     # Platform introspection — answers "what's on this tenant?" questions like
     # "list my agents", "what workflows do I have", "which MCP servers are
