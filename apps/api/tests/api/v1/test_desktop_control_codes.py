@@ -40,6 +40,7 @@ REASON_TO_CODE = {
     "desktop native control action unsupported; frobnicate denied": DesktopDenialCode.NATIVE_CONTROL_ACTION_UNSUPPORTED,
     "desktop observation permission 'screen_recording' is denied; capture_screenshot denied": DesktopDenialCode.OBSERVATION_PERMISSION_DENIED,
     "desktop observation permission denied; get_active_app denied": DesktopDenialCode.OBSERVATION_PERMISSION_DENIED,
+    "desktop observation denied; capture_screenshot denied": DesktopDenialCode.OBSERVATION_DENIED,
     "desktop observation denied": DesktopDenialCode.OBSERVATION_DENIED,
     "desktop observation failed": DesktopDenialCode.OBSERVATION_FAILED,
     "desktop observation down-channel unavailable; get_active_app request denied": DesktopDenialCode.DOWN_CHANNEL_UNAVAILABLE,

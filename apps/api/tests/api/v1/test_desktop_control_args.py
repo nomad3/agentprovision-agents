@@ -185,6 +185,14 @@ def test_target_bounds_invalid_dropped(bad_bounds):
     assert "bounds" not in t
 
 
+def test_target_display_id_bool_dropped():
+    t = norm_target(
+        {"bundle_id": "com.apple.TextEdit", "action": "pointer_click", "display_id": True},
+        action="pointer_click",
+    )
+    assert "display_id" not in t
+
+
 # ── keyboard SEND key (enter) — the "type a message + send" enabler ──────────
 
 
