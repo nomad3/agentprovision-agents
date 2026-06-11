@@ -82,6 +82,10 @@ configMap:
   data:
     TEMPORAL_NAMESPACE: "default"
     API_BASE_URL: "http://agentprovision-api"
+    # API is the ONLY desktop-command signing boundary. The code worker must
+    # never sign desktop envelopes; Ed25519 + empty key keeps it fail-closed.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: ""
 
 # External Secrets — GitHub token + API internal key only (no DB access)
 externalSecret:

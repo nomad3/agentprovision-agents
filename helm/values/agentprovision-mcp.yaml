@@ -92,6 +92,10 @@ configMap:
     DATABASE_HOST: "localhost"
     DATABASE_PORT: "5432"
     DATABASE_NAME: "agentprovision"
+    # API is the ONLY desktop-command signing boundary. MCP must never sign
+    # desktop envelopes; Ed25519 + empty key keeps it fail-closed.
+    DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM: "Ed25519"
+    DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY: ""
 
 # External Secrets - pulls from GCP Secret Manager
 externalSecret:

@@ -1,11 +1,12 @@
 """Pure-logic tests for the desktop-control envelope-signing preflight.
 
-``run_desktop_preflight`` backs the ``alpha desktop preflight run`` verb and the
-fail-fast readiness hook. It reads the module-level ``settings`` singleton, so we
-patch that (not a fresh ``Settings`` instance). No DB.
+``run_desktop_preflight`` backs the ``alpha desktop preflight run`` operator
+gate and the startup readiness log. It reads the module-level ``settings``
+singleton, so we patch that (not a fresh ``Settings`` instance). No DB.
 """
 import base64
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -50,13 +51,26 @@ def test_preflight_ok_for_ed25519_with_valid_key(monkeypatch):
     assert result["algorithm"] == "Ed25519"
 
 
-def test_preflight_reports_normalized_algorithm_for_failfast(monkeypatch):
+def test_preflight_reports_normalized_algorithm_for_operator_gate(monkeypatch):
     # A whitespace-padded algorithm must still report the canonical "Ed25519"
-    # so the readiness fail-fast comparison (== "Ed25519") holds and a
-    # misconfigured Ed25519 deploy fails fast rather than silently degrading.
+    # so the operator-facing gate and startup log report the real mode rather
+    # than silently degrading to an unsupported value.
     monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM", " Ed25519 ", raising=False)
     monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY", "", raising=False)
     monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID", "k1", raising=False)
     result = svc.run_desktop_preflight()
     assert result["ok"] is False
     assert result["algorithm"] == "Ed25519"
+
+
+@pytest.mark.asyncio
+async def test_startup_preflight_does_not_crash_api_without_ed25519_key(monkeypatch, caplog):
+    monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM", "Ed25519", raising=False)
+    monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY", "", raising=False)
+    monkeypatch.setattr(settings, "DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID", "k1", raising=False)
+
+    from app.services.desktop_control_preflight import startup_desktop_control_preflight
+
+    caplog.set_level("WARNING")
+    await startup_desktop_control_preflight()
+    assert "native control fail-closed" in caplog.text
