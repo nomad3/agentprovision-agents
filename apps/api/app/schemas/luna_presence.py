@@ -11,6 +11,7 @@ class LunaPresenceSnapshot(BaseModel):
     shell_capabilities: Dict[str, Dict[str, bool]] = Field(default_factory=dict)
     shell_devices: Dict[str, str] = Field(default_factory=dict)
     shell_device_ids: Dict[str, str] = Field(default_factory=dict)
+    shell_permission_readiness: Dict[str, Dict] = Field(default_factory=dict)
     tool_status: str = "idle"  # idle, running, waiting, error
     attention_target: Optional[str] = None
     timestamp: Optional[str] = None
@@ -31,6 +32,7 @@ class ShellRegisterRequest(BaseModel):
     shell: str
     capabilities: Optional[Dict[str, bool]] = None
     device_id: Optional[str] = None
+    permission_readiness: Optional[Dict] = None
 
 
 class ShellDeregisterRequest(BaseModel):

@@ -42,6 +42,7 @@ BUNDLE = "net.whatsapp.WhatsApp"
 
 OTHER_TENANT_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 OTHER_TENANT_USER_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+_READINESS_MISSING = object()
 
 
 @pytest.fixture(name="db_session")
@@ -88,10 +89,20 @@ def _seed_other_tenant(db):
     db.commit()
 
 
-def _presence(connected=True):
+def _permission_readiness(*, screen="granted", accessibility="granted", observed_at=None):
+    return {
+        "screen_recording": {"status": screen},
+        "accessibility": {"status": accessibility},
+        "observed_at": (observed_at or datetime.now(timezone.utc)).isoformat(),
+    }
+
+
+def _presence(connected=True, readiness=_READINESS_MISSING):
     if not connected:
         return {"connected_shells": [], "shell_devices": {}}
-    return {
+    if readiness is _READINESS_MISSING:
+        readiness = _permission_readiness()
+    payload = {
         "active_shell": SHELL_ID,
         "connected_shells": [SHELL_ID],
         "shell_capabilities": {
@@ -99,12 +110,15 @@ def _presence(connected=True):
         },
         "shell_devices": {SHELL_ID: str(DEVICE_ID)},
     }
+    if readiness is not None:
+        payload["shell_permission_readiness"] = {SHELL_ID: readiness}
+    return payload
 
 
-def _patch_presence(connected=True):
+def _patch_presence(connected=True, readiness=_READINESS_MISSING):
     return patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",
-        return_value=_presence(connected),
+        return_value=_presence(connected, readiness=readiness),
     )
 
 
@@ -150,6 +164,8 @@ def _mk_grant(
 
 
 def _actuate(db, grant_id, **over):
+    connected = over.pop("_connected", True)
+    readiness = over.pop("_readiness", _READINESS_MISSING)
     kwargs = dict(
         tenant_id=TENANT_ID,
         user_id=USER_ID,
@@ -158,7 +174,7 @@ def _actuate(db, grant_id, **over):
         args={"text": "hello"},
     )
     kwargs.update(over)
-    with _patch_presence(over.pop("_connected", True) if "_connected" in over else True):
+    with _patch_presence(connected, readiness=readiness):
         return desktop_act.actuate_command(db, **kwargs)
 
 
@@ -371,6 +387,40 @@ def test_actuate_shell_offline_denies(db_session):
             grant_id=grant.id, args={"text": "x"},
         )
     assert exc.value.status_code == 409
+    assert _commands(db_session) == []
+
+
+def test_actuate_missing_permission_readiness_denies_no_command(db_session):
+    _seed(db_session)
+    grant = _mk_grant(db_session)
+    with pytest.raises(HTTPException) as exc:
+        _actuate(db_session, grant.id, _readiness=None)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "permission_not_ready"
+    assert _commands(db_session) == []
+
+
+def test_actuate_denied_permission_readiness_denies_no_command(db_session):
+    _seed(db_session)
+    grant = _mk_grant(db_session)
+    readiness = _permission_readiness(accessibility="denied")
+    with pytest.raises(HTTPException) as exc:
+        _actuate(db_session, grant.id, _readiness=readiness)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "permission_not_ready"
+    assert _commands(db_session) == []
+
+
+def test_actuate_stale_permission_readiness_denies_no_command(db_session):
+    _seed(db_session)
+    grant = _mk_grant(db_session)
+    readiness = _permission_readiness(
+        observed_at=datetime.now(timezone.utc) - timedelta(seconds=31)
+    )
+    with pytest.raises(HTTPException) as exc:
+        _actuate(db_session, grant.id, _readiness=readiness)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "permission_not_ready"
     assert _commands(db_session) == []
 
 

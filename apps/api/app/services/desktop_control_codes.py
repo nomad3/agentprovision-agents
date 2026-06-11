@@ -39,6 +39,7 @@ class DesktopDenialCode(str, Enum):
     NATIVE_CONTROL_DISABLED = "native_control_disabled"
     NATIVE_CONTROL_TIER_DISABLED = "native_control_tier_disabled"
     NATIVE_CONTROL_ACTION_UNSUPPORTED = "native_control_action_unsupported"
+    PERMISSION_NOT_READY = "permission_not_ready"
 
     # Observation
     OBSERVATION_PERMISSION_DENIED = "observation_permission_denied"
@@ -107,6 +108,7 @@ _REASON_PREFIXES: tuple[tuple[str, DesktopDenialCode], ...] = (
     ("desktop native control tier disabled", DesktopDenialCode.NATIVE_CONTROL_TIER_DISABLED),
     ("desktop native control action unsupported", DesktopDenialCode.NATIVE_CONTROL_ACTION_UNSUPPORTED),
     ("desktop native control disabled", DesktopDenialCode.NATIVE_CONTROL_DISABLED),
+    ("desktop permission readiness", DesktopDenialCode.PERMISSION_NOT_READY),
     # observation
     ("desktop observation permission", DesktopDenialCode.OBSERVATION_PERMISSION_DENIED),
     ("desktop observation down-channel unavailable", DesktopDenialCode.DOWN_CHANNEL_UNAVAILABLE),

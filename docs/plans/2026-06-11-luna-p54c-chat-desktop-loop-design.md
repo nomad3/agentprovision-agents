@@ -1,8 +1,9 @@
 # P5.4c — chat-triggered desktop loop (grant-ref on status + planner guidance)
 
-Status: design + smallest make-it-work slice. Lane: Luna computer-use. Builds
-on: P5.4b pending request (#895), P5.5 approve/deny (#896), P5.4b
-`desktop_actuate` (#898), the agent-loop prompt scaffold (#886), Stop (#893).
+Status: merged as PR #899; follow-up readiness slice in progress. Lane: Luna
+computer-use. Builds on: P5.4b pending request (#895), P5.5 approve/deny
+(#896), P5.4b `desktop_actuate` (#898), the agent-loop prompt scaffold (#886),
+Stop (#893).
 Spec: plan Slice 5 (`2026-06-11-luna-agent-loop-chat-trigger-execution.md`,
 lines 440-518) — "a loop coordinator that runs inside existing
 ChatCliWorkflow/task routing: observe, summarize state, propose action, request
@@ -136,9 +137,12 @@ native command even if the words were present.
 
 ## PR ladder (later rungs, out of this slice)
 
-- **PR2 — readiness probe**: a `permission_not_ready` fresh Luna-client
-  permission probe before enqueue (plan lines 466-468). Does not exist yet; the
-  current slice relies on `actuate`'s fail-closed shell/flag gates instead.
+- **PR2 — readiness probe**: current branch
+  `codex/luna-p54d-permission-readiness`. Luna shell presence registers
+  sanitized permission statuses from `control_get_safety_state`; the server
+  stores a server-timestamped shell readiness snapshot and denies native-control
+  enqueue as `permission_not_ready` when required readiness is missing, stale, or
+  not granted. No command row is created on that denial.
 - **PR3 — desktop RL experience**: byte-free `rl_experience` per desktop
   decision/denial (denial code, action class, capability, outcome, command id,
   audit refs — no OCR/title/clipboard/text). No desktop RL logging exists today.

@@ -98,6 +98,13 @@ fn denies_deserialize_typed_with_canonical_codes() {
 
     let d2: DesktopCommandDenied = serde_json::from_str(DENY_CAP).expect("typed deny (cap)");
     assert_eq!(d2.code, DesktopDenialCode::ApprovalBindingMismatch);
+
+    let permission_not_ready: DesktopDenialCode =
+        serde_json::from_value(serde_json::json!("permission_not_ready")).unwrap();
+    assert_eq!(
+        permission_not_ready,
+        DesktopDenialCode::PermissionNotReady
+    );
 }
 
 #[test]

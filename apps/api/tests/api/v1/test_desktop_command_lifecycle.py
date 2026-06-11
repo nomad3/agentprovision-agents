@@ -147,6 +147,13 @@ def _presence(can_observe: bool = True, *, device_id: uuid.UUID = DEVICE_ID):
             },
         },
         "shell_devices": {SHELL_ID: str(device_id)},
+        "shell_permission_readiness": {
+            SHELL_ID: {
+                "screen_recording": {"status": "granted"},
+                "accessibility": {"status": "granted"},
+                "observed_at": _utcnow().isoformat(),
+            },
+        },
     }
 
 
