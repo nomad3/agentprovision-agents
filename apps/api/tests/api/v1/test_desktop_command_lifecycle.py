@@ -2197,7 +2197,24 @@ def test_command_status_snapshot_is_display_safe(db_session, seeded):
         },
         created_at=now,
     )
-    db_session.add(event)
+    wrong_user_event = DesktopCommandEvent(
+        tenant_id=TENANT_ID,
+        user_id=USER_ID_2,
+        session_id=SESSION_ID,
+        desktop_command_id=command.id,
+        correlation_id=command.correlation_id,
+        event_type="desktop_command_completed",
+        source="tauri",
+        action="keyboard_type",
+        capability="keyboard_control",
+        outcome="succeeded",
+        mode="control_locked",
+        shell_id=SHELL_ID,
+        device_id=DEVICE_ID,
+        event_metadata={"result_kind": "text", "result_size_chars": 99},
+        created_at=now,
+    )
+    db_session.add_all([event, wrong_user_event])
     db_session.commit()
 
     snapshot = get_desktop_command_status_snapshot(
@@ -2216,6 +2233,7 @@ def test_command_status_snapshot_is_display_safe(db_session, seeded):
         "result_kind": "json",
         "result_size_chars": 42,
     }
+    assert len(payload["events"]) == 1
     assert "payload" not in payload["command"]
     assert "must not leak" not in rendered
     assert "must-not-leak" not in rendered

@@ -2214,6 +2214,7 @@ def get_desktop_command_status_snapshot(
         db.query(DesktopCommandEvent)
         .filter(
             DesktopCommandEvent.tenant_id == tenant_id,
+            DesktopCommandEvent.user_id == user_id,
             DesktopCommandEvent.desktop_command_id == command.id,
         )
         .order_by(DesktopCommandEvent.created_at.asc(), DesktopCommandEvent.id.asc())
