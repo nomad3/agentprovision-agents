@@ -782,14 +782,20 @@ def internal_observation_artifact_content(
     )
 
 
-# ── P5.4b pending desktop approval requests (`alpha desktop grant request|status`) ──
+# ── P5.4b/P5.5 pending desktop approval requests ─────────────────────────────
 #
-# An agent records a PENDING request to run a native desktop action and polls it;
-# a human approves later (P5.5). These routes never mint a grant, sign an
-# envelope, or actuate — they delegate to the thin `desktop_act` service.
+# An agent records a PENDING request to observe or run a native desktop action
+# and polls it; a human approves later (P5.5). These routes never mint a grant,
+# sign an envelope, or actuate — they delegate to the thin `desktop_act` service.
 
 _REQUESTABLE_ACTION = Literal[
-    "pointer_move", "pointer_click", "keyboard_type", "keyboard_key_chord"
+    "capture_screenshot",
+    "get_active_app",
+    "read_clipboard",
+    "pointer_move",
+    "pointer_click",
+    "keyboard_type",
+    "keyboard_key_chord",
 ]
 
 
@@ -801,7 +807,7 @@ class DesktopGrantRequestIn(BaseModel):
 
     session_id: uuid.UUID
     action: _REQUESTABLE_ACTION
-    target_bundle_id: str = Field(min_length=1, max_length=128)
+    target_bundle_id: str | None = Field(default=None, min_length=1, max_length=128)
     shell_id: str | None = Field(default=None, pattern=_SHELL_ID_PATTERN, max_length=96)
     reason: str | None = Field(default=None, max_length=280)
 
