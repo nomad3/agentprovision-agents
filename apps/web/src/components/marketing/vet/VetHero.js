@@ -75,6 +75,7 @@ export default function VetHero() {
           transition={{ duration: 0.6, ease: 'easeOut' }}
         >
           <span className="vet-hero__badge">Veterinary Practice Intelligence</span>
+          <span className="vet-hero__script">Calm medicine, cited workflows.</span>
           <h1 className="vet-hero__title">
             Clinical infrastructure for the practice behind the medicine.
           </h1>
