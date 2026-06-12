@@ -148,7 +148,7 @@ Merged:
   `codex/luna-p55-observe-command-downchannel`: the live WhatsApp no-send smoke
   proved routing and background dry-run, but `desktop_get_active_app` still used
   the legacy audit-only MCP observation path and returned `denied`. This slice
-  moves MCP observe tools onto the existing claimable `/internal/commands`
+  moves MCP observe tools onto the existing `/internal/commands` claim
   lifecycle so Luna can request active-app/screen/clipboard observation through
   the Tauri command-claim down-channel while preserving display-safe responses.
 
@@ -200,8 +200,8 @@ Current deployed proof:
   contains the new MCP observe helper and no longer contains the legacy
   `/internal/observations/request` URL. Installed Luna no-send smokes showed:
   - `desktop_get_active_app` now posts to
-    `/api/v1/desktop-control/internal/commands` and returns a claimable command
-    id instead of the old audit-only denial. First proof command:
+    `/api/v1/desktop-control/internal/commands` and returns a queued command id
+    instead of the old audit-only denial. First proof command:
     `37901c19-d1d0-462a-be28-b0fc9070dad1`.
   - With Observe mode enabled, Luna queued active-app command
     `e53909ca-bd88-4f60-89c1-b0025b33ca5f` and screen-observe command
@@ -240,8 +240,8 @@ Ordering rule:
 - P5.4c wires the operator Luna loop.
 - P5.5 adds chat trigger and explicit user approval UX. The explicit
   approve/deny/list surface landed in #896; chat route/report-back slices landed
-  through #905. The next missing live proof is claimable observation from MCP
-  through Luna Tauri during a no-send app-control smoke.
+  through #905. The next missing live proof is approved, claimable observation
+  from MCP through Luna Tauri during a no-send app-control smoke.
 
 ## Execution Ladder
 

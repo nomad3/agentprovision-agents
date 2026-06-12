@@ -131,7 +131,7 @@ async def test_desktop_read_clipboard_omits_empty_shell_id(patch_httpx):
 
 
 @pytest.mark.asyncio
-async def test_desktop_get_active_app_queues_claimable_observe_command(patch_httpx):
+async def test_desktop_get_active_app_queues_observe_command(patch_httpx):
     client = patch_httpx(
         default_json={
             "desktop_command_id": "99999999-9999-9999-9999-999999999999",
