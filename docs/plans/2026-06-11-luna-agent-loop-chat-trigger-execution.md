@@ -2,9 +2,11 @@
 
 Date: 2026-06-11
 Status: implementation in progress; P5.3 planner-safe substrate merged through
-PR #892; P5.4 dry-run/status/Stop/pending-request substrate merged through
-PR #895; P5.5 human approval surface merged through PR #896; P5.4c
-chat-triggered act loop merged through PR #899
+PR #892; P5.4 dry-run/status/Stop/pending-request/actuate substrate merged
+through PR #899; P5.4d permission readiness merged through PR #900; P5.5
+chat report-back, RL logging, report polish, and route pins merged through
+PR #905. Current active slice:
+`codex/luna-p55-observe-command-downchannel`.
 Inputs: `docs/report/2026-06-11-luna-computer-use-fable-review.md`, `docs/plans/2026-06-09-luna-phase5-general-app-control-design.md`, `docs/plans/2026-06-11-luna-secondary-pointer-background-control.md`
 
 ## Goal
@@ -127,6 +129,28 @@ Merged:
   the `grant_id` handle, and the Luna planner prompt describes the governed
   request -> human approval -> act -> poll -> display-safe report loop. Merged
   at `937da96a`.
+- P5.4d permission readiness / PR #900: Luna shell readiness is registered from
+  sanitized local permission state, and server enqueue denies stale or missing
+  native-control readiness before command creation.
+- P5.5 report-back / PR #901: desktop chat responses report command/status/audit
+  refs through display-safe summaries after governed desktop work.
+- P5.5 report-back guards / PR #902: regression fixtures prevent planner
+  report-back from leaking raw OCR, title/contact, clipboard, or typed text.
+- P5.5 desktop RL logging / PR #903: byte-free desktop decisions and denials
+  are logged for RL/eval without raw perception or native args.
+- P5.5 chat report polish / PR #904: Luna chat status wording and outcome
+  summaries were tightened for operator-facing desktop-control turns.
+- P5.5 route pins / PR #905: desktop-looking prompts select existing
+  desktop-capable Luna agents when unbound, while ordinary prompts and
+  non-desktop bound agents remain on their normal routes. Merged at
+  `908ee579`.
+- P5.5 observe down-channel follow-up / active branch
+  `codex/luna-p55-observe-command-downchannel`: the live WhatsApp no-send smoke
+  proved routing and background dry-run, but `desktop_get_active_app` still used
+  the legacy audit-only MCP observation path and returned `denied`. This slice
+  moves MCP observe tools onto the existing `/internal/commands` claim
+  lifecycle so Luna can request active-app/screen/clipboard observation through
+  the Tauri command-claim down-channel while preserving display-safe responses.
 
 Current deployed proof:
 
@@ -157,6 +181,56 @@ Current deployed proof:
   `27375497795` passed after host free space was restored. Local post-deploy
   smoke found API healthy, MCP SSE endpoint emitting, containers up/healthy, and
   the Docker `_work` bind-mount gate returning no output.
+- PR #905 post-merge verification: GitHub main CI passed on merge commit
+  `908ee579`, Docker Desktop Deployment run `27385486318` passed after clearing
+  stale local disk pressure, and the exact Docker `_work` bind-mount gate
+  returned no output.
+- Installed Luna + WhatsApp Desktop no-send smoke after #905: bundle
+  `net.whatsapp.WhatsApp`; `desktop_background_app_control_dry_run` command
+  `56a15a70-f17b-4162-a3ab-4ca969636205` reached `no_op`; no contact was
+  selected, no text typed, Send was not clicked, and nothing was transmitted.
+  Remaining blocker found by that smoke: `desktop_get_active_app` returned a
+  denied audit envelope because MCP observe still pointed at
+  `/internal/observations/request`; the active follow-up branch addresses that
+  blocker.
+- Active branch local validation
+  `codex/luna-p55-observe-command-downchannel`: rebuilt/recreated only the
+  local `mcp-tools` service from this branch; `mcp-tools` returned healthy; the
+  exact Docker `_work` mount gate returned no output; the running container
+  contains the new MCP observe helper and no longer contains the legacy
+  `/internal/observations/request` URL. Installed Luna no-send smokes showed:
+  - `desktop_get_active_app` now posts to
+    `/api/v1/desktop-control/internal/commands` and returns a queued command id
+    instead of the old audit-only denial. First proof command:
+    `37901c19-d1d0-462a-be28-b0fc9070dad1`.
+  - With Observe mode enabled, Luna queued active-app command
+    `e53909ca-bd88-4f60-89c1-b0025b33ca5f` and screen-observe command
+    `d1ea0197-9ce9-45f9-99dc-0af83d0fc5b2`; MCP polled both through
+    `/internal/commands/{id}/status`.
+  - Both branch-smoke commands terminated `denied` at
+    `desktop_command_envelope_denied` because the live local API container has
+    empty desktop envelope env vars:
+    `DESKTOP_COMMAND_ENVELOPE_SIGNING_ALGORITHM`,
+    `DESKTOP_COMMAND_ENVELOPE_ED25519_PRIVATE_KEY`,
+    `DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID`, and
+    `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS`.
+  - No text was typed into WhatsApp, no contact was selected, Send was not
+    clicked, and nothing was transmitted to WhatsApp. The remaining E2E gate is
+    now envelope/approval configuration, not MCP observation routing.
+
+Current observe posture caveat:
+
+- PR #906 moves observe requests onto the real command-claim path. In the
+  current API claim logic, observe commands enqueue with `approval_id: null` and
+  do not require a per-observe human approval grant at claim; they are gated by
+  tenant desktop-control enablement, session/user/shell/device binding, shell
+  observe capability, and a valid command envelope. This branch is still
+  locally fail-closed because envelope signing/public-key env vars are empty.
+- Before enabling successful observe execution outside tightly controlled local
+  validation, land the next slice that either adds the explicit observe approval
+  gate or records the accepted operator-only observe posture, and prove the
+  quarantine -> redactor -> planner-safe fetch path fails closed: raw captured
+  artifacts must be unfetchable by the planner until redacted.
 
 Open after D3:
 
@@ -179,8 +253,9 @@ Ordering rule:
   when absent.
 - P5.4c wires the operator Luna loop.
 - P5.5 adds chat trigger and explicit user approval UX. The explicit
-  approve/deny/list surface landed in #896; chat-triggered orchestration and
-  report-back remain pending.
+  approve/deny/list surface landed in #896; chat route/report-back slices landed
+  through #905. The next missing live proof is approved, claimable observation
+  from MCP through Luna Tauri during a no-send app-control smoke.
 
 ## Execution Ladder
 

@@ -1,9 +1,9 @@
 """Luna desktop-control MCP tools.
 
-Phase 1 registers read-only observation tools but does not execute desktop
-capture from the server side. The tools call the API control plane, which
-records a tenant/user/session/shell-scoped, display-safe audit event and fails
-closed until the Tauri command down-channel ships.
+The observe tools enqueue display-safe commands through the API-to-Luna
+down-channel. The Tauri app claims and completes those commands locally; MCP
+responses expose command/audit envelopes only, never raw pixels, app titles, or
+clipboard text.
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ _TOOL_ACTIONS = {
 }
 
 
-async def _request_observation(
+async def _enqueue_observation_command(
     *,
     tool_name: str,
     session_id: str,
@@ -72,7 +72,7 @@ async def _request_observation(
         "X-Tenant-Id": tid,
         "X-User-Id": user_id,
     }
-    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/observations/request"
+    url = f"{API_BASE_URL}/api/v1/desktop-control/internal/commands"
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -91,13 +91,15 @@ async def _request_observation(
         return {
             **payload,
             "message": (
-                "Observation was recorded by the desktop-control control plane. "
-                "Live content capture is disabled until the Luna Tauri command "
-                "down-channel ships."
+                "Observation command was queued for the Luna Tauri down-channel. "
+                "Results remain display-safe: raw screen bytes, clipboard text, "
+                "app names, and window titles are not returned by this MCP tool."
             ),
         }
     if resp.status_code == 401:
         return {"status": "error", "error": "invalid internal key"}
+    if resp.status_code == 403:
+        return {"status": "error", "error": f"desktop observation denied: {resp.text[:200]}"}
     if resp.status_code == 404:
         return {"status": "error", "error": "session not found"}
     if resp.status_code == 409:
@@ -308,10 +310,10 @@ async def desktop_observe_screen(
 ) -> dict:
     """Request a governed screen observation for a Luna chat session.
 
-    Returns an audit/result envelope, not screenshot pixels. Live content
-    delivery remains blocked until the Tauri command down-channel is in place.
+    Queues a Tauri-claimed command and returns an audit/result envelope, not
+    screenshot pixels.
     """
-    return await _request_observation(
+    return await _enqueue_observation_command(
         tool_name="desktop_observe_screen",
         session_id=session_id,
         shell_id=shell_id,
@@ -329,10 +331,10 @@ async def desktop_get_active_app(
 ) -> dict:
     """Request a governed active-app/window observation for a Luna session.
 
-    Returns an audit/result envelope, not app names or window titles, until the
-    Tauri command down-channel can return sanitized observation results.
+    Queues a Tauri-claimed command and returns an audit/result envelope, not app
+    names or window titles.
     """
-    return await _request_observation(
+    return await _enqueue_observation_command(
         tool_name="desktop_get_active_app",
         session_id=session_id,
         shell_id=shell_id,
@@ -350,10 +352,10 @@ async def desktop_read_clipboard(
 ) -> dict:
     """Request a governed clipboard-read observation for a Luna session.
 
-    Returns an audit/result envelope only. Raw clipboard text is never returned
-    by this Phase 1 MCP tool.
+    Queues a Tauri-claimed command and returns an audit/result envelope only.
+    Raw clipboard text is never returned by this MCP tool.
     """
-    return await _request_observation(
+    return await _enqueue_observation_command(
         tool_name="desktop_read_clipboard",
         session_id=session_id,
         shell_id=shell_id,
