@@ -144,13 +144,19 @@ Merged:
   desktop-capable Luna agents when unbound, while ordinary prompts and
   non-desktop bound agents remain on their normal routes. Merged at
   `908ee579`.
-- P5.5 observe down-channel follow-up / active branch
-  `codex/luna-p55-observe-command-downchannel`: the live WhatsApp no-send smoke
-  proved routing and background dry-run, but `desktop_get_active_app` still used
-  the legacy audit-only MCP observation path and returned `denied`. This slice
-  moves MCP observe tools onto the existing `/internal/commands` claim
-  lifecycle so Luna can request active-app/screen/clipboard observation through
-  the Tauri command-claim down-channel while preserving display-safe responses.
+- P5.5 observe down-channel follow-up / PR #906: MCP observe tools now post to
+  the `/internal/commands` claim lifecycle instead of the legacy audit-only
+  `/internal/observations/request` route. This lets Luna request
+  active-app/screen/clipboard observation through the Tauri command-claim
+  down-channel while preserving display-safe responses.
+- P5.5 observe approval gate / active branch
+  `codex/luna-p55-observe-approval-gate`: observe commands now follow the same
+  request -> human approval -> grant -> command -> claim pattern as
+  pointer/keyboard. `desktop_request_grant` accepts observe actions
+  (`capture_screenshot`, `get_active_app`, `read_clipboard`) without a target
+  bundle, user approval mints an `observe` grant, and MCP observe tools require
+  that approved `grant_id` before queuing a command. Missing grant returns
+  `approval_required` and queues nothing.
 
 Current deployed proof:
 
@@ -215,8 +221,18 @@ Current deployed proof:
     `DESKTOP_COMMAND_ENVELOPE_ED25519_KEY_ID`, and
     `LUNA_DESKTOP_COMMAND_ENVELOPE_ED25519_PUBLIC_KEYS`.
   - No text was typed into WhatsApp, no contact was selected, Send was not
-    clicked, and nothing was transmitted to WhatsApp. The remaining E2E gate is
-    now envelope/approval configuration, not MCP observation routing.
+  clicked, and nothing was transmitted to WhatsApp. The remaining E2E gate is
+  now envelope/approval configuration, not MCP observation routing.
+- Active branch local validation
+  `codex/luna-p55-observe-approval-gate`: focused API tests passed for
+  observe/native grant request + approval + claim semantics (`56 passed,
+  1 skipped` in the selected desktop suites); MCP desktop-control tests passed
+  (`36 passed`); Alpha/core Rust desktop contract tests passed
+  (`26 passed` in `cargo test desktop --lib --tests`). The only cargo warning
+  was a non-blocking global cache cleanup permission warning outside the repo.
+  This branch has not yet been deployed or installed; the next gate is PR
+  review, CI, local stack smoke, and installed Luna/WhatsApp no-send validation
+  after the branch image/build is running.
 
 Current observe posture caveat:
 

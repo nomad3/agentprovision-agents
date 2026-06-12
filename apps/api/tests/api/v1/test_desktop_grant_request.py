@@ -197,10 +197,28 @@ def test_desktop_control_disabled_denies(db_session):
     assert db_session.query(DesktopApprovalRequest).count() == 0
 
 
-def test_non_native_action_is_rejected(db_session):
+def test_observe_action_creates_pending_row_without_target_or_command(db_session):
+    _seed(db_session)
+    out = _req(db_session, action="capture_screenshot", target_bundle_id=None)
+
+    assert out["status"] == "pending"
+    assert out["action"] == "capture_screenshot"
+    assert out["capability"] == "screenshot"
+    assert out["target_bundle_id"] is None
+    assert out["grant_present"] is False
+
+    row = db_session.query(DesktopApprovalRequest).filter(
+        DesktopApprovalRequest.id == uuid.UUID(out["request_id"])
+    ).one()
+    assert row.target_binding == {}
+    assert db_session.query(DesktopCommandApprovalGrant).count() == 0
+    assert db_session.query(DesktopCommand).count() == 0
+
+
+def test_dry_run_action_is_rejected(db_session):
     _seed(db_session)
     with pytest.raises(HTTPException) as exc:
-        _req(db_session, action="capture_screenshot")
+        _req(db_session, action="background_app_control_dry_run", target_bundle_id=None)
     status_code, code = _denial(exc)
     assert status_code == 422
     assert code == DesktopGrantRequestDenialCode.ACTION_NOT_REQUESTABLE.value

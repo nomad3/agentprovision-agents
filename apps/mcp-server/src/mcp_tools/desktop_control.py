@@ -47,6 +47,7 @@ async def _enqueue_observation_command(
     *,
     tool_name: str,
     session_id: str,
+    grant_id: str = "",
     shell_id: str = "",
     tenant_id: str = "",
     ctx: Context = None,
@@ -59,10 +60,26 @@ async def _enqueue_observation_command(
     if not user_id:
         return {"status": "error", "error": "X-User-Id required for desktop observation"}
 
+    safe_grant_id = _validate_uuid(grant_id, "grant_id") if grant_id else None
+    if grant_id and not safe_grant_id:
+        return {"status": "error", "error": "grant_id must be a UUID"}
+    if not safe_grant_id:
+        return {
+            "status": "approval_required",
+            "command_id": None,
+            "message": (
+                "Observation requires an approved observe grant. Call "
+                "`desktop_request_grant` for `capture_screenshot`, "
+                "`get_active_app`, or `read_clipboard`, wait for a human-approved "
+                "`grant_id`, then retry this observation tool with that grant."
+            ),
+        }
+
     body = {
         "session_id": session_id,
         "action": _TOOL_ACTIONS[tool_name],
         "tool_name": tool_name,
+        "approval_id": safe_grant_id,
     }
     if shell_id:
         body["shell_id"] = shell_id
@@ -91,7 +108,8 @@ async def _enqueue_observation_command(
         return {
             **payload,
             "message": (
-                "Observation command was queued for the Luna Tauri down-channel. "
+                "Observation command was queued for the Luna Tauri down-channel "
+                "using an approved observe grant. "
                 "Results remain display-safe: raw screen bytes, clipboard text, "
                 "app names, and window titles are not returned by this MCP tool."
             ),
@@ -304,6 +322,7 @@ async def _stop_commands(
 @mcp.tool()
 async def desktop_observe_screen(
     session_id: str,
+    grant_id: str = "",
     shell_id: str = "",
     tenant_id: str = "",
     ctx: Context = None,
@@ -316,6 +335,7 @@ async def desktop_observe_screen(
     return await _enqueue_observation_command(
         tool_name="desktop_observe_screen",
         session_id=session_id,
+        grant_id=grant_id,
         shell_id=shell_id,
         tenant_id=tenant_id,
         ctx=ctx,
@@ -325,6 +345,7 @@ async def desktop_observe_screen(
 @mcp.tool()
 async def desktop_get_active_app(
     session_id: str,
+    grant_id: str = "",
     shell_id: str = "",
     tenant_id: str = "",
     ctx: Context = None,
@@ -337,6 +358,7 @@ async def desktop_get_active_app(
     return await _enqueue_observation_command(
         tool_name="desktop_get_active_app",
         session_id=session_id,
+        grant_id=grant_id,
         shell_id=shell_id,
         tenant_id=tenant_id,
         ctx=ctx,
@@ -346,6 +368,7 @@ async def desktop_get_active_app(
 @mcp.tool()
 async def desktop_read_clipboard(
     session_id: str,
+    grant_id: str = "",
     shell_id: str = "",
     tenant_id: str = "",
     ctx: Context = None,
@@ -358,6 +381,7 @@ async def desktop_read_clipboard(
     return await _enqueue_observation_command(
         tool_name="desktop_read_clipboard",
         session_id=session_id,
+        grant_id=grant_id,
         shell_id=shell_id,
         tenant_id=tenant_id,
         ctx=ctx,
@@ -528,6 +552,9 @@ async def desktop_stop_commands(
 
 
 _REQUESTABLE_ACTIONS = {
+    "capture_screenshot",
+    "get_active_app",
+    "read_clipboard",
     "pointer_move",
     "pointer_click",
     "keyboard_type",
@@ -539,7 +566,7 @@ async def _request_grant(
     *,
     session_id: str,
     action: str,
-    target_bundle_id: str,
+    target_bundle_id: str = "",
     shell_id: str = "",
     reason: str = "",
     tenant_id: str = "",
@@ -562,8 +589,9 @@ async def _request_grant(
     body = {
         "session_id": session_id,
         "action": action,
-        "target_bundle_id": target_bundle_id,
     }
+    if target_bundle_id:
+        body["target_bundle_id"] = target_bundle_id
     if shell_id:
         body["shell_id"] = shell_id
     if reason:
@@ -670,19 +698,19 @@ async def _request_status(
 async def desktop_request_grant(
     session_id: str,
     action: str,
-    target_bundle_id: str,
+    target_bundle_id: str = "",
     shell_id: str = "",
     reason: str = "",
     tenant_id: str = "",
     ctx: Context = None,
 ) -> dict:
-    """Record a PENDING request to run a native desktop action (pointer/keyboard).
+    """Record a PENDING request to observe or run a native desktop action.
 
     This asks a human for approval; it does NOT create an approval grant, does NOT
     sign an envelope, and does NOT actuate. The request sits `pending` until a
     human approves it (then a grant is minted out-of-band). Poll it with
-    `desktop_request_status`. `action` must be one of: pointer_move,
-    pointer_click, keyboard_type, keyboard_key_chord.
+    `desktop_request_status`. Observe actions do not require `target_bundle_id`;
+    pointer/keyboard actions do.
     """
     return await _request_grant(
         session_id=session_id,

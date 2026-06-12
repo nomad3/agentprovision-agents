@@ -1,17 +1,16 @@
-"""Luna P5.4b — agent-facing pending desktop approval requests (thin act surface).
+"""Luna P5.4b/P5.5 — agent-facing pending desktop approval requests.
 
-This is the *pending-approval branch* of the agent act surface: an agent (Luna)
-records a request to run a native desktop action and polls its status; a human
-approves it later (P5.5). Fail-closed and intrinsically safe:
+This is the pending-approval branch of the agent desktop surface: an agent
+(Luna) records a request to observe or run a native desktop action and polls its
+status; a human approves it later (P5.5). Fail-closed and intrinsically safe:
 
 * It NEVER enqueues a command, signs an envelope, or calls a native actuator.
-* It NEVER mints an approval grant — grant creation stays internal-key-only in
-  ``desktop_control_service.create_desktop_approval_grant`` (untouched). A pending
-  request lives in its own table (``desktop_approval_requests``) and is invisible
-  to the claim path (which only consumes grants with ``status == 'active'``), so it
-  can never authorize a native action.
-* Requests are accepted only for the native-control action class — the actions
-  that will need a user grant. Observe/dry-run need no grant and are rejected.
+* It NEVER mints an approval grant. A pending request lives in its own table
+  (``desktop_approval_requests``) and is invisible to the claim path (which only
+  consumes grants with ``status == 'active'``), so it can never authorize a
+  command until a user-authenticated approval decision creates a bounded grant.
+* Requests are accepted for observe plus pointer/keyboard actions. Background
+  dry-run still needs no grant and is rejected.
 
 Kept deliberately separate from the 3k-line ``desktop_control_service.py`` (D5
 split pending): it only *imports* the shared display-safe + scoping helpers.
@@ -32,24 +31,31 @@ from app.models.desktop_command_approval_grant import DesktopCommandApprovalGran
 from app.services import rl_experience_service
 from app.services.desktop_control_codes import DesktopDenialCode
 from app.services.desktop_control_service import (
+    _COMMAND_ACTION_CAPABILITIES,
     _COMMAND_TOOL_ACTIONS,
     _NATIVE_CONTROL_CAPABILITIES,
+    _OBSERVATION_CAPABILITIES,
     _capability_matches_risk_tier,
     _ensure_desktop_control_enabled,
     _ensure_session_owned_by_user,
     _ensure_user_for_tenant,
     _publish_display_safe_session_event,
     _require_native_control_target_binding,
+    _risk_tier_for_action,
     _select_connected_shell,
     DesktopCommandEnqueue,
     enqueue_desktop_command,
 )
 from app.services.perception_storage import _BUNDLE_ID_RE
 
-# Only the native-control actions are grant-requestable: observe + dry-run need no
-# grant, so a request for them is a category error (fail-closed 422).
 REQUESTABLE_ACTIONS: frozenset[str] = frozenset(
-    {"pointer_move", "pointer_click", "keyboard_type", "keyboard_key_chord"}
+    {
+        *_OBSERVATION_CAPABILITIES.keys(),
+        "pointer_move",
+        "pointer_click",
+        "keyboard_type",
+        "keyboard_key_chord",
+    }
 )
 
 _REASON_MAX_LEN = 280
@@ -231,7 +237,7 @@ def request_desktop_grant(
     user_id: uuid.UUID,
     session_id: uuid.UUID,
     action: str,
-    target_bundle_id: str,
+    target_bundle_id: str | None = None,
     shell_id: str | None = None,
     reason: str | None = None,
     # Reserved for the P5.5 approval surface (which may set a shorter/longer
@@ -240,32 +246,44 @@ def request_desktop_grant(
     ttl_seconds: int | None = None,
     source: str = "alpha",
 ) -> dict[str, Any]:
-    """Record a PENDING approval request for a native desktop action.
+    """Record a PENDING approval request for an observe or native desktop action.
 
-    Fail-closed: master flag re-checked, session ownership enforced, action limited
-    to the native-control class, target bundle validated. Creates NO grant, NO
-    command, NO envelope, and triggers NO actuation.
+    Fail-closed: master flag re-checked, session ownership enforced, action
+    limited to the requestable desktop classes, and native targets validated.
+    Creates NO grant, NO command, NO envelope, and triggers NO actuation.
     """
     # 1. master capability gate (fail-closed, re-checked here)
     _ensure_desktop_control_enabled(db, tenant_id)
     # 2. user + session ownership (matching the real grant minting path)
     _ensure_user_for_tenant(db, user_id, tenant_id)
     _ensure_session_owned_by_user(db, session_id, tenant_id, user_id)
-    # 3. action must be grant-requestable (native-control class only)
+    # 3. action must be grant-requestable. Background dry-run is intentionally
+    # excluded because it is already a local no-op proof and needs no grant.
     if action not in REQUESTABLE_ACTIONS:
         _deny(
             DesktopGrantRequestDenialCode.ACTION_NOT_REQUESTABLE,
-            "action is not a grant-requestable native-control action",
+            "action is not a grant-requestable desktop action",
         )
-    capability = _NATIVE_CONTROL_CAPABILITIES[action]
-    # 4. reduced, validated target bundle (no payload bag, no raw content)
-    if not isinstance(target_bundle_id, str) or not _BUNDLE_ID_RE.match(target_bundle_id):
-        _deny(
-            DesktopGrantRequestDenialCode.INVALID_TARGET_BUNDLE,
-            "target_bundle_id is not a valid bundle identifier",
-        )
+    capability = _COMMAND_ACTION_CAPABILITIES[action]
+    risk_tier = _risk_tier_for_action(action)
+    # 4. reduced, validated target bundle (no payload bag, no raw content). It
+    # is required only for native pointer/keyboard control; observe grants bind
+    # to session/shell/device/action and carry no app target.
+    target_binding: dict[str, Any] = {}
+    if risk_tier == "native_control":
+        if not isinstance(target_bundle_id, str) or not _BUNDLE_ID_RE.match(target_bundle_id):
+            _deny(
+                DesktopGrantRequestDenialCode.INVALID_TARGET_BUNDLE,
+                "target_bundle_id is not a valid bundle identifier",
+            )
+        target_binding = {"bundle_id": target_bundle_id}
     # 5. bind to a connected shell + device (same proof as observe-request)
-    selected_shell, _caps, device_id = _select_connected_shell(tenant_id, shell_id)
+    selected_shell, shell_capabilities, device_id = _select_connected_shell(tenant_id, shell_id)
+    if risk_tier == "observe" and not bool(shell_capabilities.get("can_observe")):
+        _deny(
+            DesktopGrantRequestDenialCode.REQUEST_NOT_PENDING,
+            "desktop shell cannot observe",
+        )
 
     clean_reason: str | None = None
     if reason is not None:
@@ -283,7 +301,7 @@ def request_desktop_grant(
         device_id=device_id,
         action=action,
         capability=capability,
-        target_binding={"bundle_id": target_bundle_id},
+        target_binding=target_binding,
         reason=clean_reason,
         status="pending",
         requested_by_user_id=user_id,
@@ -304,7 +322,7 @@ def request_desktop_grant(
             "capability": capability,
             "status": "pending",
             "shell_id": selected_shell,
-            "target_bundle_id": target_bundle_id,
+            "target_bundle_id": target_bundle_id if risk_tier == "native_control" else None,
             "expires_at": request.expires_at.isoformat(),
             "requested_via": source,
         },
@@ -323,7 +341,7 @@ def request_desktop_grant(
         capability=capability,
         request_id=request.id,
         shell_id=selected_shell,
-        target_bundle_id=target_bundle_id,
+        target_bundle_id=target_bundle_id if risk_tier == "native_control" else None,
     )
     return _display_safe_request(request, now=now)
 
@@ -482,29 +500,39 @@ def approve_desktop_grant_request(
     _ensure_session_owned_by_user(db, request.session_id, tenant_id, user_id)
 
     capability = request.capability
-    if not _capability_matches_risk_tier(capability, "native_control"):
-        # Defensive: requests are only ever created for native-control actions.
+    risk_tier = _risk_tier_for_action(request.action)
+    if not _capability_matches_risk_tier(capability, risk_tier):
+        # Defensive: request creation should have written a capability that
+        # matches the action-derived risk tier.
         _deny(
             DesktopGrantRequestDenialCode.ACTION_NOT_REQUESTABLE,
-            "request capability is not a native-control capability",
+            "request capability does not match its action",
         )
 
     # Resolve shell + device from LIVE presence (binds the device that is
     # connected now). A disconnected shell fails closed (409) inside the helper.
-    selected_shell, _caps, device_id = _select_connected_shell(tenant_id, request.shell_id)
+    selected_shell, shell_capabilities, device_id = _select_connected_shell(tenant_id, request.shell_id)
     if device_id is None:
         _deny(
             DesktopGrantRequestDenialCode.REQUEST_NOT_PENDING,
             "desktop shell device is not bound",
         )
 
-    # Build + validate the native-control target binding (allowlist-gated). The
-    # bundle is the one the user is approving; the action is the requested action.
-    target = (request.target_binding or {}).copy()
-    target["action"] = request.action
-    target_binding = _require_native_control_target_binding(
-        target, action=request.action, db=db, tenant_id=tenant_id
-    )
+    target_binding: dict[str, Any] = {}
+    if risk_tier == "native_control":
+        # Build + validate the native-control target binding (allowlist-gated).
+        # The bundle is the one the user is approving; the action is the
+        # requested action.
+        target = (request.target_binding or {}).copy()
+        target["action"] = request.action
+        target_binding = _require_native_control_target_binding(
+            target, action=request.action, db=db, tenant_id=tenant_id
+        )
+    elif not bool(shell_capabilities.get("can_observe")):
+        _deny(
+            DesktopGrantRequestDenialCode.REQUEST_NOT_PENDING,
+            "desktop shell cannot observe",
+        )
 
     max_actions = max(_GRANT_MIN_ACTIONS, min(int(max_actions), _GRANT_MAX_ACTIONS))
     expires_in = max(
@@ -518,7 +546,7 @@ def approve_desktop_grant_request(
         shell_id=selected_shell,
         device_id=device_id,
         desktop_command_id=None,
-        risk_tier="native_control",
+        risk_tier=risk_tier,
         capability=capability,
         status="active",
         target_binding=target_binding,

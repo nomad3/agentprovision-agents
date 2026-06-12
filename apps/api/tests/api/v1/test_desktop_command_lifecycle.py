@@ -675,6 +675,56 @@ def test_claim_without_approval_grant_waits_before_lease(db_session, seeded):
     assert db_session.query(DesktopCommandEnvelopeNonce).count() == 0
 
 
+def test_observe_command_with_unbound_approved_grant_claims(db_session, seeded):
+    with patch(
+        "app.services.desktop_control_service.luna_presence_service.get_presence",
+        return_value=_presence(),
+    ), patch("app.services.desktop_control_service.publish_session_event", return_value=None):
+        grant = create_desktop_approval_grant(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandApprovalGrantCreate(
+                session_id=SESSION_ID,
+                risk_tier="observe",
+                capability="screenshot",
+                expires_in_seconds=60,
+            ),
+        )
+        command, _queued_event, _queued_session = enqueue_desktop_command(
+            db_session,
+            tenant_id=TENANT_ID,
+            user_id=USER_ID,
+            request=DesktopCommandEnqueue(
+                session_id=SESSION_ID,
+                action="capture_screenshot",
+                tool_name="desktop_observe_screen",
+                shell_id=None,
+                nonce="observe-preapproved-grant",
+                approval_id=grant.id,
+                payload={},
+            ),
+        )
+        claimed, event, _session_event = claim_next_desktop_command(
+            db_session,
+            user=seeded,
+            device_token=DEVICE_TOKEN,
+            claim=DesktopCommandClaim(session_id=SESSION_ID, shell_id=SHELL_ID, lease_seconds=30),
+        )
+
+    assert claimed is not None
+    assert claimed.id == command.id
+    assert claimed.status == "claimed"
+    assert claimed.approval_id == grant.id
+    assert claimed.payload["approval"]["approval_id"] == str(grant.id)
+    assert claimed.payload["command_envelope"]["action"] == "capture_screenshot"
+    assert event is not None
+    assert event.event_type == "desktop_command_claimed"
+    db_session.refresh(grant)
+    assert grant.status == "consumed"
+    assert grant.remaining_actions == 0
+
+
 def test_claim_with_explicit_missing_approval_id_denies_before_lease(db_session, seeded):
     with patch(
         "app.services.desktop_control_service.luna_presence_service.get_presence",

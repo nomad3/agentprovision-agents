@@ -71,6 +71,7 @@ async def test_desktop_observe_screen_posts_display_safe_request(patch_httpx):
 
     out = await dc.desktop_observe_screen(
         session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
         shell_id="desktop-44444444-4444-4444-4444-444444444444",
         tenant_id="11111111-1111-1111-1111-111111111111",
         ctx=_ctx_with_user(),
@@ -90,9 +91,41 @@ async def test_desktop_observe_screen_posts_display_safe_request(patch_httpx):
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
         "action": "capture_screenshot",
         "tool_name": "desktop_observe_screen",
+        "approval_id": "55555555-5555-5555-5555-555555555555",
     }
     assert call["headers"]["X-Tenant-Id"] == "11111111-1111-1111-1111-111111111111"
     assert call["headers"]["X-User-Id"] == "22222222-2222-2222-2222-222222222222"
+
+
+@pytest.mark.asyncio
+async def test_desktop_observe_screen_requires_grant_before_queue(patch_httpx):
+    client = patch_httpx(default_json={"unreached": True})
+
+    out = await dc.desktop_observe_screen(
+        session_id="33333333-3333-3333-3333-333333333333",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "approval_required"
+    assert out["command_id"] is None
+    assert "desktop_request_grant" in out["message"]
+    assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_desktop_observe_screen_rejects_invalid_grant_id(patch_httpx):
+    client = patch_httpx(default_json={"unreached": True})
+
+    out = await dc.desktop_observe_screen(
+        session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="../../oauth/internal/token/github",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out == {"status": "error", "error": "grant_id must be a UUID"}
+    assert client.calls == []
 
 
 @pytest.mark.asyncio
@@ -121,6 +154,7 @@ async def test_desktop_read_clipboard_omits_empty_shell_id(patch_httpx):
 
     out = await dc.desktop_read_clipboard(
         session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
         tenant_id="11111111-1111-1111-1111-111111111111",
         ctx=_ctx_with_user(),
     )
@@ -128,6 +162,7 @@ async def test_desktop_read_clipboard_omits_empty_shell_id(patch_httpx):
     assert out["status"] == "pending"
     assert out["payload"]["action"] == "read_clipboard"
     assert "shell_id" not in client.calls[0]["json"]
+    assert client.calls[0]["json"]["approval_id"] == "55555555-5555-5555-5555-555555555555"
 
 
 @pytest.mark.asyncio
@@ -156,6 +191,7 @@ async def test_desktop_get_active_app_queues_observe_command(patch_httpx):
 
     out = await dc.desktop_get_active_app(
         session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
         shell_id="desktop-44444444-4444-4444-4444-444444444444",
         tenant_id="11111111-1111-1111-1111-111111111111",
         ctx=_ctx_with_user(),
@@ -174,6 +210,7 @@ async def test_desktop_get_active_app_queues_observe_command(patch_httpx):
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
         "action": "get_active_app",
         "tool_name": "desktop_get_active_app",
+        "approval_id": "55555555-5555-5555-5555-555555555555",
     }
 
 
@@ -388,6 +425,7 @@ async def test_desktop_tools_surface_shell_unavailable(patch_httpx):
 
     out = await dc.desktop_observe_screen(
         session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
         tenant_id="11111111-1111-1111-1111-111111111111",
         ctx=_ctx_with_user(),
     )
@@ -414,6 +452,7 @@ async def test_desktop_tools_transport_error_returns_error(monkeypatch):
 
     out = await dc.desktop_observe_screen(
         session_id="33333333-3333-3333-3333-333333333333",
+        grant_id="55555555-5555-5555-5555-555555555555",
         tenant_id="11111111-1111-1111-1111-111111111111",
         ctx=_ctx_with_user(),
     )
@@ -660,18 +699,51 @@ async def test_desktop_request_grant_posts_reduced_request(patch_httpx):
 
 
 @pytest.mark.asyncio
-async def test_desktop_request_grant_rejects_non_native_action(patch_httpx):
-    client = patch_httpx(default_status=201, default_json={"unreached": True})
+async def test_desktop_request_grant_posts_observe_request_without_target(patch_httpx):
+    client = patch_httpx(
+        default_status=201,
+        default_json={
+            "request_id": "55555555-5555-5555-5555-555555555555",
+            "session_id": "33333333-3333-3333-3333-333333333333",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "action": "capture_screenshot",
+            "capability": "screenshot",
+            "status": "pending",
+            "target_bundle_id": None,
+            "grant_present": False,
+        },
+    )
 
     out = await dc.desktop_request_grant(
         session_id="33333333-3333-3333-3333-333333333333",
         action="capture_screenshot",
-        target_bundle_id="net.whatsapp.WhatsApp",
         tenant_id="11111111-1111-1111-1111-111111111111",
         ctx=_ctx_with_user(),
     )
 
-    # Rejected client-side before any HTTP call — observe/dry-run never need a grant.
+    assert out["status"] == "pending"
+    assert out["capability"] == "screenshot"
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/desktop-control/internal/grants/request")
+    assert call["json"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "action": "capture_screenshot",
+    }
+
+
+@pytest.mark.asyncio
+async def test_desktop_request_grant_rejects_unrequestable_action(patch_httpx):
+    client = patch_httpx(default_status=201, default_json={"unreached": True})
+
+    out = await dc.desktop_request_grant(
+        session_id="33333333-3333-3333-3333-333333333333",
+        action="background_app_control_dry_run",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    # Rejected client-side before any HTTP call — dry-run never needs a grant.
     assert out["status"] == "error"
     assert "pointer_move" in out["error"]
     assert client.calls == []

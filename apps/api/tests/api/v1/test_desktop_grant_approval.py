@@ -106,15 +106,16 @@ def _patch_presence(connected: bool = True):
 
 
 def _make_pending(db, *, action="keyboard_type", user_id=USER_ID, session_id=SESSION_ID):
+    kwargs = dict(
+        tenant_id=TENANT_ID,
+        user_id=user_id,
+        session_id=session_id,
+        action=action,
+    )
+    if action not in {"capture_screenshot", "get_active_app", "read_clipboard"}:
+        kwargs["target_bundle_id"] = BUNDLE
     with _patch_presence():
-        out = desktop_act.request_desktop_grant(
-            db,
-            tenant_id=TENANT_ID,
-            user_id=user_id,
-            session_id=session_id,
-            action=action,
-            target_bundle_id=BUNDLE,
-        )
+        out = desktop_act.request_desktop_grant(db, **kwargs)
     return uuid.UUID(out["request_id"])
 
 
@@ -186,6 +187,27 @@ def test_approve_mints_exactly_one_active_bounded_grant(db_session):
     blob = str(approved[0])
     assert "payload" not in approved[0]
     assert "secret" not in blob.lower()
+
+
+def test_approve_observe_request_mints_observe_grant_without_target(db_session):
+    _seed(db_session)
+    rid = _make_pending(db_session, action="capture_screenshot")
+
+    out = _approve(db_session, rid, max_actions=1, expires_in_seconds=60)
+
+    assert out["status"] == "approved"
+    assert out["grant_present"] is True
+    assert out["risk_tier"] == "observe"
+    assert out["capability"] == "screenshot"
+    assert out["target_bundle_id"] is None
+
+    grants = _active_grants(db_session)
+    assert len(grants) == 1
+    grant = grants[0]
+    assert grant.risk_tier == "observe"
+    assert grant.capability == "screenshot"
+    assert grant.target_binding == {}
+    assert grant.remaining_actions == 1
 
 
 def test_approve_logs_byte_free_rl_decision(db_session):

@@ -633,11 +633,15 @@ pub struct PerceptionArtifactStatus {
 
 // ── P5.4b pending desktop approval requests (`alpha desktop grant request|status`) ──
 
-/// The four native-control actions an agent may request approval for. Observe /
-/// dry-run need no grant, so they are not requestable. Unknown values fail closed.
+/// The desktop actions an agent may request approval for. Observe plus
+/// pointer/keyboard actions are requestable; background dry-run needs no grant.
+/// Unknown values fail closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DesktopRequestableAction {
+    CaptureScreenshot,
+    GetActiveApp,
+    ReadClipboard,
     PointerMove,
     PointerClick,
     KeyboardType,
@@ -726,7 +730,9 @@ impl DesktopStructuredDenial {
 pub struct DesktopGrantRequestBody {
     pub session_id: String,
     pub action: DesktopRequestableAction,
-    pub target_bundle_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub target_bundle_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub shell_id: Option<String>,
@@ -1151,15 +1157,20 @@ mod tests {
         bad_status["status"] = serde_json::json!("escalated");
         assert!(serde_json::from_value::<DesktopGrantRequest>(bad_status).is_err());
 
-        // Observe/dry-run actions are NOT requestable — they fail the enum.
-        for action in ["capture_screenshot", "background_app_control_dry_run"] {
-            let mut bad_action = grant_request_json();
-            bad_action["action"] = serde_json::json!(action);
-            assert!(
-                serde_json::from_value::<DesktopGrantRequest>(bad_action).is_err(),
-                "{action} must not be a requestable action"
-            );
-        }
+        let mut observe = grant_request_json();
+        observe["action"] = serde_json::json!("capture_screenshot");
+        observe["capability"] = serde_json::json!("screenshot");
+        observe["target_bundle_id"] = serde_json::Value::Null;
+        let req: DesktopGrantRequest =
+            serde_json::from_value(observe).expect("observe grant request decode");
+        assert_eq!(req.action, DesktopRequestableAction::CaptureScreenshot);
+        assert_eq!(req.capability, DesktopCapability::Screenshot);
+        assert!(req.target_bundle_id.is_none());
+
+        // Dry-run is still not requestable — it needs no grant.
+        let mut bad_action = grant_request_json();
+        bad_action["action"] = serde_json::json!("background_app_control_dry_run");
+        assert!(serde_json::from_value::<DesktopGrantRequest>(bad_action).is_err());
     }
 
     #[test]
@@ -1167,7 +1178,7 @@ mod tests {
         let body = DesktopGrantRequestBody {
             session_id: "33333333-3333-3333-3333-333333333333".into(),
             action: DesktopRequestableAction::PointerClick,
-            target_bundle_id: "net.whatsapp.WhatsApp".into(),
+            target_bundle_id: Some("net.whatsapp.WhatsApp".into()),
             shell_id: None,
             reason: None,
         };
@@ -1176,6 +1187,17 @@ mod tests {
         // omitted optional fields are not serialized
         assert!(v.get("shell_id").is_none());
         assert!(v.get("reason").is_none());
+
+        let observe_body = DesktopGrantRequestBody {
+            session_id: "33333333-3333-3333-3333-333333333333".into(),
+            action: DesktopRequestableAction::CaptureScreenshot,
+            target_bundle_id: None,
+            shell_id: None,
+            reason: None,
+        };
+        let observe = serde_json::to_value(&observe_body).unwrap();
+        assert_eq!(observe["action"], serde_json::json!("capture_screenshot"));
+        assert!(observe.get("target_bundle_id").is_none());
     }
 
     #[test]

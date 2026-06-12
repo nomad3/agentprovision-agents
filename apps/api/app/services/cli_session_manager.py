@@ -361,7 +361,17 @@ def generate_cli_instructions(
             )
         lines.append("- If a desktop tool reports that no shell is connected, say that Luna Desktop must be in Observe or Control Locked mode, then stop.")
         if has_desktop_observe:
-            lines.append("- Observation tools return display-safe audit envelopes only, not pixels, clipboard text, or raw window contents.")
+            if has_desktop_control:
+                lines.append(
+                    "- Observation requires the same governed approval loop: request "
+                    "approval with `desktop_request_grant` for `capture_screenshot`, "
+                    "`get_active_app`, or `read_clipboard`; wait for an approved "
+                    "`grant_id`; then pass that `grant_id` to the matching observe "
+                    "tool. Observation tools return display-safe audit envelopes only, "
+                    "not pixels, clipboard text, or raw window contents."
+                )
+            else:
+                lines.append("- Observation tools return display-safe audit envelopes only, not pixels, clipboard text, or raw window contents.")
         if has_desktop_control:
             lines.append(
                 f"- For the Luna desktop app, the target bundle_id is `{default_bundle_id}`."
