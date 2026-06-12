@@ -218,6 +218,20 @@ Current deployed proof:
     clicked, and nothing was transmitted to WhatsApp. The remaining E2E gate is
     now envelope/approval configuration, not MCP observation routing.
 
+Current observe posture caveat:
+
+- PR #906 moves observe requests onto the real command-claim path. In the
+  current API claim logic, observe commands enqueue with `approval_id: null` and
+  do not require a per-observe human approval grant at claim; they are gated by
+  tenant desktop-control enablement, session/user/shell/device binding, shell
+  observe capability, and a valid command envelope. This branch is still
+  locally fail-closed because envelope signing/public-key env vars are empty.
+- Before enabling successful observe execution outside tightly controlled local
+  validation, land the next slice that either adds the explicit observe approval
+  gate or records the accepted operator-only observe posture, and prove the
+  quarantine -> redactor -> planner-safe fetch path fails closed: raw captured
+  artifacts must be unfetchable by the planner until redacted.
+
 Open after D3:
 
 - D4 test integrity gaps must be folded into the implementation slices below
