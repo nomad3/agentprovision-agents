@@ -49,15 +49,23 @@ def patch_httpx(monkeypatch, make_client):
 async def test_desktop_observe_screen_posts_display_safe_request(patch_httpx):
     client = patch_httpx(
         default_json={
-            "status": "denied",
+            "desktop_command_id": "99999999-9999-9999-9999-999999999999",
             "desktop_event_id": "66666666-6666-6666-6666-666666666666",
             "session_event_id": "session-event-2",
             "session_seq_no": 8,
+            "status": "pending",
             "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
-            "action": "capture_screenshot",
+            "device_id": "88888888-8888-8888-8888-888888888888",
+            "approval_id": None,
             "capability": "screenshot",
-            "reason": "desktop observation down-channel unavailable; capture_screenshot request denied",
-            "down_channel_available": False,
+            "lease_expires_at": None,
+            "payload": {
+                "action": "capture_screenshot",
+                "tool_name": "desktop_observe_screen",
+                "mode": "observe",
+                "request": {},
+            },
+            "idempotent": False,
         },
     )
 
@@ -68,16 +76,15 @@ async def test_desktop_observe_screen_posts_display_safe_request(patch_httpx):
         ctx=_ctx_with_user(),
     )
 
-    assert out["status"] == "denied"
-    assert out["action"] == "capture_screenshot"
+    assert out["status"] == "pending"
+    assert out["payload"]["action"] == "capture_screenshot"
     assert out["capability"] == "screenshot"
-    assert out["down_channel_available"] is False
     assert "screenshot" not in out
     assert "clipboard_text" not in out
     assert "down-channel" in out["message"]
     call = client.calls[0]
     assert call["method"] == "POST"
-    assert call["url"].endswith("/api/v1/desktop-control/internal/observations/request")
+    assert call["url"].endswith("/api/v1/desktop-control/internal/commands")
     assert call["json"] == {
         "session_id": "33333333-3333-3333-3333-333333333333",
         "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
@@ -92,15 +99,23 @@ async def test_desktop_observe_screen_posts_display_safe_request(patch_httpx):
 async def test_desktop_read_clipboard_omits_empty_shell_id(patch_httpx):
     client = patch_httpx(
         default_json={
-            "status": "denied",
+            "desktop_command_id": "99999999-9999-9999-9999-999999999999",
             "desktop_event_id": "66666666-6666-6666-6666-666666666666",
             "session_event_id": None,
             "session_seq_no": None,
+            "status": "pending",
             "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
-            "action": "read_clipboard",
+            "device_id": "88888888-8888-8888-8888-888888888888",
+            "approval_id": None,
             "capability": "clipboard_read",
-            "reason": "desktop observation down-channel unavailable; read_clipboard request denied",
-            "down_channel_available": False,
+            "lease_expires_at": None,
+            "payload": {
+                "action": "read_clipboard",
+                "tool_name": "desktop_read_clipboard",
+                "mode": "observe",
+                "request": {},
+            },
+            "idempotent": False,
         },
     )
 
@@ -110,9 +125,56 @@ async def test_desktop_read_clipboard_omits_empty_shell_id(patch_httpx):
         ctx=_ctx_with_user(),
     )
 
-    assert out["status"] == "denied"
-    assert out["action"] == "read_clipboard"
+    assert out["status"] == "pending"
+    assert out["payload"]["action"] == "read_clipboard"
     assert "shell_id" not in client.calls[0]["json"]
+
+
+@pytest.mark.asyncio
+async def test_desktop_get_active_app_queues_claimable_observe_command(patch_httpx):
+    client = patch_httpx(
+        default_json={
+            "desktop_command_id": "99999999-9999-9999-9999-999999999999",
+            "desktop_event_id": "66666666-6666-6666-6666-666666666666",
+            "session_event_id": "session-event-active-app",
+            "session_seq_no": 10,
+            "status": "pending",
+            "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+            "device_id": "88888888-8888-8888-8888-888888888888",
+            "approval_id": None,
+            "capability": "active_app",
+            "lease_expires_at": None,
+            "payload": {
+                "action": "get_active_app",
+                "tool_name": "desktop_get_active_app",
+                "mode": "observe",
+                "request": {},
+            },
+            "idempotent": False,
+        },
+    )
+
+    out = await dc.desktop_get_active_app(
+        session_id="33333333-3333-3333-3333-333333333333",
+        shell_id="desktop-44444444-4444-4444-4444-444444444444",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        ctx=_ctx_with_user(),
+    )
+
+    assert out["status"] == "pending"
+    assert out["capability"] == "active_app"
+    assert out["payload"]["action"] == "get_active_app"
+    assert "app" not in out
+    assert "title" not in out
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/api/v1/desktop-control/internal/commands")
+    assert call["json"] == {
+        "session_id": "33333333-3333-3333-3333-333333333333",
+        "shell_id": "desktop-44444444-4444-4444-4444-444444444444",
+        "action": "get_active_app",
+        "tool_name": "desktop_get_active_app",
+    }
 
 
 @pytest.mark.asyncio
