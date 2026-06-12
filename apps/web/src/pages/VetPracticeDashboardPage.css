@@ -1,21 +1,29 @@
 .vet-practice-page {
-  max-width: 1180px;
+  max-width: 1240px;
 }
 
-.vet-practice-metrics {
+.vet-practice-metrics,
+.vet-practice-brief-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--ap-space-4);
   margin-bottom: var(--ap-space-6);
 }
 
-.vet-practice-metric .ap-card-body {
+.vet-practice-brief-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.vet-practice-metric .ap-card-body,
+.vet-practice-brief-grid .ap-card-title {
   display: flex;
   align-items: center;
   gap: var(--ap-space-3);
 }
 
-.vet-practice-metric__icon {
+.vet-practice-metric__icon,
+.vet-practice-brief-grid .ap-card-title svg,
+.vet-practice-checklist svg {
   color: var(--ap-primary);
   flex: 0 0 auto;
 }
@@ -36,43 +44,112 @@
   margin-bottom: var(--ap-space-6);
 }
 
-.vet-practice-storage,
-.vet-practice-two-col {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--ap-space-4);
+.vet-practice-brief-line + .vet-practice-brief-line {
+  margin-top: var(--ap-space-2);
 }
 
-.vet-practice-storage-card,
-.vet-practice-agent-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--ap-space-4);
+.vet-practice-brief-line strong {
+  color: var(--ap-text);
+  display: block;
+  font-weight: 600;
 }
 
-.vet-practice-flow-list,
-.vet-practice-agent-list,
-.vet-practice-future-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--ap-space-3);
-}
-
-.vet-practice-flow__head {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--ap-space-4);
-  align-items: flex-start;
-}
-
+.vet-practice-chip-list,
+.vet-practice-room__actions,
+.vet-practice-room__meta,
 .vet-practice-flow__meta {
   display: flex;
-  gap: var(--ap-space-2);
   flex-wrap: wrap;
+  gap: var(--ap-space-2);
+}
+
+.vet-practice-board {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.35fr) minmax(0, 1fr);
+  gap: var(--ap-space-4);
+  align-items: start;
+}
+
+.vet-practice-flow-rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ap-space-2);
+}
+
+.vet-practice-flow-tab {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ap-space-3);
+  width: 100%;
+  min-height: 74px;
+  padding: var(--ap-space-3);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+  background: var(--ap-card-bg);
+  color: var(--ap-text);
+  text-align: left;
+  transition: var(--ap-transition);
+}
+
+.vet-practice-flow-tab:hover,
+.vet-practice-flow-tab.active {
+  border-color: var(--ap-border-strong);
+  background: var(--ap-primary-tint);
+}
+
+.vet-practice-flow-tab strong,
+.vet-practice-flow-tab small {
+  display: block;
+}
+
+.vet-practice-flow-tab strong {
+  font-size: var(--ap-fs-sm);
+  font-weight: 600;
+  line-height: var(--ap-lh-tight);
+}
+
+.vet-practice-flow-tab small {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-xs);
+  margin-top: 4px;
+}
+
+.vet-practice-room__head,
+.vet-practice-storage-card,
+.vet-practice-agent-row,
+.vet-practice-specialist-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--ap-space-4);
+}
+
+.vet-practice-room__head h2 {
+  color: var(--ap-text);
+  font-size: var(--ap-fs-lg);
+  font-weight: 700;
+  line-height: var(--ap-lh-tight);
+  margin: 0 0 var(--ap-space-2);
+}
+
+.vet-practice-room__head p {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  line-height: var(--ap-lh-normal);
+  margin: 0;
+}
+
+.vet-practice-room__actions {
+  margin-top: var(--ap-space-4);
+}
+
+.vet-practice-room__meta,
+.vet-practice-flow__meta {
   margin-top: var(--ap-space-3);
 }
 
+.vet-practice-room__meta span,
 .vet-practice-flow__meta span {
   color: var(--ap-text-muted);
   background: var(--ap-primary-tint);
@@ -82,24 +159,192 @@
   padding: 3px 8px;
 }
 
-@media (max-width: 991.98px) {
-  .vet-practice-metrics,
-  .vet-practice-storage,
-  .vet-practice-two-col {
+.vet-practice-room-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(240px, 0.7fr);
+  gap: var(--ap-space-4);
+  margin-top: var(--ap-space-5);
+}
+
+.vet-practice-room-grid--bottom {
+  align-items: start;
+}
+
+.vet-practice-subhead {
+  color: var(--ap-text);
+  font-size: var(--ap-fs-sm);
+  font-weight: 700;
+  margin: 0 0 var(--ap-space-3);
+}
+
+.vet-practice-work-items,
+.vet-practice-agent-list,
+.vet-practice-future-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ap-space-3);
+}
+
+.vet-practice-work-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ap-space-3);
+  padding: var(--ap-space-4);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+  background: var(--ap-card-bg-hover);
+}
+
+.vet-practice-work-item h4 {
+  color: var(--ap-text);
+  font-size: var(--ap-fs-sm);
+  font-weight: 700;
+  margin: 0 0 var(--ap-space-2);
+}
+
+.vet-practice-work-item p {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  line-height: var(--ap-lh-normal);
+  margin: 0;
+}
+
+.vet-practice-checklist,
+.vet-practice-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ap-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.vet-practice-checklist li,
+.vet-practice-step-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ap-space-2);
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  line-height: var(--ap-lh-normal);
+}
+
+.vet-practice-step-list li {
+  padding: var(--ap-space-3);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+}
+
+.vet-practice-step-list svg {
+  color: var(--ap-primary);
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.vet-practice-step-list strong,
+.vet-practice-step-list small {
+  display: block;
+}
+
+.vet-practice-step-list strong {
+  color: var(--ap-text);
+  font-weight: 600;
+}
+
+.vet-practice-step-list small {
+  color: var(--ap-text-subtle);
+  font-size: var(--ap-fs-xs);
+  margin-top: 2px;
+}
+
+.vet-practice-review-gate {
+  display: flex;
+  gap: var(--ap-space-3);
+  padding: var(--ap-space-4);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+  background: var(--ap-primary-tint);
+}
+
+.vet-practice-review-gate svg {
+  color: var(--ap-primary);
+  margin-top: 2px;
+  flex: 0 0 auto;
+}
+
+.vet-practice-review-gate strong {
+  color: var(--ap-text);
+  display: block;
+  font-size: var(--ap-fs-sm);
+  margin-bottom: var(--ap-space-1);
+}
+
+.vet-practice-review-gate p {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  line-height: var(--ap-lh-normal);
+  margin: 0 0 var(--ap-space-3);
+}
+
+.vet-practice-specialist-grid,
+.vet-practice-storage,
+.vet-practice-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ap-space-4);
+}
+
+.vet-practice-specialist-case {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: var(--ap-space-3);
+  padding-top: var(--ap-space-3);
+  border-top: 1px solid var(--ap-border);
+}
+
+.vet-practice-specialist-case strong {
+  color: var(--ap-text);
+  font-size: var(--ap-fs-sm);
+}
+
+.vet-practice-specialist-case span {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  line-height: var(--ap-lh-normal);
+}
+
+@media (max-width: 1199.98px) {
+  .vet-practice-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vet-practice-board,
+  .vet-practice-room-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 991.98px) {
+  .vet-practice-brief-grid,
+  .vet-practice-storage,
+  .vet-practice-specialist-grid,
+  .vet-practice-two-col {
+    grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 575.98px) {
-  .vet-practice-metrics,
-  .vet-practice-storage,
-  .vet-practice-two-col {
+  .vet-practice-metrics {
     grid-template-columns: 1fr;
   }
 
-  .vet-practice-flow__head,
+  .vet-practice-flow-tab,
+  .vet-practice-room__head,
   .vet-practice-storage-card,
-  .vet-practice-agent-row {
+  .vet-practice-agent-row,
+  .vet-practice-work-item,
+  .vet-practice-specialist-head {
     flex-direction: column;
   }
 }
