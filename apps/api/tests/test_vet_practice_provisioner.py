@@ -565,6 +565,33 @@ def test_vet_dashboard_endpoint_defaults_to_gp_full(db_session, vet_tenant):
     assert body["tenant_id"] == str(tenant.id)
     assert body["summary"]["agents_expected"] == 10
 
+    concierge = next(
+        flow for flow in body["flows"]
+        if flow["key"] == "pet_health_concierge"
+    )
+    assert concierge["sample_queue"][0]["patient"] == "Milo"
+    assert concierge["packet_checklist"]
+    assert {step["destination"] for step in concierge["workflow_steps"]} >= {
+        "Google Drive",
+        "OneDrive",
+    }
+
+    soap = next(flow for flow in body["flows"] if flow["key"] == "soap_note_sync")
+    assert soap["review_gate"]["reviewer"] == "Dr. Angelo or attending DVM"
+    assert soap["human_approval_steps"][0]["name"] == "DVM review required"
+    assert soap["review_gate"]["enforced_by_workflow"] is True
+
+    assert body["launch_context"]["locations"] == [
+        "Anaheim",
+        "Buena Park",
+        "Mission Viejo",
+    ]
+    assert body["launch_context"]["initial_meetings"][0]["title"] == (
+        "Angelo practice-management kickoff"
+    )
+    assert body["specialist_lanes"][0]["lead_clinician"] == "Dr. Brett"
+    assert body["specialist_lanes"][0]["sample_queue"][0]["patient"] == "Bailey"
+
 
 def test_vet_dashboard_endpoint_rejects_unknown_variant(db_session, vet_tenant):
     _, admin = vet_tenant
