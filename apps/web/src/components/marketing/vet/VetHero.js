@@ -10,15 +10,15 @@ const APEX_REGISTER = 'https://agentprovision.com/register';
 const HERO_STATS = [
   {
     value: 'File-first',
-    label: 'Drive and OneDrive packets are the MVP source of truth',
+    label: 'Starts with your existing Drive and OneDrive files',
   },
   {
-    value: 'Auditable',
-    label: 'source, assumption, confidence, approver',
+    value: 'Review-ready',
+    label: 'Summaries, notes, and follow-ups prepared for staff',
   },
   {
-    value: 'PMS-ready',
-    label: 'screen maps and approved action plans before actuation',
+    value: 'Connect later',
+    label: 'Practice software can be added when the team is ready',
   },
 ];
 
@@ -74,21 +74,21 @@ export default function VetHero() {
           style={prefersReducedMotion ? undefined : { y: textY }}
           transition={{ duration: 0.6, ease: 'easeOut' }}
         >
-          <span className="vet-hero__badge">Veterinary Practice Intelligence</span>
-          <span className="vet-hero__script">Calm medicine, cited workflows.</span>
+          <span className="vet-hero__badge">Veterinary Team Support</span>
+          <span className="vet-hero__script">Calm medicine, clearer workdays.</span>
           <h1 className="vet-hero__title">
-            Clinical infrastructure for the practice behind the medicine.
+            AI support for busy veterinary teams.
           </h1>
           <p className="vet-hero__subtitle">
-            Turn every intake, triage note, SOAP draft, billing exception, and
-            specialist handoff into structured practice memory. Agents prepare
-            the work, cite the source packet, and keep licensed staff in control.
+            One place to organize intake, records, notes, billing questions,
+            and follow-ups. AI prepares the work so licensed staff can review,
+            edit, and decide.
           </p>
 
           <ul className="vet-hero__assurances" aria-label="What stays true">
-            <li className="vet-hero__assurance">Built for licensed veterinary teams</li>
-            <li className="vet-hero__assurance">Evidence and source trails on every output</li>
-            <li className="vet-hero__assurance">File-first now, PMS integration-ready next</li>
+            <li className="vet-hero__assurance">Built around real practice work</li>
+            <li className="vet-hero__assurance">Shows what it used</li>
+            <li className="vet-hero__assurance">Connects to practice software later</li>
           </ul>
 
           <div className="vet-hero__ctas">

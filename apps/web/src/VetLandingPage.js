@@ -79,14 +79,14 @@ export default function VetLandingPage() {
         <VetCardiologyShowcase />
         <CTASection
           registerHref={APEX_REGISTER}
-          title="Give every case a source, a workflow, and a human owner."
-          subtitle="Start file-first with Drive and OneDrive, then graduate the same approved workflows into PMS and desktop automation when the practice is ready."
+          title="Give every case a clear next step and a person in charge."
+          subtitle="Start with Drive and OneDrive files today. When the practice is ready, connect the same reviewed steps to practice software and desktop apps."
           buttonText="Request access"
         />
       </main>
       <LandingFooter
         links={VET_FOOTER_LINKS}
-        tagline="Veterinary practice intelligence with source-traceable workflows and human approval."
+        tagline="AI support for veterinary teams, with staff review on every important decision."
       />
     </>
   );

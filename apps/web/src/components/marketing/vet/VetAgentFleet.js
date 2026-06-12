@@ -16,63 +16,63 @@ import {
 const AGENTS = [
   {
     icon: FaUserMd,
-    title: 'Luna Supervisor',
-    body: 'Routes work across the fleet, maintains context, and keeps clinical, financial, and PMS actions inside approval boundaries.',
-    gate: 'Supervisor coordinates, staff decides',
+    title: 'Luna Practice Lead',
+    body: 'Sends new work to the right room, keeps the case context together, and brings important decisions back to staff.',
+    gate: 'Team stays in charge',
   },
   {
     icon: FaComments,
     title: 'Pet Health Concierge',
-    body: 'Answers owner intake, gathers missing facts, and escalates red flags without diagnosing or prescribing.',
+    body: 'Collects owner details, asks for missing information, and flags urgent concerns without diagnosing or prescribing.',
     gate: 'Urgent cases route to staff',
   },
   {
     icon: FaCalendarCheck,
-    title: 'Front Desk Agent',
-    body: 'Prepares scheduling packets, confirmations, reschedule requests, and new-client onboarding for each location.',
+    title: 'Front Desk Assistant',
+    body: 'Prepares appointment requests, confirmations, reschedules, and new-client details for each location.',
     gate: 'Staff confirms every slot',
   },
   {
     icon: FaClipboardCheck,
-    title: 'Clinical Triage Agent',
-    body: 'Classifies messages by urgency and produces one-screen summaries grounded in uploaded records.',
+    title: 'Triage Assistant',
+    body: 'Sorts messages by urgency and prepares a short summary from the records and notes provided.',
     gate: 'No diagnosis, conservative routing',
   },
   {
     icon: FaNotesMedical,
-    title: 'SOAP Note Agent',
-    body: 'Turns transcripts, notes, and visit context into structured drafts with uncertain source language marked clearly.',
+    title: 'Visit Note Assistant',
+    body: 'Turns transcripts, notes, and visit context into a draft note with uncertain points marked clearly.',
     gate: 'DVM approves every note',
   },
   {
     icon: FaFileInvoiceDollar,
-    title: 'Billing Agent',
-    body: 'Reviews invoices, charge sheets, write-offs, refunds, and missing codes before accountant export.',
-    gate: 'Manager approves exceptions',
+    title: 'Billing Assistant',
+    body: 'Reviews invoices, charge sheets, write-offs, refunds, and missing codes before export.',
+    gate: 'Manager reviews changes',
   },
   {
     icon: FaPills,
-    title: 'Inventory & Pharma Agent',
-    body: 'Keeps count sheets, dispense events, expirations, reorder thresholds, and controlled-substance issues visible.',
+    title: 'Inventory & Pharmacy Assistant',
+    body: 'Keeps count sheets, dispense events, expirations, reorder points, and medication questions visible.',
     gate: 'Discrepancies stay open',
   },
   {
     icon: FaStarHalfAlt,
-    title: 'Reputation & Growth Agent',
-    body: 'Drafts review replies and campaign ideas from measured practice signals without publishing autonomously.',
+    title: 'Review Reply Assistant',
+    body: 'Drafts public replies and campaign ideas from practice facts without publishing on its own.',
     gate: 'Approval before public response',
   },
   {
     icon: FaChartPie,
-    title: 'Practice Operations Agent',
-    body: 'Builds daily operator briefs across locations, unresolved handoffs, revenue packets, recall backlog, and readiness.',
-    gate: 'Separates file-backed facts from future fields',
+    title: 'Practice Operations Assistant',
+    body: 'Builds a daily brief across locations, open follow-ups, revenue files, recalls, and billing questions.',
+    gate: 'Flags what needs a person',
   },
   {
     icon: FaDesktop,
-    title: 'PMS Operator Agent',
-    body: 'Maps PMS screens, identifies safe fields, and prepares human-approved desktop action plans for the computer-use lane.',
-    gate: 'Readiness-only until enabled',
+    title: 'Practice Software Prep Assistant',
+    body: 'Documents common screens and steps so later software automation can be reviewed before it is turned on.',
+    gate: 'Prep only until approved',
   },
 ];
 
@@ -82,11 +82,11 @@ export default function VetAgentFleet() {
     <section className="vet-fleet" id="rooms">
       <div className="vet-fleet__inner">
         <span className="vet-section-kicker">Practice rooms</span>
-        <h2 className="vet-fleet__title">A named agent room for every core workflow.</h2>
+        <h2 className="vet-fleet__title">A helper for each part of the practice day.</h2>
         <p className="vet-fleet__subtitle">
-          This is clinical infrastructure, not a generic chatbot. Each room has
-          a defined job, a bounded source of truth, and an explicit handoff to
-          the human who owns the decision.
+          Each room has one job and hands work back to the right person. It can
+          draft, summarize, organize, and flag concerns, but your team stays in
+          charge of medical and financial decisions.
         </p>
 
         <div className="vet-fleet__grid">

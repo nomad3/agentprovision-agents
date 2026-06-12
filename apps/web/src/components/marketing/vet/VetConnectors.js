@@ -13,51 +13,51 @@ import {
 const PRACTICE_FLOWS = [
   {
     icon: FaFileMedical,
-    name: 'Intake Packet',
+    name: 'New Visit Intake',
     category: 'Owner + patient context',
-    body: 'New-client forms, history, reason for visit, location preference, and attachments become a staff-ready packet.',
+    body: 'New-client forms, history, visit reason, preferred location, and attachments are pulled together for the team.',
   },
   {
     icon: FaStethoscope,
-    name: 'Clinical Triage',
+    name: 'Triage Support',
     category: 'Red flags first',
-    body: 'Symptoms are routed as emergency, same-day, routine, refill, records, billing, or follow-up with missing facts called out.',
+    body: 'Owner messages are sorted by urgency, with emergency signs and missing details called out clearly.',
   },
   {
     icon: FaNotesMedical,
-    name: 'SOAP Draft',
+    name: 'Visit Note Draft',
     category: 'Clinician review',
-    body: 'Visit notes and transcripts turn into structured SOAP drafts with unclear source language marked for DVM confirmation.',
+    body: 'Visit notes and transcripts become a first draft, with unclear points marked for the DVM to confirm.',
   },
   {
     icon: FaReceipt,
     name: 'Billing Review',
     category: 'Exceptions surfaced',
-    body: 'Charge sheets, invoices, refunds, discounts, and missing codes become a human-approved review packet.',
+    body: 'Invoices, charge sheets, refunds, discounts, and missing codes are grouped for manager review.',
   },
   {
     icon: FaBoxes,
     name: 'Inventory + Pharmacy',
     category: 'Count-sheet discipline',
-    body: 'Dispense logs, reorder thresholds, expirations, and controlled-substance exceptions stay open until reconciled.',
+    body: 'Dispense logs, reorder points, expirations, and controlled-substance questions stay visible until resolved.',
   },
   {
     icon: FaStar,
-    name: 'Reputation Response',
+    name: 'Review Replies',
     category: 'Approve before public',
-    body: 'Review replies and campaign drafts are grounded in practice facts and held for staff approval before posting.',
+    body: 'Public replies and client messages are drafted from practice facts and held for approval before posting.',
   },
   {
     icon: FaChartLine,
-    name: 'Daily Ops Brief',
+    name: 'Daily Practice Brief',
     category: 'Practice signal',
-    body: 'Location load, unresolved handoffs, revenue files, recall work, and billing exceptions roll into one daily brief.',
+    body: 'Location load, open follow-ups, recall work, revenue files, and billing questions roll into one daily view.',
   },
   {
     icon: FaDesktop,
-    name: 'PMS Readiness',
-    category: 'Computer-use safe path',
-    body: 'Screen maps, safe fields, and action plans are prepared before any future PMS desktop actuation is enabled.',
+    name: 'Practice Software Prep',
+    category: 'Safe path later',
+    body: 'Common screens and safe fields are documented before future practice-software automation is turned on.',
   },
 ];
 
@@ -67,11 +67,11 @@ export default function VetConnectors() {
     <section className="vet-connectors" id="mission">
       <div className="vet-connectors__inner">
         <span className="vet-section-kicker">Mission</span>
-        <h2 className="vet-connectors__title">Make the practice computable before you automate it.</h2>
+        <h2 className="vet-connectors__title">Start with the work your team already does.</h2>
         <p className="vet-connectors__subtitle">
-          The MVP starts with the files practices already trust: Google Drive
-          and OneDrive. Each workflow converts a packet into structured,
-          source-traceable work that staff can approve, hand off, and audit.
+          The first version works from the files your practice already uses in
+          Google Drive and OneDrive. It organizes each case, prepares
+          review-ready drafts, and keeps the final decision with your team.
         </p>
 
         <div className="vet-connectors__grid">
@@ -98,9 +98,10 @@ export default function VetConnectors() {
         </div>
 
         <p className="vet-connectors__footnote">
-          PMS, scribe, payment, messaging, and inventory integrations come
-          later. The file-first lane gives Dr. Angelo-style GP teams and
-          Dr. Brett-style specialist workflows usable structure now.
+          Connections to your practice software, scribe, payment, messaging,
+          and inventory systems can come later. The file-first lane gives Dr.
+          Angelo's GP team and Dr. Brett's specialty team useful help right
+          away.
         </p>
       </div>
     </section>

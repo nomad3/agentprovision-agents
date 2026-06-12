@@ -3,39 +3,36 @@ import { motion, useReducedMotion } from 'framer-motion';
 const PILLARS = [
   {
     icon: '01',
-    title: 'Deterministic where it matters',
+    title: 'Rules for high-risk moments',
     body:
-      'Red flags, missing records, controlled-substance mismatches, and ' +
-      'approval boundaries are handled as workflow rules. Unvalidated paths ' +
-      'are surfaced for staff instead of smoothed over.',
-    proof: 'routing rules · missing-source blocks · approval gates',
+      'Urgent symptoms, missing records, medication concerns, and billing ' +
+      'changes are called out for staff instead of being hidden in a draft.',
+    proof: 'urgent flags · missing-info checks · staff approval',
   },
   {
     icon: '02',
     title: 'Clinician-led by design',
     body:
-      'Agents draft, triage, summarize, and prepare. They do not diagnose, ' +
-      'prescribe, alter records, post payments, or send sensitive messages ' +
-      'without the practice team approving the decision.',
+      'The system can draft, sort, summarize, and prepare. It does not ' +
+      'diagnose, prescribe, change records, post payments, or send sensitive ' +
+      'messages without the practice team approving the decision.',
     proof: 'licensed staff stays accountable',
   },
   {
     icon: '03',
-    title: 'Fully auditable',
+    title: 'Easy to review',
     body:
-      'Every packet, draft, and handoff records the source file, stated ' +
-      'assumptions, confidence, approver, and next action. You can reconstruct ' +
-      'why a workflow moved the way it did.',
-    proof: 'source · assumption · confidence · approver',
+      'Every draft shows the files and notes it used, what it assumed, who ' +
+      'approved it, and what happens next.',
+    proof: 'files used · assumptions · approver',
   },
   {
     icon: '04',
-    title: 'Practice memory compounds',
+    title: 'Practice memory gets better',
     body:
-      'Each approved case leaves behind structured operational memory: what ' +
-      'worked, what was missing, who handled it, and what should be faster next ' +
-      'time across the practice.',
-    proof: 'case packets become reusable intelligence',
+      'Approved cases leave a simple record of what worked, what was missing, ' +
+      'who handled it, and what should be faster next time.',
+    proof: 'less rework on repeat cases',
   },
 ];
 
@@ -45,11 +42,11 @@ export default function VetTrust() {
     <section className="vet-trust" id="safety">
       <div className="vet-trust__inner">
         <span className="vet-section-kicker vet-section-kicker--dark">Trust & safety</span>
-        <h2 className="vet-trust__title">Safety is the workflow, not a banner claim.</h2>
+        <h2 className="vet-trust__title">Trust comes from reviewable work.</h2>
         <p className="vet-trust__subtitle">
-          A veterinary agent system earns its place only when it behaves like
-          accountable clinical infrastructure: bounded, cited, reviewable, and
-          explicit about what it does not know.
+          Veterinary teams should be able to see what the system used, what it
+          is unsure about, and where a person must decide. That is the safety
+          model.
         </p>
 
         <div className="vet-trust__grid">
