@@ -13,45 +13,45 @@ const STAGES = [
   {
     icon: FaCloudUploadAlt,
     label: '01',
-    title: 'Packet enters',
-    body: 'Drive and OneDrive files become one case packet.',
-    meta: '5 sources',
+    title: 'Files arrive',
+    body: 'Upload records, forms, invoices, and notes from Drive or OneDrive.',
+    meta: 'files together',
   },
   {
     icon: FaFolderOpen,
     label: '02',
-    title: 'Evidence indexed',
-    body: 'Owner history, symptoms, invoices, and notes stay traceable.',
-    meta: 'source map',
+    title: 'Story is organized',
+    body: 'History, symptoms, visit reason, and billing context sit in one view.',
+    meta: 'clear context',
   },
   {
     icon: FaNotesMedical,
     label: '03',
     title: 'Draft prepared',
-    body: 'The right agent creates the intake, SOAP, billing, or referral draft.',
+    body: 'The right room prepares the intake, note, invoice check, or referral draft.',
     meta: 'review ready',
   },
   {
     icon: FaShieldAlt,
     label: '04',
-    title: 'Guardrails fire',
-    body: 'Red flags, missing facts, and financial changes pause for approval.',
-    meta: 'policy gate',
+    title: 'Safety check',
+    body: 'Urgent signs, missing facts, and money changes are called out first.',
+    meta: 'review needed',
   },
   {
     icon: FaUserCheck,
     label: '05',
-    title: 'Human owns it',
-    body: 'Staff approve, edit, route, or send with the full audit trail intact.',
-    meta: 'signed off',
+    title: 'Team signs off',
+    body: 'Your staff edit, approve, send, or save the final version.',
+    meta: 'team approved',
   },
 ];
 
 const LEDGER = [
   'owner-history.pdf',
-  'triage-call.md',
-  'SOAP-draft.docx',
-  'invoice-review.csv',
+  'phone-note.md',
+  'visit-note-draft.docx',
+  'invoice-check.csv',
 ];
 
 export default function VetCaseFlow() {
@@ -74,24 +74,24 @@ export default function VetCaseFlow() {
           viewport={{ once: true, margin: '-90px' }}
           transition={{ duration: 0.55, ease: [0.16, 1, 0.3, 1] }}
         >
-          <span className="vet-section-kicker vet-section-kicker--dark">Live case flow</span>
-          <h2>Make the invisible work visible.</h2>
+          <span className="vet-section-kicker vet-section-kicker--dark">Daily case flow</span>
+          <h2>See what needs attention next.</h2>
           <p>
-            Every file packet becomes evidence, every draft carries provenance,
-            and every risky action pauses at a named approval gate before it
-            reaches the client or the medical record.
+            From the first form to the final follow-up, the page keeps the
+            patient story, open questions, and next staff action in view before
+            anything reaches an owner or medical record.
           </p>
         </motion.div>
 
         <div className="vet-caseflow__console" aria-label="Animated veterinary case flow">
           <div className="vet-caseflow__console-top">
             <div>
-              <span className="vet-caseflow__eyebrow">Case packet</span>
-              <strong>Milo · same-day triage</strong>
+              <span className="vet-caseflow__eyebrow">Patient case</span>
+              <strong>Milo · same-day visit</strong>
             </div>
             <span className="vet-caseflow__live">
               <FaCheckCircle aria-hidden="true" />
-              audit trail active
+              ready for staff review
             </span>
           </div>
 
@@ -125,9 +125,9 @@ export default function VetCaseFlow() {
           <motion.div
             className="vet-caseflow__ledger"
             style={prefersReducedMotion ? undefined : { y: ledgerY }}
-            aria-label="Source packet examples"
+            aria-label="Patient case file examples"
           >
-            <span className="vet-caseflow__ledger-title">Source packet</span>
+            <span className="vet-caseflow__ledger-title">Files in the case</span>
             {LEDGER.map((item, index) => (
               <motion.span
                 className="vet-caseflow__ledger-item"

@@ -4,20 +4,20 @@ const STEPS = [
   {
     num: '01',
     actor: 'Referral intake',
-    title: 'Echo packet lands in Drive',
-    body: 'Referral email, patient signalment, history, images, and prior notes are assembled as one source-traceable packet.',
+    title: 'Referral files land in Drive',
+    body: 'The referral email, history, images, and prior notes are gathered in one place.',
   },
   {
     num: '02',
     actor: 'Diagnostics room',
-    title: 'Measurements are extracted',
-    body: 'Key values, missing fields, prior comparison points, and uncertainty markers are pulled into a structured review table.',
+    title: 'Key details are organized',
+    body: 'Measurements, missing fields, prior comparisons, and questions for the specialist are placed in a review table.',
   },
   {
     num: '03',
     actor: 'Report room',
-    title: 'Specialist draft is prepared',
-    body: 'The report is drafted in the practice template with citations back to source files and explicit fields for DVM edits.',
+    title: 'Draft report is prepared',
+    body: 'The report starts in the practice template with links back to the files Dr. Brett needs to check.',
   },
   {
     num: '04',
@@ -35,12 +35,11 @@ export default function VetCardiologyShowcase() {
       <div className="vet-cardio__inner">
         <span className="vet-cardio__eyebrow">Specialist example</span>
         <h2 className="vet-cardio__title">
-          From uploaded echo packet to review-ready cardiology report.
+          From uploaded echo files to a cardiology report ready for Dr. Brett.
         </h2>
         <p className="vet-cardio__subtitle">
-          Medical-grade trust is not just about a better answer. It is about a
-          better clinical pathway: structured inputs, cited findings, named
-          expert review, and a permanent case artifact after approval.
+          The goal is not to replace the specialist. It is to gather the case,
+          reduce formatting work, and make the final review easier.
         </p>
 
         <ol className="vet-cardio__steps">
@@ -69,9 +68,9 @@ export default function VetCardiologyShowcase() {
         </ol>
 
         <p className="vet-cardio__footnote">
-          Cardiology is one depth example. The same draft-then-approve pattern
-          runs across GP triage, SOAP notes, billing review, inventory, and
-          reputation workflows.
+          Cardiology is one depth example. The same draft-then-review pattern
+          can support GP triage, visit notes, billing review, inventory, and
+          client follow-up.
         </p>
       </div>
     </section>

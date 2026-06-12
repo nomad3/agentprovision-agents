@@ -9,23 +9,23 @@ const JOURNEYS = [
   {
     image: dogExam,
     label: 'GP visit',
-    title: 'Dog exam packet',
-    body: 'History, reason for visit, triage notes, and staff follow-up stay tied to the patient packet.',
-    status: 'Staff-ready intake',
+    title: 'Dog visit summary',
+    body: 'History, visit reason, phone notes, and follow-up tasks stay tied to the patient.',
+    status: 'Intake ready',
   },
   {
     image: catConsult,
     label: 'Feline care',
-    title: 'Cat consult summary',
-    body: 'Owner concerns, missing records, and clinician review needs are separated before the visit starts.',
-    status: 'Triage routed',
+    title: 'Cat consult prep',
+    body: 'Owner concerns, missing records, and questions for the clinician are separated before the visit starts.',
+    status: 'Visit needs sorted',
   },
   {
     image: cardioDog,
     label: 'Specialty lane',
     title: 'Cardiology review',
-    body: 'Echo artifacts and prior history become a cited specialist draft that Dr. Brett can approve.',
-    status: 'DVM approval gate',
+    body: 'Echo files and prior history are gathered into a specialist draft that Dr. Brett can review.',
+    status: 'Vet review ready',
   },
 ];
 
@@ -43,11 +43,11 @@ export default function VetPatientJourneys() {
       <div className="vet-patients__inner">
         <div className="vet-patients__header">
           <span className="vet-section-kicker">Patients</span>
-          <h2 className="vet-patients__title">The workflow starts with the animal in front of the team.</h2>
+          <h2 className="vet-patients__title">Start with the patient, then organize the work around them.</h2>
           <p className="vet-patients__subtitle">
-            The interface should feel grounded in real veterinary care. Every
-            image below maps to an operational packet: intake, triage, SOAP,
-            billing, inventory, or specialist review.
+            Every view should feel grounded in a real appointment: why the pet
+            is here, what the owner said, what is missing, and what your team
+            needs to review next.
           </p>
         </div>
 
