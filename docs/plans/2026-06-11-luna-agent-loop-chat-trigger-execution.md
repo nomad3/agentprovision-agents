@@ -557,20 +557,26 @@ Implementation scope:
   refs. It does not persist actuation args, request/deny reasons, OCR,
   window/contact/clipboard/typed text, raw screen content, page text, AX trees,
   envelopes, or embeddings.
-- Status 2026-06-11: current branch `codex/luna-p55-chat-report-polish` starts
-  the next chat-trigger polish rung. It adds a desktop app-control intent
-  definition for routing to `desktop_observe`/`desktop_control` agents, adds
-  desktop task-type inference for chat telemetry, and tells Luna to ask one
-  clarifying question rather than guessing when app/action/target/text/coords/key
-  chord are ambiguous.
+- Status 2026-06-11: PR #904 (`codex/luna-p55-chat-report-polish`, merge
+  `4b123111`) landed the chat-trigger polish rung. It adds a desktop
+  app-control intent definition for routing to
+  `desktop_observe`/`desktop_control` agents, adds desktop task-type inference
+  for chat telemetry, and tells Luna to ask one clarifying question rather than
+  guessing when app/action/target/text/coords/key chord are ambiguous.
+- Status 2026-06-11: current branch `codex/luna-p55-chat-route-pins` pins the
+  route-to-agent seam for the actual prompt loop: an unbound desktop prompt
+  selects an existing desktop-capable Luna agent, ordinary prompts do not select
+  desktop tools, and a session-bound non-desktop agent is not overridden by a
+  desktop-looking prompt.
 
 Next smallest make-it-work step:
 
 - Post-#896 smoke is complete; keep it as the regression baseline for
   approval-request -> user approval -> bounded grant.
-- P5.4d permission readiness, P5.5 approval UX, report-back leak fixtures, and
-  byte-free `rl_experience` per desktop decision/denial are landed. Continue
-  with broader chat trigger/report-back polish.
+- P5.4d permission readiness, P5.5 approval UX, report-back leak fixtures,
+  byte-free `rl_experience` per desktop decision/denial, and first chat-trigger
+  intent routing are landed. Continue with chat route pins, then live
+  prompt-to-approval smoke.
 
 Tests:
 
