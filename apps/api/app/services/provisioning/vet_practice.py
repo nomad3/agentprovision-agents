@@ -69,6 +69,7 @@ from app.services.provisioning.vet_manifest import (
     VetPracticeManifest,
     get_manifest,
 )
+from app.services.workspace_registry import install_workspace_pack
 
 log = logging.getLogger(__name__)
 
@@ -619,6 +620,7 @@ def _dry_run_plan(
         "workflow_templates": {"planned": wf_planned},
         "permissions": {"planned": agents_planned if owner_id else 0},
         "value_sets": {"planned": len(manifest.value_sets)},
+        "workspace_pack": {"planned": 1, "slug": "vet-practice"},
     }
 
 
@@ -686,6 +688,19 @@ def provision_vet_practice(
         perm_counts = _seed_permissions(
             db, tenant_id, owner_id, owner_id, agents_by_name
         )
+        workspace_install = install_workspace_pack(
+            db,
+            tenant_id,
+            "vet-practice",
+            actor_user_id=owner_id,
+            display_order=10,
+            pinned=True,
+            config={
+                "source": "vet_practice_provisioner",
+                "fleet_variant": manifest.variant,
+            },
+            reason="Installed by vet practice provisioner",
+        )
         # Flush (not commit) so the agent ids are visible to the value-set
         # writer's INSERTs (agent_memory.agent_id is a NOT-NULL FK) while the
         # whole txn stays open + rollback-able.
@@ -718,6 +733,11 @@ def provision_vet_practice(
         "workflow_templates": wf_counts,
         "permissions": perm_counts,
         "value_sets": vs_counts,
+        "workspace_pack": {
+            "slug": "vet-practice",
+            "status": workspace_install.status,
+            "install_id": str(workspace_install.id),
+        },
     }
     log.info(
         "provision_vet_practice DONE tenant=%s variant=%s result=%s",

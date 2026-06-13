@@ -42,6 +42,7 @@ from app.api.v1 import (
     integrations,
     users,
     workspace,
+    workspaces,
     gesture_dispatch,
     fleet,
     skills_new,
@@ -133,6 +134,7 @@ router.include_router(users.router, prefix="/users", tags=["users"])
 # Workspace file-tree navigator — left-panel Files mode in the dashboard.
 # Routes already include `/workspace/` internally, so mount at root.
 router.include_router(workspace.router, prefix="", tags=["workspace"])
+router.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 router.include_router(gesture_dispatch.router, tags=["gestures"])
 router.include_router(fleet.router, prefix="/fleet", tags=["fleet"])
 router.include_router(data_sources.router, prefix="/data_sources", tags=["data_sources"])

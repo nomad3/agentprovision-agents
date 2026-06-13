@@ -44,6 +44,7 @@ from app.models.agent_permission import AgentPermission
 from app.models.dynamic_workflow import DynamicWorkflow
 from app.models.integration_config import IntegrationConfig
 from app.models.tenant import Tenant
+from app.models.tenant_workspace import TenantWorkspaceInstall
 from app.models.user import User
 from app.services.provisioning.vet_manifest import (
     CARDIOLOGY_V1,
@@ -358,6 +359,15 @@ def test_gp_full_provision_seeds_ten_agents_and_storage_slots(db_session, vet_te
         .all()
     )
     assert {s.integration_name for s in slots} == {"google_drive", "onedrive"}
+    workspace_install = (
+        db_session.query(TenantWorkspaceInstall)
+        .filter(
+            TenantWorkspaceInstall.tenant_id == tenant.id,
+            TenantWorkspaceInstall.workspace_slug == "vet-practice",
+        )
+        .one()
+    )
+    assert workspace_install.status == "enabled"
 
 
 def test_gp_full_dashboard_is_tenant_scoped(db_session, vet_tenant):
@@ -475,6 +485,10 @@ def test_dry_run_writes_nothing(db_session, vet_tenant, native_cardiac_template)
     # but the plan describes what WOULD be created
     assert result["agents"]["planned"] == 5
     assert result["connector_slots"]["planned"] >= 3
+    assert result["workspace_pack"]["slug"] == "vet-practice"
+    assert db_session.query(TenantWorkspaceInstall).filter(
+        TenantWorkspaceInstall.tenant_id == tenant.id
+    ).count() == 0
 
 
 # ── internal endpoint ─────────────────────────────────────────────────
@@ -532,10 +546,42 @@ def test_endpoint_dry_run_delegates_to_service(
     assert body["dry_run"] is True
     assert body["variant"] == "cardiology_v1"
     assert body["agents"]["planned"] == 5
+    assert body["workspace_pack"]["slug"] == "vet-practice"
     # dry-run wrote nothing
     assert db_session.query(Agent).filter(
         Agent.tenant_id == tenant.id
     ).count() == 0
+
+
+def test_workspace_pack_internal_endpoint_installs_pack(db_session, vet_tenant):
+    tenant, _admin = vet_tenant
+    client = _build_client(db_session)
+    resp = client.post(
+        "/api/v1/provision/workspace-pack/internal",
+        json={
+            "workspace_slug": "vet-practice",
+            "display_order": 10,
+            "reason": "test internal install",
+        },
+        headers={
+            "X-Internal-Key": settings.API_INTERNAL_KEY,
+            "X-Tenant-Id": str(tenant.id),
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["workspace_slug"] == "vet-practice"
+    assert body["status"] == "enabled"
+    assert (
+        db_session.query(TenantWorkspaceInstall)
+        .filter(
+            TenantWorkspaceInstall.tenant_id == tenant.id,
+            TenantWorkspaceInstall.workspace_slug == "vet-practice",
+        )
+        .count()
+        == 1
+    )
 
 
 def test_endpoint_invalid_tenant_id_is_400(db_session, vet_tenant):

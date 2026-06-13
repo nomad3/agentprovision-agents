@@ -22,6 +22,7 @@ from app.services.provisioning.vet_manifest import (
     VetPracticeManifest,
     get_manifest,
 )
+from app.services.workflow_templates import NATIVE_TEMPLATES
 
 
 FUTURE_PRACTICE_SYSTEMS: list[dict[str, str]] = [
@@ -50,6 +51,380 @@ FUTURE_PRACTICE_SYSTEMS: list[dict[str, str]] = [
         "note": "Daily exports/count sheets are the source of truth for the MVP.",
     },
 ]
+
+
+FLOW_OPERATING_DETAILS: dict[str, dict[str, Any]] = {
+    "pet_health_concierge": {
+        "queue": [
+            {
+                "id": "ang-001",
+                "title": "Milo - limping after dog park",
+                "source": "Owner web request",
+                "owner": "Maria Lopez",
+                "patient": "Milo",
+                "location": "Anaheim",
+                "priority": "same-day review",
+                "status": "Needs packet",
+                "next_step": "Confirm patient identity, ask staff to review pain/red-flag notes, then save intake packet.",
+                "packet_name": "Vet Intake Packet - Milo - today.md",
+            },
+            {
+                "id": "ang-002",
+                "title": "Nala - refill question",
+                "source": "Copied voicemail transcript",
+                "owner": "Jordan Lee",
+                "patient": "Nala",
+                "location": "Buena Park",
+                "priority": "routine",
+                "status": "Needs records",
+                "next_step": "Collect medication name and last-visit context before staff reply.",
+                "packet_name": "Vet Intake Packet - Nala - today.md",
+            },
+        ],
+        "packet_checklist": [
+            "Owner and pet identifiers",
+            "Location preference",
+            "Reason for request",
+            "Urgency and red flags",
+            "Missing fields for staff follow-up",
+            "Staff next action",
+        ],
+        "review_gate": {
+            "label": "Staff review before owner guidance",
+            "reviewer": "Front desk or clinical team",
+            "reason": "The concierge organizes context; staff decide scheduling and medical guidance.",
+        },
+    },
+    "front_desk_scheduling": {
+        "queue": [
+            {
+                "id": "ang-003",
+                "title": "New puppy appointment request",
+                "source": "Website form",
+                "owner": "Priya Shah",
+                "patient": "Scout",
+                "location": "Mission Viejo",
+                "priority": "routine",
+                "status": "Ready to draft",
+                "next_step": "Capture requested window and missing vaccine records; do not promise a slot.",
+                "packet_name": "Vet Intake Packet - Scout - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Owner contact",
+            "Pet signalment",
+            "Requested location",
+            "Requested time window",
+            "Reason for visit",
+            "Scheduling status marked staff-confirmed",
+        ],
+        "review_gate": {
+            "label": "Staff confirms schedule",
+            "reviewer": "Front desk",
+            "reason": "Until live calendar/PMS access is approved, agents prepare the request but do not reserve appointments.",
+        },
+    },
+    "clinical_triage": {
+        "queue": [
+            {
+                "id": "ang-004",
+                "title": "Bella - vomiting overnight",
+                "source": "Owner text pasted into packet",
+                "owner": "Chris Martin",
+                "patient": "Bella",
+                "location": "Anaheim",
+                "priority": "same-day review",
+                "status": "Review red flags",
+                "next_step": "Build one-screen handoff with symptoms, duration, meds, allergies, and missing context.",
+                "packet_name": "Vet Triage Handoff - Bella - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Severity bucket",
+            "Emergency red flags",
+            "Symptoms and duration",
+            "Known medications/allergies",
+            "Missing history",
+            "Recommended staff routing",
+        ],
+        "review_gate": {
+            "label": "Clinical staff review",
+            "reviewer": "Technician or DVM",
+            "reason": "The agent classifies urgency and missing context; staff own clinical decisions.",
+        },
+    },
+    "soap_note_sync": {
+        "queue": [
+            {
+                "id": "ang-005",
+                "title": "Charlie - wellness visit transcript",
+                "source": "Scribe transcript upload",
+                "owner": "Ana Rivera",
+                "patient": "Charlie",
+                "location": "Buena Park",
+                "priority": "DVM review",
+                "status": "Needs SOAP draft",
+                "next_step": "Convert transcript into SOAP sections and flag missing weight, vaccines, and DVM wording.",
+                "packet_name": "SOAP Draft - Charlie - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Raw transcript or draft note",
+            "Subjective",
+            "Objective",
+            "Assessment",
+            "Plan",
+            "Missing-data flags for DVM confirmation",
+        ],
+        "review_gate": {
+            "label": "DVM approval required",
+            "reviewer": "Dr. Angelo or attending DVM",
+            "reason": "Clinical documentation is drafted by the agent and signed by licensed staff.",
+        },
+    },
+    "billing_reconciliation": {
+        "queue": [
+            {
+                "id": "ang-006",
+                "title": "End-of-day billing review",
+                "source": "Uploaded charge sheet",
+                "owner": "Practice team",
+                "patient": "Multiple",
+                "location": "All locations",
+                "priority": "daily close",
+                "status": "Ready to draft",
+                "next_step": "Create AAHA-oriented exception packet for refunds, discounts, missing codes, and CPA notes.",
+                "packet_name": "Billing Review Packet - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Charge-sheet source",
+            "Line-item table",
+            "Likely AAHA category",
+            "Missing code flags",
+            "Refund/write-off/discount flags",
+            "Accountant notes",
+        ],
+        "review_gate": {
+            "label": "Human review for ledger changes",
+            "reviewer": "Manager or bookkeeper",
+            "reason": "Agents prepare billing exceptions, but never post ledger adjustments.",
+        },
+    },
+    "inventory_pharmacy": {
+        "queue": [
+            {
+                "id": "ang-007",
+                "title": "Controlled drug count variance",
+                "source": "Inventory count sheet",
+                "owner": "Pharmacy lead",
+                "patient": "N/A",
+                "location": "Mission Viejo",
+                "priority": "manager review",
+                "status": "Exception packet",
+                "next_step": "Freeze discrepant SKU in the packet and route to staff before close.",
+                "packet_name": "Inventory Audit Packet - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Medication or SKU",
+            "On-hand count",
+            "Par level if present",
+            "Expiration issue",
+            "Discrepancy note",
+            "Controlled-substance flag",
+        ],
+        "review_gate": {
+            "label": "Manager review for exceptions",
+            "reviewer": "Inventory/pharmacy owner",
+            "reason": "Controlled-substance discrepancies cannot be closed by assumption.",
+        },
+    },
+    "reputation_growth": {
+        "queue": [
+            {
+                "id": "ang-008",
+                "title": "Anaheim review response",
+                "source": "Uploaded review screenshot",
+                "owner": "Practice manager",
+                "patient": "N/A",
+                "location": "Anaheim",
+                "priority": "approval before public reply",
+                "status": "Draft response",
+                "next_step": "Draft public reply and private follow-up note; route medical content to Luna Supervisor.",
+                "packet_name": "Reputation Response Packet - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Review summary",
+            "Risk flags",
+            "Suggested public reply",
+            "Private follow-up note",
+            "Content opportunity",
+            "Manager approval",
+        ],
+        "review_gate": {
+            "label": "Manager approval before publish",
+            "reviewer": "Practice manager",
+            "reason": "The agent drafts responses and content only; publishing stays human-approved.",
+        },
+    },
+    "practice_ops": {
+        "queue": [
+            {
+                "id": "ang-009",
+                "title": "Three-location daily brief",
+                "source": "Uploaded packets and exports",
+                "owner": "Operations",
+                "patient": "Multiple",
+                "location": "All locations",
+                "priority": "daily huddle",
+                "status": "Ready to compile",
+                "next_step": "Summarize requests, handoffs, billing exceptions, inventory exceptions, and blockers.",
+                "packet_name": "Daily Practice Ops Brief - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "By-location summary",
+            "Appointment/request queue",
+            "Triage escalations",
+            "Billing exceptions",
+            "Inventory exceptions",
+            "Blocked workflows and next actions",
+        ],
+        "review_gate": {
+            "label": "Operator review",
+            "reviewer": "Owner, COO, or practice manager",
+            "reason": "Ops briefs separate file-backed facts from future PMS fields.",
+        },
+    },
+    "pms_desktop_control": {
+        "queue": [
+            {
+                "id": "ang-010",
+                "title": "Pulse screen-map packet",
+                "source": "Computer-use lane notes",
+                "owner": "Implementation team",
+                "patient": "N/A",
+                "location": "All locations",
+                "priority": "staging",
+                "status": "Observation only",
+                "next_step": "Map safe fields and required approval grants; do not claim any PMS write occurred.",
+                "packet_name": "PMS Desktop Readiness Packet - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "App and screen name",
+            "Safe fields",
+            "Unsafe fields",
+            "Approval grant needed",
+            "Target allowlist notes",
+            "Exact proposed operator steps",
+        ],
+        "review_gate": {
+            "label": "Explicit desktop-control approval",
+            "reviewer": "Implementation owner",
+            "reason": "PMS actuation is future work and must be granted before any desktop command writes data.",
+        },
+    },
+    "cardiac_referral_loop": {
+        "queue": [
+            {
+                "id": "brett-001",
+                "title": "Bailey - echo referral package",
+                "source": "Referral email and Drive upload",
+                "owner": "Maple Veterinary Hospital",
+                "patient": "Bailey",
+                "location": "Cardiology referral",
+                "priority": "specialist review",
+                "status": "Needs DACVIM draft",
+                "next_step": "Extract echo measurements, draft report, and hold for Dr. Brett approval.",
+                "packet_name": "Cardiac Report - Bailey - draft.md",
+            }
+        ],
+        "packet_checklist": [
+            "Referral clinic",
+            "Patient and owner",
+            "Echo measurement table",
+            "Source page citations",
+            "DACVIM draft",
+            "Brett approval before send",
+        ],
+        "review_gate": {
+            "label": "Dr. Brett approval before send-back",
+            "reviewer": "Dr. Brett",
+            "reason": "The diagnostics agent drafts; the veterinarian signs the interpretation.",
+        },
+    },
+    "referral_sendback": {
+        "queue": [
+            {
+                "id": "brett-002",
+                "title": "Referral send-back follow-up",
+                "source": "Approved report artifact",
+                "owner": "Referring clinic",
+                "patient": "Multiple",
+                "location": "Cardiology referral",
+                "priority": "turnaround watch",
+                "status": "Track package",
+                "next_step": "Confirm delivery preference and flag packages waiting beyond turnaround target.",
+                "packet_name": "Referral Send-back Tracker - today.md",
+            }
+        ],
+        "packet_checklist": [
+            "Approved report",
+            "Referral clinic preference",
+            "Owner-ready summary",
+            "Send-back status",
+            "Recall timing",
+            "Open blockers",
+        ],
+        "review_gate": {
+            "label": "Approved report required",
+            "reviewer": "Dr. Brett or referral lead",
+            "reason": "No referral package leaves before the clinical report is approved.",
+        },
+    },
+}
+
+
+PRACTICE_LAUNCH_CONTEXT: dict[str, Any] = {
+    "lead_clinicians": [
+        {
+            "name": "Dr. Angelo Castillo",
+            "focus": "The Animal Doctor SOC multi-location GP practice",
+        },
+        {
+            "name": "Dr. Brett",
+            "focus": "Cardiology referral and report loop",
+        },
+    ],
+    "locations": ["Anaheim", "Buena Park", "Mission Viejo"],
+    "mvp_sources": [
+        "Google Drive practice packets",
+        "OneDrive practice packets",
+        "Uploaded scribe transcripts and chart exports",
+        "Uploaded billing, inventory, and review exports",
+    ],
+    "initial_meetings": [
+        {
+            "title": "Angelo practice-management kickoff",
+            "date": "2026-05-09",
+            "summary": (
+                "Confirmed file-first MVP, Pulse and scribe readiness as future integration work, "
+                "and three-location daily operations support."
+            ),
+        },
+        {
+            "title": "Brett cardiology beachhead",
+            "date": "2026-03-11",
+            "summary": (
+                "Defined the referral package loop: study in, measurements extracted, DACVIM "
+                "draft prepared, veterinarian approval, then send-back."
+            ),
+        },
+    ],
+}
 
 
 def _display_for_integration(name: str) -> dict[str, str]:
@@ -107,6 +482,85 @@ def _workflow_row(
     )
 
 
+def _native_template(name: str | None) -> dict[str, Any] | None:
+    if not name:
+        return None
+    for template in NATIVE_TEMPLATES:
+        if template.get("name") == name:
+            return template
+    return None
+
+
+def _workflow_definition(
+    workflow: DynamicWorkflow | None,
+    template_name: str | None,
+) -> dict[str, Any] | None:
+    if workflow is not None:
+        return workflow.definition or {"steps": []}
+    native = _native_template(template_name)
+    if native is None:
+        return None
+    return native.get("definition") or {"steps": []}
+
+
+def _step_destination(step: dict[str, Any]) -> str | None:
+    params = step.get("params") or {}
+    tool = step.get("tool")
+    if tool == "create_drive_file":
+        return "Google Drive"
+    if tool == "create_onedrive_file":
+        return "OneDrive"
+    if params.get("folder_id"):
+        return "File repository"
+    return None
+
+
+def _workflow_steps(definition: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not definition:
+        return []
+    rows: list[dict[str, Any]] = []
+    for index, step in enumerate(definition.get("steps") or [], start=1):
+        rows.append({
+            "index": index,
+            "id": step.get("id"),
+            "type": step.get("type"),
+            "name": step.get("name") or step.get("agent") or step.get("tool") or step.get("id"),
+            "agent": step.get("agent"),
+            "tool": step.get("tool"),
+            "output": step.get("output"),
+            "approval_timeout_hours": step.get("timeout_hours"),
+            "destination": _step_destination(step),
+        })
+    return rows
+
+
+def _specialist_lanes(variant: str) -> list[dict[str, Any]]:
+    if variant != "gp_full":
+        return []
+    cardiology = get_manifest("cardiology_v1")
+    lanes: list[dict[str, Any]] = []
+    for flow in cardiology.dashboard_flows:
+        details = FLOW_OPERATING_DETAILS.get(flow["key"], {})
+        lanes.append({
+            **flow,
+            "lead_clinician": "Dr. Brett",
+            "manifest_variant": cardiology.variant,
+            "status": "available manifest",
+            "packet_checklist": details.get("packet_checklist", []),
+            "sample_queue": [
+                {
+                    **item,
+                    "assigned_agent": flow.get("primary_agent"),
+                    "approval_required": bool(flow.get("approval_required")),
+                    "example": True,
+                }
+                for item in details.get("queue", [])
+            ],
+            "review_gate": details.get("review_gate"),
+        })
+    return lanes
+
+
 def _latest_run(db: Session, tenant_id: uuid.UUID, workflow_id: uuid.UUID | None) -> dict[str, Any] | None:
     if workflow_id is None:
         return None
@@ -131,7 +585,14 @@ def _latest_run(db: Session, tenant_id: uuid.UUID, workflow_id: uuid.UUID | None
     }
 
 
-def _agent_row(agent: Agent | None, spec: dict[str, Any]) -> dict[str, Any]:
+def _agent_row(
+    agent: Agent | None,
+    spec: dict[str, Any],
+    *,
+    agents_by_name: dict[str, Agent],
+) -> dict[str, Any]:
+    escalation_to = spec.get("escalation_to")
+    escalation_agent = agents_by_name.get(escalation_to) if escalation_to else None
     return {
         "name": spec["name"],
         "id": str(agent.id) if agent else None,
@@ -142,6 +603,8 @@ def _agent_row(agent: Agent | None, spec: dict[str, Any]) -> dict[str, Any]:
         "capabilities": agent.capabilities if agent else spec.get("capabilities", []),
         "tool_groups": agent.tool_groups if agent else spec.get("tool_groups", []),
         "human_approval_gate": bool(spec.get("human_approval_gate", False)),
+        "escalation_to": escalation_to,
+        "escalation_agent_id": str(escalation_agent.id) if escalation_agent else None,
     }
 
 
@@ -206,8 +669,10 @@ def build_vet_practice_dashboard(
         })
 
     workflow_rows: dict[str, dict[str, Any]] = {}
+    workflow_models: dict[str, DynamicWorkflow | None] = {}
     for name in manifest.workflow_templates:
         wf = _workflow_row(db, tenant_id, name)
+        workflow_models[name] = wf
         workflow_rows[name] = {
             "name": name,
             "id": str(wf.id) if wf else None,
@@ -216,6 +681,7 @@ def build_vet_practice_dashboard(
             "run_count": wf.run_count if wf else 0,
             "last_run_at": wf.last_run_at.isoformat() if wf and wf.last_run_at else None,
             "latest_run": _latest_run(db, tenant_id, wf.id if wf else None),
+            "native_template_present": _native_template(name) is not None,
         }
 
     flow_rows = []
@@ -233,6 +699,29 @@ def build_vet_practice_dashboard(
         agent = agents_by_name.get(flow.get("primary_agent"))
         connected_count = sum(1 for r in readiness if r["connected"])
         required_count = len(readiness)
+        definition = _workflow_definition(
+            workflow_models.get(flow.get("workflow_template")),
+            flow.get("workflow_template"),
+        )
+        details = FLOW_OPERATING_DETAILS.get(flow["key"], {})
+        sample_queue = [
+            {
+                **item,
+                "assigned_agent": flow.get("primary_agent"),
+                "approval_required": bool(flow.get("approval_required")),
+                "example": True,
+            }
+            for item in details.get("queue", [])
+        ]
+        steps = _workflow_steps(definition)
+        human_approval_steps = [
+            step for step in steps if step.get("type") == "human_approval"
+        ]
+        review_gate = details.get("review_gate") or {
+            "label": "Staff review",
+            "reviewer": "Practice team",
+            "reason": "The agent prepares the packet; staff confirm before any sensitive action.",
+        }
         flow_rows.append({
             **flow,
             "primary_agent_id": str(agent.id) if agent else None,
@@ -246,6 +735,19 @@ def build_vet_practice_dashboard(
             ),
             "connected_integrations": connected_count,
             "required_integrations_count": required_count,
+            "packet_checklist": details.get("packet_checklist", []),
+            "sample_queue": sample_queue,
+            "workflow_steps": steps,
+            "human_approval_steps": human_approval_steps,
+            "review_gate": {
+                **review_gate,
+                "enforced_by_workflow": bool(human_approval_steps),
+            },
+            "operator_actions": [
+                "Open or create the source packet in Drive/OneDrive.",
+                "Run or dry-run the workflow template when file storage is connected.",
+                "Route the generated packet to the named reviewer before external action.",
+            ],
         })
 
     summary = {
@@ -264,13 +766,19 @@ def build_vet_practice_dashboard(
         "tenant_id": str(tenant_id),
         "practice_name": tenant.name if tenant else "Veterinary Practice",
         "mode": "file_first",
+        "launch_context": PRACTICE_LAUNCH_CONTEXT,
         "summary": summary,
         "agents": [
-            _agent_row(agents_by_name.get(spec["name"]), spec)
+            _agent_row(
+                agents_by_name.get(spec["name"]),
+                spec,
+                agents_by_name=agents_by_name,
+            )
             for spec in manifest.agents
         ],
         "storage": storage_rows,
         "flows": flow_rows,
+        "specialist_lanes": _specialist_lanes(manifest.variant),
         "workflows": list(workflow_rows.values()),
         "future_practice_systems": FUTURE_PRACTICE_SYSTEMS,
     }

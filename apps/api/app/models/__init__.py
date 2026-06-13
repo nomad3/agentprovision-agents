@@ -56,6 +56,7 @@ from .skill_registry import SkillRegistry
 from .tenant_analytics import TenantAnalytics
 from .tenant_branding import TenantBranding
 from .tenant_features import TenantFeatures
+from .tenant_workspace import TenantWorkspaceAuditLog, TenantWorkspaceInstall
 from .tool import Tool
 from .vector_store import VectorStore
 from .webhook_connector import WebhookConnector, WebhookDeliveryLog
@@ -122,6 +123,7 @@ __all__ = [
     "IntegrationConfig", "IntegrationCredential",
     "Embedding",
     "Skill", "SkillExecution", "SkillRegistry",
+    "TenantWorkspaceInstall", "TenantWorkspaceAuditLog",
     "TenantAnalytics", "TenantBranding", "TenantFeatures",
     "Tool", "VectorStore",
     "WebhookConnector", "WebhookDeliveryLog",

@@ -24,11 +24,12 @@ import { useCallback, useEffect, useState } from 'react';
 import { Alert, Spinner } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { FaColumns, FaTimes } from 'react-icons/fa';
+import { FaBriefcase, FaColumns, FaHeartbeat, FaTimes } from 'react-icons/fa';
 import Layout from '../components/Layout';
 import { getOnboardingStatus } from '../services/onboarding';
 import chatService from '../services/chat';
 import agentService from '../services/agent';
+import workspaceService from '../services/workspaces';
 import AgentActivityPanel from '../dashboard/AgentActivityPanel';
 import ChatTab from '../dashboard/tabs/ChatTab';
 import TerminalPanel from '../dashboard/TerminalPanel';
@@ -234,6 +235,7 @@ const DashboardControlCenter = () => {
 
   // Agents and command-palette state for ⌘K jump.
   const [agents, setAgents] = useState([]);
+  const [workspaces, setWorkspaces] = useState([]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [coalitionOpen, setCoalitionOpen] = useState(false);
 
@@ -467,6 +469,21 @@ const DashboardControlCenter = () => {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    workspaceService.list()
+      .then((resp) => {
+        if (cancelled) return;
+        setWorkspaces(
+          (resp.data?.workspaces || []).filter((workspace) => workspace.category !== 'core'),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaces([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   // ⌘K / Ctrl+K opens the command palette. Esc handled inside the
   // palette modal itself. Ignore the shortcut if the user is editing
   // inside an input/textarea/contenteditable that's not the palette.
@@ -551,6 +568,37 @@ const DashboardControlCenter = () => {
             didn't earn the prime real estate at the top of the dash.
             The same data is reachable from /agents, /integrations,
             /memory; the bottom Quick-tile row links there directly. */}
+
+        {workspaces.length > 0 && (
+          <>
+            <div className="ap-section-label">{t('workspaces.title', 'Workspaces')}</div>
+            <div className="dcc-workspace-strip">
+              {workspaces.map((workspace) => {
+                const Icon = workspace.slug === 'vet-practice' ? FaHeartbeat : FaBriefcase;
+                const summary = workspace.summary || {};
+                const state = summary.state === 'ready' ? 'Ready' : 'Needs setup';
+                return (
+                  <button
+                    type="button"
+                    className="ap-card dcc-workspace-card"
+                    key={workspace.slug}
+                    onClick={() => navigate(workspace.route)}
+                  >
+                    <div className="ap-card-body">
+                      <Icon aria-hidden="true" />
+                      <span>
+                        <strong>{workspace.label}</strong>
+                        <small>
+                          {summary.open_work_count || 0} open items · {state}
+                        </small>
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
 
         {/* Merged chat surface: sessions list + active thread + live agent activity */}
         {/* SessionEventsProvider opens ONE SSE connection per active
