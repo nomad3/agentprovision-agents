@@ -2,6 +2,7 @@
 
 Search, list, read, and manage files in Google Drive via the Drive API v3.
 """
+import io
 import json
 import logging
 import os
@@ -12,6 +13,9 @@ import httpx
 from mcp.server.fastmcp import Context
 
 GOOGLE_DOC_MIME = "application/vnd.google-apps.document"
+PDF_MIME = "application/pdf"
+MAX_DRIVE_FILE_CHARS = 10000
+MAX_PDF_PAGES = 30
 
 from src.mcp_app import mcp
 from src.mcp_auth import resolve_tenant_id
@@ -162,13 +166,33 @@ async def read_drive_file(
         if resp.status_code != 200:
             return {"error": f"Failed to read file: {resp.status_code}"}
 
-        content = resp.text[:10000]
+        if mime == PDF_MIME or name.lower().endswith(".pdf"):
+            raw_bytes = getattr(resp, "content", None)
+            if raw_bytes is None:
+                raw_bytes = resp.text.encode("utf-8", errors="replace")
+            try:
+                import pdfplumber
+
+                pages = []
+                with pdfplumber.open(io.BytesIO(raw_bytes)) as pdf:
+                    for page in pdf.pages[:MAX_PDF_PAGES]:
+                        page_text = page.extract_text()
+                        if page_text:
+                            pages.append(page_text)
+                content_full = "\n\n".join(pages) if pages else "(PDF has no extractable text)"
+            except Exception as exc:
+                logger.warning("Drive PDF extraction failed for %s: %s", file_id, exc)
+                content_full = f"(Could not extract PDF text: {type(exc).__name__})"
+        else:
+            content_full = resp.text
+
+        content = content_full[:MAX_DRIVE_FILE_CHARS]
         return {
             "status": "success",
             "name": name,
             "type": mime,
             "content": content,
-            "truncated": len(resp.text) > 10000,
+            "truncated": len(content_full) > MAX_DRIVE_FILE_CHARS,
         }
 
 

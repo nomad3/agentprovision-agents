@@ -323,8 +323,8 @@ _CARDIOLOGY_V1_DASHBOARD_FLOWS: List[Dict[str, Any]] = [
         "key": "cardiac_referral_loop",
         "name": "Cardiac referral loop",
         "description": (
-            "Inbound echo email to structured measurements, DACVIM draft, "
-            "Brett approval, Drive document, and send-back package."
+            "Drive packet folder to structured measurements, DACVIM draft, "
+            "Drive review document, Brett approval gate, and send-back package."
         ),
         "primary_agent": "Cardiac Diagnostics Agent",
         "workflow_template": "Cardiac Report Generator",

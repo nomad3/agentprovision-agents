@@ -6,6 +6,9 @@ to script the Drive REST responses.
 """
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from src.mcp_tools import drive as dr
@@ -151,6 +154,41 @@ async def test_read_drive_file_regular_downloads(patch_drive, mock_ctx):
     patch_drive(side_effect=_side_effect)
     out = await dr.read_drive_file(file_id="f-1", tenant_id="t", ctx=mock_ctx)
     assert out["content"] == "raw bytes as text"
+
+
+@pytest.mark.asyncio
+async def test_read_drive_file_pdf_extracts_text(patch_drive, mock_ctx, monkeypatch):
+    from tests.conftest import _DummyResponse  # type: ignore
+
+    class _FakePdf:
+        pages = [
+            SimpleNamespace(extract_text=lambda: "page one"),
+            SimpleNamespace(extract_text=lambda: "page two"),
+        ]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules,
+        "pdfplumber",
+        SimpleNamespace(open=lambda _stream: _FakePdf()),
+    )
+
+    def _side_effect(method, url, kwargs):
+        if kwargs.get("params", {}).get("alt") == "media":
+            return _DummyResponse(200, {}, text="%PDF bytes")
+        return _DummyResponse(200, {
+            "id": "f-1", "name": "echo.pdf", "mimeType": "application/pdf",
+        })
+
+    patch_drive(side_effect=_side_effect)
+    out = await dr.read_drive_file(file_id="f-1", tenant_id="t", ctx=mock_ctx)
+    assert out["status"] == "success"
+    assert out["content"] == "page one\n\npage two"
 
 
 @pytest.mark.asyncio

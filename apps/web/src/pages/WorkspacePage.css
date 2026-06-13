@@ -142,7 +142,8 @@
 .ws-work-grid,
 .ws-flow-list,
 .ws-gate-list,
-.ws-agent-list {
+.ws-agent-list,
+.ws-source-list {
   display: flex;
   flex-direction: column;
   gap: var(--ap-space-3);
@@ -207,6 +208,86 @@
 .ws-gate {
   display: flex;
   gap: var(--ap-space-3);
+}
+
+.ws-source-card {
+  min-width: 0;
+  padding: var(--ap-space-4);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-md);
+  background: var(--ap-card-bg-hover);
+}
+
+.ws-source-card__head,
+.ws-source-file {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ap-space-3);
+}
+
+.ws-source-card__head {
+  justify-content: space-between;
+}
+
+.ws-source-card h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-2);
+  color: var(--ap-text);
+  font-size: var(--ap-fs-sm);
+  font-weight: 700;
+  line-height: var(--ap-lh-tight);
+  margin: 0 0 var(--ap-space-2);
+}
+
+.ws-source-card p {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-sm);
+  line-height: var(--ap-lh-normal);
+  margin: 0;
+}
+
+.ws-source-files {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ap-space-2);
+  margin-top: var(--ap-space-3);
+}
+
+.ws-source-file {
+  min-width: 0;
+  padding: var(--ap-space-3);
+  border: 1px solid var(--ap-border);
+  border-radius: var(--ap-radius-sm);
+}
+
+.ws-source-file svg,
+.ws-source-card h3 svg {
+  color: var(--ap-primary);
+  flex: 0 0 auto;
+}
+
+.ws-source-file span {
+  min-width: 0;
+}
+
+.ws-source-file strong {
+  color: var(--ap-text);
+  display: block;
+  font-size: var(--ap-fs-sm);
+  font-weight: 700;
+  line-height: var(--ap-lh-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-source-file small {
+  color: var(--ap-text-muted);
+  display: block;
+  font-size: var(--ap-fs-xs);
+  line-height: var(--ap-lh-normal);
+  margin-top: 4px;
 }
 
 .ws-readiness-grid,
@@ -304,6 +385,7 @@
   .workspace-grid,
   .workspace-grid__item--span-2,
   .ws-flow__grid,
+  .ws-source-files,
   .ws-readiness-grid,
   .ws-referral-grid {
     grid-template-columns: 1fr;
@@ -319,6 +401,7 @@
 
   .ws-widget__head,
   .ws-flow__head,
+  .ws-source-card__head,
   .ws-work-item,
   .ws-agent-row,
   .workspace-card .ap-card-body {

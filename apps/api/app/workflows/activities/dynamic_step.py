@@ -5,13 +5,14 @@ full retry/timeout/heartbeat support.
 """
 
 import logging
+import json
 import os
 import re
 import time
 import unicodedata
 import uuid
-from datetime import datetime
-from typing import Any, Dict
+from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from temporalio import activity
@@ -30,6 +31,27 @@ MCP_TOOLS_URL = os.environ.get(
     "MCP_TOOLS_URL",
     os.environ.get("MCP_SERVER_URL", "http://mcp-tools:8086"),
 )
+
+
+def _as_aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _step_output_json(output: dict | None, max_chars: int = 5000) -> str | None:
+    if not output:
+        return None
+    encoded = json.dumps(output)
+    if len(encoded) <= max_chars:
+        return encoded
+    return json.dumps({
+        "truncated": True,
+        "keys": list(output.keys()) if isinstance(output, dict) else [],
+        "preview": encoded[: max_chars - 500],
+    })
 
 
 def _http_timeout_for_step(step: dict, default_seconds: float) -> httpx.Timeout:
@@ -696,7 +718,7 @@ def _log_step(run_id: str, step_id: str, step_type: str, status: str,
                 """), {
                     "run_id": run_id, "step_id": step_id, "status": status,
                     "duration_ms": duration_ms,
-                    "output": __import__("json").dumps(output)[:5000] if output else None,
+                    "output": _step_output_json(output),
                     "error": error, "tokens": tokens,
                 })
             db.commit()
@@ -751,9 +773,14 @@ async def finalize_workflow_run(
         try:
             run = db.query(WorkflowRun).filter(WorkflowRun.id == run_id).first()
             if run:
+                completed_at = datetime.now(timezone.utc)
+                started_at = _as_aware_utc(run.started_at)
                 run.status = status
-                run.completed_at = datetime.utcnow()
-                run.duration_ms = int((datetime.utcnow() - run.started_at).total_seconds() * 1000) if run.started_at else None
+                run.completed_at = completed_at
+                run.duration_ms = (
+                    int((completed_at - started_at).total_seconds() * 1000)
+                    if started_at else None
+                )
                 run.step_results = {
                     "steps_completed": steps_completed,
                     "total_tokens": total_tokens,
