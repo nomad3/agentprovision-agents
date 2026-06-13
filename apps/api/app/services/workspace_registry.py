@@ -14,10 +14,16 @@ from typing import Any, Dict, Literal, Optional, Protocol
 
 from sqlalchemy.orm import Session
 
+from app.models.agent import Agent
+from app.models.agent_permission import AgentPermission
+from app.models.tenant import Tenant
+from app.models.tenant_features import TenantFeatures
 from app.models.tenant_workspace import (
     TenantWorkspaceAuditLog,
     TenantWorkspaceInstall,
 )
+from app.models.user import User
+from app.services.provisioning.vet_manifest import get_manifest
 from app.services.vet_practice_dashboard import build_vet_practice_dashboard
 
 WidgetState = Literal[
@@ -28,6 +34,10 @@ WidgetState = Literal[
     "missing_permission",
     "unsupported",
 ]
+
+FEATURE_FLAG_FIELDS = {
+    "native_workspace_packs": "native_workspace_packs",
+}
 
 
 @dataclass(frozen=True)
@@ -164,6 +174,117 @@ def _install_snapshot(install: TenantWorkspaceInstall | None) -> Dict[str, Any] 
     }
 
 
+def _feature_flag_field(feature_flag: str | None) -> str | None:
+    if feature_flag is None:
+        return None
+    return FEATURE_FLAG_FIELDS.get(feature_flag)
+
+
+def _feature_enabled(
+    db: Session,
+    tenant_id: uuid.UUID,
+    pack: WorkspacePackDefinition,
+) -> bool:
+    field = _feature_flag_field(pack.feature_flag)
+    if field is None:
+        return True
+    row = (
+        db.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant_id)
+        .first()
+    )
+    return bool(row and getattr(row, field, False))
+
+
+def _ensure_feature_enabled(
+    db: Session,
+    tenant_id: uuid.UUID,
+    pack: WorkspacePackDefinition,
+) -> None:
+    field = _feature_flag_field(pack.feature_flag)
+    if field is None:
+        return
+    row = (
+        db.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant_id)
+        .first()
+    )
+    if row is None:
+        row = TenantFeatures(tenant_id=tenant_id)
+        db.add(row)
+    setattr(row, field, True)
+    db.flush()
+
+
+def _variant_from_install(install: TenantWorkspaceInstall | None) -> str:
+    config = install.config if install and isinstance(install.config, dict) else {}
+    variant = config.get("fleet_variant")
+    if variant in {"gp_full", "cardiology_v1"}:
+        return variant
+    return "gp_full"
+
+
+def _workspace_agent_names(
+    pack: WorkspacePackDefinition,
+    install: TenantWorkspaceInstall | None,
+) -> list[str]:
+    if pack.slug != "vet-practice":
+        return []
+    manifest = get_manifest(_variant_from_install(install))
+    return [spec["name"] for spec in manifest.agents]
+
+
+def _can_view_workspace(
+    db: Session,
+    tenant_id: uuid.UUID,
+    pack: WorkspacePackDefinition,
+    install: TenantWorkspaceInstall | None,
+    user_id: uuid.UUID | None,
+) -> bool:
+    if pack.category == "core" or user_id is None:
+        return True
+    user = (
+        db.query(User)
+        .filter(User.id == user_id, User.tenant_id == tenant_id)
+        .first()
+    )
+    if user is None:
+        return False
+    if user.is_superuser:
+        return True
+    if install and install.installed_by == user.id:
+        return True
+
+    agent_names = _workspace_agent_names(pack, install)
+    if not agent_names:
+        return False
+    agent_ids = [
+        row[0]
+        for row in (
+            db.query(Agent.id)
+            .filter(
+                Agent.tenant_id == tenant_id,
+                Agent.name.in_(agent_names),
+            )
+            .all()
+        )
+    ]
+    if not agent_ids:
+        return False
+    return (
+        db.query(AgentPermission.id)
+        .filter(
+            AgentPermission.tenant_id == tenant_id,
+            AgentPermission.agent_id.in_(agent_ids),
+            AgentPermission.principal_type == "user",
+            AgentPermission.principal_id == user.id,
+            AgentPermission.permission.in_(["viewer", "edit", "admin"]),
+        )
+        .first()
+        is not None
+    )
+
+
 def _audit(
     db: Session,
     *,
@@ -206,11 +327,7 @@ class VetWorkspaceProvider:
 
     def _variant(self, db: Session, tenant_id: uuid.UUID) -> str:
         install = _query_install(db, tenant_id, self.slug)
-        config = install.config if install and isinstance(install.config, dict) else {}
-        variant = config.get("fleet_variant")
-        if variant in {"gp_full", "cardiology_v1"}:
-            return variant
-        return "gp_full"
+        return _variant_from_install(install)
 
     def _dashboard(self, db: Session, tenant_id: uuid.UUID) -> Dict[str, Any]:
         return build_vet_practice_dashboard(
@@ -232,7 +349,8 @@ class VetWorkspaceProvider:
             "state": state,
             "setup_blockers": blockers,
             "readiness": dashboard.get("summary") or {},
-            "open_work_count": queue_count,
+            "open_work_count": 0,
+            "example_work_count": queue_count,
             "example": True,
             "practice_name": dashboard.get("practice_name"),
             "updated_at": _utc_now_iso(),
@@ -523,8 +641,16 @@ def _descriptor_for_pack(
 ) -> Dict[str, Any]:
     descriptor = pack.descriptor()
     descriptor["install"] = _install_snapshot(install)
+    descriptor["feature_enabled"] = _feature_enabled(db, tenant_id, pack)
     descriptor["installed"] = pack.category == "core" or install is not None
-    descriptor["enabled"] = pack.category == "core" or (install is not None and install.status == "enabled")
+    descriptor["enabled"] = (
+        pack.category == "core"
+        or (
+            descriptor["feature_enabled"]
+            and install is not None
+            and install.status == "enabled"
+        )
+    )
     descriptor["display_order"] = install.display_order if install else 0
     descriptor["pinned"] = bool(install.pinned) if install else pack.category == "core"
     if include_summary and descriptor["enabled"]:
@@ -563,6 +689,10 @@ def list_enabled_workspaces(
         pack = get_workspace_pack(install.workspace_slug)
         if pack is None or pack.status == "deprecated":
             continue
+        if not _feature_enabled(db, tenant_id, pack):
+            continue
+        if not _can_view_workspace(db, tenant_id, pack, install, user_id):
+            continue
         descriptors.append(_descriptor_for_pack(db, tenant_id, pack, install=install, user_id=user_id))
     return descriptors
 
@@ -574,8 +704,18 @@ def list_catalog(
     user_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
     descriptors: list[dict[str, Any]] = []
+    user = (
+        db.query(User)
+        .filter(User.id == user_id, User.tenant_id == tenant_id)
+        .first()
+        if user_id is not None
+        else None
+    )
     for pack in native_workspace_catalog():
         install = _query_install(db, tenant_id, pack.slug)
+        feature_enabled = _feature_enabled(db, tenant_id, pack)
+        if not feature_enabled and not bool(user and user.is_superuser):
+            continue
         descriptors.append(
             _descriptor_for_pack(
                 db,
@@ -604,6 +744,10 @@ def get_workspace_detail(
     install = require_enabled_install(db, tenant_id, slug)
     if pack.category != "core" and install is None:
         return None
+    if not _feature_enabled(db, tenant_id, pack):
+        return None
+    if not _can_view_workspace(db, tenant_id, pack, install, user_id):
+        return None
 
     descriptor = _descriptor_for_pack(db, tenant_id, pack, install=install, user_id=user_id)
     detail = {
@@ -629,7 +773,15 @@ def get_workspace_widget(
     *,
     user_id: uuid.UUID | None = None,
 ) -> dict[str, Any] | None:
-    if require_enabled_install(db, tenant_id, slug) is None:
+    pack = get_workspace_pack(slug)
+    if pack is None:
+        return None
+    install = require_enabled_install(db, tenant_id, slug)
+    if install is None:
+        return None
+    if not _feature_enabled(db, tenant_id, pack):
+        return None
+    if not _can_view_workspace(db, tenant_id, pack, install, user_id):
         return None
     provider = PROVIDERS.get(slug)
     if provider is None:
@@ -654,8 +806,12 @@ def install_workspace_pack(
         raise ValueError(f"Unknown native workspace pack: {workspace_slug}")
     if status not in {"enabled", "disabled"}:
         raise ValueError("Workspace install status must be enabled or disabled")
+    if db.query(Tenant.id).filter(Tenant.id == tenant_id).first() is None:
+        raise ValueError(f"Tenant {tenant_id} does not exist")
 
     now = datetime.utcnow()
+    if status == "enabled":
+        _ensure_feature_enabled(db, tenant_id, pack)
     existing = _query_install(db, tenant_id, workspace_slug)
     before = _install_snapshot(existing)
     if existing is None:
@@ -689,11 +845,18 @@ def install_workspace_pack(
     existing.display_order = display_order if display_order is not None else existing.display_order
     existing.pinned = pinned
     existing.config = config if config is not None else (existing.config or {})
+    if existing.installed_by is None and actor_user_id is not None:
+        existing.installed_by = actor_user_id
     existing.installed_version = pack.version
     if existing.status != status:
         existing.status = status
-        existing.enabled_at = now if status == "enabled" else existing.enabled_at
-        existing.disabled_at = now if status == "disabled" else None
+        if status == "enabled":
+            existing.enabled_at = now
+            existing.disabled_at = None
+        else:
+            existing.disabled_at = now
+    elif status == "enabled" and existing.disabled_at is not None:
+        existing.disabled_at = None
     existing.updated_at = now
     db.add(existing)
     db.flush()

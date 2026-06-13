@@ -63,6 +63,7 @@ from app.models.agent import Agent
 from app.models.agent_permission import AgentPermission
 from app.models.dynamic_workflow import DynamicWorkflow
 from app.models.integration_config import IntegrationConfig
+from app.models.tenant import Tenant
 from app.models.user import User
 from app.services import agent_value_set_io as value_io
 from app.services.provisioning.vet_manifest import (
@@ -650,6 +651,8 @@ def provision_vet_practice(
         tenant_id = uuid.UUID(tenant_id)
     if profile is None:
         profile = VetPracticeProfile(practice_name="Vet Practice")
+    if db.query(Tenant.id).filter(Tenant.id == tenant_id).first() is None:
+        raise ValueError(f"Tenant {tenant_id} does not exist")
 
     manifest = get_manifest(profile.fleet_variant)
     owner_id = _resolve_owner_id(db, tenant_id, profile)

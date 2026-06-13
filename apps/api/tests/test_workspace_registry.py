@@ -10,7 +10,10 @@ from app.api import deps
 from app.api.v1 import workspaces as workspaces_route
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
+from app.models.agent import Agent
+from app.models.agent_permission import AgentPermission
 from app.models.tenant import Tenant
+from app.models.tenant_features import TenantFeatures
 from app.models.tenant_workspace import TenantWorkspaceAuditLog, TenantWorkspaceInstall
 from app.models.user import User
 from app.services.workspace_registry import install_workspace_pack
@@ -114,6 +117,82 @@ def test_vet_pack_uses_installed_manifest_variant(db_session):
     readiness = resp.json()["descriptor"]["summary"]["readiness"]
     assert readiness["agents_expected"] == 5
     assert readiness["workflows_expected"] == 1
+
+
+def test_feature_flag_can_hide_installed_pack(db_session):
+    tenant, user = _tenant_with_user(db_session)
+    install_workspace_pack(
+        db_session,
+        tenant.id,
+        "vet-practice",
+        actor_user_id=user.id,
+        reason="feature gate test",
+    )
+    features = (
+        db_session.query(TenantFeatures)
+        .filter(TenantFeatures.tenant_id == tenant.id)
+        .one()
+    )
+    features.native_workspace_packs = False
+    db_session.commit()
+    client = _client(db_session, user)
+
+    resp = client.get("/api/v1/workspaces")
+    assert resp.status_code == 200, resp.text
+    assert "vet-practice" not in {w["slug"] for w in resp.json()["workspaces"]}
+
+    resp = client.get("/api/v1/workspaces/vet-practice")
+    assert resp.status_code == 404, resp.text
+
+
+def test_workspace_detail_requires_installer_or_agent_permission(db_session):
+    tenant, installer = _tenant_with_user(db_session)
+    viewer = User(
+        email=f"viewer-{uuid.uuid4().hex[:8]}@example.com",
+        full_name="Workspace Viewer",
+        hashed_password="x",
+        is_active=True,
+        is_superuser=False,
+        tenant_id=tenant.id,
+    )
+    db_session.add(viewer)
+    install_workspace_pack(
+        db_session,
+        tenant.id,
+        "vet-practice",
+        actor_user_id=installer.id,
+        config={"fleet_variant": "gp_full"},
+        reason="rbac test",
+    )
+    db_session.commit()
+
+    viewer_client = _client(db_session, viewer)
+    resp = viewer_client.get("/api/v1/workspaces/vet-practice")
+    assert resp.status_code == 404, resp.text
+
+    agent = Agent(
+        tenant_id=tenant.id,
+        name="Luna Supervisor",
+        role="supervisor",
+        status="production",
+        tool_groups=[],
+    )
+    db_session.add(agent)
+    db_session.flush()
+    db_session.add(
+        AgentPermission(
+            agent_id=agent.id,
+            tenant_id=tenant.id,
+            principal_type="user",
+            principal_id=viewer.id,
+            permission="admin",
+            granted_by=installer.id,
+        )
+    )
+    db_session.commit()
+
+    resp = viewer_client.get("/api/v1/workspaces/vet-practice")
+    assert resp.status_code == 200, resp.text
 
 
 def test_disabled_pack_is_not_visible_or_directly_accessible(db_session):

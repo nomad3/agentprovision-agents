@@ -5,12 +5,13 @@ import VetPracticeAliasPage from '../VetPracticeAliasPage';
 jest.mock('../../components/Layout', () => ({ children }) => <div>{children}</div>);
 
 const mockNavigate = jest.fn();
+let mockSlug = 'vet-practice';
 jest.mock('react-router-dom', () => {
   const actual = jest.requireActual('../../__mocks__/react-router-dom');
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useParams: () => ({ slug: 'vet-practice' }),
+    useParams: () => ({ slug: mockSlug }),
     Navigate: ({ to }) => <div data-testid="navigate" data-to={to}>redirected workspace</div>,
   };
 });
@@ -103,6 +104,7 @@ function renderWorkspace() {
 describe('WorkspacePage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockSlug = 'vet-practice';
     workspaceService.get.mockResolvedValue({ data: sampleDetail });
   });
 
@@ -123,6 +125,18 @@ describe('WorkspacePage', () => {
 
     expect((await screen.findAllByText(/Connect Google Drive or OneDrive/)).length).toBeGreaterThan(0);
     expect(screen.getAllByText('Needs setup').length).toBeGreaterThan(0);
+  });
+
+  test('clears stale workspace detail when a new slug fails to load', async () => {
+    const { rerender } = renderWorkspace();
+    expect(await screen.findByText('Milo - limping after dog park')).toBeInTheDocument();
+
+    workspaceService.get.mockRejectedValueOnce({ response: { status: 404, data: { detail: 'Workspace not found' } } });
+    mockSlug = 'sales-crm';
+    rerender(<WorkspacePage />);
+
+    expect(await screen.findByText(/Workspace not found/)).toBeInTheDocument();
+    expect(screen.queryByText('Milo - limping after dog park')).not.toBeInTheDocument();
   });
 });
 

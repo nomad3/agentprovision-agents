@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS tenant_workspace_audit_logs (
 CREATE INDEX IF NOT EXISTS idx_tenant_workspace_audit_logs_tenant_slug
     ON tenant_workspace_audit_logs (tenant_id, workspace_slug, created_at DESC);
 
+ALTER TABLE tenant_features
+    ADD COLUMN IF NOT EXISTS native_workspace_packs BOOLEAN NOT NULL DEFAULT FALSE;
+
 WITH vet_tenants AS (
     SELECT id
     FROM tenants
@@ -94,6 +97,40 @@ SELECT
     '{"status":"enabled","installed_version":"1.0.0"}'::jsonb,
     'Backfilled native vet workspace for existing veterinary MVP tenant'
 FROM inserted;
+
+UPDATE tenant_features tf
+SET native_workspace_packs = TRUE
+FROM vet_tenants vt
+WHERE tf.tenant_id = vt.id;
+
+INSERT INTO tenant_features (
+    id,
+    tenant_id,
+    rl_settings,
+    native_workspace_packs,
+    created_at,
+    updated_at
+)
+SELECT
+    gen_random_uuid(),
+    id,
+    '{
+        "exploration_rate": 0.1,
+        "opt_in_global_learning": true,
+        "use_global_baseline": true,
+        "min_tenant_experiences": 50,
+        "blend_alpha_growth": 0.01,
+        "reward_weights": {"implicit": 0.3, "explicit": 0.5, "admin": 0.2},
+        "review_schedule": "weekly",
+        "per_decision_overrides": {}
+    }'::jsonb,
+    TRUE,
+    now(),
+    now()
+FROM vet_tenants vt
+WHERE NOT EXISTS (
+    SELECT 1 FROM tenant_features tf WHERE tf.tenant_id = vt.id
+);
 
 INSERT INTO _migrations(filename) VALUES ('177_tenant_workspace_installs.sql')
 ON CONFLICT DO NOTHING;

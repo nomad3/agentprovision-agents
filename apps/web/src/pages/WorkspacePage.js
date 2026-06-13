@@ -309,12 +309,16 @@ const WorkspacePage = () => {
     let cancelled = false;
     setLoading(true);
     setError('');
+    setDetail(null);
     workspaceService.get(slug)
       .then((res) => {
         if (!cancelled) setDetail(res.data);
       })
       .catch((err) => {
-        if (!cancelled) setError(formatApiError(err, 'Workspace not found or not enabled for this tenant.'));
+        if (!cancelled) {
+          setDetail(null);
+          setError(formatApiError(err, 'Workspace not found or not enabled for this tenant.'));
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

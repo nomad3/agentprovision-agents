@@ -25,6 +25,9 @@ from app.services.provisioning.vet_manifest import (
 from app.services.workflow_templates import NATIVE_TEMPLATES
 
 
+FILE_STORAGE_INTEGRATIONS = {"google_drive", "onedrive"}
+
+
 FUTURE_PRACTICE_SYSTEMS: list[dict[str, str]] = [
     {
         "key": "covetrus_pulse",
@@ -534,6 +537,20 @@ def _workflow_steps(definition: dict[str, Any] | None) -> list[dict[str, Any]]:
     return rows
 
 
+def _requirements_satisfied(readiness: list[dict[str, Any]]) -> bool:
+    non_storage = [
+        row for row in readiness
+        if row.get("integration_name") not in FILE_STORAGE_INTEGRATIONS
+    ]
+    storage = [
+        row for row in readiness
+        if row.get("integration_name") in FILE_STORAGE_INTEGRATIONS
+    ]
+    non_storage_ready = all(row["connected"] for row in non_storage)
+    storage_ready = not storage or any(row["connected"] for row in storage)
+    return non_storage_ready and storage_ready
+
+
 def _specialist_lanes(variant: str) -> list[dict[str, Any]]:
     if variant != "gp_full":
         return []
@@ -661,6 +678,7 @@ def build_vet_practice_dashboard(
         cfg = configs_by_name.get(name)
         storage_rows.append({
             **display,
+            "integration_name": name,
             "configured": cfg is not None,
             "enabled": bool(cfg.enabled) if cfg else False,
             "connected": _is_connected(cfg, connected_ids),
@@ -692,6 +710,7 @@ def build_vet_practice_dashboard(
             cfg = configs_by_name.get(name)
             readiness.append({
                 **_display_for_integration(name),
+                "integration_name": name,
                 "connected": _is_connected(cfg, connected_ids),
                 "configured": cfg is not None,
             })
@@ -699,6 +718,7 @@ def build_vet_practice_dashboard(
         agent = agents_by_name.get(flow.get("primary_agent"))
         connected_count = sum(1 for r in readiness if r["connected"])
         required_count = len(readiness)
+        requirements_ready = _requirements_satisfied(readiness)
         definition = _workflow_definition(
             workflow_models.get(flow.get("workflow_template")),
             flow.get("workflow_template"),
@@ -731,8 +751,9 @@ def build_vet_practice_dashboard(
             "ready": (
                 agent is not None
                 and (workflow is None or workflow.get("installed"))
-                and connected_count == required_count
+                and requirements_ready
             ),
+            "requirements_ready": requirements_ready,
             "connected_integrations": connected_count,
             "required_integrations_count": required_count,
             "packet_checklist": details.get("packet_checklist", []),
@@ -750,13 +771,21 @@ def build_vet_practice_dashboard(
             ],
         })
 
+    file_storage_rows = [
+        row for row in storage_rows
+        if row["integration_name"] in FILE_STORAGE_INTEGRATIONS
+    ]
+    file_storage_connected = any(row["connected"] for row in file_storage_rows)
+
     summary = {
         "agents_present": len(agents),
         "agents_expected": len(manifest.agents),
         "workflows_installed": sum(1 for w in workflow_rows.values() if w["installed"]),
         "workflows_expected": len(manifest.workflow_templates),
-        "storage_connected": sum(1 for r in storage_rows if r["connected"]),
-        "storage_expected": len(storage_rows),
+        "storage_connected": 1 if file_storage_connected else 0,
+        "storage_expected": 1 if file_storage_rows else 0,
+        "storage_options_connected": sum(1 for r in file_storage_rows if r["connected"]),
+        "storage_options_available": len(file_storage_rows),
         "flows_ready": sum(1 for f in flow_rows if f["ready"]),
         "flows_expected": len(flow_rows),
     }

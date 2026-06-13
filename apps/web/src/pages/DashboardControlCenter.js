@@ -577,6 +577,9 @@ const DashboardControlCenter = () => {
                 const Icon = workspace.slug === 'vet-practice' ? FaHeartbeat : FaBriefcase;
                 const summary = workspace.summary || {};
                 const state = summary.state === 'ready' ? 'Ready' : 'Needs setup';
+                const workloadLabel = summary.example
+                  ? `${summary.example_work_count || 0} example items`
+                  : `${summary.open_work_count || 0} open items`;
                 return (
                   <button
                     type="button"
@@ -589,7 +592,7 @@ const DashboardControlCenter = () => {
                       <span>
                         <strong>{workspace.label}</strong>
                         <small>
-                          {summary.open_work_count || 0} open items · {state}
+                          {workloadLabel} · {state}
                         </small>
                       </span>
                     </div>
