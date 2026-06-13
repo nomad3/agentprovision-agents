@@ -48,6 +48,9 @@ dependencies = [
     # parse it post-synthesis to validate ``name`` + ``engine`` and to
     # branch on engine for the forbidden-shellout scan.
     "pyyaml>=6.0",
+    # Drive packet workflows read veterinarian PDFs from Google Drive and
+    # pass extracted text to clinical review agents.
+    "pdfplumber>=0.11.0",
 ]
 
 [project.optional-dependencies]

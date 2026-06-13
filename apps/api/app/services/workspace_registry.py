@@ -23,6 +23,7 @@ from app.models.tenant_workspace import (
     TenantWorkspaceInstall,
 )
 from app.models.user import User
+from app.services.drive_packet_sources import list_google_drive_packet
 from app.services.provisioning.vet_manifest import get_manifest
 from app.services.vet_practice_dashboard import build_vet_practice_dashboard
 
@@ -322,6 +323,27 @@ def _setup_state_from_summary(summary: dict[str, Any]) -> tuple[WidgetState, lis
     return ("setup_required", blockers) if blockers else ("ready", [])
 
 
+def _source_packet_configs(install: TenantWorkspaceInstall | None) -> list[dict[str, Any]]:
+    config = install.config if install and isinstance(install.config, dict) else {}
+    sources = config.get("source_packets")
+    if isinstance(sources, list):
+        return [source for source in sources if isinstance(source, dict)]
+
+    # Backward-compatible single-folder binding for early vet MVP tenants.
+    folder_id = config.get("brett_drive_folder_id")
+    if folder_id:
+        return [
+            {
+                "key": "brett",
+                "label": "Brett",
+                "provider": "google_drive",
+                "folder_id": folder_id,
+                "account_email": config.get("google_account_email"),
+            }
+        ]
+    return []
+
+
 class VetWorkspaceProvider:
     slug = "vet-practice"
 
@@ -378,6 +400,7 @@ class VetWorkspaceProvider:
         flows = dashboard.get("flows") or []
         agents = dashboard.get("agents") or []
         storage = dashboard.get("storage") or []
+        install = _query_install(db, tenant_id, self.slug)
 
         if widget_key == "launch_brief":
             return widget_payload(
@@ -433,6 +456,47 @@ class VetWorkspaceProvider:
                 },
                 setup_blockers=blockers,
                 example=True,
+            )
+
+        if widget_key == "source_packets":
+            sources = []
+            for source in _source_packet_configs(install):
+                provider = source.get("provider", "google_drive")
+                if provider == "google_drive":
+                    sources.append(
+                        list_google_drive_packet(
+                            db,
+                            tenant_id,
+                            folder_id=str(source.get("folder_id") or ""),
+                            label=source.get("label") or "Drive packet",
+                            account_email=source.get("account_email"),
+                        )
+                    )
+                else:
+                    sources.append({
+                        "label": source.get("label") or "Source packet",
+                        "provider": provider,
+                        "state": "unsupported",
+                        "error": "unsupported_provider",
+                        "files": [],
+                    })
+            ready_count = sum(1 for source in sources if source.get("state") in {"ready", "empty"})
+            if not sources:
+                source_state: WidgetState = "empty"
+                source_blockers = ["Bind a Drive or OneDrive source folder to visualize packet files."]
+            elif ready_count:
+                source_state = "ready"
+                source_blockers = []
+            else:
+                source_state = "setup_required"
+                source_blockers = ["Connect file storage or check the configured packet folder."]
+            return widget_payload(
+                widget_key,
+                state=source_state,
+                data={"sources": sources},
+                setup_blockers=source_blockers,
+                example=False,
+                cache_ttl_seconds=60,
             )
 
         if widget_key == "review_gates":
@@ -547,6 +611,7 @@ VET_PRACTICE_PACK = WorkspacePackDefinition(
     widgets=(
         WorkspaceWidgetDefinition("launch_brief", "Launch Brief", "launch_brief", span=2),
         WorkspaceWidgetDefinition("daily_work_queue", "Daily Work Queue", "work_queue", span=2),
+        WorkspaceWidgetDefinition("source_packets", "Source Packets", "source_packets", span=2),
         WorkspaceWidgetDefinition("file_packet_flows", "File Packet Flows", "flow_board", span=2),
         WorkspaceWidgetDefinition("review_gates", "Review Gates", "review_gates", span=1),
         WorkspaceWidgetDefinition("agent_fleet", "Agent Fleet", "agent_fleet", span=1),

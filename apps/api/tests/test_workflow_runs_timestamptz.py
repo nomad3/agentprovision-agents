@@ -8,7 +8,11 @@ future refactor doesn't silently revert to naive columns and re-break
 the CLI deserialisation path.
 """
 
+from datetime import datetime, timezone
+import json
+
 from app.models.dynamic_workflow import WorkflowRun
+from app.workflows.activities.dynamic_step import _as_aware_utc, _step_output_json
 
 
 def test_started_at_column_is_tz_aware():
@@ -41,3 +45,21 @@ def test_started_at_default_is_tz_aware():
         "WorkflowRun.started_at default must produce tz-aware UTC datetimes; "
         f"got {produced!r}"
     )
+
+
+def test_finalize_duration_normalizes_naive_started_at_to_utc():
+    produced = _as_aware_utc(datetime(2026, 2, 14, 16, 11, 24))
+    assert produced == datetime(2026, 2, 14, 16, 11, 24, tzinfo=timezone.utc)
+
+
+def test_finalize_duration_preserves_aware_started_at_in_utc():
+    produced = _as_aware_utc(datetime(2026, 2, 14, 13, 11, 24, tzinfo=timezone.utc))
+    assert produced == datetime(2026, 2, 14, 13, 11, 24, tzinfo=timezone.utc)
+
+
+def test_step_output_json_truncates_as_valid_json():
+    payload = _step_output_json({"response": "x" * 8000}, max_chars=5000)
+    decoded = json.loads(payload)
+    assert decoded["truncated"] is True
+    assert decoded["keys"] == ["response"]
+    assert len(payload) < 5000

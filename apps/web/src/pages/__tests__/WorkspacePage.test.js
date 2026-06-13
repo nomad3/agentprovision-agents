@@ -35,6 +35,7 @@ const sampleDetail = {
     widgets: [
       { key: 'launch_brief', title: 'Launch Brief', type: 'launch_brief', span: 2 },
       { key: 'daily_work_queue', title: 'Daily Work Queue', type: 'work_queue', span: 2 },
+      { key: 'source_packets', title: 'Source Packets', type: 'source_packets', span: 2 },
       { key: 'system_readiness', title: 'Practice Software Prep', type: 'system_readiness', span: 1 },
     ],
   },
@@ -58,6 +59,29 @@ const sampleDetail = {
             { title: 'Angelo practice-management kickoff', summary: 'Confirmed file-first MVP.' },
           ],
         },
+      },
+    },
+    {
+      key: 'source_packets',
+      state: 'ready',
+      example: false,
+      setup_blockers: [],
+      data: {
+        sources: [
+          {
+            provider: 'google_drive',
+            label: 'Brett',
+            folder_id: 'drive-folder-1',
+            folder_name: 'Brett',
+            account_email: 'vet@example.com',
+            state: 'ready',
+            counts: { files: 4, pdfs: 4 },
+            files: [
+              { id: 'f1', name: 'Winnie Nieto.pdf', kind: 'pdf' },
+              { id: 'f2', name: 'Invoice WMAH 2-14-26.pdf', kind: 'pdf' },
+            ],
+          },
+        ],
       },
     },
     {
@@ -115,6 +139,8 @@ describe('WorkspacePage', () => {
     expect(screen.getByText('Dr. Angelo Castillo')).toBeInTheDocument();
     expect(screen.getByText('Dr. Brett')).toBeInTheDocument();
     expect(screen.getByText('Milo - limping after dog park')).toBeInTheDocument();
+    expect(screen.getByText('Source Packets')).toBeInTheDocument();
+    expect(screen.getByText('Winnie Nieto.pdf')).toBeInTheDocument();
     expect(screen.getByText('Practice Software Prep')).toBeInTheDocument();
     expect(screen.getAllByText('Example preview').length).toBeGreaterThan(0);
     expect(screen.queryByText(/MCP Tool/i)).not.toBeInTheDocument();
