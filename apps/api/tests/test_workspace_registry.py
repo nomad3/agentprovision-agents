@@ -119,6 +119,56 @@ def test_vet_pack_uses_installed_manifest_variant(db_session):
     assert readiness["workflows_expected"] == 1
 
 
+def test_vet_pack_source_packets_use_install_config(db_session, monkeypatch):
+    tenant, user = _tenant_with_user(db_session)
+    install_workspace_pack(
+        db_session,
+        tenant.id,
+        "vet-practice",
+        actor_user_id=user.id,
+        config={
+            "fleet_variant": "cardiology_v1",
+            "source_packets": [
+                {
+                    "key": "brett",
+                    "label": "Brett",
+                    "provider": "google_drive",
+                    "folder_id": "folder-123",
+                }
+            ],
+        },
+        reason="source packet test",
+    )
+    db_session.commit()
+
+    def _fake_packet(db, tenant_id, *, folder_id, label, account_email=None, max_children=25):
+        assert tenant_id == tenant.id
+        assert folder_id == "folder-123"
+        return {
+            "label": label,
+            "provider": "google_drive",
+            "folder_id": folder_id,
+            "folder_name": "Brett",
+            "state": "ready",
+            "counts": {"files": 4, "pdfs": 4, "folders": 0},
+            "files": [{"id": "f1", "name": "Winnie Nieto.pdf", "kind": "pdf"}],
+        }
+
+    monkeypatch.setattr(
+        "app.services.workspace_registry.list_google_drive_packet",
+        _fake_packet,
+    )
+    client = _client(db_session, user)
+
+    resp = client.get("/api/v1/workspaces/vet-practice")
+    assert resp.status_code == 200, resp.text
+    payloads = {w["key"]: w for w in resp.json()["widgets"]}
+    assert payloads["source_packets"]["state"] == "ready"
+    source = payloads["source_packets"]["data"]["sources"][0]
+    assert source["folder_name"] == "Brett"
+    assert source["files"][0]["name"] == "Winnie Nieto.pdf"
+
+
 def test_feature_flag_can_hide_installed_pack(db_session):
     tenant, user = _tenant_with_user(db_session)
     install_workspace_pack(

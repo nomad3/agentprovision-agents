@@ -5,6 +5,7 @@ import {
   FaClipboardList,
   FaExclamationTriangle,
   FaFileAlt,
+  FaFilePdf,
   FaFolderOpen,
   FaMapMarkerAlt,
   FaPlug,
@@ -182,6 +183,43 @@ const FlowBoardWidget = ({ widget, definition }) => {
   );
 };
 
+const SourcePacketsWidget = ({ widget, definition }) => {
+  const sources = widget.data?.sources || [];
+  return (
+    <WidgetShell widget={widget} title={definition.title}>
+      <div className="ws-source-list">
+        {sources.map((source) => (
+          <section className="ws-source-card" key={`${source.provider}-${source.folder_id || source.label}`}>
+            <div className="ws-source-card__head">
+              <div>
+                <h3><FaFolderOpen /> {source.folder_name || source.label}</h3>
+                <p>{source.account_email || source.provider}</p>
+              </div>
+              <StatusPill state={source.state === 'ready' ? 'ready' : source.state || 'empty'} />
+            </div>
+            <div className="ws-meta">
+              <span>{source.counts?.files || 0} files</span>
+              <span>{source.counts?.pdfs || 0} PDFs</span>
+              {source.label && <span>{source.label}</span>}
+            </div>
+            <div className="ws-source-files">
+              {(source.files || []).map((file) => (
+                <div className="ws-source-file" key={file.id || file.name}>
+                  {file.kind === 'pdf' ? <FaFilePdf aria-hidden="true" /> : <FaFileAlt aria-hidden="true" />}
+                  <span>
+                    <strong>{file.name}</strong>
+                    <small>{file.kind === 'pdf' ? 'PDF packet file' : titleize(file.kind)}</small>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </WidgetShell>
+  );
+};
+
 const ReviewGatesWidget = ({ widget, definition }) => {
   const gates = widget.data?.gates || [];
   return (
@@ -290,6 +328,7 @@ const GenericWidget = ({ widget, definition }) => (
 const renderWidget = (widget, definition) => {
   if (definition.type === 'launch_brief') return <LaunchBriefWidget widget={widget} definition={definition} />;
   if (definition.type === 'work_queue') return <WorkQueueWidget widget={widget} definition={definition} />;
+  if (definition.type === 'source_packets') return <SourcePacketsWidget widget={widget} definition={definition} />;
   if (definition.type === 'flow_board') return <FlowBoardWidget widget={widget} definition={definition} />;
   if (definition.type === 'review_gates') return <ReviewGatesWidget widget={widget} definition={definition} />;
   if (definition.type === 'agent_fleet') return <AgentFleetWidget widget={widget} definition={definition} />;
