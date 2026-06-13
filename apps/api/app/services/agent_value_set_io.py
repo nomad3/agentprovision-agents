@@ -101,7 +101,7 @@ def is_value_layer_enabled(
         from app.models.tenant_features import TenantFeatures
         row = (
             db.query(TenantFeatures)
-            .filter(TenantFeatures.tenant_id == str(tenant_id))
+            .filter(TenantFeatures.tenant_id == tenant_id)
             .first()
         )
         if row is None:
@@ -163,8 +163,8 @@ def read_value_set(
         rows = (
             db.query(AgentMemory.content)
             .filter(
-                AgentMemory.tenant_id == str(tenant_id),
-                AgentMemory.agent_id == str(agent_id),
+                AgentMemory.tenant_id == tenant_id,
+                AgentMemory.agent_id == agent_id,
                 AgentMemory.memory_type == VALUE_SET_MEMORY_TYPE,
             )
             .order_by(

@@ -45,6 +45,7 @@ class TenantFeaturesBase(BaseModel):
     # their chat path until an operator explicitly opts in. Mirrors the
     # nightly_reflection_enabled pattern.
     value_layer_enabled: bool = False
+    native_workspace_packs: bool = False
 
 
 class TenantFeaturesCreate(TenantFeaturesBase):
@@ -75,6 +76,7 @@ class TenantFeaturesUpdate(BaseModel):
     rl_enabled: Optional[bool] = None
     rl_settings: Optional[Dict[str, Any]] = None
     value_layer_enabled: Optional[bool] = None
+    native_workspace_packs: Optional[bool] = None
 
 
 class TenantFeatures(TenantFeaturesBase):

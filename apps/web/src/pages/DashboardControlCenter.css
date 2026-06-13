@@ -239,6 +239,56 @@
   padding: var(--ap-space-6);
 }
 
+.dcc-workspace-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--ap-space-3);
+  margin-bottom: var(--ap-space-5);
+}
+
+.dcc-workspace-card {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  color: var(--ap-text);
+  background: transparent;
+  border: 1px solid var(--ap-border);
+}
+
+.dcc-workspace-card:hover {
+  background: var(--ap-primary-tint);
+  border-color: var(--ap-border-strong);
+}
+
+.dcc-workspace-card .ap-card-body {
+  display: flex;
+  align-items: center;
+  gap: var(--ap-space-3);
+}
+
+.dcc-workspace-card svg {
+  color: var(--ap-primary);
+  flex: 0 0 auto;
+}
+
+.dcc-workspace-card strong,
+.dcc-workspace-card small {
+  display: block;
+}
+
+.dcc-workspace-card strong {
+  color: var(--ap-text);
+  font-size: var(--ap-fs-sm);
+  font-weight: 700;
+}
+
+.dcc-workspace-card small {
+  color: var(--ap-text-muted);
+  font-size: var(--ap-fs-xs);
+  margin-top: 2px;
+}
+
 /* Inside the dashboard card, the ChatTab component should fill the
    card body rather than its IDE-shell full-height styling. */
 .dcc-thread-body .ap-chattab {
@@ -397,4 +447,16 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+}
+
+@media (max-width: 991.98px) {
+  .dcc-workspace-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 575.98px) {
+  .dcc-workspace-strip {
+    grid-template-columns: 1fr;
+  }
 }

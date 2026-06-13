@@ -33,7 +33,7 @@ const DashboardControlCenter = lazy(() => import(/* webpackChunkName: "dashboard
 // Agent Kits removed - using ADK for agent configuration
 const AgentDetailPage = lazy(() => import(/* webpackChunkName: "agent-detail" */ './pages/AgentDetailPage'));
 const AgentsPage = lazy(() => import(/* webpackChunkName: "agents" */ './pages/AgentsPage'));
-const VetPracticeDashboardPage = lazy(() => import(/* webpackChunkName: "vet-practice" */ './pages/VetPracticeDashboardPage'));
+const VetPracticeAliasPage = lazy(() => import(/* webpackChunkName: "vet-practice" */ './pages/VetPracticeAliasPage'));
 const FleetHealthPage = lazy(() => import(/* webpackChunkName: "fleet-health" */ './pages/FleetHealthPage'));
 const CostInsightsPage = lazy(() => import(/* webpackChunkName: "cost-insights" */ './pages/CostInsightsPage'));
 const CoalitionReplayPage = lazy(() => import(/* webpackChunkName: "coalition-replay" */ './pages/CoalitionReplayPage'));
@@ -58,6 +58,8 @@ const ToolsPage = lazy(() => import(/* webpackChunkName: "tools" */ './pages/Too
 const VectorStoresPage = lazy(() => import(/* webpackChunkName: "vector-stores" */ './pages/VectorStoresPage'));
 const SkillsPage = lazy(() => import(/* webpackChunkName: "skills" */ './pages/SkillsPage'));
 const WorkflowsPage = lazy(() => import(/* webpackChunkName: "workflows" */ './pages/WorkflowsPage'));
+const WorkspaceListPage = lazy(() => import(/* webpackChunkName: "workspaces" */ './pages/WorkspaceListPage'));
+const WorkspacePage = lazy(() => import(/* webpackChunkName: "workspace" */ './pages/WorkspacePage'));
 const WorkflowBuilder = lazy(() => import(/* webpackChunkName: "workflow-builder" */ './components/workflows/WorkflowBuilder'));
 const LearningPage = lazy(() => import(/* webpackChunkName: "learning" */ './pages/LearningPage'));
 const CommitmentsPage = lazy(() => import(/* webpackChunkName: "commitments" */ './pages/CommitmentsPage'));
@@ -270,7 +272,9 @@ function App() {
                 <Route path="/onboarding" element={<ProtectedRoute><OnboardingPage /></ProtectedRoute>} />
                 <Route path="/data-sources" element={<Navigate to="/integrations?tab=data-sources" replace />} />
                 <Route path="/integrations" element={<ProtectedRoute><IntegrationsPage /></ProtectedRoute>} />
-                <Route path="/practice" element={<ProtectedRoute><VetPracticeDashboardPage /></ProtectedRoute>} />
+                <Route path="/practice" element={<ProtectedRoute><VetPracticeAliasPage /></ProtectedRoute>} />
+                <Route path="/workspaces" element={<ProtectedRoute><WorkspaceListPage /></ProtectedRoute>} />
+                <Route path="/workspaces/:slug" element={<ProtectedRoute><WorkspacePage /></ProtectedRoute>} />
                 <Route path="/notebooks" element={<ProtectedRoute><NotebooksPage /></ProtectedRoute>} />
                 <Route path="/agents" element={<ProtectedRoute><AgentsPage /></ProtectedRoute>} />
                 <Route path="/insights/fleet-health" element={<ProtectedRoute><FleetHealthPage /></ProtectedRoute>} />

@@ -128,6 +128,13 @@ class TenantFeatures(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
 
+    # Native vertical workspace packs (vet-practice, sales-crm, future
+    # verticals). Default OFF; installing a native pack enables the flag for
+    # that tenant, and operators can turn it back off as a kill switch.
+    native_workspace_packs = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
     # ── Luna macOS computer-use (desktop control) per-tenant gating ──────
     # PR4 of the 2026-06-09 productionization plan. Superuser/operator-only
     # (excluded from member-writable feature updates, enforced in PR4b).

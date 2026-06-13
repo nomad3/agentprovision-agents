@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge, Dropdown, Nav, OverlayTrigger, Tooltip } from 'react-bootstrap';
 import { useTranslation } from 'react-i18next';
 import {
   FaSignOutAlt as BoxArrowRight,
   FaBuilding as BuildingFill,
+  FaBriefcase,
   FaDatabase as DatabaseFill,
   FaCog as GearFill,
   FaHome as HouseDoorFill,
@@ -23,6 +24,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../App';
 import { useLunaPresence } from '../context/LunaPresenceContext';
 import { useTheme } from '../context/ThemeContext';
+import workspaceService from '../services/workspaces';
 // LunaAvatar removed
 import LunaStateBadge from './luna/LunaStateBadge';
 import './Layout.css';
@@ -58,6 +60,7 @@ const Layout = ({ children }) => {
   const lunaCtx = useLunaPresence();
   const lunaState = lunaCtx?.presence?.state || 'idle';
   const lunaMood = lunaCtx?.presence?.mood || 'calm';
+  const [workspaceItems, setWorkspaceItems] = useState([]);
 
   const currentLanguage = (i18n.language || 'en').split('-')[0];
   const languageOptions = useMemo(
@@ -77,6 +80,32 @@ const Layout = ({ children }) => {
     i18n.changeLanguage(code);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!auth.user?.access_token) {
+      setWorkspaceItems([]);
+      return () => { cancelled = true; };
+    }
+    workspaceService.list()
+      .then((res) => {
+        if (cancelled) return;
+        setWorkspaceItems(
+          (res.data?.workspaces || [])
+            .filter((workspace) => workspace.category !== 'core' && workspace.enabled)
+            .sort((a, b) => (a.display_order || 0) - (b.display_order || 0)),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceItems([]);
+      });
+    return () => { cancelled = true; };
+  }, [auth.user?.access_token]);
+
+  const workspaceIconFor = (workspace) => {
+    if (workspace.slug === 'vet-practice') return HeartbeatFill;
+    return FaBriefcase;
+  };
+
   // Navigation structure — consolidated into the Alpha Control Center IA:
   // Integrations leads (most-used surface); Dashboard absorbs AI Chat as a tab;
   // Agent Fleet absorbs Fleet Health + Cost & Usage via SubNav inside the page;
@@ -87,9 +116,17 @@ const Layout = ({ children }) => {
       items: [
         { path: '/integrations', icon: PlugFill, label: t('sidebar.integrations'), description: t('sidebar_desc.integrations') },
         { path: '/dashboard', icon: HouseDoorFill, label: t('sidebar.alphaControl', 'Alpha Control'), description: t('sidebar_desc.alphaControl', 'Command center + chat with your agents') },
-        { path: '/practice', icon: HeartbeatFill, label: t('sidebar.vetPractice', 'Vet Practice'), description: t('sidebar_desc.vetPractice', 'File-first veterinary MVP flows') },
       ]
     },
+    ...(workspaceItems.length ? [{
+      title: t('sidebar.workspaces', 'Workspaces'),
+      items: workspaceItems.map((workspace) => ({
+        path: workspace.route,
+        icon: workspaceIconFor(workspace),
+        label: workspace.label,
+        description: workspace.description,
+      })),
+    }] : []),
     {
       title: t('sidebar.aiOperations'),
       items: [

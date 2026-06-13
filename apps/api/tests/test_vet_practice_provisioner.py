@@ -44,6 +44,7 @@ from app.models.agent_permission import AgentPermission
 from app.models.dynamic_workflow import DynamicWorkflow
 from app.models.integration_config import IntegrationConfig
 from app.models.tenant import Tenant
+from app.models.tenant_workspace import TenantWorkspaceInstall
 from app.models.user import User
 from app.services.provisioning.vet_manifest import (
     CARDIOLOGY_V1,
@@ -55,6 +56,7 @@ from app.services.provisioning.vet_practice import (
     provision_vet_practice,
 )
 from app.services.vet_practice_dashboard import build_vet_practice_dashboard
+from app.services.workspace_registry import install_workspace_pack
 from app.services.workflow_templates import NATIVE_TEMPLATES
 from app.services.tool_groups import TOOL_GROUPS, resolve_tool_names
 
@@ -358,6 +360,15 @@ def test_gp_full_provision_seeds_ten_agents_and_storage_slots(db_session, vet_te
         .all()
     )
     assert {s.integration_name for s in slots} == {"google_drive", "onedrive"}
+    workspace_install = (
+        db_session.query(TenantWorkspaceInstall)
+        .filter(
+            TenantWorkspaceInstall.tenant_id == tenant.id,
+            TenantWorkspaceInstall.workspace_slug == "vet-practice",
+        )
+        .one()
+    )
+    assert workspace_install.status == "enabled"
 
 
 def test_gp_full_dashboard_is_tenant_scoped(db_session, vet_tenant):
@@ -392,6 +403,7 @@ def test_gp_full_dashboard_is_tenant_scoped(db_session, vet_tenant):
     assert dashboard["summary"]["agents_expected"] == 10
     assert dashboard["summary"]["agents_present"] == 10
     assert dashboard["summary"]["storage_connected"] == 0
+    assert dashboard["summary"]["storage_expected"] == 1
     assert {row["integration_name"] for row in dashboard["storage"]} == {
         "google_drive",
         "onedrive",
@@ -475,6 +487,10 @@ def test_dry_run_writes_nothing(db_session, vet_tenant, native_cardiac_template)
     # but the plan describes what WOULD be created
     assert result["agents"]["planned"] == 5
     assert result["connector_slots"]["planned"] >= 3
+    assert result["workspace_pack"]["slug"] == "vet-practice"
+    assert db_session.query(TenantWorkspaceInstall).filter(
+        TenantWorkspaceInstall.tenant_id == tenant.id
+    ).count() == 0
 
 
 # ── internal endpoint ─────────────────────────────────────────────────
@@ -532,10 +548,56 @@ def test_endpoint_dry_run_delegates_to_service(
     assert body["dry_run"] is True
     assert body["variant"] == "cardiology_v1"
     assert body["agents"]["planned"] == 5
+    assert body["workspace_pack"]["slug"] == "vet-practice"
     # dry-run wrote nothing
     assert db_session.query(Agent).filter(
         Agent.tenant_id == tenant.id
     ).count() == 0
+
+
+def test_workspace_pack_internal_endpoint_installs_pack(db_session, vet_tenant):
+    tenant, _admin = vet_tenant
+    client = _build_client(db_session)
+    resp = client.post(
+        "/api/v1/provision/workspace-pack/internal",
+        json={
+            "workspace_slug": "vet-practice",
+            "display_order": 10,
+            "reason": "test internal install",
+        },
+        headers={
+            "X-Internal-Key": settings.API_INTERNAL_KEY,
+            "X-Tenant-Id": str(tenant.id),
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["workspace_slug"] == "vet-practice"
+    assert body["status"] == "enabled"
+    assert (
+        db_session.query(TenantWorkspaceInstall)
+        .filter(
+            TenantWorkspaceInstall.tenant_id == tenant.id,
+            TenantWorkspaceInstall.workspace_slug == "vet-practice",
+        )
+        .count()
+        == 1
+    )
+
+
+def test_workspace_pack_internal_endpoint_rejects_unknown_tenant(db_session):
+    client = _build_client(db_session)
+    resp = client.post(
+        "/api/v1/provision/workspace-pack/internal",
+        json={"workspace_slug": "vet-practice"},
+        headers={
+            "X-Internal-Key": settings.API_INTERNAL_KEY,
+            "X-Tenant-Id": str(uuid.uuid4()),
+        },
+    )
+
+    assert resp.status_code == 400, resp.text
 
 
 def test_endpoint_invalid_tenant_id_is_400(db_session, vet_tenant):
@@ -553,8 +615,26 @@ def test_endpoint_invalid_tenant_id_is_400(db_session, vet_tenant):
     assert resp.status_code == 400, resp.text
 
 
-def test_vet_dashboard_endpoint_defaults_to_gp_full(db_session, vet_tenant):
+def test_vet_dashboard_endpoint_requires_installed_workspace(db_session, vet_tenant):
+    _tenant, admin = vet_tenant
+    client = _build_vet_dashboard_client(db_session, admin)
+
+    resp = client.get("/api/v1/vet-practice/dashboard")
+
+    assert resp.status_code == 404, resp.text
+
+
+def test_vet_dashboard_endpoint_uses_installed_variant(db_session, vet_tenant):
     tenant, admin = vet_tenant
+    install_workspace_pack(
+        db_session,
+        tenant.id,
+        "vet-practice",
+        actor_user_id=admin.id,
+        config={"fleet_variant": "gp_full"},
+        reason="test route gate",
+    )
+    db_session.commit()
     client = _build_vet_dashboard_client(db_session, admin)
 
     resp = client.get("/api/v1/vet-practice/dashboard")
@@ -567,10 +647,37 @@ def test_vet_dashboard_endpoint_defaults_to_gp_full(db_session, vet_tenant):
 
 
 def test_vet_dashboard_endpoint_rejects_unknown_variant(db_session, vet_tenant):
-    _, admin = vet_tenant
+    tenant, admin = vet_tenant
+    install_workspace_pack(
+        db_session,
+        tenant.id,
+        "vet-practice",
+        actor_user_id=admin.id,
+        config={"fleet_variant": "gp_full"},
+        reason="test route gate",
+    )
+    db_session.commit()
     client = _build_vet_dashboard_client(db_session, admin)
 
     resp = client.get("/api/v1/vet-practice/dashboard?variant=nope")
+
+    assert resp.status_code == 400, resp.text
+
+
+def test_vet_dashboard_endpoint_rejects_uninstalled_variant(db_session, vet_tenant):
+    tenant, admin = vet_tenant
+    install_workspace_pack(
+        db_session,
+        tenant.id,
+        "vet-practice",
+        actor_user_id=admin.id,
+        config={"fleet_variant": "cardiology_v1"},
+        reason="test route gate",
+    )
+    db_session.commit()
+    client = _build_vet_dashboard_client(db_session, admin)
+
+    resp = client.get("/api/v1/vet-practice/dashboard?variant=gp_full")
 
     assert resp.status_code == 400, resp.text
 

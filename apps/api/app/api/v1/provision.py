@@ -30,6 +30,7 @@ from app.services.provisioning.vet_practice import (
     VetPracticeProfile,
     provision_vet_practice,
 )
+from app.services.workspace_registry import install_workspace_pack
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,15 @@ class VetPracticeProvisionRequest(BaseModel):
     )
 
 
+class WorkspacePackProvisionRequest(BaseModel):
+    workspace_slug: str = Field(..., description="native pack slug, e.g. 'vet-practice'")
+    display_order: Optional[int] = Field(None, ge=0)
+    pinned: bool = True
+    config: dict = Field(default_factory=dict)
+    status: str = Field("enabled", pattern="^(enabled|disabled)$")
+    reason: Optional[str] = Field(None, description="operator-visible audit reason")
+
+
 @router.post("/vet-practice/internal")
 def provision_vet_practice_internal(
     payload: VetPracticeProvisionRequest,
@@ -114,3 +124,34 @@ def provision_vet_practice_internal(
         # Bad caller input (e.g. an owner_user_id from another tenant —
         # tenant-isolation break). Surface as a controlled 400, not a 500.
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/workspace-pack/internal")
+def provision_workspace_pack_internal(
+    payload: WorkspacePackProvisionRequest,
+    db: Session = Depends(deps.get_db),
+    tenant_id: uuid.UUID = Depends(verify_internal_key),
+):
+    """Operator-run: idempotently install a native workspace pack for a tenant."""
+    try:
+        install = install_workspace_pack(
+            db,
+            tenant_id,
+            payload.workspace_slug,
+            display_order=payload.display_order,
+            pinned=payload.pinned,
+            config=payload.config,
+            status=payload.status,
+            reason=payload.reason or "Installed by internal workspace-pack provision route",
+        )
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {
+        "tenant_id": str(tenant_id),
+        "workspace_slug": install.workspace_slug,
+        "status": install.status,
+        "install_id": str(install.id),
+        "installed_version": install.installed_version,
+    }
